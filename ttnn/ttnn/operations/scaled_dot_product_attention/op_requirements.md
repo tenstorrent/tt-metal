@@ -71,7 +71,7 @@
 
 **Target test file**: `eval/golden_tests/scaled_dot_product_attention/test_translated.py` — the failing cell lives here. Run it directly to verify your fix: `scripts/run_safe_pytest.sh "eval/golden_tests/scaled_dot_product_attention/test_translated.py::test_sdpa_noncausal_unequal_seqlen__nightly[1-8-1-4096-2048-128-k256-q128-bfp8]"`. Note: `test_translated.py` is EXCLUDED from the gate's golden runs (it's a blind, non-gating suite), so the mechanical completion gate cannot verify this refinement — you MUST verify the cell yourself by running it directly and confirming it passes without a timeout. The gate's bullets 1 (no hangs in golden) and 3 (golden majority) will pass vacuously for this refinement since the target isn't in the gated golden suite; your direct verification of the translated cell is the real done criterion.
 
-### [ ] Refinement 6 — Translated hang: test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k
+### [x] Refinement 6 — Translated hang: test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k
 
 **Goal**: stop the op from timing out on `test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bf16]` — causal self-attention with S=131072 (128K sequence), D=128, bf16, 8 heads, MQA (nkv=1). No SUPPORTED axis is added — this is a performance/correctness boundary for very large sequence lengths that the translated (blind) suite exposes but the golden suite does not cover (golden max is S=8192).
 

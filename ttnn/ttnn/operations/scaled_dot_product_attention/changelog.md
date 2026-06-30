@@ -107,3 +107,21 @@
   - The large-seq test (`test_sdpa_tt_large_seq__nightly`, S=131072) still times out — but this is a genuine long computation (16M tile operations), NOT a CB deadlock. All cores are in GO state actively computing. This is self-attention (S_q == S_kv), not cross-attention, and is out of scope for this refinement. The test has `@pytest.mark.timeout(120)` but the 5s dispatch timeout kills it first. A future refinement could address S-chunking for very large sequences.
   - 7 pre-existing regression test failures (precision: PCC 0.987-0.997, rms 0.08-0.17 on uniform/negative inputs) — all pre-existed in R4, not caused by this change.
 - **Tests added**: test_scaled_dot_product_attention_large_cross_attn.py (15 tests: multi-WU-per-core ×6, large unequal-seqlen cross-attention ×6, combined multi-WU + cross-attention ×3)
+
+## Refinement 6 — Translated hang: test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k
+- **Date**: 2026-06-30
+- **What was done**:
+  - Root cause: `test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bf16]` (causal self-attention, S=131072, D=128, bf16, 8 heads, MQA) timed out at 5s dispatch timeout. The causal attention kernel processed ALL (Q-block, KV-block) pairs — including fully-future blocks (above the causal diagonal) that contribute nothing to the output. For S=131072: 1024 Q-blocks × 1024 KV-blocks = 1M iterations per work unit, ~50% fully-future. The reader was the bottleneck, stuck in `fill_mask_tile_uniform` generating mask tiles for all pairs.
+  - Fix 1 — Causal block skip: when `is_causal=True`, skip fully-future KV-blocks entirely in both reader and compute. A KV-block is fully-future when `kvb * B_kv_t >= (qb + 1) * B_q_t`. These blocks contribute exp(-inf - m) = 0, P@V = 0, max(m_old, -inf) = m_old — skipping is mathematically exact. Added `is_causal` as CT arg to compute kernel (index 4, shifted remaining args). Reader skips pushing Q/K/V/mask tiles for these blocks.
+  - Fix 2 — Dtype-aware B_kv_t: increased MAX_B_KV_T from 4 to 8 for non-fp32 dtypes (bf16/bf8b), halving the KV-block count. This improves both performance (fewer iterations) and accuracy (fewer softmax recurrence steps → less rounding error). fp32 tiles are 4x larger, so B_kv_t=8 with fp32 causes OOM (L1 exceeds 1.5MB) — kept at 4 for fp32.
+  - No SUPPORTED axis changes (this is a performance/correctness boundary, not a kernel-level branch).
+- **Accuracy achieved**:
+  - Large seq bf16: PCC=0.9996, RMSE=0.00677, 70s wall time (threshold: PCC≥0.994, RMSE<0.0094)
+  - Large seq bfp8: PASSED, 72s wall time
+  - Refinement-specific tests: all 13 pass (correctness at S=1024/4096/8192, small shapes, single-tile diagonal, causal vs non-causal divergence, S=32768 large completion)
+- **Golden test progress**: 1770 / 2233 passing (unchanged from R5 — no SUPPORTED axis changes). 462 xfailed. 1 skipped. 0 failures in golden suite. 7 pre-existing precision failures in regression suite (same as R5, confirmed by stash test).
+- **Translated suite**: `test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bf16]` PASSES (was: timeout). `test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bfp8]` PASSES.
+- **Issues encountered**:
+  - Initial attempt with unconditional MAX_B_KV_T=8 caused OOM on fp32 golden cells (fp32 tiles 4x larger → L1 exceeds 1.5MB). Fixed by making B_kv_t dtype-aware: 8 for bf16/bf8b, 4 for fp32.
+  - With B_kv_t=4 (no increase), the large seq test completed but RMSE was 0.0117 (exceeding 0.0094 threshold) — more KV-blocks means more softmax recurrence steps, compounding rounding error. B_kv_t=8 reduces recurrence steps and improves accuracy.
+- **Tests added**: test_scaled_dot_product_attention_large_seq.py (13 tests: causal block skip correctness ×6, causal vs non-causal divergence ×2, large seq completion ×1, small shapes ×3, single-tile diagonal ×1)
