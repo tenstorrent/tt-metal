@@ -1219,6 +1219,6 @@ In an unlikely case that ``tt-smi -r`` gives an error, contact your system admin
 
 Additional information about TT-Metalium and the Tenstorrent architecture can be found in the following resources:
 
-* TT-Metalium Documentation: https://firdovsimammedovk.github.io/tt-metal-sandbox/tt-metalium/index.html
+* TT-Metalium Documentation: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/index.html
 * TT-Metalium GitHub Repository: https://github.com/tenstorrent/tt-metal
 * TT-Metalium Discord: https://discord.gg/tenstorrent

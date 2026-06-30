@@ -1,7 +1,7 @@
 # Installing Galaxy Wormhole Systems
 
 ## Hardware Setup
-Follow the instructions for your specific Wormhole device at: [Wormhole Hardware Setup](https://firdovsimammedovk.github.io/tenstorrent-sandbox/aibs/wormhole/).
+Follow the instructions for your specific Wormhole device at: [Wormhole Hardware Setup](https://docs.tenstorrent.com/aibs/wormhole/).
 
 ## Software Installation
 To install TT-Metalium visit the [TT-Installer](https://github.com/tenstorrent/tt-installer) repository on GitHub for a quick installation package. The [Installation Guide](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md) in the TT-Metal repository has installation instructions for advanced developers.

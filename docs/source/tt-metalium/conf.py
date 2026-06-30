@@ -46,8 +46,8 @@ exclude_patterns = []
 
 import subprocess as _sp
 
-_METAL_BASE = "https://firdovsimammedovk.github.io/tt-metal-sandbox/"
-_GLOBAL_CSS = "https://firdovsimammedovk.github.io/tenstorrent-sandbox/_static/tt_theme.css"
+_METAL_BASE = "https://docs.tenstorrent.com/tt-metal/latest/"
+_GLOBAL_CSS = "https://docs.tenstorrent.com/_static/tt_theme.css"
 
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {
@@ -61,11 +61,10 @@ html_favicon = "../common/images/favicon.png"
 html_baseurl = f"{_METAL_BASE}tt-metalium/"
 html_static_path = ["_static", "../common/_static"]
 
-# Load global theme from tenstorrent-sandbox CDN; local tt_theme.css adds API overrides
 html_css_files = [_GLOBAL_CSS]
 
 html_context = {
-    "logo_link_url": "https://firdovsimammedovk.github.io/tenstorrent-sandbox/",
+    "logo_link_url": "https://docs.tenstorrent.com/",
 }
 
 

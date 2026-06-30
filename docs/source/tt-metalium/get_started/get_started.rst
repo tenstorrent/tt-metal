@@ -17,7 +17,7 @@ Software Stack Overview
 TT-Metalium sits at the foundation of Tenstorrent's software stack:
 
 - **TT-Forge / TT-MLIR**: High-level compilation frameworks for deploying neural networks (see https://github.com/tenstorrent/tt-forge-fe)
-- **TTNN**: Library of kernels implementing common Machine Learning operations (see https://firdovsimammedovk.github.io/tt-metal-sandbox/ttnn/)
+- **TTNN**: Library of kernels implementing common Machine Learning operations (see https://docs.tenstorrent.com/tt-metal/latest/ttnn/)
 - **TT-Metalium**: Low-level programming interface for Tensix hardware ⬅ This guide
 - **TT-LLK (Low Level Kernels)**: Hardware-specific kernel implementations
 
@@ -101,7 +101,7 @@ Documentation
 ^^^^^^^^^^^^^
 
 - **Metalium Architecture Guide**: Comprehensive guide to architecture and programming model: https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md
-- **API Reference**: https://firdovsimammedovk.github.io/tt-metal-sandbox/tt-metalium/tt_metal/apis/
+- **API Reference**: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/
 
 Related Repositories
 ^^^^^^^^^^^^^^^^^^^^
@@ -118,14 +118,14 @@ For information on debugging and profiling tools (DPRINT, Tracy Profiler, Device
 Community Support
 ^^^^^^^^^^^^^^^^^
 
-- **Documentation**: https://firdovsimammedovk.github.io/tenstorrent-sandbox/
+- **Documentation**: https://docs.tenstorrent.com/
 - **GitHub Issues**: https://github.com/tenstorrent/tt-metal/issues
 
 Next Steps
 ----------
 
 **For ML Developers**
-    Use the higher-level `TT-NN <https://firdovsimammedovk.github.io/tt-metal-sandbox/ttnn/>`_ API for model development and deployment. TT-NN builds on TT-Metalium but provides PyTorch-like operations and automatic kernel selection.
+    Use the higher-level `TT-NN <https://docs.tenstorrent.com/tt-metal/latest/ttnn/>`_ API for model development and deployment. TT-NN builds on TT-Metalium but provides PyTorch-like operations and automatic kernel selection.
 
 **For Architecture Deep Dives**
     Read the comprehensive `Metalium Architecture Guide <https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md>`_ for deep dives into hardware architecture, NoC topology, and advanced programming patterns.

@@ -53,8 +53,8 @@ exclude_patterns = [
     "**/tutorials_env/**",
 ]
 
-_METAL_BASE = "https://firdovsimammedovk.github.io/tt-metal-sandbox/"
-_GLOBAL_CSS = "https://firdovsimammedovk.github.io/tenstorrent-sandbox/_static/tt_theme.css"
+_METAL_BASE = "https://docs.tenstorrent.com/tt-metal/latest/"
+_GLOBAL_CSS = "https://docs.tenstorrent.com/_static/tt_theme.css"
 
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {
@@ -68,13 +68,12 @@ html_favicon = "../common/images/favicon.png"
 html_baseurl = f"{_METAL_BASE}ttnn/"
 html_static_path = ["_static", "../common/_static"]
 
-_docs_site_base = os.environ.get("DOC_SITE_BASE_URL", "https://firdovsimammedovk.github.io/tt-metal-sandbox").rstrip("/")
+_docs_site_base = os.environ.get("DOC_SITE_BASE_URL", "https://docs.tenstorrent.com/tt-metal/latest").rstrip("/")
 
-# Load global theme from tenstorrent-sandbox CDN; local tt_theme.css adds API overrides
 html_css_files = [_GLOBAL_CSS]
 
 html_context = {
-    "logo_link_url": "https://firdovsimammedovk.github.io/tenstorrent-sandbox/",
+    "logo_link_url": "https://docs.tenstorrent.com/",
     "docs_site_base": _docs_site_base,
     "docs_project_subpath": "ttnn",
 }
