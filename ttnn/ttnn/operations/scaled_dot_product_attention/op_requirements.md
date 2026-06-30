@@ -59,7 +59,7 @@
 
 **Done when**: every Phase 0 cell currently in the `OOM` category passes.
 
-### [ ] Refinement 5 — Large unequal-seqlen cross-attention
+### [x] Refinement 5 — Large unequal-seqlen cross-attention
 
 **Goal**: stop the op from hanging the device on cross-attention with large, unequal sequence lengths (S_q ≠ S_kv, large S). The op currently times out (`TT_THROW: TIMEOUT: device timeout in fetch queue wait, potential hang detected`) on `test_sdpa_noncausal_unequal_seqlen__nightly[1-8-1-4096-2048-128-k256-q128-bfp8]` — S_q=4096, S_kv=2048, d=128, bf8b, noncausal. No SUPPORTED axis is added — this is a resource/correctness boundary for large asymmetric cross-attention shapes that the translated (blind) suite exposes but the golden suite does not cover.
 

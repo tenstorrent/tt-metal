@@ -92,3 +92,18 @@
   - D=1024 bf16 initially OOM by 3872B when K-blocking was fp32-only. Fix: enabled K-blocking for ALL dtypes when D_t > D_BLOCK. The HiFi4+bf16 K-acc concern (issue #38306) is mitigated by fp32_dest_acc_en=True keeping partials in fp32 DEST.
   - Initial test had a bug: torch reference call was missing attn_mask parameter, causing false failure on custom mask test. Fixed.
 - **Tests added**: test_scaled_dot_product_attention_large_d.py (30 tests: D=256/512/1024 × bf16/fp32/bf8b, causal mask, custom mask, explicit scale, GQA, cross-attention, fp32_dest_acc_en=False, D=32/D=64 regression)
+
+## Refinement 5 — Large unequal-seqlen cross-attention
+- **Date**: 2026-06-30
+- **What was done**:
+  - Root cause identified: the compute kernel was missing a work-unit loop. The reader and writer both loop over `num_work_units` (assigned (B,H) pairs), but the compute kernel only processed a single work unit. When a core got >1 work unit (e.g. H_q=71 > 64 cores → some cores get 2), compute finished after the first work unit and exited, while the reader kept pushing tiles into full CBs → CB deadlock (`cb_reserve_back` hang in reader at line 219).
+  - Fix: added work-unit loop to the compute kernel (`for (wu = 0; wu < num_work_units; ++wu)`) wrapping the existing Q-block loop. Added runtime args (`num_work_units` + `(b,h)` pairs) to the compute kernel in the program descriptor, matching the reader/writer pattern.
+  - The refinement's named target cell (`test_sdpa_noncausal_unequal_seqlen__nightly[1-8-1-4096-2048-128-k256-q128-bfp8]`) was already passing — likely fixed by R4's D-chunking/K-blocking work. The real defect surfaced was the Falcon-7B shape (H_q=71, MQA) which hung due to the missing work-unit loop.
+  - No SUPPORTED axis changes (this is a correctness boundary, not a kernel-level branch).
+- **Accuracy achieved**: PCC=0.999+ on all tested shapes. Falcon-7B [1,71,1,2048,64] max_diff=0.00018. Cross-attention [1,8,1,4096,2048,128] bf16/bf8b PCC≥0.99. Multi-WU + cross-attention [1,71,1,4096,2048,128] PCC≥0.97 (bf8b).
+- **Golden test progress**: 1770 / 2233 passing (up from 1722 / 2233 in Refinement 4). +48 new passing cells (multi-WU shapes that previously hung). 462 xfailed (float32+False EXCLUSION + causal+cross EXCLUSION). 1 skipped. 0 failures, 0 XPASS-strict, 0 regressions. Full suite completes in 113s with 30s dispatch timeout.
+- **Translated suite**: All 12 `test_sdpa_noncausal_unequal_seqlen__nightly` cells pass (4 skipped for divisibility). All 12 Falcon-7B `test_sdpa_noncausal__nightly[1-71-1-2048-64-*]` cells pass (previously all 12 hung). `test_sdpa_perf__nightly` (S=44K) passes.
+- **Issues encountered**:
+  - The large-seq test (`test_sdpa_tt_large_seq__nightly`, S=131072) still times out — but this is a genuine long computation (16M tile operations), NOT a CB deadlock. All cores are in GO state actively computing. This is self-attention (S_q == S_kv), not cross-attention, and is out of scope for this refinement. The test has `@pytest.mark.timeout(120)` but the 5s dispatch timeout kills it first. A future refinement could address S-chunking for very large sequences.
+  - 7 pre-existing regression test failures (precision: PCC 0.987-0.997, rms 0.08-0.17 on uniform/negative inputs) — all pre-existed in R4, not caused by this change.
+- **Tests added**: test_scaled_dot_product_attention_large_cross_attn.py (15 tests: multi-WU-per-core ×6, large unequal-seqlen cross-attention ×6, combined multi-WU + cross-attention ×3)
