@@ -7,7 +7,7 @@
 # Launch on the 4-galaxy superpod. Host order must match the physical cabling chain (mesh 0 -> first
 # --host, ... mesh 3 -> last); reorder the --host slots if a boundary's fabric fails to train:
 #   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-#     models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_rank_binding_4rank_d2d.yaml \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_4rank_d2d.yaml \
 #     bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u02:1,bh-glx-d08u08:1
 
 rank_bindings:
@@ -29,13 +29,15 @@ rank_bindings:
     env_overrides: {}
 
 # Connected 4x 8x4 BH-galaxy MGD: inter-galaxy links 0<->1<->2<->3.
-mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
 
 global_env:
-  PREFILL_MODEL: "kimi_k2_6"   # ttrun does not propagate shell PREFILL_*, so the model must live here
-  PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
-  PREFILL_FABRIC_MODE: "2d"
-  PREFILL_PP_D2D_FIFO_BYTES: "4096"   # Kimi: 4KB L1 socket FIFO clears the ring_mla CB clash on non-first ranks
+  # Model config (PREFILL_MODEL + model-specific knobs) lives in a per-model manifest, applied via
+  # setdefault before the runner's env reads. This binding stays model-agnostic: point PREFILL_MANIFEST
+  # at any model's manifest to run it on this topology. ttrun does not propagate shell PREFILL_*, so
+  # the manifest path (like the rest of global_env) must live here.
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi.json"
+  PREFILL_STANDALONE: "1"   # standalone bring-up/pipeline mode, not the production request loop
+  PREFILL_FABRIC_MODE: "2d"   # D2D pipeline transport needs FABRIC_2D
   PREFILL_STANDALONE_PCC: "0"
   PREFILL_STANDALONE_NCHUNKS: "11"
-  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"

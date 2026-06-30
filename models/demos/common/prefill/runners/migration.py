@@ -32,6 +32,36 @@ _DEFAULT_TABLE_QUEUE = "/prefill_mig_tbl_1"
 _DEFAULT_RESP_QUEUE = "/prefill_mig_rsp_1"
 
 
+def serialize_kv_chunk_table(
+    *,
+    table_builder,
+    num_layers: int,
+    max_seq_len: int,
+    num_users: int,
+    chunk_n_tokens: int,
+    chunk_size_bytes: int,
+    path: str,
+) -> str:
+    """Populate the generic KvChunkAddressTableConfig, invoke a model's `table_builder`, and serialize
+    the result to a protobuf file for the worker's SET_TABLE. Returns `path`.
+
+    The KV layout (how natural positions map to storage chips/offsets) is the one model-specific part:
+    the caller supplies `table_builder(config, chunk_size_bytes, num_users) -> KvChunkAddressTable`.
+    Everything here — config population, serialization, logging — is model-agnostic.
+    """
+    disagg = ttnn.experimental.disaggregation
+    cfg = disagg.KvChunkAddressTableConfig()
+    cfg.num_layers = num_layers
+    cfg.max_sequence_length = max_seq_len
+    cfg.num_slots = num_users
+    cfg.chunk_n_tokens = chunk_n_tokens
+    cfg.chunk_size_bytes = chunk_size_bytes
+    table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
+    disagg.export_to_protobuf_file(table, path)
+    logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
+    return path
+
+
 def _resolve_queue_names() -> tuple[str, str, str]:
     return (
         os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", _DEFAULT_CMD_QUEUE),

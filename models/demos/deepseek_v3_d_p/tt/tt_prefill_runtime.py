@@ -13,7 +13,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 
 
@@ -306,7 +306,7 @@ class TtPrefillRuntime:
         The runner publishes the serialized table to the worker — this method only describes the
         cache layout; it issues no migration comms. Single-rank only (config.num_layers == the
         full model)."""
-        from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import build_and_serialize_kv_chunk_table
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,

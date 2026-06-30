@@ -255,7 +255,7 @@ def validate_migration_kv(
 
     The migration (src_slot -> dst_slot) is driven by tt-llm-engine (the prefill
     scheduler / driver over the migration layer) — the runner never issues migrate
-    itself (see kv_migration_setup; the runner only publishes the table via SET_TABLE).
+    itself (see kv_chunk_table; the runner only publishes the table via SET_TABLE).
     This reuses `kv_cache_pcc_check` to PCC BOTH endpoints against the SAME golden
     `kv_post_transform` trace:
 

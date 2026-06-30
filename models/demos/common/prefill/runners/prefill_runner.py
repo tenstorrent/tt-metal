@@ -60,12 +60,23 @@ def _apply_manifest_env():
 
     with open(manifest_path) as mp:
         manifest = json.load(mp)
-    users = manifest["users"]
-    N = len(users)
 
     def sd(key, val):
         if val is not None:
             os.environ.setdefault(key, str(val))
+
+    # Generic model/run config: a flat PREFILL_* map applied verbatim (setdefault). This lets a
+    # rank-binding stay topology-only (rank_bindings + mesh_graph_desc) and point at a per-model
+    # manifest for all model config — PREFILL_MODEL, fabric mode, chunk count, etc.
+    for key, val in manifest.get("env", {}).items():
+        sd(key, val)
+
+    # The migration/pairwise-validation runs additionally carry a users[] + migration{} block. A
+    # plain model-config manifest omits it (env-only), so it's optional.
+    users = manifest.get("users")
+    if not users:
+        return
+    N = len(users)
 
     model = manifest.get("model", {})
     mig = manifest.get("migration", {})

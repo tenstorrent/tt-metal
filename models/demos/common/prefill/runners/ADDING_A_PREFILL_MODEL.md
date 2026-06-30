@@ -141,7 +141,10 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's
         block-cyclic layout) to `path` and return it. The engine then PUBLISHES it to the
-        migration worker — this method issues no comms. Called when PREFILL_ENABLE_MIGRATION=1."""
+        migration worker — this method issues no comms. Called when PREFILL_ENABLE_MIGRATION=1.
+        Use the shared `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py)
+        for the config-population + protobuf-serialize boilerplate; supply only your model's
+        table builder + chunk geometry."""
 
     def set_layer_ack_channel(self, channel) -> None:
         """Register the per-layer LayerAck channel (the engine creates and owns it); the
@@ -168,6 +171,32 @@ ADAPTER_PATHS = {
 propagate shell `PREFILL_*`), set it in the binding YAML's `global_env`. The same
 registry feeds the pytest `variant` fixture (`tests/conftest.py`), so the adapter is
 the single source of truth for both the runner and the tests.
+
+### Per-model manifest (keeps bindings model-agnostic)
+
+Rather than scattering `PREFILL_MODEL` and the model's knobs across every rank-binding,
+put them in a per-model **manifest** in your package and point the binding at it:
+
+```json
+// models/demos/my_model/tt/runners/manifests/my_model.json
+{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32" } }
+```
+
+```yaml
+# the binding's global_env then needs only this model reference:
+PREFILL_MANIFEST: "models/demos/my_model/tt/runners/manifests/my_model.json"
+```
+
+The manifest's `env` map is applied with `setdefault` before the runner reads its config, so a
+binding `global_env` value still wins. Precedence under `tt-run`: `global_env` > manifest > code
+default — uniform across ranks (model/run config must be identical on every rank). NOTE: a
+shell-exported `PREFILL_*` is NOT an override here — `tt-run` only passes through the
+`TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_` prefixes, so override via `global_env`, not the shell.
+
+This keeps the rank-binding + mesh-graph descriptors model-agnostic shared topology config (under
+`models/demos/common/prefill/runners/topology_configuration/`) — the same binding runs any model by
+swapping the manifest. (A manifest may also carry a migration `users[]` block for pairwise
+KV-migration validation; see `_apply_manifest_env`.)
 
 ## 4. Validate
 
