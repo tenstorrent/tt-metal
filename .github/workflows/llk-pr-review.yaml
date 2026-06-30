@@ -41,7 +41,8 @@ jobs:
       contents: read             # read the checkout
       pull-requests: write       # post inline review comments
       issues: write              # post acknowledgement / summary
-      id-token: write            # OIDC, if the key path requires it
+      id-token: write            # OIDC: lets GitHub mint the JWT for Tailscale
+                                 # workload-identity federation (and the key path)
     env:
       PR_NUMBER: ${{ github.event.inputs.pr_number }}
     steps:
@@ -129,7 +130,15 @@ jobs:
           } > "$out"
           echo "Assembled $(wc -l < "$out") lines into $out"
 
-      # 4. Run the review: the code-review plugin command against the PR, posting
+      # 4. Connect to Tenstorrent tailnet
+      - name: Connect to Tenstorrent tailnet (Tailscale)
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
+          audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
+          tags: tag:tt-github-actions-public-internet-outbound
+
+      # 5. Run the review: the code-review plugin command against the PR, posting
       #    findings inline via --comment, with the LLK MCP servers and knowledge.
       - name: Run /code-review
         uses: anthropics/claude-code-action@v1
@@ -160,3 +169,9 @@ jobs:
             --max-turns 100
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
+
+      # 6. Tear down the ephemeral tailnet node immediately instead of waiting for
+      #    the up-to-60-minute auto-removal. Runs even if the review step failed.
+      - name: Tailscale cleanup
+        if: always()
+        run: sudo tailscale logout
