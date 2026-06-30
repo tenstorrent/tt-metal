@@ -37,8 +37,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # L1_SMALL region reserved for the MoE routed-expert/combine overlap global semaphore.
-# Required because TtMoe, when built with the overlaps enabled, allocates the semaphore in
-# L1_SMALL at construction. Tests that exercise the overlap must reserve this in device_params.
+# Required because TtMoe, when built with the overlap enabled, uses a global semaphore in L1_SMALL.
+# A single semaphore is shared by all MoE layers (owned by TT_CCL), so this size is independent of
+# layer count.
 MOE_L1_SMALL_REGION_SIZE = 2048
 
 
@@ -330,11 +331,10 @@ class TtMoe(LightweightModule):
             )
 
             # Global semaphore is only needed for overlapping the routed expert with the combine.
+            # See TT_CCL.get_routed_expert_global_semaphore.
             self.routed_expert_global_semaphore = None
             if overlap_routed_expert_with_combine:
-                self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
-                    mesh_device, dm_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
-                )
+                self.routed_expert_global_semaphore = self.tt_ccl.get_routed_expert_global_semaphore(dm_cores)
 
         # Initialize dispatch module (row axis: axis 0)
         self.dispatch_module = TtDispatchModule(
