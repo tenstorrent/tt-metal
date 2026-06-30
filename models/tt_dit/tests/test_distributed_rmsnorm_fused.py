@@ -998,6 +998,163 @@ def test_layernorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_m
     [pytest.param(*p, id=i) for p, i in zip(_LNMOD_PARAMS, _LNMOD_IDS)],
     indirect=["mesh_device", "device_params"],
 )
+def test_layernorm_fused_vs_composite_diff(mesh_device, model, tp, topology, tp_axis, full_mesh):
+    """Per-element fused-vs-composite LayerNorm diff with confounders removed:
+      - NO affine (norm_elementwise_affine=False, no dynamic weight/bias) -> pure
+        normalize (x-mean)/sqrt(var+eps); no weight/bias dtype to confound.
+      - SAME bf16 input fed to both; fp32 OUTPUT for both (so we see normalize
+        precision, not bf16 output quantization).
+      - SAME module/CCLManager (one of each), flag toggled between runs.
+    Reports max/mean |fused-composite|, the worst rows, and correlates the per-row
+    error with the row variance (tests the low-variance-amplifies-rsqrt theory), plus
+    each path's error vs the fp32 torch reference. LNMOD_ROWS picks N (default 4096,
+    multi-AG-round where the gap appears)."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    dim = _LN_HID[model]
+    rows = int(_os.getenv("LNMOD_ROWS", "4096"))
+    torch.manual_seed(0)
+    x_t = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()  # mean-0, bf16-representable
+    # fp32 torch reference: pure LayerNorm, no affine.
+    mean = x_t.mean(-1, keepdim=True)
+    var = x_t.var(-1, unbiased=False, keepdim=True)
+    ref = ((x_t - mean) / torch.sqrt(var + NORM_EPS)).reshape(rows, dim)
+    row_var = var.reshape(rows)  # per-row variance (over the full dim)
+
+    x = bf16_tensor(x_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedLayerNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+
+    def _run(use_fused):
+        prev = _norm._USE_FUSED_LAYERNORM
+        _norm._USE_FUSED_LAYERNORM = use_fused
+        try:
+            return _gather(mod.forward(x, dtype=ttnn.float32), tp_axis).float()
+        finally:
+            _norm._USE_FUSED_LAYERNORM = prev
+
+    out_c = _run(False)
+    out_f = _run(True)
+    out_f2 = _run(True)  # second fused run: tests determinism (AG race vs deterministic bug)
+    det = (out_f - out_f2).abs().max().item()
+    sp1 = (out_f - out_f.mean(-1, keepdim=True)).abs().max(-1).values
+    sp2 = (out_f2 - out_f2.mean(-1, keepdim=True)).abs().max(-1).values
+    logger.info(
+        f"LNDIFF determinism: max|fused_run1 - fused_run2| = {det:.6f} "
+        f"({'NON-DETERMINISTIC (AG race)' if det > 1e-4 else 'deterministic'}) | "
+        f"degenerate rows: launch1={int((sp1<0.01).sum())} launch2={int((sp2<0.01).sum())} /{rows}"
+    )
+
+    d = (out_f - out_c).abs()
+    row_max = d.max(dim=-1).values  # per-row max |fused-composite|
+    worst = torch.argsort(row_max, descending=True)[:8]
+    logger.info(
+        f"LNDIFF {model}_tp{tp} N={rows}: max|f-c|={d.max():.6f} mean|f-c|={d.mean():.8f} "
+        f"pcc(f:c)={_pcc(out_f, out_c)*100:.5f}%"
+    )
+    logger.info(
+        f"LNDIFF vs torch: pcc(composite:ref)={_pcc(out_c, ref)*100:.5f}% "
+        f"pcc(fused:ref)={_pcc(out_f, ref)*100:.5f}% | "
+        f"max|c-ref|={(out_c-ref).abs().max():.5f} max|f-ref|={(out_f-ref).abs().max():.5f}"
+    )
+    logger.info(f"LNDIFF row_var: min={row_var.min():.5f} max={row_var.max():.5f} median={row_var.median():.5f}")
+    for r in worst.tolist():
+        logger.info(
+            f"LNDIFF worst row {r}: row_var={row_var[r]:.6f} max|f-c|={row_max[r]:.6f} "
+            f"|c-ref|={(out_c[r]-ref[r]).abs().max():.6f} |f-ref|={(out_f[r]-ref[r]).abs().max():.6f}"
+        )
+    # correlation: does per-row error track 1/sqrt(var) (low-variance rows worse)?
+    inv_std = 1.0 / torch.sqrt(row_var + NORM_EPS)
+    corr = torch.corrcoef(torch.stack([row_max, inv_std]))[0, 1]
+    logger.info(f"LNDIFF corr(row_max|f-c|, 1/std) = {corr:.4f}  (high => low-variance rows dominate)")
+
+    # Per-row affine recovery. out = (x - mean) * invstd is LINEAR in the host-known
+    # input x, so fitting out[r] = a*x[r] + b recovers the (mean, invstd) each path
+    # actually used: invstd = a, mean = -b/a. This separates the failure modes:
+    #   wrong mean  -> mean_fused != mean_true (constant offset across the row)
+    #   wrong var   -> std_fused  != std_true  (constant scale across the row)
+    #   element noise -> good a,b fit but large residual (r2 < 1)
+    x2 = x_t.reshape(rows, dim)
+
+    def _fit(y, r):
+        xr, yr = x2[r], y[r]
+        xm, ym = xr.mean(), yr.mean()
+        a = ((xr - xm) * (yr - ym)).sum() / ((xr - xm) ** 2).sum()
+        b = ym - a * xm
+        resid = yr - (a * xr + b)
+        ai = a.item()
+        mean_i = float("nan") if abs(ai) < 1e-9 else (-b / a).item()  # degenerate (constant) row -> NaN
+        return ai, mean_i, resid.abs().max().item()  # invstd, mean, max|resid|
+
+    # Count degenerate (constant / collapsed) rows in each output: a broken token whose
+    # normalization produced a constant (e.g. NaN->0) row has ~zero spread.
+    spread_c = (out_c - out_c.mean(-1, keepdim=True)).abs().max(-1).values
+    spread_f = (out_f - out_f.mean(-1, keepdim=True)).abs().max(-1).values
+    logger.info(
+        f"LNDIFF pcc(fused:composite)={_pcc(out_f, out_c)*100:.5f}% | "
+        f"degenerate rows (spread<0.01): comp={int((spread_c<0.01).sum())} "
+        f"fused={int((spread_f<0.01).sum())} /{rows}"
+    )
+
+    for r in worst[:4].tolist():
+        a_c, m_c, rs_c = _fit(out_c, r)
+        a_f, m_f, rs_f = _fit(out_f, r)
+        std_true, mean_true = float(torch.sqrt(row_var[r] + NORM_EPS)), float(mean.reshape(rows)[r])
+        sc = float("nan") if abs(a_c) < 1e-9 else 1 / a_c
+        sf = float("nan") if abs(a_f) < 1e-9 else 1 / a_f
+        logger.info(
+            f"LNDIFF fit row {r}: true(mean={mean_true:+.5f} std={std_true:.5f}) | "
+            f"comp(mean={m_c:+.5f} std={sc:.5f} resid={rs_c:.5f}) | "
+            f"fused(mean={m_f:+.5f} std={sf:.5f} resid={rs_f:.5f}) | "
+            f"Δstd_f={(sf - std_true):+.5f} Δmean_f={(m_f - mean_true):+.5f}"
+        )
+
+    # Vectorized affine recovery for ALL rows: recover invstd per row, compare to truth.
+    # Distribution tells sparse-corruption (a few rows huge) from systematic (all rows off).
+    def _fit_all(y):
+        xm = x2.mean(-1, keepdim=True)
+        ym = y.mean(-1, keepdim=True)
+        a = ((x2 - xm) * (y - ym)).sum(-1) / ((x2 - xm) ** 2).sum(-1)  # invstd per row
+        b = ym.squeeze(-1) - a * xm.squeeze(-1)
+        return 1.0 / a, (-b / a)  # std, mean per row
+
+    std_true_all = torch.sqrt(row_var + NORM_EPS)
+    std_c, mean_c = _fit_all(out_c)
+    std_f, mean_f = _fit_all(out_f)
+    dstd_c, dstd_f = (std_c - std_true_all).abs(), (std_f - std_true_all).abs()
+    for tag, ds in (("comp", dstd_c), ("fused", dstd_f)):
+        nbad = [(int((ds > t).sum()), t) for t in (0.001, 0.005, 0.01, 0.03)]
+        logger.info(
+            f"LNDIFF {tag} |Δstd|: max={ds.max():.5f} mean={ds.mean():.6f} "
+            f"p99={ds.quantile(0.99):.5f} | rows>thr " + " ".join(f"{n}@{t}" for n, t in nbad) + f" /{rows}"
+        )
+    # signed bias: is fused var consistently low (negative Δstd) or symmetric?
+    logger.info(
+        f"LNDIFF fused signed Δstd: mean={ (std_f-std_true_all).mean():+.6f} "
+        f"(negative => variance systematically underestimated)"
+    )
+
+    # Structure by token index: a deterministic multi-round-AG addressing bug makes the
+    # error cluster by AG round (token // 32 tiles). Bin |Δstd| by 256-token blocks.
+    nblk = 16
+    blk = rows // nblk
+    if blk > 0:
+        means = [f"{dstd_f[i*blk:(i+1)*blk].mean():.4f}" for i in range(nblk)]
+        logger.info(f"LNDIFF fused |Δstd| by token-block (x{blk}): " + " ".join(means))
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "model", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNMOD_PARAMS, _LNMOD_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
 def test_rmsnorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_mesh):
     """DistributedRMSNorm (static weight): fused device op (WAN_USE_FUSED_RMSNORM) vs the
     composite pre/AG/post chain, both vs fp32-PyTorch. Fused must be >= composite and

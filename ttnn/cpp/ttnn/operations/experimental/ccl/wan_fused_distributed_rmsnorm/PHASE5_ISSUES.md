@@ -156,3 +156,50 @@ logic bug — it's fp operation-ordering/rounding between two INDEPENDENT Welfor
 bit-exact because they are different kernels. Making them match would require the fused PRE to
 mirror the composite's exact op sequence (guided by a per-element fused-vs-composite device diff).
 The rsqrt fix is kept (correct alignment, 5/5 module corr still pass). Fused RMS unaffected/ships.
+
+### ISSUE 3 — DEFINITIVE per-element device diff (supersedes the "fp op-ordering" guess above)
+Test: `test_layernorm_fused_vs_composite_diff` (models/tt_dit/tests/test_distributed_rmsnorm_fused.py).
+No-affine (norm_elementwise_affine=False -> no weight/bias confounder), SAME seed-fixed bf16 mean-0
+input to BOTH paths, fp32 output, one shared DistributedLayerNorm+CCLManager, flag toggled. Gathers
+both [N,dim] fp32 outputs and, per row, fits out = a*x + b to RECOVER the (mean, invstd) each path
+actually applied (output is linear in the host-known input x). N=4096. Composite is the accurate
+reference: pcc(composite : fp32-torch) = 99.9997%+ at every TP; max|comp-ref| ~ 0.013. Composite is
+NOT the problem — fused is.
+
+THERE ARE TWO SEPARATE FUSED FAILURES, by per-device shard width (= num_tile_cols, the wide-shard
+threshold for block-major POST is num_tile_cols >= 56 with use_recip_lut && use_mux, factory L587):
+
+ISSUE 3A (SEVERE, wide-shard / block-major POST path). WAN TP=2 -> 2560/dev = 80 tiles >= 56 ->
+force_recip_stream -> streaming + block-major POST. Result on a FRESHLY RESET galaxy:
+  - 960 / 4096 rows (23%) come out DEGENERATE = exactly CONSTANT (affine-fit slope 0, resid 0.0).
+  - NON-DETERMINISTIC run-to-run (max|run1-run2| ~ 0.015).
+  - pcc(fused:composite) = 87.5%, max err 3.46 (= the row's true max |normalized x|: the token is
+    left un-normalized / collapsed).
+TP=4 (40 tiles) and TP=8 (20 tiles) take the RESIDENT path and are CLEAN: deterministic, 0
+degenerate rows. => the bug is the recently-added block-major-POST + force_recip_stream wide-shard
+path (num_tile_cols>=56), NOT the AG round count. The earlier "grows with N / AG rounds" framing was
+wrong; it tracks SHARD WIDTH (which path), not N.
+
+ISSUE 3B (MILD, narrow-shard path = the real ~0.013% in-block regressor). TP=4 and TP=8:
+deterministic, no degenerate rows, but fused variance is ~4x noisier than composite:
+  - per-row recovered std error: composite max 0.0037, never > 0.5%; fused mean 0.0066, p99 ~0.035,
+    ~25% of rows > 1% std error, 90+ rows > 3%. SIGNED mean ~ 0 (symmetric, zero-mean spread).
+  - UNCORRELATED with row variance (corr(row_err, 1/std) ~ 0) -> NOT the rsqrt approximation.
+  - UNIFORM across token-index blocks -> NOT a multi-round AG addressing bug.
+  - Each affected row is still a CLEAN affine of x (tiny resid) -> the op applies a consistent but
+    slightly-wrong (mean, var) per token; it's a stats-precision difference, not normalize noise.
+  PRE kernel (welford), recip LUT values (1/(i+1) fp32, identical), combine_welford merge (shared
+  code), and stats transport (all fp32 CBs / RawUInt32 packets) are all confirmed equivalent to
+  composite -> the residual is the only-not-shared component: the fabric ring-AG of the 2-stat
+  partial vs composite's all_gather_persistent_buffer. Small, zero-mean, deterministic.
+
+WARM-GALAXY CONTAMINATION: tp4/tp8 showed degenerate rows ONLY on a galaxy warmed by MANY prior
+(broken tp2) runs; after `tt-smi -glx_reset` they are clean, and a single tp2->tp4->tp8 sequence on
+a fresh galaxy does NOT corrupt the later configs. So broken (block-major) runs leave device-
+persistent fabric state that accumulates and eventually degrades otherwise-clean narrow-shard runs.
+This explains earlier unstable model-level numbers. ALWAYS reset before correctness runs.
+
+FIX PRIORITIES: (A) the block-major-POST/force_recip_stream wide-shard path (token collapse + non-
+determinism) is the real blocker — gate it off or fix the streaming POST token addressing; (B) the
+narrow-shard ~0.66%-std variance noise is minor (the 0.013% regressor) and lives in the fused 2-stat
+fabric AG. Fused RMS (1-stat) is unaffected and ships.
