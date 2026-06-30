@@ -193,7 +193,12 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     prepared = weight is not None
     if weight is None:
         wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
-        weight = ttnn.from_torch(wt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+        weight = ttnn.from_torch(
+            wt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
     if "cc" not in cache:
         cache["cc"] = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
