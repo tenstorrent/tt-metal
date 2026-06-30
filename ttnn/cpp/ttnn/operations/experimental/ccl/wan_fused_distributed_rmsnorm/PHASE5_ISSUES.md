@@ -134,3 +134,25 @@ forwarder is structurally consistent on inspection (slot=i*256, stat s at +s*128
 the error is subtle (not a gross misindex). Pinning it needs device-level debug (DPRINT won't
 compile in the forwarder, triage callstacks broken in-container -> code bisection), a focused
 multi-iteration effort. Fused LN stays gated; fused RMS ships.
+
+### ISSUE 3 — "are we doing different math?" — ANSWERED + partial fix
+Compared the fused Welford LN vs the composite dit_layernorm step-by-step:
+- mean/variance: IDENTICAL — same per-shard Welford (same SrcA path for bf16, same 1/(i+1)
+  reciprocal LUT, same reduce width/order) and the EXACT SAME shared combine_welford_partials
+  merge code (so the merged (mean,var) is bit-identical given identical per-shard inputs).
+- ONE real difference FOUND + FIXED: the rsqrt approximation. Composite uses rsqrt_tile<true>
+  (legacy); fused used the non-legacy default (in combine_welford's RSqrtPolicy path AND the
+  is_tp_1 path). Added a `legacy` field to RSqrtPolicy (default false; other callers unchanged)
+  and set legacy=true in the fused LN. => fused now uses the same rsqrt as composite. But this
+  moved the Wan block PCC only 99.8692 -> 99.8698 — real different math, NOT the dominant cause.
+- RULED OUT: UnpackToDestFp32/#45319 — the composite enables it ONLY for fp32 input
+  (welford_unpack_fp32_active = in==Float32 && fp32_dest_acc; pre factory L120); for bf16 BOTH use
+  the SrcA path, so it's not the difference. Also ruled out the merge (identical code), the recip
+  LUT (identical values), and eps (scalar-add vs tile-add of the same eps).
+
+CONCLUSION: the residual ~0.008% op gap (-> 0.13% in-block via ~13x amplification) is NOT a single
+logic bug — it's fp operation-ordering/rounding between two INDEPENDENT Welford PRE kernels
+(different tile_regs/reconfig/DEST sequencing), amplified on low-variance rows. They are not
+bit-exact because they are different kernels. Making them match would require the fused PRE to
+mirror the composite's exact op sequence (guided by a per-element fused-vs-composite device diff).
+The rsqrt fix is kept (correct alignment, 5/5 module corr still pass). Fused RMS unaffected/ships.
