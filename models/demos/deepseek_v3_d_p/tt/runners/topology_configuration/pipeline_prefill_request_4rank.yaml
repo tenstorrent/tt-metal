@@ -19,6 +19,7 @@ global_env:
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   # Set PREFILL_MIGRATION_CLIENT_DIR to the dir containing the migration_client.so file
+  PREFILL_MIGRATION_GRANULARITY: "layerwise"
   PREFILL_MIGRATION_SELFTEST: "0"
   PREFILL_MODEL_VARIANT: "kimi_k2_6"
   PREFILL_PP_D2D_FIFO_BYTES: "4096"
