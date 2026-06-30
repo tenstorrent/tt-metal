@@ -46,22 +46,11 @@ def open_parent_with_retry(n, *, retries=2, l1_small_size=24576, trace_region_si
     """Open an (1,n) FABRIC_1D parent mesh; reset+retry on ethernet-core stalls."""
     last = None
     for _ in range(retries + 1):
-        if ttnn.get_num_devices() < n:
-            pytest.skip(f"need >={n} chips, have {ttnn.get_num_devices()}")
         try:
-            # Full fabric signature with STRICT_INIT (matches the proven tt_symbiote denoise
-            # fixture): STRICT_INIT re-trains the 1D line on every open, so a prior run's leaked
-            # fabric state can't carry a half-trained line into the next open (a proximate cause
-            # of the "active ethernet core timed out" stall on the 2nd run). The short
-            # set_fabric_config(FABRIC_1D) form uses laxer defaults.
-            ttnn.set_fabric_config(
-                ttnn.FabricConfig.FABRIC_1D,
-                ttnn.FabricReliabilityMode.STRICT_INIT,
-                None,
-                ttnn.FabricTensixConfig.DISABLED,
-                ttnn.FabricUDMMode.DISABLED,
-                ttnn.FabricManagerMode.DEFAULT,
-            )
+            num_devices = ttnn.get_num_devices()
+            if num_devices < n:
+                pytest.skip(f"need >={n} chips, have {num_devices}")
+            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(1, n),
                 l1_small_size=l1_small_size,

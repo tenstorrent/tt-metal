@@ -21,7 +21,7 @@ from typing import Optional
 import ttnn
 
 from . import stages
-from .stages import MeshHandles, TracedMeshHandles
+from .stages import Decode16MeshHandles, MeshHandles, TracedMeshHandles
 
 
 @contextmanager
@@ -91,6 +91,113 @@ def _carve_per_chip(parent_mesh, submesh_shape, submesh_offset, num_chips):
 
 
 _DEFAULT_TRACE_REGION_SIZE = 134_217_728  # 128 MiB — matches single-chip trace tests
+
+
+@contextmanager
+def open_decode_16_mesh(
+    l1_small_size: Optional[int] = None,
+    trace_region_size: Optional[int] = None,
+    enable_fabric: bool = True,
+):
+    """Open a 16-chip layout on the BH Galaxy for TP=8 prefill + 8-stage
+    streamed denoise. Opens the full Galaxy as a (4,8) parent and carves two
+    adjacent 8-chip rows from it (only 16 of 32 chips are actually used; this
+    matches the 28-chip pipeline's "open full Galaxy, carve submeshes" pattern).
+
+    Layout (on the (4,8) parent):
+      row 0: prefill_submesh (1,8) at (0,0) — SigLIP DP + StagePrefillTP4.
+      row 1: denoise_submesh (1,8) at (1,0) — parent of the eight 1x1 stage submeshes.
+             denoise_per_chip[i] = (1,1) at (1,i) for i in 0..7.
+
+    This keeps TP=8 prefill in the original production orientation. Fabric is
+    FABRIC_2D: the carved chips are a sub-slice of the 32-chip torus (not a clean
+    1x8 ring), so the denoise velocity-wrap socket (stage7->stage0, a long
+    col-7->col-0 hop) has no forwarding direction under FABRIC_1D. FABRIC_2D
+    routes it (and the adjacent forward hops, and the prefill TP=8 collectives
+    when those use Linear topology via PI0_CCL_TOPOLOGY=linear — Ring deadlocks
+    under FABRIC_2D). Verified by _bench_runs/probe_{fabric_allreduce,socket_d2d}.py.
+    """
+    # Galaxy is 32 chips. Open a row-major (4,8) parent so every 8-chip stage
+    # uses the same orientation as the known-good production 1x8 prefill.
+    open_kwargs = {"mesh_shape": ttnn.MeshShape(4, 8)}
+    if l1_small_size is not None:
+        open_kwargs["l1_small_size"] = l1_small_size
+    if trace_region_size is not None:
+        open_kwargs["trace_region_size"] = trace_region_size
+
+    # set_fabric_config can raise IndexError when an earlier import-time probe
+    # closed the cluster and left the topology unordered_map empty. Mirror the
+    # reset/retry pattern from tests/pcc/_fabric_harness.open_parent_with_retry:
+    # on failure drop the fabric, tt-smi -r, settle, and retry.
+    parent = None
+    if enable_fabric:
+        import subprocess
+        import time as _time
+
+        last_err = None
+        # The set_fabric_config IndexError (eth-core/topology wedge) can persist
+        # across a quick reset, especially when re-opening between back-to-back
+        # processes. Use more attempts and a longer, escalating settle.
+        for _attempt in range(6):
+            try:
+                ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
+                parent = ttnn.open_mesh_device(**open_kwargs)
+                break
+            except Exception as e:
+                last_err = e
+                try:
+                    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+                except Exception:
+                    pass
+                try:
+                    # tt-smi -r is ineffective on this Galaxy (CPLD FW < v1.16);
+                    # -glx_reset does the real IPMI reset of all 32 ASICs.
+                    subprocess.run(["tt-smi", "-glx_reset"], check=False, timeout=300)
+                except FileNotFoundError:
+                    pass
+                _time.sleep(15 + 15 * _attempt)
+        if parent is None:
+            raise last_err
+    else:
+        parent = ttnn.open_mesh_device(**open_kwargs)
+    all_submeshes = []
+    try:
+        if parent.get_num_devices() != 32:
+            raise RuntimeError(f"Parent mesh has {parent.get_num_devices()} devices, expected 32 (full Galaxy)")
+
+        # 8 chips row 0: TP=8 prefill in the original working 1x8 orientation.
+        prefill_submesh = parent.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(0, 0))
+        all_submeshes.append(prefill_submesh)
+
+        # 8 chips row 1: parent of the 8 streamed denoise stages.
+        denoise_submesh = parent.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(1, 0))
+        all_submeshes.append(denoise_submesh)
+
+        # 8 single-chip submeshes at (1, i) for i in 0..7 — one per stage.
+        denoise_per_chip = _carve_per_chip(parent, (1, 8), (1, 0), 8)
+        all_submeshes.extend(denoise_per_chip)
+
+        yield Decode16MeshHandles(
+            parent=parent,
+            prefill_submesh=prefill_submesh,
+            denoise_submesh=denoise_submesh,
+            denoise_per_chip=denoise_per_chip,
+        )
+    finally:
+        try:
+            from models.experimental.pi0_5.tt.tt_pipeline._d2d_pipeline import Pipeline
+
+            Pipeline.release_all()
+        except Exception:
+            pass
+        for sm in reversed(all_submeshes):
+            try:
+                ttnn.close_mesh_device(sm)
+            except Exception:
+                pass
+        ttnn.close_mesh_device(parent)
+        if enable_fabric:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 @contextmanager

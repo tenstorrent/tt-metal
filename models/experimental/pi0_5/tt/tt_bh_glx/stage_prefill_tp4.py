@@ -68,7 +68,13 @@ def _ccl_base(tp: int) -> dict:
         "num_buffers_per_channel": 2,
     }
     if tp == 8:
-        kw["topology"] = ttnn.Topology.Ring
+        # Ring needs the chip7<->chip0 wraparound link, which exists only when
+        # these 8 chips ARE the SystemMesh torus (production 1x8). On an 8-chip
+        # sub-slice of a 32-chip Galaxy the wraparound can't route (FABRIC_1D:
+        # "no forwarding direction"; FABRIC_2D: deadlock). PI0_CCL_TOPOLOGY=linear
+        # drops the wraparound (adjacent hops only) — numerically identical.
+        _topo = os.environ.get("PI0_CCL_TOPOLOGY", "ring").strip().lower()
+        kw["topology"] = ttnn.Topology.Linear if _topo == "linear" else ttnn.Topology.Ring
     return kw
 
 
@@ -353,6 +359,13 @@ class GemmaMLPTP4:
             self._pcfg_grid = (12, 8)
         else:
             self._pcfg_grid = (8, 8)
+        if os.environ.get("PI0_PREFILL_PCFG_DEBUG", "").lower() in ("1", "true", "yes", "on"):
+            print(
+                f"[PCFG_DEBUG StagePrefillTP4.__init__] grid_size={self.grid_size} "
+                f"_pcfg_grid={self._pcfg_grid} num_cores={num_cores} tp={self.tp} "
+                f"mesh_shape={mesh_device.shape if hasattr(mesh_device, 'shape') else '?'}",
+                flush=True,
+            )
 
         self._fused_rs = self.tp > 1 and _mlp_fused_rs_enabled()
         self._rs_buffer_cache: Dict[Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
@@ -691,6 +704,13 @@ class _GemmaBlockTP4:
                 norm_cfg = build_sharded_norm_pcfg(
                     m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles))
                 )
+                if os.environ.get("PI0_PREFILL_PCFG_DEBUG", "").lower() in ("1", "true", "yes", "on"):
+                    print(
+                        f"[PCFG_DEBUG _get_sharded_norm] m_padded={m_padded} m_tiles={m_tiles} "
+                        f"hidden_tiles={hidden_tiles} max_grid_x=8 max_grid_y={min(8, max(1, m_tiles))} "
+                        f"-> norm_cfg={'None' if norm_cfg is None else f'bs_grid=(x={norm_cfg[2].x}, y={norm_cfg[2].y})'}",
+                        flush=True,
+                    )
                 if norm_cfg is not None:
                     pc, memcfg_factory, grid = norm_cfg
                     self._rms_norm_sharded_pcfg = pc

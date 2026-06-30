@@ -189,6 +189,16 @@ class Pi0_5LiberoAdapter:
             # Per-task trace cache: re-capture when (task_desc, num_denoising_steps)
             # changes. Same idea as `ttnn` backend's trace cache (line ~631-654).
             self._glx1x8_trace_key = None
+        elif backend == "ttnn_16_decode":
+            # 16-chip pipeline: row-0 1x8 vision/prefill + row-1 8-stage
+            # streamed decode_all denoise.
+            assert mesh_handles is not None, "ttnn_16_decode backend requires handles from open_decode_16_mesh()"
+            from models.experimental.pi0_5.tt.tt_bh_glx.pipeline_16_decode import Pi0_5GLX16DecodePipeline
+
+            self._ttnn = None
+            self._Pi0_5ModelTTNN = None
+            self.mesh_handles = mesh_handles
+            self.model = Pi0_5GLX16DecodePipeline(cfg, loader.categorized_weights, mesh_handles)
         else:
             raise ValueError(f"Unknown backend: {backend}")
         self.cfg = cfg
@@ -445,6 +455,20 @@ class Pi0_5LiberoAdapter:
                     images,
                     lang_tokens=tokens,
                     iters=1,
+                )
+            actions_np = actions[0].float().cpu().numpy()
+        elif self.backend == "ttnn_16_decode":
+            # 16-chip decode pipeline. The phase-1 implementation rebuilds the
+            # streamed denoise driver per chunk after handing prefill KV to the
+            # denoise row through torch, prioritizing correctness over final
+            # pipeline throughput.
+            self.model.set_num_denoising_steps(num_denoising_steps)
+            with torch.no_grad():
+                actions = self.model.sample_actions(
+                    images=images,
+                    img_masks=img_masks,
+                    lang_tokens=tokens,
+                    lang_masks=lang_mask,
                 )
             actions_np = actions[0].float().cpu().numpy()
         elif self._use_trace:
@@ -968,7 +992,11 @@ def main():
         default=None,
         help="Override env step cap. If unset, uses per-suite default (spatial=220, object=280, goal=300, 10=520).",
     )
-    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn", "ttnn_glx", "ttnn_1x8"])
+    ap.add_argument(
+        "--backend",
+        default="pytorch",
+        choices=["pytorch", "ttnn", "ttnn_glx", "ttnn_1x8", "ttnn_16_decode"],
+    )
     ap.add_argument(
         "--replan-steps",
         type=int,
@@ -1082,7 +1110,7 @@ def main():
         mesh_ctx = open_galaxy_mesh(l1_small_size=24576)
         mesh_handles = mesh_ctx.__enter__()
         print(f"   ttnn_glx mesh opened in {time.time() - t0:.1f}s (28 chips on 8x4 BH Galaxy)")
-    elif args.backend == "ttnn_1x8":
+    elif args.backend in ("ttnn_1x8", "ttnn_16_decode"):
         # 1×8-specific env vars that the perf test (test_perf_tt_bh_glx_1x8.py)
         # self-applies at module load. These are NOT in pi05_production.env
         # — they're pipeline_1x8-specific and control how attention/MLP
@@ -1098,16 +1126,29 @@ def main():
         }.items():
             os.environ.setdefault(_k, _v)
 
-        from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+        if args.backend == "ttnn_1x8":
+            from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
 
-        mesh_ctx = open_prefill_tp4_mesh(
-            tp=8,
-            l1_small_size=24576,
-            trace_region_size=128 * 1024 * 1024,
-            num_command_queues=2,
-        )
-        mesh_handles = mesh_ctx.__enter__()
-        print(f"   ttnn_1x8 mesh opened in {time.time() - t0:.1f}s (8 chips, 2 CQs)")
+            mesh_ctx = open_prefill_tp4_mesh(
+                tp=8,
+                l1_small_size=24576,
+                # Bumped 128 → 256 MiB so a 10-task LIBERO suite can capture
+                # all 10 traces in the same mesh open. 10 traces × ~16 MiB each
+                # ≈ 160 MiB; 128 was overflowing during task 9 capture.
+                trace_region_size=256 * 1024 * 1024,
+                num_command_queues=2,
+            )
+            mesh_handles = mesh_ctx.__enter__()
+            print(f"   ttnn_1x8 mesh opened in {time.time() - t0:.1f}s (8 chips, 2 CQs)")
+        else:
+            from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_decode_16_mesh
+
+            mesh_ctx = open_decode_16_mesh(
+                l1_small_size=24576,
+                trace_region_size=256 * 1024 * 1024,
+            )
+            mesh_handles = mesh_ctx.__enter__()
+            print(f"   ttnn_16_decode mesh opened in {time.time() - t0:.1f}s (16 chips)")
     adapter = Pi0_5LiberoAdapter(
         args.checkpoint,
         backend=args.backend,

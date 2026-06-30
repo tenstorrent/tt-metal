@@ -147,6 +147,16 @@ class TracedMeshHandles:
 
 
 @dataclass
+class Decode16MeshHandles:
+    """Live handles for the 16-chip 1x8 prefill + 8-stage decode denoise pipeline."""
+
+    parent: object  # (4,8) Galaxy parent; only rows 0..1 are used by this pipeline
+    prefill_submesh: object  # (1,8) @ (0,0): SigLIP DP + TP=8 prefill
+    denoise_submesh: object  # (1,8) @ (1,0): parent for the streamed denoise stages
+    denoise_per_chip: List[object] = field(default_factory=list)  # 8 x (1,1), row 1 cols 0..7
+
+
+@dataclass
 class StageTimings:
     """Wall-clock per stage in ms. denoise_step_ms holds per-step times."""
 

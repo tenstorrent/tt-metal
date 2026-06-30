@@ -272,6 +272,7 @@ def _bind_stage_runtime(
     kvd = _kv_dtype()
     for k, (lo, hi) in enumerate(bounds):
         st, mesh = stages[k], submeshes_n[k]
+        st._layer_lo = lo  # global layer offset; used by refresh_prefix_kv (build-once reuse)
         if st._use_concat_kv:
             kvd_concat = _kv_dtype()
             st._prefix_kv = []
@@ -751,6 +752,33 @@ class TTNNPi05DenoiseStreamedPipeline:
         self._pipe.replay_loop(self._loop_tids, drain="stage0", drain_mesh=self._stage0_mesh)
         return ttnn.to_torch(self._x_t)[:, : self._ah, :]
 
+    def refresh_prefix_kv(self, prefix_kv_cache):
+        """In-place refresh of each stage's concat-KV buffers from a new prefill's
+        per-layer (k, v) host tensors. Enables build-once + replay across chunks:
+        the denoise weights are L1-pinned and the teardown (release_all) only frees
+        traces, so REBUILDING per chunk leaks weights and OOMs L1. Reusing the build
+        and overwriting the fixed-shape KV buffers avoids that entirely."""
+        kvd = _kv_dtype()
+        for st in self._stages:
+            if not getattr(st, "_use_concat_kv", False) or st._prefix_kv is None:
+                raise RuntimeError("refresh_prefix_kv requires concat-KV stages (build_denoise_loop_pipeline)")
+            lo = st._layer_lo
+            for j, (pk_dev, pv_dev) in enumerate(st._prefix_kv):
+                pk, pv = prefix_kv_cache[lo + j]
+                ttnn.copy_host_to_device_tensor(ttnn.from_torch(pk, dtype=kvd, layout=ttnn.TILE_LAYOUT), pk_dev)
+                ttnn.copy_host_to_device_tensor(ttnn.from_torch(pv, dtype=kvd, layout=ttnn.TILE_LAYOUT), pv_dev)
+
+    def rerun(self, x_t_init):
+        """Re-seed the noise buffer and replay the captured loop (build-once reuse)."""
+        assert self._loop_tids is not None, "call stream_euler(capture=True) once before rerun()"
+        ttnn.copy(
+            ttnn.from_torch(
+                x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1
+            ),
+            self._x_t,
+        )
+        return self.replay()
+
     def close(self):
         self._pipe.release_loop(self._loop_tids)
         self._loop_tids = None
@@ -766,6 +794,43 @@ class TTNNPi05DenoiseStreamedPipeline:
             Pipeline.release_all()
         except Exception:
             pass
+
+    def release_weights(self):
+        """Deallocate every device tensor reachable from the stages (weights, KV,
+        mask, mods, RoPE tables, suffix). close()/release_all only free traces +
+        transports, NOT the L1-pinned weights -- so a rebuild (required per prompt,
+        since position_offset/attention_mask are baked into the trace) would leak a
+        full weight set and OOM L1 after a few distinct prompts. Call before dropping
+        the driver on rebuild. Skips device handles; idempotent via a seen-set."""
+        seen = set()
+
+        def _free(o):
+            if o is None or id(o) in seen:
+                return
+            seen.add(id(o))
+            if isinstance(o, ttnn.Tensor):
+                try:
+                    ttnn.deallocate(o)
+                except Exception:
+                    pass
+                return
+            if type(o).__name__ in ("MeshDevice", "Device", "MeshShape", "MeshCoordinate"):
+                return  # never descend into device handles
+            if isinstance(o, (list, tuple, set)):
+                for x in o:
+                    _free(x)
+                return
+            if isinstance(o, dict):
+                for x in o.values():
+                    _free(x)
+                return
+            d = getattr(o, "__dict__", None)
+            if isinstance(d, dict):
+                for x in list(d.values()):
+                    _free(x)
+
+        for st in self._stages:
+            _free(st)
 
 
 def build_denoise_loop_pipeline(
