@@ -1123,7 +1123,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadCommonVarargPartialUpdate) {
 void kernel_main() {
     const uint32_t vararg_value = get_common_vararg(0);
     Scratchpad<int32_t> pad(scratch::scratch);
-    const uint32_t scratch_base = pad.get_base_addr().get_address();
+    const uint32_t scratch_base = pad.get_base_address();
     DataflowBuffer buf(dfb::stage);
     buf.reserve_back(1);
     volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();

@@ -43,5 +43,5 @@ void kernel_main() {
     // ReadFromDeviceL1 after the (blocking) enqueue completes — the same pattern test_add_two_ints
     // and test_single_dm_l1_write rely on for Gen1.
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-    report[0] = s.get_base_addr().get_address();
+    report[0] = s.get_base_address();
 }

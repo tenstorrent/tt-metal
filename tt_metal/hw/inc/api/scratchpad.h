@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "experimental/kernel_args.h"
+#include "internal/risc_attribs.h"  // tt_l1_ptr (named in get_unsafe_ptr's return type)
 
 // Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -114,15 +115,29 @@ public:
         return size_type{sentinel_addr_.get_address() - start_addr_.get_address()};
     }
 
-    /** @brief Get the base address of the scratchpad.
+    /** @brief Raw, directly-dereferenceable L1 pointer to the start of the scratchpad.
      *
-     * This is a facility to escape the index accessors while getting the base address directly.
-     * Indexed accessors should be preferred whenever possible as they have a bounds check via ASSERT (see
-     * api/debug/assert.h for when it's activated).
-     *
-     * @return the base address of the scratchpad
+     * Escapes the bounds-checked index accessor; staying within size() is then the caller's
+     * responsibility. Mirrors LocalTensorAccessor::get_unsafe_ptr().
      */
-    [[nodiscard]] pointer get_base_addr() const noexcept { return start_addr_; }
+    [[nodiscard]] tt_l1_ptr T* get_unsafe_ptr() const noexcept { return start_addr_.get_unsafe_ptr(); }
+
+    /** @brief L1 base address of the scratchpad, as a raw byte address.
+     *
+     * The form most kernel-side APIs consume (NOC transfers, CB/LLK configuration, ...). Mirrors
+     * LocalTensorAccessor::get_bank_base_address() — without the "bank": a scratchpad is private
+     * node-local L1, not a tensor shard.
+     *
+     * @return the scratchpad's L1 base address
+     */
+    [[nodiscard]] uint32_t get_base_address() const noexcept {
+        return static_cast<uint32_t>(start_addr_.get_address());
+    }
+
+    /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
+     * (pointer arithmetic, scoped_lock, comparisons, ...). Mirrors LocalTensorAccessor::local_mem().
+     */
+    [[nodiscard]] const pointer& local_mem() const noexcept { return start_addr_; }
 
     // begin/end pair to enable range-based-for over the entire scratchpad region.
     // This does not support standard-library algorithms that require a conforming iterator:
@@ -137,7 +152,7 @@ private:
     // construction/copy and a constexpr `get_address()`:
     //   - Scratchpad(pointer, size_type)
     //   - size(), size_in_bytes()
-    //   - get_base_addr()
+    //   - get_base_address(), local_mem()
     //   - begin(), end()
     // They are currently runtime-only because `CoreLocalMem<T>` does not provide constexpr support
     // for those operations.

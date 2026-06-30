@@ -3628,7 +3628,7 @@ TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeDMKernel) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     Scratchpad<int32_t> pad(scratch::scratch);
-    volatile uint32_t base = pad.get_base_addr().get_address();
+    volatile uint32_t base = pad.get_base_address();
     (void)base;
 }
 )"};
@@ -3658,7 +3658,7 @@ TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeComputeKernel) {
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     Scratchpad<int32_t> pad(scratch::scratch);
-    volatile uint32_t base = pad.get_base_addr().get_address();
+    volatile uint32_t base = pad.get_base_address();
     (void)base;
 }
 )"};
