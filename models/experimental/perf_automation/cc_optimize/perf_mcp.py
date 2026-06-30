@@ -204,6 +204,12 @@ def _is_kernel_able(op_code: str) -> bool:
     return not any(m in oc for m in _SEALED_OP_MARKERS)
 
 
+def _ttl_available() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("ttl") is not None
+
+
 def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool, str, str]:
     """DETERMINISTIC ladder gate for ONE open op. Returns (done, rung, reason).
 
@@ -254,7 +260,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
         )
     if _is_kernel_able(op_code):
-        if "tt-lang" not in kinds:
+        if _ttl_available() and "tt-lang" not in kinds:
             return (
                 False,
                 "tt-lang",
@@ -529,6 +535,9 @@ def record_kernel_attempt(
     is_knob = (kernel_kind or "").lower() in _KNOB_KINDS
     ev = _scan_kernel_evidence()
     detected = True if is_knob else bool(ev["markers"] or ev["cpp_files"])
+    ttl_absent = (kernel_kind or "").lower() == "tt-lang" and not _ttl_available()
+    if ttl_absent:
+        detected = False
     attempts = _load_attempts()
     rec = {
         "op_signature": op_signature,
@@ -544,10 +553,14 @@ def record_kernel_attempt(
     return {
         "recorded": True,
         "attempt": rec,
-        "warning": None
-        if detected
-        else "NO kernel markers (generic_op/@ttl/.cpp/ProgramDescriptor) found in model source — this "
-        "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first.",
+        "warning": (
+            "tt-lang toolchain (ttl) not installed — kernel cannot run or be measured; attempt NOT credited."
+            if ttl_absent
+            else None
+            if detected
+            else "NO kernel markers (generic_op/@ttl/.cpp/ProgramDescriptor) found in model source — this "
+            "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first."
+        ),
     }
 
 
