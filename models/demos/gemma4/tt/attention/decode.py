@@ -92,24 +92,16 @@ def decode_forward(
         sin_pos = ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT)
         cos_pos = ttnn.unsqueeze_to_4D(cos_pos)  # [1, 1, batch_pad, head_dim]
         sin_pos = ttnn.unsqueeze_to_4D(sin_pos)
-        # RoPE. batch=1 uses the fused single-position rotary_embedding (one core
-        # but cheap, no slice/tilize churn). batch>1 needs per-user positions,
-        # which that op can't express, so fall back to the manual elementwise
-        # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
-        # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
+        # RoPE. Use the manual elementwise q*cos + rotate_half(q)*sin path for
+        # decode to avoid the fused single-position op's large static-CB footprint.
         batch = tt_q.shape[1]
-        if batch == 1:
-            tt_q = apply_rope(tt_q, cos_pos, sin_pos, token_index=0)
-            if not is_kv_shared:
-                tt_k = apply_rope(tt_k, cos_pos, sin_pos, token_index=0)
-        else:
-            cos_b = ttnn.transpose(cos_pos, 1, 2)  # [1, batch_pad, 1, head_dim]
-            sin_b = ttnn.transpose(sin_pos, 1, 2)
-            cos_b = cos_b[:, :batch, :, :]
-            sin_b = sin_b[:, :batch, :, :]
-            tt_q = apply_rope_decode_peruser(tt_q, cos_b, sin_b)
-            if not is_kv_shared:
-                tt_k = apply_rope_decode_peruser(tt_k, cos_b, sin_b)
+        cos_b = ttnn.transpose(cos_pos, 1, 2)  # [1, batch_pad, 1, head_dim]
+        sin_b = ttnn.transpose(sin_pos, 1, 2)
+        cos_b = cos_b[:, :batch, :, :]
+        sin_b = sin_b[:, :batch, :, :]
+        tt_q = apply_rope_decode_peruser(tt_q, cos_b, sin_b)
+        if not is_kv_shared:
+            tt_k = apply_rope_decode_peruser(tt_k, cos_b, sin_b)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
@@ -222,6 +214,8 @@ def decode_forward(
             else:
                 ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos)
                 ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos)
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
     else:
         k_cache = tt_k
         v_cache = tt_v
@@ -234,20 +228,21 @@ def decode_forward(
     # the SDPA op falls back to the full device grid, which exceeds 64 cores
     # on Blackhole (>=110 cores) when num_kv_heads is small. The struct's
     # default max_cores_per_head_batch=16 caps the per-head reduction tree.
-    if config.head_dim >= 512:
-        # Global layers: smaller grid — head_dim=512 needs more L1 per core.
-        sdpa_grid = ttnn.CoreCoord(8, 4)
-    else:
-        # Sliding layers: use a smaller grid to leave room for decode-path
-        # resident L1 tensors after denoise/commit handoff.
-        sdpa_grid = ttnn.CoreCoord(8, 1)
+    # Use a small decode grid to leave room for resident L1 tensors after the
+    # denoise/commit handoff. This covers both sliding and global layers.
+    sdpa_grid = ttnn.CoreCoord(1, 1)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_grid,
         q_chunk_size=32,
-        k_chunk_size=64,
+        k_chunk_size=32,
         exp_approx_mode=False,
     )
+
+    if tt_q.memory_config().buffer_type != ttnn.BufferType.DRAM:
+        tt_q_l1 = tt_q
+        tt_q = ttnn.to_memory_config(tt_q_l1, ttnn.DRAM_MEMORY_CONFIG)
+        tt_q_l1.deallocate(True)
 
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
