@@ -416,8 +416,7 @@ template <typename Upstream>
 MeshWorkload make_d2h_relay_workload(
     Upstream* inbound,
     const std::shared_ptr<MeshDevice>& mesh,
-    D2HStreamService* d2h_service,
-    uint32_t metadata_size_bytes = 0) {
+    D2HStreamService* d2h_service) {
     const auto& coords = inbound->get_backing_tensor().tensor_topology().mesh_coords();
     const auto* up_buf = inbound->get_backing_tensor().buffer();
     const uint32_t page_size = up_buf->aligned_page_size();
