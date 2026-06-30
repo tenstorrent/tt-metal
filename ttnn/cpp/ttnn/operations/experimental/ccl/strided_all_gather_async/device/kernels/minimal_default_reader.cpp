@@ -97,8 +97,8 @@ void kernel_main() {
     // Mirror the writer's split-forwarding: on an even ring the opposite slice
     // arrives in halves from both links. Direction 1 receives one extra slice
     // (the second half) and relays one extra (its inbound +1-hop slice's second
-    // half). Disabled under fusion. See writer for the rationale.
-    bool split_forwarding_enabled = (topology == Topology::Ring) && !fuse_op && (ring_size % 2 == 0) && (ring_size > 2);
+    // half). See writer for the rationale.
+    bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
     if (split_forwarding_enabled && direction == 1) {
         slices_expected++;
         writes_expected++;
@@ -214,8 +214,12 @@ void kernel_main() {
                         last_input_chunk_start_tile = input_chunk_start_tile;
                     }
                     if constexpr (fuse_op) {
-                        // Signal matmul to go
-                        op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+                        // Signal the matmul once per chunk this link confirmed. For a split
+                        // diametric slice each link confirms only its half, so the matmul
+                        // receiver waits that half on this link's signal semaphore.
+                        if (receive_this_chunk) {
+                            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+                        }
                     }
                 }
                 if (should_forward) {

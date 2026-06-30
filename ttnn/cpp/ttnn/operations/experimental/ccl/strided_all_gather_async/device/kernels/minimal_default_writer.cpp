@@ -196,9 +196,9 @@ void kernel_main() {
     // would otherwise traverse the full half-ring on one link while the other
     // idles. Relay its first half on direction 0 and its second half on
     // direction 1 so both links share the final hop. Direction 1 (the shorter
-    // num_targets side) gains one relay to carry that second half. Disabled
-    // under fusion: the matmul op-signaler needs whole per-sender slices.
-    bool split_forwarding_enabled = (topology == Topology::Ring) && !fuse_op && (ring_size % 2 == 0) && (ring_size > 2);
+    // num_targets side) gains one relay to carry that second half. Under fusion
+    // the matmul receiver waits each half on the matching link's signal sem.
+    bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
     if (split_forwarding_enabled && direction == 1) {
         writes_expected++;
     }

@@ -213,7 +213,18 @@ struct MinimalMatmulOpReceiver {
         uint32_t k_block_received = 0;
 
         if (is_first_n_block_iter) {
+            // Split-forwarding delivers the diametric device's slice in halves on the two
+            // links: first half on the backward signal sem, second half on the forward sem.
+            // Flip the wait direction at the half so each half is awaited on its own link.
+            uint32_t diametric_device =
+                (topology == ttnn::ccl::Topology::Ring && num_devices % 2 == 0 && num_devices > 2)
+                    ? ((my_chip_id + num_devices / 2) % num_devices)
+                    : num_devices;
             while (true) {
+                if (device_id == diametric_device && device_k_block_counts[device_id] >= 2 &&
+                    device_chunk_id >= device_k_block_counts[device_id] / 2) {
+                    curr_k_block_dir = 1;  // forward
+                }
                 if (wait_for_op_signal && !(read_local_slice_from_input && (curr_k_block_dir == 2))) {
                     volatile tt_l1_ptr uint32_t* semaphore = signal_op_semaphore_addr_ptrs[curr_k_block_dir];
                     uint32_t sem_target = sem_targets[curr_k_block_dir];
