@@ -135,6 +135,7 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype, n
         pytest.param((2, 4), (2, 1), 0, 1, 1, id="sp2"),  # sequence parallel only (TP=1)
         pytest.param((2, 4), (2, 2), 0, 1, 1, id="sp2tp2"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, id="sp2tp4_pad20"),  # SP=2, TP=4 (pad 20)
+        pytest.param((4, 2), (4, 2), 0, 1, 1, id="sp4tp2"),  # SP=4, TP=2 (full mesh, 4x2 arrangement)
     ],
     indirect=["mesh_device"],
 )

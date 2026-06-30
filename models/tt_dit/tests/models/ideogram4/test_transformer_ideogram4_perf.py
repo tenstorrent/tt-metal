@@ -48,13 +48,18 @@ TIMED_ITERS = 10
         pytest.param((2, 4), (2, 1), 0, 1, 1, id="sp2"),
         pytest.param((2, 4), (2, 2), 0, 1, 1, id="sp2tp2"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, id="sp2tp4"),
+        pytest.param((4, 2), (4, 2), 0, 1, 1, id="sp4tp2"),  # SP=4, TP=2 (full mesh, 4x2 arrangement)
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     ("batch_size", "text_len", "image_len"),
-    [pytest.param(1, 128, 4096, id="b1_text128_img4096")],
+    [
+        pytest.param(1, 128, 1024, id="b1_text128_img1024"),  # ~512px
+        pytest.param(1, 128, 4096, id="b1_text128_img4096"),  # ~1024px
+        pytest.param(1, 128, 16384, id="b1_text128_img16384"),  # ~2048px
+    ],
 )
 def test_transformer_block_perf(
     *,
