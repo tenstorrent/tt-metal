@@ -5,6 +5,7 @@
 #
 # Full upstream flow (``bot_task=think_recaption``):
 #   cond image(s) + prompt
+#     → on-device VAE encode + SigLIP2 vision (tt/vision/i2i_bundle.py)
 #     → on-device AR think/recaption (``run_recaption_on_device``)
 #     → ``cot_text`` injected into I2I denoise bundle
 #     → denoise_loop + CFG → VAE decode → PNG
@@ -39,7 +40,7 @@ from PIL import Image
 from safetensors import safe_open
 
 ROOT = Path(__file__).resolve().parents[4]
-HUNYUAN = Path(os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/tt-ign/HunyuanImage-3.0"))
+HUNYUAN = Path(os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/ign-tt/hunyan_instruct"))
 for p in (str(ROOT), str(HUNYUAN)):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -48,9 +49,6 @@ import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
 from models.experimental.hunyuan_image_3_0.ref.image_gen.model_loaders import (
-    load_aligner,
-    load_patch_embed,
-    load_siglip2_vision,
     load_timestep_embedder,
 )
 from dataclasses import replace
@@ -63,8 +61,6 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     HunyuanTokenizer,
     build_i2i_cfg_conds,
-    prepare_i2i_denoise_bundle,
-    prepare_recaption_ar_bundle,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import (
     INSTRUCT_DISTIL_MODEL_DIR,
@@ -75,9 +71,23 @@ from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import Hunyu
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, decode_latent, denoise_loop
+from models.experimental.hunyuan_image_3_0.tt.pipeline import (
+    HunyuanTtDenoiseStep,
+    decode_latent,
+    denoise_loop,
+    upload_denoise_cond_mesh,
+)
+from models.experimental.hunyuan_image_3_0.tt.vision.i2i_bundle import (
+    load_tt_cond_patch_embed,
+    load_tt_cond_timestep_embedders,
+    load_tt_vae_encoder,
+    load_tt_vision_stack,
+    prepare_i2i_denoise_bundle_tt,
+    prepare_recaption_ar_bundle_tt,
+)
 from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
 
 from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
@@ -162,6 +172,38 @@ def _pe_dims(down_sd):
     hid, latent = down_sd["model.0.weight"].shape[:2]
     hsz = down_sd["model.1.in_layers.2.weight"].shape[0]
     return int(latent), int(hid), int(hsz)
+
+
+def _load_i2i_cond_stack(mesh_device, weights: _WeightLoader, wte, *, H: int, LATENT: int, HID: int, HSZ: int):
+    """Upload I2I cond modules. Runtime order is wte → VAE encode → patch/time scatter → ViT."""
+    print("[demo_i2i] loading on-device cond stack (wte, patch/time embed, ViT, VAE encoder) ...", flush=True)
+    wte_tt = HunyuanTtWte(
+        mesh_device,
+        wte,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    cond_patch_embed = load_tt_cond_patch_embed(
+        mesh_device,
+        weights.load_prefix("patch_embed"),
+        in_channels=LATENT,
+        hidden_channels=HID,
+        out_channels=HSZ,
+    )
+    cond_time_embed, cond_timestep_emb = load_tt_cond_timestep_embedders(
+        mesh_device,
+        hidden_size=H,
+        time_embed_sd=weights.load_prefix("time_embed"),
+        timestep_emb_sd=weights.load_prefix("timestep_emb"),
+    )
+    vision_tt, aligner_tt = load_tt_vision_stack(
+        mesh_device,
+        weights.load_prefix("vision_model"),
+        weights.load_prefix("vision_aligner"),
+        num_layers=VIT_LAYERS,
+    )
+    print("[demo_i2i] loading VAE encoder weights (conv3d) ...", flush=True)
+    vae_encoder = load_tt_vae_encoder(mesh_device)
+    return wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt, vae_encoder
 
 
 def _parse_image_size(raw: str) -> str | int:
@@ -320,11 +362,7 @@ def main():
     wte = load_tensors(model_dir, ["model.wte.weight"])["model.wte.weight"]
     gen = torch.Generator().manual_seed(SEED)
 
-    patch_embed_ref = load_patch_embed(model_dir)
-    time_embed_ref = load_timestep_embedder("time_embed", model_dir)
-    timestep_emb_ref = load_timestep_embedder("timestep_emb", model_dir)
-    vision_ref = load_siglip2_vision(model_dir, num_layers=VIT_LAYERS)
-    aligner_ref = load_aligner(model_dir)
+    timestep_emb_distil = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H)
 
     if args.bot_task != "image":
         sp_key, sp_sub = system_prompt_for_bot_task(args.bot_task)
@@ -338,7 +376,15 @@ def main():
             try:
                 recap_mesh.enable_program_cache()
                 recap_ccl = CCLManager(recap_mesh, num_links=1, topology=ttnn.Topology.Linear)
-                print("[demo_i2i] building recaption AR bundle (host VAE/ViT encode) ...", flush=True)
+                (
+                    wte_tt,
+                    cond_patch_embed,
+                    cond_time_embed,
+                    cond_timestep_emb,
+                    vision_tt,
+                    aligner_tt,
+                    vae_encoder,
+                ) = _load_i2i_cond_stack(recap_mesh, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
 
                 def rep(t):
                     return ttnn.from_torch(
@@ -350,22 +396,24 @@ def main():
                         mesh_mapper=ttnn.ReplicateTensorToMesh(recap_mesh),
                     )
 
-                recap_bundle = prepare_recaption_ar_bundle(
+                print("[demo_i2i] building recaption AR bundle (wte → VAE encode → ViT inject) ...", flush=True)
+                recap_bundle = prepare_recaption_ar_bundle_tt(
+                    recap_mesh,
                     tok,
                     args.prompt,
                     proc,
-                    wte,
+                    wte_tt,
                     cond_images=cond_for_bundle,
                     bot_task=args.bot_task,
                     system_prompt=recap_system,
                     sequence_template="instruct",
-                    patch_embed=patch_embed_ref,
-                    time_embed=time_embed_ref,
-                    timestep_emb=timestep_emb_ref,
-                    vision_model=vision_ref,
-                    aligner=aligner_ref,
-                    model_dir=model_dir,
-                    generator=gen,
+                    vae_encoder=vae_encoder,
+                    vision=vision_tt,
+                    aligner=aligner_tt,
+                    cond_patch_embed=cond_patch_embed,
+                    cond_time_embed=cond_time_embed,
+                    cond_timestep_emb=cond_timestep_emb,
+                    seed=SEED,
                 )
                 prefix_len = int(recap_bundle.input_ids.shape[1])
                 print(
@@ -399,7 +447,7 @@ def main():
                     tok,
                     args.bot_task,
                     proc,
-                    wte,
+                    wte_tt=wte_tt,
                     image_size=image_size,
                     config=recap_config,
                     generator=gen,
@@ -419,33 +467,54 @@ def main():
         print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
 
     denoise_system = get_system_prompt("en_unified", "image")
-    print("[demo_i2i] building I2I denoise bundle ...")
-    bundle = prepare_i2i_denoise_bundle(
-        tok,
-        args.prompt,
-        cond_for_bundle,
-        proc,
-        wte,
-        patch_embed=patch_embed_ref,
-        time_embed=time_embed_ref,
-        timestep_emb=timestep_emb_ref,
-        vision_model=vision_ref,
-        aligner=aligner_ref,
-        image_size=image_size,
-        sequence_template="instruct",
-        system_prompt=denoise_system,
-        cot_text=cot_text,
-        generator=gen,
-    )
+    guidance_emb = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H) if cfg_distilled else None
+    timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
+
+    # Cond encode (VAE + ViT + cond patch/time embed) on its own mesh so weights are
+    # released before the resident denoise backbone loads (~19GB/device).
+    print("[demo_i2i] opening cond mesh (2x2) for VAE/ViT encode ...", flush=True)
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    cond_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
+    try:
+        cond_mesh.enable_program_cache()
+        (
+            wte_tt,
+            cond_patch_embed,
+            cond_time_embed,
+            cond_timestep_emb,
+            vision_tt,
+            aligner_tt,
+            vae_encoder,
+        ) = _load_i2i_cond_stack(cond_mesh, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
+        print("[demo_i2i] building I2I denoise bundle (wte → VAE encode → ViT inject) ...", flush=True)
+        bundle = prepare_i2i_denoise_bundle_tt(
+            cond_mesh,
+            tok,
+            args.prompt,
+            cond_for_bundle,
+            proc,
+            wte_tt,
+            vae_encoder=vae_encoder,
+            vision=vision_tt,
+            aligner=aligner_tt,
+            cond_patch_embed=cond_patch_embed,
+            cond_time_embed=cond_time_embed,
+            cond_timestep_emb=cond_timestep_emb,
+            image_size=image_size,
+            sequence_template="instruct",
+            system_prompt=denoise_system,
+            cot_text=cot_text,
+            seed=SEED,
+        )
+    finally:
+        ttnn.close_mesh_device(cond_mesh)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
     cond_row, uncond_row = build_i2i_cfg_conds(bundle, wte, proc)
     img_slice = cond_row["gen_slice"]
     grid = cond_row["gen_hw"]
     seq_len = bundle.seq_len
     print(f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}")
-
-    timestep_emb = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H)
-    guidance_emb = load_timestep_embedder("guidance_emb", model_dir, hidden_size=H) if cfg_distilled else None
-    timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
 
     print("[demo_i2i] opening denoise mesh (2x2) ...", flush=True)
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -453,6 +522,7 @@ def main():
     try:
         mesh_device.enable_program_cache()
         ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
         print("[demo_i2i] building patch_embed + final_layer ...", flush=True)
 
         def rep(t):
@@ -506,14 +576,22 @@ def main():
             seq_len=seq_len,
         )
 
-        print("[demo_i2i] uploading cond/uncond attention masks ...", flush=True)
-        cond_tt = dict(cond_row)
-        cond_tt["attention_mask"] = rep(cond_row["attention_mask"].reshape(1, 1, seq_len, seq_len).to(torch.bfloat16))
+        print("[demo_i2i] uploading cond/uncond (device attention masks) ...", flush=True)
+        cond_tt = upload_denoise_cond_mesh(
+            cond_row,
+            seq_len=seq_len,
+            mesh_device=mesh_device,
+            replicate_fn=rep,
+            full_attn_slices=bundle.full_attn_slices[0],
+        )
         uncond_tt = None
         if uncond_row is not None:
-            uncond_tt = dict(uncond_row)
-            uncond_tt["attention_mask"] = rep(
-                uncond_row["attention_mask"].reshape(1, 1, seq_len, seq_len).to(torch.bfloat16)
+            uncond_tt = upload_denoise_cond_mesh(
+                uncond_row,
+                seq_len=seq_len,
+                mesh_device=mesh_device,
+                replicate_fn=rep,
+                full_attn_slices=bundle.full_attn_slices[1],
             )
 
         torch.manual_seed(SEED + 1)
@@ -534,7 +612,7 @@ def main():
             cond=cond_tt,
             uncond=uncond_tt,
             guidance_scale=GUIDANCE,
-            timestep_emb=timestep_emb,
+            timestep_emb=timestep_emb_distil,
             guidance_emb=guidance_emb,
             timestep_r_emb=timestep_r_emb,
             cfg_distilled=cfg_distilled,
