@@ -173,7 +173,12 @@ def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: i
         }
         if attn_mask is not None:
             kwargs["attn_mask"] = attn_mask
-        return ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)
+        try:
+            return ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)
+        except RuntimeError as exc:
+            if attn_mask is None and _is_sdpa_l1_cb_clash(exc):
+                return _manual_gqa_attention(tt_q, tt_k, tt_v)
+            raise
 
     chunks = []
     for start in range(0, q_seq_len, chunk_size):
@@ -202,6 +207,67 @@ def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: i
     for chunk in chunks:
         chunk.deallocate(True)
     return out
+
+
+def _is_sdpa_l1_cb_clash(exc: RuntimeError) -> bool:
+    message = str(exc)
+    return "Statically allocated circular buffers" in message and "clash with L1 buffers" in message
+
+
+def _manual_gqa_attention(tt_q, tt_k, tt_v):
+    """Staged non-causal GQA fallback for small denoise chunks.
+
+    The SDPA kernel can miss L1 by less than one tile on the first real adapter
+    layer. This fallback uses ordinary TTNN ops for the same 32-token Q chunk.
+    """
+    q_heads = tt_q.shape[1]
+    kv_heads = tt_k.shape[1]
+    if kv_heads <= 0 or q_heads % kv_heads != 0:
+        raise ValueError(f"unsupported GQA shape q_heads={q_heads}, kv_heads={kv_heads}")
+
+    q_heads_per_kv = q_heads // kv_heads
+    outputs = []
+    for kv_head in range(kv_heads):
+        q_start = kv_head * q_heads_per_kv
+        q_end = q_start + q_heads_per_kv
+        q_group = ttnn.slice(
+            tt_q,
+            [0, q_start, 0, 0],
+            [tt_q.shape[0], q_end, tt_q.shape[2], tt_q.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        k_head = ttnn.slice(
+            tt_k,
+            [0, kv_head, 0, 0],
+            [tt_k.shape[0], kv_head + 1, tt_k.shape[2], tt_k.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_head = ttnn.slice(
+            tt_v,
+            [0, kv_head, 0, 0],
+            [tt_v.shape[0], kv_head + 1, tt_v.shape[2], tt_v.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if q_heads_per_kv > 1:
+            k_heads = [k_head] + [
+                ttnn.clone(k_head, memory_config=ttnn.DRAM_MEMORY_CONFIG) for _ in range(q_heads_per_kv - 1)
+            ]
+            v_heads = [v_head] + [
+                ttnn.clone(v_head, memory_config=ttnn.DRAM_MEMORY_CONFIG) for _ in range(q_heads_per_kv - 1)
+            ]
+            k_group = ttnn.concat(k_heads, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_group = ttnn.concat(v_heads, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            k_group = k_head
+            v_group = v_head
+
+        k_transposed = ttnn.permute(k_group, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.matmul(q_group, k_transposed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+        outputs.append(ttnn.matmul(probs, v_group, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+
+    return ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def denoise_attention(

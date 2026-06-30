@@ -178,3 +178,87 @@ def test_sdpa_q_chunked_slices_q_and_mask(monkeypatch):
     assert [call[1] for call in calls if call[0] == "sdpa"] == ["q[s0:32]", "q[s32:64]", "q[s64:96]"]
     assert [call[4] for call in calls if call[0] == "sdpa"] == ["mask[s0:32]", "mask[s32:64]", "mask[s64:96]"]
     assert calls[-1] == ("concat", ["sdpa(q[s0:32])", "sdpa(q[s32:64])", "sdpa(q[s64:96])"], 2, "dram")
+
+
+def test_sdpa_q_chunked_falls_back_to_manual_gqa_on_l1_clash(monkeypatch):
+    calls = []
+
+    class _Tensor:
+        def __init__(self, name, shape):
+            self.name = name
+            self.shape = shape
+            self.deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def CoreCoord(x, y):
+            return ("grid", x, y)
+
+        @staticmethod
+        def SDPAProgramConfig(**kwargs):
+            calls.append(("program", kwargs))
+            return "program"
+
+        @staticmethod
+        def slice(tensor, starts, ends, *, memory_config=None):
+            calls.append(("slice", tensor.name, starts, ends, memory_config))
+            return _Tensor(
+                f"{tensor.name}[h{starts[1]}:{ends[1]},s{starts[2]}:{ends[2]}]",
+                [ends[idx] - starts[idx] for idx in range(4)],
+            )
+
+        @staticmethod
+        def clone(tensor, *, memory_config):
+            calls.append(("clone", tensor.name, memory_config))
+            return _Tensor(f"clone({tensor.name})", tensor.shape)
+
+        @staticmethod
+        def concat(tensors, *, dim, memory_config):
+            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
+            shape = list(tensors[0].shape)
+            shape[dim] = sum(tensor.shape[dim] for tensor in tensors)
+            return _Tensor(f"concat{dim}", shape)
+
+        @staticmethod
+        def permute(tensor, order, *, memory_config):
+            calls.append(("permute", tensor.name, order, memory_config))
+            shape = [tensor.shape[idx] for idx in order]
+            return _Tensor(f"permute({tensor.name})", shape)
+
+        @staticmethod
+        def matmul(lhs, rhs, *, memory_config):
+            calls.append(("matmul", lhs.name, rhs.name, memory_config))
+            return _Tensor(f"matmul({lhs.name},{rhs.name})", [lhs.shape[0], lhs.shape[1], lhs.shape[2], rhs.shape[3]])
+
+        @staticmethod
+        def softmax(tensor, *, dim, numeric_stable):
+            calls.append(("softmax", tensor.name, dim, numeric_stable))
+            return _Tensor(f"softmax({tensor.name})", tensor.shape)
+
+    class _FakeTransformer:
+        @staticmethod
+        def scaled_dot_product_attention(q, k, v, **kwargs):
+            calls.append(("sdpa", q.name, k.name, v.name, kwargs))
+            raise RuntimeError("Statically allocated circular buffers in program clash with L1 buffers")
+
+    _FakeTtnn.transformer = _FakeTransformer
+    monkeypatch.setattr(DA, "ttnn", _FakeTtnn)
+
+    out = _sdpa_q_chunked(
+        _Tensor("q", [1, 4, 32, 256]),
+        _Tensor("k", [1, 2, 288, 256]),
+        _Tensor("v", [1, 2, 288, 256]),
+        head_dim=256,
+    )
+
+    assert out.shape == [1, 4, 32, 256]
+    assert [call[0] for call in calls].count("sdpa") == 1
+    assert [call for call in calls if call[0] == "softmax"] == [
+        ("softmax", "matmul(q[h0:2,s0:32],permute(concat1))", -1, True),
+        ("softmax", "matmul(q[h2:4,s0:32],permute(concat1))", -1, True),
+    ]
