@@ -57,7 +57,7 @@ struct KvChunkAddressTableConfig {
 // config 0, a sparse index_k representation in config 1). Each config has its
 // own grid and may differ in num_layers / max_sequence_length / num_slots /
 // chunk_n_tokens. Configs are addressed last on every accessor — by index
-// (config_id, defaulting to 0) or by name (config_str). A single-config table
+// (config_id, defaulting to 0) or by name (config). A single-config table
 // names its lone config "0".
 //
 // Device replica groups are stored in a separate side table, shared across all
