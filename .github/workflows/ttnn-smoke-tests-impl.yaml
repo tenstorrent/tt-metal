@@ -241,9 +241,21 @@ jobs:
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
-          PYTEST_ADDOPTS: "-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
         run: |
-          ${{ matrix.test-group.cmd }}
+          # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
+          # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
+          # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
+          # only reports "worker crashed"), re-run serially (drop -n 4 via the PYTEST_ADDOPTS override)
+          # with --lf for actionable diagnostics.
+          cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
+          if eval "$cmd"; then
+            exit 0
+          fi
+          echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
+          export PYTEST_ADDOPTS="-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          eval "$cmd --lf --lfnf=all --tb=long -v" || true
+          exit 1
 
       - name: Upload power report
         if: ${{ !cancelled() && !startsWith(matrix.test-group.sku, 'sim_') }}
