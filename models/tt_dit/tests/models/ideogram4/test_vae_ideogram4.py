@@ -74,7 +74,10 @@ def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, latent_h: int, latent_w: i
 
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis"),
-    [pytest.param((2, 4), (1, 4), 1, id="tp4")],
+    [
+        pytest.param((2, 4), (1, 4), 1, id="tp4"),
+        pytest.param((4, 2), (4, 2), 1, id="tp2"),  # SP4xTP2 denoiser: VAE TP=2, replicated on size-4 axis
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(

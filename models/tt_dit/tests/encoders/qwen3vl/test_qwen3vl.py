@@ -33,7 +33,10 @@ REPO = "Qwen/Qwen3-VL-8B-Instruct"
 
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis"),
-    [pytest.param((2, 4), (1, 4), 1, id="tp4")],
+    [
+        pytest.param((2, 4), (1, 4), 1, id="tp4"),
+        pytest.param((4, 2), (4, 2), 1, id="tp2"),  # SP4xTP2 denoiser: encoder TP=2, replicated on size-4 axis
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -51,7 +54,8 @@ def test_qwen3vl_text_encoder_tp4(*, mesh_device: ttnn.MeshDevice, submesh_shape
     lm.eval()
     cfg = lm.config
     head_dim = cfg.hidden_size // cfg.num_attention_heads
-    mrope_section, rope_theta = cfg.rope_scaling["mrope_section"], cfg.rope_scaling["rope_theta"]
+    mrope_section = cfg.rope_scaling["mrope_section"]
+    rope_theta = cfg.rope_scaling.get("rope_theta", cfg.rope_theta)  # top-level in transformers >=4.57
 
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
     caps: dict[int, torch.Tensor] = {}
@@ -108,7 +112,7 @@ def test_qwen3vl_text_encoder(*, mesh_device: ttnn.MeshDevice, seq_len: int) -> 
     cfg = lm.config
     head_dim = cfg.hidden_size // cfg.num_attention_heads
     mrope_section = cfg.rope_scaling["mrope_section"]
-    rope_theta = cfg.rope_scaling["rope_theta"]
+    rope_theta = cfg.rope_scaling.get("rope_theta", cfg.rope_theta)  # top-level in transformers >=4.57
 
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
 

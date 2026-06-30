@@ -20,6 +20,8 @@ sequence for SP and the wrapper is per-token, so the denoise loop is SP/TP-ready
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -123,6 +125,25 @@ def _dq(path):
     return dequant_fp8_state_dict(_load_file(path))
 
 
+# SP shards the sequence; the padded length must be a multiple of
+# Ideogram4TransformerBlock.sdpa_k_chunk_size * sp_factor (matches _sp_padded_len in
+# test_transformer_ideogram4.py). k_chunk is 256 on Blackhole.
+_SP_K_CHUNK = 256
+
+
+def _sp_padded_len(seq_len: int, sp_factor: int) -> int:
+    """Pad the sequence so each SP shard is k_chunk- and tile-aligned (ring SDPA).
+
+    Mirrors _sp_padded_len in test_transformer_ideogram4.py: the padded length must
+    be a multiple of sdpa_k_chunk_size * sp_factor so each per-device shard is a whole
+    number of k_chunks (and therefore tile-aligned). No-op when SP is disabled.
+    """
+    if sp_factor <= 1:
+        return seq_len
+    divisor = _SP_K_CHUNK * sp_factor
+    return ((seq_len + divisor - 1) // divisor) * divisor
+
+
 class Ideogram4Pipeline:
     """Ideogram 4.0 text-to-image pipeline (device-resident, TP=4, sequential CFG)."""
 
@@ -142,6 +163,13 @@ class Ideogram4Pipeline:
         self.patch, self.ae = 2, 8
         tp_factor = tuple(mesh_device.shape)[tp_axis]
         self.tp_factor = tp_factor
+        # Sequence-parallel (SP) over the other mesh axis. Auto-enabled from the mesh shape:
+        # a (1,4) submesh -> sp=1 (TP=4 only, unchanged); the full (2,4) mesh -> sp=2 x tp=4.
+        # SP shards the sequence (ring/all-gather attention) and is the hi-res win (4k/16k tok),
+        # where activations dominate. The denoiser block path is validated in
+        # test_transformer_ideogram4.py (sp2tp4); pipeline wiring below is UNVALIDATED end-to-end.
+        self.sp_axis = 1 - tp_axis
+        self.sp_factor = tuple(mesh_device.shape)[self.sp_axis]
         cfg = self.config
 
         ccl = CCLManager(mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
@@ -149,7 +177,7 @@ class Ideogram4Pipeline:
         dit_pc = DiTParallelConfig(
             cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
             tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-            sequence_parallel=ParallelFactor(factor=1, mesh_axis=1 - tp_axis),
+            sequence_parallel=ParallelFactor(factor=self.sp_factor, mesh_axis=self.sp_axis),
         )
         from ...utils.padding import PaddingConfig
 
@@ -168,7 +196,9 @@ class Ideogram4Pipeline:
         self.tokenizer = _tf.AutoTokenizer.from_pretrained(weights_dir, subfolder="tokenizer")
         self._enc_head_dim = qcfg.hidden_size // qcfg.num_attention_heads
         self._enc_mrope = qcfg.rope_scaling["mrope_section"]
-        self._enc_rope_theta = qcfg.rope_scaling["rope_theta"]
+        # transformers >=4.57 moved rope_theta to the top-level config; older versions
+        # kept it inside rope_scaling. Accept both.
+        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta", qcfg.rope_theta)
         self.encoder = Qwen3VlTextEncoder(
             vocab_size=qcfg.vocab_size,
             hidden_size=qcfg.hidden_size,
@@ -184,6 +214,12 @@ class Ideogram4Pipeline:
             device=mesh_device,
             parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
             ccl_manager=ccl,
+            # FSDP-shard encoder weights across the SP (non-TP) axis instead of replicating
+            # them. The encoder runs once (outside the denoise loop), so the per-layer weight
+            # all-gather overhead is negligible, while it frees ~(sp_factor-1)/sp_factor of the
+            # encoder's resident DRAM during denoise (needed to fit 2048px at SP4xTP2).
+            # Auto-disables when the non-TP axis is size 1 (e.g. the TP=4 (1,4) submesh).
+            is_fsdp=True,
         )
         self.encoder.load_torch_state_dict(enc_sd)
         del hf, lm, enc_sd
@@ -239,7 +275,12 @@ class Ideogram4Pipeline:
         _gc.collect()
 
     @classmethod
-    def from_pretrained(cls, mesh_device, weights_dir="/localdev/cglagovich/ideogram-4-fp8", **kw):
+    def from_pretrained(
+        cls,
+        mesh_device,
+        weights_dir=os.environ.get("IDEOGRAM4_WEIGHTS", "/data/cglagovich/ideogram-4-fp8"),
+        **kw,
+    ):
         return cls(mesh_device=mesh_device, weights_dir=weights_dir, **kw)
 
     def _encode(self, prompt: str):
@@ -263,15 +304,35 @@ class Ideogram4Pipeline:
         feats = torch.stack(taps_t, dim=0).permute(1, 2, 3, 0).reshape(1, n_text, -1).to(torch.bfloat16)
         return feats, n_text
 
+    def _seq_dev(self, t: torch.Tensor, seq_dim: int) -> ttnn.Tensor:
+        """bf16 device tensor: shard on the SP axis along ``seq_dim`` when SP>1, else replicate."""
+        if self.sp_factor > 1:
+            return bf16_tensor(t, device=self.mesh_device, mesh_axis=self.sp_axis, shard_dim=seq_dim)
+        return bf16_tensor(t, device=self.mesh_device)
+
+    def _idx_dev(self, t: torch.Tensor, seq_dim: int) -> ttnn.Tensor:
+        """uint32 device tensor (embedding index): shard on the SP axis when SP>1, else replicate."""
+        if self.sp_factor > 1:
+            mesh_axes = [self.sp_axis if d == seq_dim else None for d in range(t.ndim)]
+            return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32, mesh_axes=mesh_axes)
+        return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32)
+
     def _branch(self, n_pre, num_img, grid_h, grid_w, llm_real):
         cfg = self.config
-        ind = torch.full((1, n_pre + num_img), OUTPUT_IMAGE_INDICATOR, dtype=torch.long)
+        seq = n_pre + num_img
+        # SP shards the sequence: pad to a k_chunk*sp_factor multiple so each per-device
+        # shard is tile-aligned (ring SDPA requirement), then shard every per-token tensor
+        # on the SP axis. Padding is appended after the image tokens (mask/indicator 0), so
+        # it contributes nothing and is sliced off the velocity output. No-op when SP==1.
+        padded_len = _sp_padded_len(seq, self.sp_factor)
+        pad = padded_len - seq
+        ind = torch.full((1, seq), OUTPUT_IMAGE_INDICATOR, dtype=torch.long)
         if n_pre:
             ind[:, :n_pre] = LLM_TOKEN_INDICATOR
-        llm = torch.zeros(1, n_pre + num_img, cfg.llm_features_dim, dtype=torch.bfloat16)
+        llm = torch.zeros(1, seq, cfg.llm_features_dim, dtype=torch.bfloat16)
         if n_pre and llm_real is not None:
             llm[:, :n_pre] = llm_real
-        pos = torch.zeros(1, n_pre + num_img, 3, dtype=torch.long)
+        pos = torch.zeros(1, seq, 3, dtype=torch.long)
         if n_pre:
             tp = torch.arange(n_pre)
             pos[:, :n_pre] = torch.stack([tp, tp, tp], dim=1)
@@ -284,15 +345,28 @@ class Ideogram4Pipeline:
             head_dim=cfg.emb_dim // cfg.num_heads, base=cfg.rope_theta, mrope_section=cfg.mrope_section
         )
         cos, sin = rope(pos)
-        dev = self.mesh_device
+        llm_mask = (ind == LLM_TOKEN_INDICATOR).float().unsqueeze(-1)  # [1, seq, 1]
+        img_mask = (ind == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1)
+        idx = (ind == OUTPUT_IMAGE_INDICATOR).to(torch.int32)  # [1, seq]
+        cos4 = cos.unsqueeze(1).to(torch.bfloat16)  # [1, 1, seq, head_dim]
+        sin4 = sin.unsqueeze(1).to(torch.bfloat16)
+        if pad:
+            llm = torch.nn.functional.pad(llm, (0, 0, 0, pad))
+            cos4 = torch.nn.functional.pad(cos4, (0, 0, 0, pad))
+            sin4 = torch.nn.functional.pad(sin4, (0, 0, 0, pad))
+            llm_mask = torch.nn.functional.pad(llm_mask, (0, 0, 0, pad))
+            img_mask = torch.nn.functional.pad(img_mask, (0, 0, 0, pad))
+            idx = torch.nn.functional.pad(idx, (0, pad))
         return dict(
-            llm=bf16_tensor(llm, device=dev),
-            cos=bf16_tensor(cos.unsqueeze(1).to(torch.bfloat16), device=dev),
-            sin=bf16_tensor(sin.unsqueeze(1).to(torch.bfloat16), device=dev),
-            llm_mask=bf16_tensor((ind == LLM_TOKEN_INDICATOR).float().unsqueeze(-1), device=dev),
-            img_mask=bf16_tensor((ind == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1), device=dev),
-            idx=tensor.from_torch((ind == OUTPUT_IMAGE_INDICATOR).to(torch.int32), device=dev, dtype=ttnn.uint32),
-            seq=n_pre + num_img,
+            llm=self._seq_dev(llm, 1),
+            cos=self._seq_dev(cos4, 2),
+            sin=self._seq_dev(sin4, 2),
+            llm_mask=self._seq_dev(llm_mask, 1),
+            img_mask=self._seq_dev(img_mask, 1),
+            idx=self._idx_dev(idx, 1),
+            seq=seq,
+            padded_len=padded_len,
+            n_pre=n_pre,
         )
 
     @torch.no_grad()
@@ -329,8 +403,11 @@ class Ideogram4Pipeline:
 
         def _v(model, br, x_full, t_val):
             t_sin = Ideogram4Transformer.sinusoidal_embedding(torch.tensor([t_val]), cfg.emb_dim)
+            pad = br["padded_len"] - br["seq"]
+            if pad:
+                x_full = torch.nn.functional.pad(x_full, (0, 0, 0, pad))  # pad sequence (dim 1)
             out = model(
-                x=bf16_tensor(x_full, device=dev),
+                x=self._seq_dev(x_full, 1),
                 llm_features=br["llm"],
                 t_sin=bf16_tensor(t_sin.unsqueeze(1), device=dev),
                 cos=br["cos"],
@@ -340,7 +417,11 @@ class Ideogram4Pipeline:
                 output_image_mask=br["img_mask"],
                 spatial_sequence_length=br["seq"],
             )
-            return tensor.to_torch(out, mesh_axes=[None, None, None])[:, br["seq"] - num_img :].float()
+            # Output is sequence-sharded under SP: gather along the SP axis, then slice the
+            # real image tokens [n_pre : seq] (drops text prefix and trailing SP padding).
+            seq_mesh_axis = self.sp_axis if self.sp_factor > 1 else None
+            full = tensor.to_torch(out, mesh_axes=[None, seq_mesh_axis, None])
+            return full[:, br["seq"] - num_img : br["seq"]].float()
 
         _td = _time.perf_counter()
         self.step_trace = []

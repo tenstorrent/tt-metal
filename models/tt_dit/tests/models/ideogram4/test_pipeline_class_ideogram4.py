@@ -25,17 +25,24 @@ from PIL import Image
 import ttnn
 
 from ....pipelines.ideogram4.pipeline import Ideogram4Pipeline
+from .test_generate_ideogram4 import PROMPT_JSON
 
-PROMPT = "a watercolor painting of a red panda reading a book under a cherry tree, soft morning light"
+# Ideogram 4 was trained exclusively on structured-JSON captions; the in-distribution
+# JSON prompt is the known-good format (plain prose triggers in-weights moderation
+# washout at >=1024px per the status notes). Reuse the verified caption.
+PROMPT = PROMPT_JSON
 
 
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis"),
-    [pytest.param((2, 4), (1, 4), 1, id="tp4")],
+    [
+        pytest.param((2, 4), (1, 4), 1, id="tp4"),
+        pytest.param((4, 2), (4, 2), 1, id="sp4tp2"),  # full-mesh SP4xTP2 denoiser default
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 65536}], indirect=True
 )
 @pytest.mark.parametrize(
     ("height", "width"), [(512, 512), (1024, 1024), (2048, 2048)], ids=["512px", "1024px", "2048px"]
@@ -46,7 +53,7 @@ def test_pipeline_class(*, mesh_device, submesh_shape, tp_axis, height, width, p
     pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis)
     img = pipe(PROMPT, height=height, width=width, preset=preset, seed=1234)
 
-    out = f"/localdev/cglagovich/ideogram4_pipeline_class_{height}_{preset}.png"
+    out = f"/data/cglagovich/ideogram4_pipeline_class_{height}_{preset}.png"
     Image.fromarray(img).save(out)
     logger.info(f"pipeline class saved {out} shape={img.shape} std={img.std():.1f} preset={preset}")
     assert img.shape == (height, width, 3)
