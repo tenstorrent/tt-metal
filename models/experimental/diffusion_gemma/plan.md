@@ -862,7 +862,7 @@ Adversarial multi-agent review of the `diffusion-gemma-function` branch (~15.4k 
 
 #### Test rigor (open)
 
-- ⬜ **Three of the four untracked `test_w2b_*` repro files have no assertions** — `tests/test_w2b_causal_repro.py`, `tests/test_w2b_chunk_repro.py`, and `tests/test_w2b_256k_probe.py` only `print` their PCC/step results; only `tests/test_w2b_repro.py` asserts (`pcc > 0.99`). They are #48549 SDPA-cliff diagnostics gated behind `DG_RUN_DEVICE=1` (inert by default), but if any are wired into a pipeline they would pass unconditionally regardless of correctness. Add assertions or move them out of the `test_` namespace before they enter CI.
+- ✅ **Fixed 2026-06-30 [#48549/test-rigor] W2b SDPA-cliff diagnostics are no longer auto-collected as pytest tests** — the four untracked `test_w2b_*` repro files were moved to opt-in diagnostic script names (`w2b_256k_probe.py`, `w2b_causal_repro.py`, `w2b_chunk_repro.py`, `w2b_repro.py`) with updated run instructions. This keeps them available for explicit QB2 debugging while preventing assertion-light probes from entering CI by filename convention. Validated with `python -m py_compile .../w2b_*.py`; explicit `pytest --collect-only` on those paths still finds the opt-in diagnostics when requested.
 
 #### Dismissed — verified false positives (no action)
 
