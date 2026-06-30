@@ -210,10 +210,9 @@ class LTXCausalConv3d(Module):
                 x_BTHWC = ttnn.concat([*padding_frames, x_BTHWC], dim=1)
             else:
                 last_frame = x_BTHWC[:, -1:, :, :, :]
-                front_pad = self.time_pad // 2
-                back_pad = self.time_pad // 2
-                front_frames = [first_frame] * front_pad
-                back_frames = [last_frame] * back_pad
+                half_pad = self.time_pad // 2
+                front_frames = [first_frame] * half_pad
+                back_frames = [last_frame] * half_pad
                 parts = front_frames + [x_BTHWC] + back_frames
                 x_BTHWC = ttnn.concat(parts, dim=1)
 
@@ -564,6 +563,14 @@ class LTXDepthToSpaceUpsample(Module):
         pass  # Conv handles its own state via LTXCausalConv3d._prepare_torch_state
 
 
+# Decoder upsample strides (depth-to-space expansion factors).
+_DECODER_STRIDE_MAP = {
+    "compress_all": (2, 2, 2),
+    "compress_space": (1, 2, 2),
+    "compress_time": (2, 1, 1),
+}
+
+
 def _compute_ltx_decoder_dims(
     *,
     decoder_blocks: list[tuple[str, dict]],
@@ -596,13 +603,12 @@ def _compute_ltx_decoder_dims(
     def k3_dims() -> ConvDims:
         return ConvDims(T=cur_T + 2, H=_dev(full_H, h_factor), W=_dev(full_W, w_factor))
 
-    stride_map = {"compress_all": (2, 2, 2), "compress_space": (1, 2, 2), "compress_time": (2, 1, 1)}
     dims: list[ConvDims] = [k3_dims()]  # conv_in
     for block_name, _block_params in reversed(decoder_blocks):
-        if block_name in stride_map:
+        if block_name in _DECODER_STRIDE_MAP:
             dims.append(k3_dims())  # conv runs at the PRE-upsample shape
             # Post-upsample: depth-to-space expands H,W by p2,p3 and T by p1 (first frame dropped if p1==2).
-            p1, p2, p3 = stride_map[block_name]
+            p1, p2, p3 = _DECODER_STRIDE_MAP[block_name]
             full_H = full_H * p2
             full_W = full_W * p3
             cur_T = cur_T * p1 - (1 if p1 == 2 else 0)
@@ -686,19 +692,14 @@ class LTXVideoDecoder(Module):
         for block_name, block_params in reversed(decoder_blocks):
             block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
 
-            if block_name in ("compress_all", "compress_space", "compress_time"):
-                stride_map = {
-                    "compress_all": (2, 2, 2),
-                    "compress_space": (1, 2, 2),
-                    "compress_time": (2, 1, 1),
-                }
+            if block_name in _DECODER_STRIDE_MAP:
                 multiplier = block_config.get("multiplier", 1)
                 residual = block_config.get("residual", False)
                 new_ch = ch // multiplier
                 self.up_blocks.append(
                     LTXDepthToSpaceUpsample(
                         in_channels=ch,
-                        stride=stride_map[block_name],
+                        stride=_DECODER_STRIDE_MAP[block_name],
                         out_channels_reduction_factor=multiplier,
                         residual=residual,
                         conv_dims=_pop_dims(),
