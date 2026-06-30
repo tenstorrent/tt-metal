@@ -541,6 +541,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         **kwargs,
     ):
         self.mode = Mode.PREFILL
+        # Prefill runs on the device's default sub-device manager. When the DRAM prefetcher is
+        # enabled it loads its own sub-device manager for decode (#47820), so prefill traces --
+        # captured on the default manager -- would otherwise be replayed against the prefetcher's
+        # manager and fail (trace_buffer != nullptr). Revert to the default manager here; the next
+        # decode_forward re-loads the prefetcher's manager via switch_mode(Mode.DECODE).
+        for i in range(len(self.model)):
+            prefetcher = getattr(self.model[i], "prefetcher", None)
+            if prefetcher is not None and prefetcher.is_initialized:
+                self.model_args[i].mesh_device.clear_loaded_sub_device_manager()
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
