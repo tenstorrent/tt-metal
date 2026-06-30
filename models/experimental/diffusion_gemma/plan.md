@@ -61,7 +61,7 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 | # | Step | Acceptance | Risk |
 |---|---|---|---|
 | R0.1 | ✅ **Build real `DiffusionGemma4Model` on (1,4) mesh** from DG ckpt: load 11 shards → `remap_state_dict` → backbone_state (gemma4-keyed) + self_cond_state; build at `max_seq_len≈512, num_layers=30, create_kv_cache=True`, experts **TP-sharded** (column/row parallel per #47487). | Passed on QB2 2026-06-30: full 30 layers build-only, no OOM, per-chip DRAM post-build **13.236 GiB used / 18.631 GiB free / 31.867 GiB total**. Demo now logs baseline/post-build DRAM via `ttnn.get_memory_view`. | done |
-| R0.2 | **Prefill a short prompt (causal)** via chat template (~32 tok) → write 30-layer prompt KV (`prefill_prompt_tokens` / `collect_prompt_kv_by_layer`). | Prefill runs; KV populated. **Bonus: real-ckpt prompt-logits PCC vs HF** (the #47461 exit that was never met on DG weights). | prefill chunking at short ctx is trivial; mainly a build/glue check |
+| R0.2 | ✅ **Prefill a short prompt (causal)** via chat template (~32 tok) → write 30-layer prompt KV (`prefill_prompt_tokens` / `collect_prompt_kv_by_layer`). | Passed on QB2 2026-06-30: full 30-layer `--prefill-only` ran default chat prompt, `prompt_len=18`, aligned `cache_len=32`, post-prefill per-chip DRAM **13.237 GiB used / 18.630 GiB free / 31.867 GiB total**. | done |
 | R0.3 | **Build denoise logits adapter from the real ckpt** (`make_generation_logits_fn_builder_from_checkpoint_state(..., prompt_len)`), then call `adapter(canvas_tokens, step=0)` once. | Returns `[1,1,256,vocab]` logits **without OOM** — critical-path step 4, the unmeasured "real-size denoise step fits" (full-canvas logits + 262k soft-embed matmul + 30-layer `[P+C]` KV concat). | **highest fit risk**; soft-embed `[256,262144]@[262144,2816]` matmul + 30× KV concat L1/DRAM |
 | R0.4 | **Run ONE denoise block** (`denoise_and_commit_block`) with released `DiffusionConfig()` (cap steps), seeded host canvas init + injected reference Gumbel noise. | Block completes, commits 256 tokens, decodes to text (garbage allowed). | step-schedule cost; intra-block early-stop still host-side |
 | R0.5 | **Measure decision fidelity vs HF** — replay the SAME canvas/noise through `reference/generate_blocks` (replay helpers), compare per-position committed-argmax agreement. | A real-scale agreement number → updates #48291 (vs the ~50% proxy). | likely ~50% → confirms #48291 is the dominant blocker |
@@ -753,6 +753,12 @@ Two prefill blockers were fixed: Gemma4 prefill RoPE outputs are restored to the
 R0.1 passed on QB2 with the real DiffusionGemma 26B-A4B checkpoint:
 `text_demo --checkpoint /home/zni/dg_models/diffusiongemma-26B-A4B-it --local-files-only --mesh P150x4 --max-seq-len 512 --build-only`.
 The full 30-layer model loaded through layer 29, initialized on-device sampling for vocab 262144, and closed the mesh cleanly. DRAM logging now records `ttnn.get_memory_view` before and after build; the measured per-chip budget was baseline **0.000 GiB used / 31.867 GiB total**, post-build **13.236 GiB used / 18.631 GiB free / 31.867 GiB total**. Next R0 step: short-prompt causal prefill through all 30 layers (R0.2).
+
+### Session 2026-06-30 — #47464 R0.2 full-26B prompt prefill
+
+R0.2 passed on QB2 with the same real checkpoint using the new prefill-only demo mode:
+`text_demo --checkpoint /home/zni/dg_models/diffusiongemma-26B-A4B-it --local-files-only --mesh P150x4 --max-seq-len 512 --prefill-only`.
+The full 30-layer model built, tokenized the default chat prompt to `prompt_len=18`, padded/wrote a `cache_len=32` frozen-prefix span through `prefill_prompt_tokens`, and closed the mesh cleanly. DRAM was baseline **0.000 GiB used / 31.867 GiB total**, post-build **13.236 GiB used / 18.631 GiB free / 31.867 GiB total**, post-prefill **13.237 GiB used / 18.630 GiB free / 31.867 GiB total**. Next R0 step: build the real-checkpoint denoise logits adapter and call it once on a 256-token canvas (R0.3).
 
 ### Code review — 2026-06-26 (multi-agent review of the 2026-06-25 branch)
 

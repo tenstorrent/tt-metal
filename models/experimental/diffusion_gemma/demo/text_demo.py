@@ -82,6 +82,15 @@ def _log_mesh_dram(mesh_device, label: str) -> None:
     )
 
 
+def _prefill_prompt(checkpoint_model_inputs, prompt):
+    from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens, tokenize_prompt
+
+    prompt_tokens = tokenize_prompt(checkpoint_model_inputs.tokenizer, prompt)
+    prefill = prefill_prompt_tokens(checkpoint_model_inputs.tt_model, prompt_tokens)
+    logger.info(f"[prefill] prompt_len={prefill.prompt_len} cache_len={prefill.cache_len}")
+    return prefill
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DiffusionGemma text generation on a TT mesh.")
     parser.add_argument(
@@ -101,7 +110,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--max-seq-len", type=int, default=4096)
     parser.add_argument("--num-layers", type=int, default=None, help="Optional smoke-test layer limit")
-    parser.add_argument("--build-only", action="store_true", help="Build the TT model, then exit before generation")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--build-only", action="store_true", help="Build the TT model, then exit before generation")
+    mode.add_argument("--prefill-only", action="store_true", help="Build the TT model, prefill prompt KV, then exit")
     parser.add_argument("--local-files-only", action="store_true", help="Do not fetch tokenizer files from HF hub")
     parser.add_argument("--bounded-sliding-kv-cache", action="store_true")
     return parser
@@ -148,6 +159,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         _log_mesh_dram(mesh_device, "post-build")
         if args.build_only:
+            return 0
+        if args.prefill_only:
+            _prefill_prompt(checkpoint_model_inputs, args.prompt)
+            _log_mesh_dram(mesh_device, "post-prefill")
             return 0
         config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=args.max_denoising_steps)
         generation = generate_text_from_checkpoint_model_inputs(
