@@ -45,34 +45,12 @@ for _k, _v in {
     os.environ.setdefault(_k, _v)
 
 
-def _apply_production_env_defaults():
-    """Source _bench_runs/pi05_production.env as DEFAULTS so this test runs the
-    full validated production flag set without a manual `source`. setdefault
-    semantics — an explicitly-set env var still wins. Must run before any ttnn /
-    pi0_5 import so every flag is in place when modules read it."""
-    import re as _re
+# Production perf flags now live in the pi0_5 package (pi05_production.env), loaded
+# via the shared package-relative loader. Runs AFTER the 1×8-specific setdefaults
+# above so those win; setdefault semantics mean an explicit shell export still wins.
+from models.experimental.pi0_5.common.prod_env import apply_production_env_defaults
 
-    root = os.environ.get("TT_METAL_HOME") or os.path.abspath(
-        os.path.join(os.path.dirname(__file__), *([os.pardir] * 4))
-    )
-    envf = os.path.join(root, "_bench_runs", "pi05_production.env")
-    if not os.path.exists(envf):
-        print(f"[1x8-test] WARN: {envf} not found; production flags NOT applied", flush=True)
-        return
-    applied = []
-    with open(envf) as f:
-        for line in f:
-            m = _re.match(r"\s*export\s+([A-Z0-9_]+)=(\S+)", line)
-            if not m:
-                continue
-            k, v = m.group(1), m.group(2)
-            if k not in os.environ:
-                os.environ[k] = v
-                applied.append(f"{k}={v}")
-    print(f"[1x8-test] production env defaults applied ({len(applied)} flags)", flush=True)
-
-
-_apply_production_env_defaults()
+apply_production_env_defaults()
 
 # Match production fold path before any ttnn / pi0_5 import (so PatchEmbeddingTTNN
 # reads the env at construction time). Most of these are in pi05_production.env
@@ -96,7 +74,7 @@ PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
 # mean — set WARMUP_ITERS=1 if you prefer to drop that from the timing.
 WARMUP_ITERS = int(os.environ.get("WARMUP_ITERS", "0"))
 
-# Production env flags worth asserting present (set by _bench_runs/pi05_production.env).
+# Production env flags worth asserting present (set by models/experimental/pi0_5/pi05_production.env).
 # Logged at test start so the run-log shows which optimizations were active.
 _PROD_ENV_KEYS = (
     "PI0_EXPERT_MM_LOFI",

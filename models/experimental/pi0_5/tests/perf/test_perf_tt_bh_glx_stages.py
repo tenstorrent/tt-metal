@@ -11,7 +11,7 @@ transport costs vs the on-device compute.
 All tests require:
   - PI05_CHECKPOINT_DIR pointed at pi05_libero_upstream
   - BH Galaxy 8x4 = 32 chips
-  - `source _bench_runs/pi05_production.env` (recommended) for the
+  - `source models/experimental/pi0_5/pi05_production.env` (recommended) for the
     validated 97.2% LIBERO production knobs.
 
 Run all:

@@ -134,7 +134,7 @@ def test_prefill_stage_pcc():
     weights = loader.categorized_weights
 
     # Production VLM prefill shape: 3 cams * 256 image tokens + 256 lang = 1024.
-    # PI0_VLM_CHUNK_SIZE in _bench_runs/pi05_production.env. Override via env for
+    # PI0_VLM_CHUNK_SIZE in models/experimental/pi0_5/pi05_production.env. Override via env for
     # faster iteration; default to the production single-pass shape.
     B = 1
     seq_len = int(os.environ.get("PI0_VLM_CHUNK_SIZE", "1024"))

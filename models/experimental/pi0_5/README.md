@@ -176,7 +176,7 @@ actions = model.sample_actions(
 
 ```bash
 # Source the validated production defaults (15 perf flags + 3-cam + checkpoint path).
-source _bench_runs/pi05_production.env
+source models/experimental/pi0_5/pi05_production.env
 ```
 
 ```python
@@ -209,18 +209,17 @@ actions_torch = ttnn.to_torch(actions)
 
 ## Performance tuning environment variables
 
-All pi0.5 perf flags + the canonical config live in **`_bench_runs/pi05_production.env`** — a single source of truth that all perf tests, the LIBERO 400-ep orchestrator, and any manual `pytest` invocation should source first.
+All pi0.5 perf flags + the canonical config live in **`models/experimental/pi0_5/pi05_production.env`** — a single source of truth. The perf tests auto-apply it at import (via `common/prod_env.py`, `setdefault` semantics so an explicit export still wins), so a manual `source` is only needed for non-pytest entry points.
 
 ```bash
 # Source once per shell. Defaults applied = validated 97.2% LIBERO config (commit e52d0d23cff).
-source _bench_runs/pi05_production.env
+source models/experimental/pi0_5/pi05_production.env
 
 # Then run anything:
 pytest models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace.py -s
-bash   _bench_runs/libero_400ep_sweep.sh
 
 # Override individual flags AFTER sourcing:
-source _bench_runs/pi05_production.env
+source models/experimental/pi0_5/pi05_production.env
 PI0_NUM_CAMERAS=2 PI05_NUM_DENOISE_STEPS=5 pytest …
 ```
 
@@ -449,7 +448,7 @@ and only touches the denoise stage; prefill/vision placement is unchanged.
 ### Tests (require a 32-chip BH Galaxy + `PI05_CHECKPOINT_DIR`)
 
 ```bash
-source _bench_runs/pi05_production.env   # checkpoint path + production knobs
+source models/experimental/pi0_5/pi05_production.env   # checkpoint path + production knobs
 
 # Mesh-carve smoke + per-stage PCC (vision ≥0.997, prefill ≥0.99, denoise ≥0.95):
 PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs \
@@ -587,7 +586,7 @@ The pytest suite below targets the **eager** socket pipeline (the traced path is
 standalone scripts above):
 
 ```bash
-source _bench_runs/pi05_production.env   # checkpoint + production knobs
+source models/experimental/pi0_5/pi05_production.env   # checkpoint + production knobs
 PP="PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs"
 
 $PP models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py   # per-stage PCC
@@ -624,8 +623,8 @@ ops ran on 1×1 children — not a socket-replay problem. Full writeup:
 
 ### How to run — full traced socket e2e (`run_socket_traced.py`)
 
-Production perf flags are **auto-applied** from `_bench_runs/pi05_production.env` (via
-`os.environ.setdefault` at startup) — no manual `source` needed. Only the checkpoint path
+Production perf flags are **auto-applied** from `models/experimental/pi0_5/pi05_production.env`
+(via `common/prod_env.py` `os.environ.setdefault` at startup) — no manual `source` needed. Only the checkpoint path
 and `PYTHONPATH`/`TT_METAL_HOME` are machine-specific. **Always start from a clean
 `tt-smi -glx_reset`** — without the production flags or on a dirty device it runs ~67 ms
 at PCC ~0.98 instead of ~50 ms at PCC 1.0.
@@ -766,7 +765,7 @@ print('libero env import: ok')
 cd /home/tt-admin/sdawle/pi0/tt-metal
 
 # All 15 perf flags + PI05_CHECKPOINT_DIR come from one source of truth.
-source _bench_runs/pi05_production.env
+source models/experimental/pi0_5/pi05_production.env
 
 PI0_TOKENIZER_PATH=$PI05_BASE/tokenizer/paligemma_tokenizer.model \
 LIBERO_REPO_PATH=$PI05_BASE/libero_repo \

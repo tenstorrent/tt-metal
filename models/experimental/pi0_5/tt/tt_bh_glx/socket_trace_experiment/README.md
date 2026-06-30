@@ -17,7 +17,7 @@ trace + full-mesh-finish deadlock at capture time), not a socket-replay problem.
 
 ## Quick start
 
-Production perf flags are **auto-applied** from `_bench_runs/pi05_production.env`
+Production perf flags are **auto-applied** from `models/experimental/pi0_5/pi05_production.env`
 (via `setdefault` at script startup) — no manual `source` needed. Only the checkpoint
 path is machine-specific:
 

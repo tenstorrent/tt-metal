@@ -18,7 +18,7 @@ build:
     (in snake order) whose recv buffer diverges localizes the op that breaks.
 
 Run:
-  source _bench_runs/pi05_production.env
+  source models/experimental/pi0_5/pi05_production.env
   export PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
   tt-smi -glx_reset
   python_env/bin/python models/experimental/pi0_5/tt/tt_bh_glx/socket_trace_experiment/localize_denoise.py

@@ -11,7 +11,7 @@ export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
 # checkpoint (HF cache snapshot):
 export PI05_CHECKPOINT_DIR=$HOME/.cache/huggingface/hub/models--lerobot--pi05_libero_base/snapshots/a217bfd3b14673cf2ce597e69997ab21866438dd
 # production perf flags (head-split, mm-tune, bf8, chunk=1024, num_cameras=3, ...):
-set -a; source models/experimental/pi0_5/_bench_runs/pi05_production.env; set +a
+set -a; source models/experimental/pi0_5/pi05_production.env; set +a
 unset PI0_VLM_MLP_MINIMAL   # minimal_matmul regresses the TP MLP; bf8-only is the win
 ```
 
@@ -147,7 +147,7 @@ flags from your shell if you need to A/B test something.
 
 The flags baked into the test (so you don't need to set them manually):
 
-- **From `_bench_runs/pi05_production.env`** (16 flags): `PI0_EXPERT_MM_LOFI`,
+- **From `models/experimental/pi0_5/pi05_production.env`** (16 flags): `PI0_EXPERT_MM_LOFI`,
   `PI0_ROPE_TABLES_L1`, `PI0_MM_SWEEP_V2`, `PI0_DENOISE_MM_TUNE`,
   `PI0_PREFILL_MM_TUNE`, `PI0_UPSTREAM_MASKS`, `QWEN_NLP_*_HEAD_SPLIT`,
   `PI0_MQA_HEAD_SPLIT`, `PI0_SDPA_DENOISE_K_FORCE`, `PI0_VLM_CHUNK_SIZE`,

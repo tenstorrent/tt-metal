@@ -38,24 +38,11 @@ from typing import List
 os.environ.setdefault("TT_VISIBLE_DEVICES", "9")
 
 
-def _apply_production_env_defaults():
-    """Source _bench_runs/pi05_production.env as DEFAULTS — no manual `source` needed."""
-    import re as _re
+# Production perf flags now live in the pi0_5 package (pi05_production.env), loaded
+# via the shared package-relative loader. setdefault: an explicit shell export wins.
+from models.experimental.pi0_5.common.prod_env import apply_production_env_defaults
 
-    root = os.environ.get("TT_METAL_HOME") or os.path.abspath(
-        os.path.join(os.path.dirname(__file__), *([os.pardir] * 4))
-    )
-    envf = os.path.join(root, "_bench_runs", "pi05_production.env")
-    if not os.path.exists(envf):
-        return
-    with open(envf) as f:
-        for line in f:
-            m = _re.match(r"\s*export\s+([A-Z0-9_]+)=(\S+)", line)
-            if m:
-                os.environ.setdefault(m.group(1), m.group(2))
-
-
-_apply_production_env_defaults()
+apply_production_env_defaults()
 
 import pytest
 import torch
