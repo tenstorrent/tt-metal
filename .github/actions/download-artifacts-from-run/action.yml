@@ -110,7 +110,7 @@ runs:
         WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | head -1 || true)
 
         # Find packages artifact (optional)
-        PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
+        PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^packages-ubuntu-22.04-amd64-Release" | head -1 || true)
 
         if [ -z "$BUILD_ARTIFACT" ]; then
           echo "ERROR: Could not find build artifact matching expected pattern"
