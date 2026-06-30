@@ -14,15 +14,15 @@ global_env:
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
 
   PREFILL_ENABLE_MIGRATION: "0"
-  # Worker shmem queue names -- must match the running migration_endpoint (see cluster_env.sh).
+  # Worker shmem queue names -- must match the running migration_endpoint
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   # Set PREFILL_MIGRATION_CLIENT_DIR to the dir containing the migration_client.so file
-  PREFILL_MIGRATION_SELFTEST: "1"
-  PREFILL_MIGRATION_CLIENT_DIR: "/data/nolenzhao/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"
+  PREFILL_MIGRATION_SELFTEST: "0"
   PREFILL_MODEL_VARIANT: "kimi_k2_6"
   PREFILL_PP_D2D_FIFO_BYTES: "4096"
+  PREFILL_MIGRATION_INTERLEAVED: "0"
   # NOTE: PREFILL_CHECK_COMPLETIONS is test-only — the master attaches a stand-in consumer that
   # drains the scheduler's counter channel, so it must NOT be set in a config a real scheduler runs
   # against (it would zero the deltas the scheduler polls). Enable it only for bring-up.
