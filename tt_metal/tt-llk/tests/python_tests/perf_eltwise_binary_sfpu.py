@@ -122,6 +122,7 @@ def test_perf_eltwise_binary_sfpu_float(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -206,6 +207,7 @@ def test_perf_eltwise_binary_sfpu_int(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
