@@ -793,7 +793,7 @@ def test_moreh_layer_norm_no_mean_rstd(input_shape_normalized_dims, elementwise_
 
 
 # Validation test for moreh.layer_norm not populating rstd when mean=None, see #22089
-@pytest.mark.skip(reason="Broken mean/rstd output")
+@pytest.mark.skip(reason="Broken mean/rstd output #48606")
 def test_moreh_layer_norm_rstd_only_mean_none(device):
     torch.manual_seed(2023)
     input_shape = [2, 32, 512]
