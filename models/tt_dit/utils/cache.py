@@ -100,7 +100,7 @@ def load_model(
         ttnn.distributed_context_barrier()
         return
 
-    if Path(cache_dir).is_dir():
+    if _cache_is_complete(cache_dir):
         logger.info(f"loading cache at '{cache_dir}'.")
         tt_model.load(cache_dir)
         ttnn.distributed_context_barrier()
@@ -119,6 +119,7 @@ def load_model(
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
+        _mark_cache_complete(cache_dir)
 
 
 def model_cache_dir(
@@ -145,7 +146,26 @@ def model_cache_dir(
     if is_fsdp:
         key += "_FSDP"
 
-    return Path(cache_dir) / model_name / subfolder / key
+    path = Path(cache_dir) / model_name / subfolder / key
+
+    if _distributed_world_size() > 1:
+        path = path / f"rank_{int(ttnn.distributed_context_world_rank())}"
+
+    return path
+
+
+def _cache_is_complete(cache_dir: str | Path) -> bool:
+    return (Path(cache_dir) / CACHE_DICT_FILE).is_file()
+
+
+def _mark_cache_complete(cache_dir: str | Path) -> None:
+    (Path(cache_dir) / CACHE_DICT_FILE).touch()
+
+
+def _distributed_world_size() -> int:
+    if not ttnn.distributed_context_is_initialized():
+        return 1
+    return int(ttnn.distributed_context_world_size())
 
 
 def _cache_root() -> str | None:

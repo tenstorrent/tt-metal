@@ -7,10 +7,10 @@
 #include <cstring>
 
 #include <random>
-#include <chrono>
 
 #include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"
@@ -109,6 +109,21 @@ vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
     uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
+    // If there are no stream registers (Quasar), translate stream flags to memory flags and calculate the L1 worker
+    // completion counter address from the stream index.
+    if (!MetalContext::instance().hal().has_stream_registers() &&
+        (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
+        const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
+        address = mem_map.get_dispatch_message_addr_start() + mem_map.get_sync_offset(stream - first_stream);
+        uint32_t new_flags = flags & ~(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM);
+        new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
+        if (flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
+            new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY;
+        }
+        flags = new_flags;
+        stream = 0;
+    }
     auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
         relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
         relay_wait->relay_inline.dispatcher_type = dispatcher_type;
