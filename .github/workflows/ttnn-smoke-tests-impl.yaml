@@ -215,6 +215,10 @@ jobs:
           sed -i -e '/TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 \/\* Set OvrdThreadId\*\/, 0 \/\*Set Dvalid\*\/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);/d' \
             "$HEADER"
 
+      - name: Install pytest-xdist (sim parallel execution)
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
+        run: uv pip install pytest-xdist
+
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
