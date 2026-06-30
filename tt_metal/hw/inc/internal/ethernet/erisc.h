@@ -62,10 +62,7 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
     // base-FW NOC0 use here would desync them and hang the router on resume. Bracket the yield exactly
     // like the full risc_context_switch() does -- flush the router's in-flight NOC0 first, then realign
     // its shadow counters after. (TEST-ONLY: this makes the "without_noc_sync" path do a full sync.)
-    ncrisc_noc_full_sync<1>();
-    service_eth_msg();
     update_boot_results_eth_link_status_check();
-    ncrisc_noc_counters_init<1>();
     recover_eth_link_if_down();
 #endif
 #endif

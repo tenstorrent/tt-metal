@@ -390,7 +390,8 @@ static void recover_eth_link_if_down() {
     // Per-core down/up edge state (single firmware TU -> one instance per eth core). Constant-
     // initialized to false, so no static-init guard variable is emitted.
     static bool eth_link_was_down = false;
-    if (!is_link_up()) {
+    // if (!is_link_up()) {
+    if (true) {
         // volatile eth_status_t* eth_status = (volatile eth_status_t*)(MEM_SYSENG_ETH_STATUS);
         // invalidate_l1_cache();  // train_status is FW-written; read a fresh value, not a stale cache line
         // if (eth_status->train_status == link_train_status_e::LINK_TRAIN_REQUESTED_DOWN) {  //
@@ -411,8 +412,8 @@ static void recover_eth_link_if_down() {
             (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr);
         if (eth_link_recovery_ptr != 0) {
             // Confirm in the watcher trace that we are about to jump into FW recovery.
-            WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE);
             reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
+            WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE);
         } else {
             // FW does not provide a recovery entry point; record that we skipped the call.
             WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_UNAVAIL_RING_BUF_CODE);
