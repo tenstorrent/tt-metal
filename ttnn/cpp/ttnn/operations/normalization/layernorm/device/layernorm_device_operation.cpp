@@ -55,6 +55,11 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (b.has_value()) {
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
+        // Padded shapes must match. This also (correctly) rejects ROW_MAJOR input + residual when the
+        // row dim isn't tile-aligned: the on-device TILIZE_IN tilizes the input as a flat stick stream,
+        // which does NOT match the host-tiled residual's per-slice tile padding, so the pre-add would
+        // misalign. (RM input + residual with a tile-aligned row dim has matching padded shapes and is
+        // fine; TILE input + residual is always fine.)
         TT_FATAL(
             a.logical_shape() == b.value().logical_shape() && a.padded_shape() == b.value().padded_shape(),
             "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
@@ -65,6 +70,28 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             b.value().padded_shape());
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "Input and residual tensors must be on same device");
+    }
+
+    if (operation_attributes.output_residual_sum) {
+        // Only the interleaved (non-sharded, non-distributed) TILE RMSNorm path emits the pre-add sum.
+        // The sharded/welford/distributed factories never see this flag (guarded here), so their
+        // output machinery is untouched.
+        TT_FATAL(b.has_value(), "output_residual_sum requires a residual_input_tensor (the sum is input + residual)");
+        TT_FATAL(!a.is_sharded(), "output_residual_sum is only supported on the interleaved (non-sharded) path");
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "output_residual_sum is not supported for distributed layernorm");
+        // Input may be TILE or ROW_MAJOR (RM is tilized internally); the residual b is required TILE
+        // (enforced above), and the sum output is always emitted TILE to match it.
+        const auto& xo = tensor_args.residual_output_tensor;
+        TT_FATAL(xo.has_value(), "output_residual_sum set but residual_output_tensor (preallocated) was not provided");
+        TT_FATAL(
+            xo.value().logical_shape() == b.value().logical_shape(),
+            "residual_output_tensor shape {} must match the residual input shape {}",
+            xo.value().logical_shape(),
+            b.value().logical_shape());
+        TT_FATAL(xo.value().buffer() != nullptr, "residual_output_tensor must be allocated in a buffer on device");
+        TT_FATAL(a.device() == xo.value().device(), "Input and residual_output tensors must be on same device");
     }
 
     if (gamma.has_value()) {
@@ -479,7 +506,9 @@ Tensor layer_norm(
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
     const std::optional<const Tensor>& recip_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    bool output_residual_sum,
+    const std::optional<const Tensor>& residual_output_tensor) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -488,7 +517,8 @@ Tensor layer_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
-        .fused_activation = fused_activation};
+        .fused_activation = fused_activation,
+        .output_residual_sum = output_residual_sum};
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,
@@ -496,6 +526,7 @@ Tensor layer_norm(
         .bias = bias,
         .stats = stats,
         .recip_tensor = recip_tensor,
+        .residual_output_tensor = residual_output_tensor,
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

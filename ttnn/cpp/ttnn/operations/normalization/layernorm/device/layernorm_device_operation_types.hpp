@@ -23,6 +23,9 @@ struct LayerNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<operations::unary::UnaryWithParam> fused_activation;
+    // When set (interleaved + FUSE_PRE_ADD only), also write the pre-add sum (input + residual) to
+    // residual_output_tensor — lets a resnet block fuse its terminal add into the next block's norm.
+    bool output_residual_sum = false;
 };
 
 struct LayerNormInputs {
@@ -32,6 +35,7 @@ struct LayerNormInputs {
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
     std::optional<Tensor> recip_tensor;           // reciprocal LUT for welford algorithm
+    std::optional<Tensor> residual_output_tensor;  // preallocated pre-add sum output (output_residual_sum)
 };
 
 }  // namespace ttnn::prim

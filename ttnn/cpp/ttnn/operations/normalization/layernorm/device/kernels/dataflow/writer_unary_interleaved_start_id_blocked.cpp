@@ -28,18 +28,40 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
+#ifdef OUTPUT_RESIDUAL_SUM
+    // Same writer also drains the pre-add sum (cb_x_out) to a second tensor — a core has only two
+    // data-movement RISCs, so both outputs share this one. The 2nd output has the same tile layout as
+    // cb_out, so the page_id walk is identical.
+    uint32_t x_dst_addr = get_arg_val<uint32_t>(4);
+    constexpr auto x_dst_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_id_x_out = get_named_compile_time_arg_val("cb_x_out");
+    const uint32_t x_tile_bytes = get_tile_size(cb_id_x_out);
+    CircularBuffer cb_x_out(cb_id_x_out);
+    const auto s_x = TensorAccessor(x_dst_args, x_dst_addr);
+#endif
+
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {
         for (auto block : generic::blocks(Wt, blk)) {
             cb_out0.wait_front(block.full_block_size());
+#ifdef OUTPUT_RESIDUAL_SUM
+            cb_x_out.wait_front(block.full_block_size());
+#endif
             uint32_t idx = 0;
             for (auto i : block.local()) {
                 noc.async_write(cb_out0, s, tile_bytes, {.offset_bytes = idx * tile_bytes}, {.page_id = tile_id});
+#ifdef OUTPUT_RESIDUAL_SUM
+                noc.async_write(
+                    cb_x_out, s_x, x_tile_bytes, {.offset_bytes = idx * x_tile_bytes}, {.page_id = tile_id});
+#endif
                 tile_id++;
                 idx++;
             }
             noc.async_write_barrier();
             cb_out0.pop_front(block.full_block_size());
+#ifdef OUTPUT_RESIDUAL_SUM
+            cb_x_out.pop_front(block.full_block_size());
+#endif
         }
     }
 }

@@ -229,7 +229,13 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t im6_t = block_size * 2;  // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
         im6_t = Wt_next_block_up;
-        in0_t = 2 * block_size;
+        // TILE-input fused streams cb_in (the reader's `a`) one block at a time, so a double buffer
+        // suffices. RM-input fused tilizes the WHOLE row into cb_in (tilize_all_blocks_to_cb) before the
+        // pre-add consumes any of it, so cb_in must hold the full row — otherwise the tilize fills the
+        // double buffer and deadlocks (no consumer runs until tilize returns). Wt>block_size only.
+        if (!input_is_row_major) {
+            in0_t = 2 * block_size;
+        }
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
@@ -349,6 +355,26 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
 
+    // Optional second output: the pre-add sum (input + residual). Lets a resnet block fuse its
+    // terminal `add(residual, h)` into the next block's norm. Only the small-kernel, non-welford,
+    // RMSNorm, fused-pre-add, interleaved path emits it (validate guards the rest); the compute kernel
+    // tees cb_x to a bf16 cb_x_out and the output writer drains it alongside cb_out (one DM RISC, no
+    // sibling writer). RM input is supported: the sum is teed in TILE (the chain residual stays TILE),
+    // only the normed output is untilized — so no per-block layout conversions are forced on the caller.
+    const bool output_residual_sum =
+        operation_attributes.output_residual_sum && fuse_pre_add && rms_norm && !use_welford && !large_tensor_needed;
+    TT_FATAL(
+        operation_attributes.output_residual_sum == output_residual_sum,
+        "output_residual_sum was requested on an unsupported layernorm path (needs interleaved TILE RMSNorm with a "
+        "residual input)");
+    const auto x_out_dram_addr =
+        output_residual_sum ? tensor_args.residual_output_tensor.value().buffer()->address() : 0;
+    const tt::DataFormat x_out_data_format =
+        output_residual_sum
+            ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.residual_output_tensor.value().dtype())
+            : tt::DataFormat::Invalid;
+    const uint32_t x_out_single_tile_size = output_residual_sum ? tt::tile_size(x_out_data_format) : 0;
+
     // Build compile time args for reader kernel
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
     if (!large_tensor_needed) {
@@ -380,9 +406,16 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         // RM writer needs elem_size to compute per-row NOC write sizes
         writer_compile_time_args.push_back(static_cast<uint32_t>(output.element_size()));
     }
+    if (output_residual_sum) {
+        // Second TensorAccessor for the (always-TILE) pre-add sum output, drained by the same writer.
+        // Appended last so each writer reads it at its own offset (after elem_size for the RM writer).
+        tt::tt_metal::TensorAccessorArgs(tensor_args.residual_output_tensor.value().buffer())
+            .append_to(writer_compile_time_args);
+    }
 
-    // Build defines for reader and compute kernels
+    // Build defines for reader, writer, and compute kernels
     KernelDescriptor::Defines reader_defines;
+    KernelDescriptor::Defines writer_defines;
     KernelDescriptor::Defines compute_defines;
 
     if (fuse_pre_add) {
@@ -390,6 +423,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         if (!use_welford) {
             compute_defines.emplace_back("FUSE_PRE_ADD", "1");
         }
+    }
+
+    if (output_residual_sum) {
+        compute_defines.emplace_back("OUTPUT_RESIDUAL_SUM", "1");
+        writer_defines.emplace_back("OUTPUT_RESIDUAL_SUM", "1");
     }
 
     if (gamma.has_value()) {
@@ -453,6 +491,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         {"cb_gamma", tt::CBIndex::c_5},
         {"cb_beta", tt::CBIndex::c_6},
         {"cb_out", tt::CBIndex::c_16},
+        {"cb_x_out", tt::CBIndex::c_17},  // optional 2nd output: pre-add sum (output_residual_sum)
         {"cb_ex", tt::CBIndex::c_18},
         {"cb_ex2", tt::CBIndex::c_19},
         {"cb_xmm2", tt::CBIndex::c_20},
@@ -605,6 +644,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         if (input_is_row_major) {
             writer_args.push_back(H_logical);  // arg[4]
         }
+        if (output_residual_sum) {
+            // The single writer also drains cb_x_out (TILE) to the 2nd output. arg[4] non-RM, arg[5] RM
+            // (after H_logical). The sum is always tiled, so tile_offset indexes it on both paths.
+            writer_args.push_back(x_out_dram_addr);
+        }
         writer_runtime_args.emplace_back(core, std::move(writer_args));
         compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
 
@@ -639,6 +683,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
     writer_kernel_desc.named_compile_time_args = cb_named_args;
+    writer_kernel_desc.defines = writer_defines;
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
@@ -697,6 +742,14 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // CB 16: Output buffer
     program_descriptor.cbs.push_back(
         make_cb_descriptor(out0_t * out_single_tile_size, tt::CBIndex::c_16, out_data_format, out_single_tile_size));
+
+    // CB 17: optional pre-add sum output (output_residual_sum). Full-row depth so the compute kernel's
+    // pre-add loop fills the whole row without back-pressure; the output writer drains it after cb_out
+    // (which the norm only produces post-reduction).
+    if (output_residual_sum) {
+        program_descriptor.cbs.push_back(make_cb_descriptor(
+            Wt_next_block_up * x_out_single_tile_size, tt::CBIndex::c_17, x_out_data_format, x_out_single_tile_size));
+    }
 
     // CB 18: Intermediate 1 (if not rms_norm). c_18 holds the running E[x] (mean) spilled
     // between blocks in layernorm_large_tensor_welford.cpp's fused welford path. When

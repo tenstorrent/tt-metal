@@ -49,7 +49,8 @@ void kernel_main() {
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
+    constexpr uint32_t elem_off = dst_args.next_compile_time_args_offset();
+    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(elem_off);
 
     constexpr uint32_t cb_id_out_rm = get_named_compile_time_arg_val("cb_out_rm");
 
@@ -63,6 +64,18 @@ void kernel_main() {
 
     constexpr uint32_t block_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t tile_width_bytes = TILE_W * elem_size_bytes;
+
+#ifdef OUTPUT_RESIDUAL_SUM
+    // Same writer also drains the pre-add sum (cb_x_out), which is always TILE — written tile-by-tile to
+    // the 2nd output. arg[3] here is a tile-row index, so the tile page_id base is start_tile_row * Wt.
+    const uint32_t x_dst_addr = get_arg_val<uint32_t>(5);
+    constexpr auto x_dst_args = TensorAccessorArgs<elem_off + 1>();
+    constexpr uint32_t cb_id_x_out = get_named_compile_time_arg_val("cb_x_out");
+    const uint32_t x_tile_bytes = get_tile_size(cb_id_x_out);
+    CircularBuffer cb_x_out(cb_id_x_out);
+    const auto s_x = TensorAccessor(x_dst_args, x_dst_addr);
+    uint32_t x_tile_id = start_tile_row * Wt;
+#endif
 
     for (uint32_t ncht = 0; ncht < num_tile_rows; ncht++) {
         const uint32_t abs_row_base = (start_tile_row + ncht) * TILE_H;
@@ -79,6 +92,18 @@ void kernel_main() {
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::write_row_major_block_from_cb<decltype(dst_a), decltype(block), TILE_W, TILE_H>(
                 noc, cb_out_rm, dst_a, abs_row_base, num_valid_rows, tile_width_bytes, block_row_stride_bytes, block);
+#ifdef OUTPUT_RESIDUAL_SUM
+            cb_x_out.wait_front(block.full_block_size());
+            uint32_t idx = 0;
+            for (auto i : block.local()) {
+                noc.async_write(
+                    cb_x_out, s_x, x_tile_bytes, {.offset_bytes = idx * x_tile_bytes}, {.page_id = x_tile_id});
+                x_tile_id++;
+                idx++;
+            }
+            noc.async_write_barrier();
+            cb_x_out.pop_front(block.full_block_size());
+#endif
         }
     }
 }

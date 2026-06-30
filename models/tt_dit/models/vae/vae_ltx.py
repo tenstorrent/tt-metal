@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Sequence
 
 import torch
@@ -27,6 +28,13 @@ from ...utils.conv3d import (
     get_conv3d_config,
 )
 from ...utils.tensor import typed_tensor
+
+# Fold each resnet block's terminal residual-add into the next block's norm1 (dual-output RMSNorm) within
+# a mid-block chain. OFF by default: the decode's RM-input norm at non-tile-aligned spatial dims hits a
+# base-op TILIZE_IN+FUSE_PRE_ADD row-misalignment bug (wiki NP_CONV3D_FUSED §4i), so the RM-native path is
+# blocked. LTX_FUSE_NORM_ADD=1 re-enables the chain (only correct once that base-op bug is fixed or the
+# chain is switched to feed the op TILE input).
+_FUSE_MIDBLOCK_NORM_ADD = os.environ.get("LTX_FUSE_NORM_ADD", "0") != "0"
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
@@ -450,18 +458,30 @@ class LTXResnetBlock3D(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(
+    def _resnet_halves(
         self,
-        x_BTHWC: ttnn.Tensor,
-        causal: bool = True,
-        logical_h: int = 0,
-        logical_w: int = 0,
-    ) -> ttnn.Tensor:
-        residual = x_BTHWC
+        x_or_h: ttnn.Tensor,
+        residual_in: ttnn.Tensor | None,
+        causal: bool,
+        logical_h: int,
+        logical_w: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The block's two pre-add halves (h, residual); the block output is residual + h.
+
+        When residual_in is None, x_or_h is this block's materialized input. Otherwise x_or_h is the
+        previous block's h-half and residual_in its residual-half, and their sum is this block's input —
+        folded into norm1 (dual-output), which also returns that sum as the new residual. This is how a
+        chain of blocks avoids materializing every intermediate residual add."""
+        if residual_in is None:
+            h = self.norm1(x_or_h, compute_kernel_config=self.norm_compute_kernel_config)
+            residual = x_or_h
+        else:
+            h, residual = self.norm1.forward_residual_sum(
+                x_or_h, residual_in, compute_kernel_config=self.norm_compute_kernel_config
+            )
 
         # Main path: (norm+silu fused) → conv → (norm+silu fused) → conv. The fused norm outputs
         # TILE; conv3d needs ROW_MAJOR.
-        h = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         h = self.conv1(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
@@ -479,7 +499,33 @@ class LTXResnetBlock3D(Module):
             )
             residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
+        return h, residual
+
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> ttnn.Tensor:
+        h, residual = self._resnet_halves(x_BTHWC, None, causal, logical_h, logical_w)
         return ttnn.add(residual, h)
+
+    def forward_deferred(
+        self,
+        x_or_h: ttnn.Tensor,
+        residual_in: ttnn.Tensor | None,
+        causal: bool = True,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Returns (h, residual) without materializing this block's `residual + h` add — the next block
+        folds it into its norm1. residual is returned TILE (the layout norm1's fused residual input
+        requires)."""
+        h, residual = self._resnet_halves(x_or_h, residual_in, causal, logical_h, logical_w)
+        if residual.layout != ttnn.TILE_LAYOUT:
+            residual = ttnn.to_layout(residual, ttnn.TILE_LAYOUT)
+        return h, residual
 
 
 class LTXUNetMidBlock3D(Module):
@@ -520,9 +566,27 @@ class LTXUNetMidBlock3D(Module):
         logical_h: int = 0,
         logical_w: int = 0,
     ) -> ttnn.Tensor:
-        for block in self.res_blocks:
-            x_BTHWC = block(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
-        return x_BTHWC
+        # Defer each block's terminal residual-add into the next block's norm1 (dual-output RMSNorm), so
+        # only the chain's final add is materialized. Same channels throughout (no shortcut), so the
+        # carried residual is just the running block input.
+        if not _FUSE_MIDBLOCK_NORM_ADD or len(self.res_blocks) == 1:
+            for block in self.res_blocks:
+                x_BTHWC = block(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
+            return x_BTHWC
+
+        h, residual = None, None
+        for i, block in enumerate(self.res_blocks):
+            if i == 0:
+                h, residual = block.forward_deferred(
+                    x_BTHWC, None, causal=causal, logical_h=logical_h, logical_w=logical_w
+                )
+            else:
+                h, residual = block.forward_deferred(
+                    h, residual, causal=causal, logical_h=logical_h, logical_w=logical_w
+                )
+        # Materialize the last block's output for the next up_block (ROW_MAJOR); residual is TILE here.
+        residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.add(residual, h)
 
 
 class LTXDepthToSpaceUpsample(Module):

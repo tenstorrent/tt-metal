@@ -61,6 +61,27 @@ class RMSNorm(Module):
             activation=self.fused_activation,
         )
 
+    def forward_residual_sum(
+        self,
+        x: ttnn.Tensor,
+        residual: ttnn.Tensor,
+        *,
+        compute_kernel_config=None,
+        program_config=None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """RMSNorm(x + residual) and the raw sum (x + residual). The sum lets a caller fold a downstream
+        residual add into this norm. Interleaved TILE path only."""
+        return ttnn.experimental.dit_rms_norm_unary_fused_residual_sum(
+            x,
+            residual,
+            weight=self.weight.data if self.weight is not None else None,
+            bias=self.bias.data if self.bias is not None else None,
+            epsilon=self.norm_eps,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            activation=self.fused_activation,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             state["weight"] = state["weight"].unsqueeze(0)
