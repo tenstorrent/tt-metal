@@ -26,6 +26,16 @@ from models.experimental.diffusion_gemma.weight_mapping import GEMMA4_LM_PREFIX,
 NEG = -1.0e9
 
 
+def default_self_conditioning_compute_kernel_config():
+    """Use fp32 accumulation for production-vocab self-conditioning softmax."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def _replicate_mapper(mesh_device):
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
@@ -514,6 +524,7 @@ def make_denoise_logits_adapter_from_checkpoint_state(
     q_rope_offset: int | None = None,
     self_conditioning_dtype=ttnn.bfloat16,
     self_conditioning_compute_kernel_config=None,
+    default_compute_kernel_config_fn=default_self_conditioning_compute_kernel_config,
     self_conditioning_builder=build_self_conditioning,
     embedding_weight_builder=build_self_conditioning_embedding_weight,
     adapter_builder=make_denoise_logits_adapter_from_kv_cache,
@@ -536,6 +547,8 @@ def make_denoise_logits_adapter_from_checkpoint_state(
         hidden_size=hidden_size,
         dtype=self_conditioning_dtype,
     )
+    if self_conditioning_compute_kernel_config is None:
+        self_conditioning_compute_kernel_config = default_compute_kernel_config_fn()
     return adapter_builder(
         tt_model,
         prompt_len=prompt_len,

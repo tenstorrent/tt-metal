@@ -346,6 +346,31 @@ def test_make_denoise_logits_adapter_from_checkpoint_state_builds_full_adapter_i
     }
 
 
+def test_make_denoise_logits_adapter_from_checkpoint_state_defaults_fp32_softmax_kernel():
+    calls = {}
+    model = _FakeModel()
+
+    def fake_adapter_builder(tt_model, **kwargs):
+        calls["adapter"] = kwargs
+        return "adapter"
+
+    out = make_denoise_logits_adapter_from_checkpoint_state(
+        model,
+        prompt_len=64,
+        self_conditioning_state={"weights": "state"},
+        embedding_weight="embedding-weight",
+        hidden_size=8,
+        intermediate_size=6,
+        self_conditioning_builder=lambda *args, **kwargs: "self-conditioning",
+        embedding_weight_builder=lambda *args, **kwargs: "embedding-tt",
+        adapter_builder=fake_adapter_builder,
+        default_compute_kernel_config_fn=lambda: "default-fp32-kernel",
+    )
+
+    assert out == "adapter"
+    assert calls["adapter"]["self_conditioning_compute_kernel_config"] == "default-fp32-kernel"
+
+
 def test_make_denoise_logits_adapter_from_remapped_state_uses_backbone_embedding_key():
     calls = {}
 
