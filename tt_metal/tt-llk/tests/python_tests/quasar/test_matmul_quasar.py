@@ -255,11 +255,11 @@ def test_matmul(
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
-            NUM_FACES(num_faces, num_faces, num_faces),
         ],
         runtimes=[
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             TILE_COUNT(matmul_dims.output_tile_cnt),
+            NUM_FACES(num_faces, num_faces, num_faces),
         ],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
