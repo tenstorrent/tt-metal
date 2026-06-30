@@ -142,7 +142,7 @@ For optimized-vLLM, optimize with same-harness primary single-user and secondary
 Check stages:
 
 - `sampling`: runs the canonical TT plugin pytest suite against the live server. `--sampling-profile full` runs the whole suite; `--sampling-profile smoke` runs a small integration sanity subset for slow bring-up loops.
-- `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; read the outputs and judge coherence, topic, repetition, gibberish, and wrong-language drift. See `Output-Quality Verdicts Need A Control` below before classifying any problem as model-intrinsic.
+- `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; use `$qualitative-check` to ensure the prompts are sent in the HF-declared model format, compare against controls, and judge coherence, topic, repetition, gibberish, and wrong-language drift.
 - `benchmark`: runs the primary single-user decode profile by default: 128-token input, 128-token output, one prompt, `--max-concurrency 1`, `ignore_eos`, percentile metrics `ttft,tpot,itl,e2el`, and a completed-prompt gate. Use `vllm_benchmark.json` for headline decode t/s/u and comparisons to full-model or older agentic/custom-benchmark reports. This is the primary optimization target.
 - `benchmark`: also runs the vLLM-nightly-shaped CI serving-burst profile by default: 100-token inputs, 100-token outputs, 32 prompts, no explicit `--max-concurrency`, `ignore_eos`, and the same metric set. Use `vllm_ci_serving_benchmark.json` for vLLM-nightly parity, serving-capacity context, and larger-batch/concurrency coverage. Do not use it as the headline decode t/s/u because burst admission and chunked prefill can affect TPOT. The readiness runner passes `--temperature 0.0` by default so both benchmark profiles are greedy. Use `--benchmark-use-server-generation-config` only when intentionally reproducing exact nightly/server-generation-config behavior, and label those numbers as sampled/default-generation-config rather than greedy single-user t/s/u.
 
@@ -170,7 +170,7 @@ Record the working server invocation in the work log, including `--max-model-len
 
 ## Output-Quality Verdicts Need A Control
 
-Before classifying any serving-output problem as a model-quality limitation, produce matching evidence: the same prompts through the HF reference, or at minimum the full-model stage's free-running generation on comparable prompts. If serving output is materially worse than what the model produced at the full-model stage, that is a serving regression and in scope for this stage - stale trace inputs, sampler state, and cache/position handling are the usual causes, not the checkpoint.
+Before classifying any serving-output problem as a model-quality limitation, use `$qualitative-check` to produce matching prompt-correct evidence from HF, or at minimum from the full-model stage on comparable prompts. If serving output is materially worse than the prompt-correct control, that is a serving regression and in scope for this stage - stale trace inputs, sampler state, and cache/position handling are the usual causes, not the checkpoint. If the shared readiness runner cannot send the correct prompt format, fix it or add a targeted prompt-correct request before judging output quality.
 
 After qualitative collection, run:
 
@@ -199,7 +199,7 @@ Done means all of these are true and recorded:
 - Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.
 - Sampling test results, with any reproducibility-only failures separated from real failures.
-- Qualitative greedy and sampled serving-output verdict.
+- `$qualitative-check` artifacts: qualitative greedy and sampled serving-output verdict, prompt-format metadata, rendered prompts or token ids, and matching HF/full-model controls.
 - Primary single-user benchmark workload config, temperature/generation-config mode, and whether it used default 128/128/1 shape or explicit overrides.
 - Primary serving-path TTFT median/P99, TPOT mean/P99, ITL median/P99, aggregate output throughput, and TPOT-derived decode t/s/u from `vllm_benchmark.json`.
 - Secondary CI serving-burst benchmark workload config and metrics from `vllm_ci_serving_benchmark.json` when comparing to vLLM nightly or serving-capacity evidence.
