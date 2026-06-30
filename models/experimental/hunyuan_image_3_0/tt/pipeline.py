@@ -180,12 +180,9 @@ def denoise_loop(
     cond,  # conditioning dict for the conditional pass (see below)
     uncond=None,  # same dict for the unconditional pass; None => no CFG
     guidance_scale: float = 1.0,
-    timestep_emb=None,  # host ref TimestepEmbedder for gen_timestep_scatter_index (legacy)
-    guidance_emb=None,  # host ref TimestepEmbedder for guidance_scatter_index (distil, legacy)
-    timestep_r_emb=None,  # host ref TimestepEmbedder for gen_timestep_r_scatter_index (meanflow, legacy)
-    tt_timestep_emb=None,  # HunyuanTtTimestepEmbedder — preferred on-device scatter path
-    tt_guidance_emb=None,
-    tt_timestep_r_emb=None,
+    tt_timestep_emb=None,  # HunyuanTtTimestepEmbedder — on-device gen timestep scatter
+    tt_guidance_emb=None,  # HunyuanTtTimestepEmbedder — on-device guidance scatter (distil)
+    tt_timestep_r_emb=None,  # HunyuanTtTimestepEmbedder — on-device timestep_r scatter (meanflow)
     cfg_distilled: bool = False,
     use_meanflow: bool = False,
     mesh_device=None,  # pass the MeshDevice when the backbone is mesh-resident
@@ -205,9 +202,8 @@ def denoise_loop(
     combined on device before the update.
 
     When ``cond`` carries persistent ``base_embeds`` on device plus scatter indices,
-    per-step gen/guidance/timestep_r tokens are updated with ``tt_timestep_emb`` /
-    ``tt_guidance_emb`` / ``tt_timestep_r_emb`` (preferred). Legacy host re-upload
-    via ``base_embeds_host`` + ref ``timestep_emb`` remains for older callers.
+    per-step gen/guidance/timestep_r tokens are updated on device with
+    ``tt_timestep_emb`` / ``tt_guidance_emb`` / ``tt_timestep_r_emb``.
 
     Latent representation: the scheduler operates on device NHWC-flat tensors,
     but UNetDown's entry only accepts torch NCHW, so the (small) latent makes one
@@ -248,87 +244,34 @@ def denoise_loop(
         return ttnn.to_torch(t_dev)
 
     def _needs_step_scatter(c):
-        idx = c.get("gen_timestep_scatter_index")
         return (
-            (idx is not None and (tt_timestep_emb is not None or timestep_emb is not None))
-            or (
-                cfg_distilled
-                and c.get("guidance_scatter_index") is not None
-                and (tt_guidance_emb is not None or guidance_emb is not None)
-            )
-            or (
-                use_meanflow
-                and c.get("gen_timestep_r_scatter_index") is not None
-                and (tt_timestep_r_emb is not None or timestep_r_emb is not None)
-            )
+            (c.get("gen_timestep_scatter_index") is not None and tt_timestep_emb is not None)
+            or (cfg_distilled and c.get("guidance_scatter_index") is not None and tt_guidance_emb is not None)
+            or (use_meanflow and c.get("gen_timestep_r_scatter_index") is not None and tt_timestep_r_emb is not None)
         )
 
     def _prepare_base_embeds(c, t_scalar):
         base = c.get("base_embeds")
-        persistent = c.get("base_embeds_persistent", False)
-        if base is not None and persistent:
-            if not _needs_step_scatter(c):
-                return base
-            from models.experimental.hunyuan_image_3_0.tt.denoise_cond import scatter_step_embeds_tt
+        if base is None or not _needs_step_scatter(c):
+            return base
 
-            t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
-            updated = scatter_step_embeds_tt(
-                base,
-                t_scalar=float(t_scalar),
-                gen_timestep_scatter_index=c.get("gen_timestep_scatter_index"),
-                tt_timestep_emb=tt_timestep_emb,
-                guidance_scalar=distill_guidance,
-                guidance_scatter_index=c.get("guidance_scatter_index"),
-                tt_guidance_emb=tt_guidance_emb,
-                t_r_scalar=t_r,
-                gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
-                tt_timestep_r_emb=tt_timestep_r_emb,
-            )
-            c["base_embeds"] = updated
-            return updated
+        from models.experimental.hunyuan_image_3_0.tt.denoise_cond import scatter_step_embeds_tt
 
-        host = c.get("base_embeds_host")
-        if host is not None:
-            emb = host
-            if _needs_step_scatter(c):
-                if tt_timestep_emb is not None or tt_guidance_emb is not None or tt_timestep_r_emb is not None:
-                    from models.experimental.hunyuan_image_3_0.tt.denoise_cond import scatter_step_embeds_tt
-
-                    t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
-                    base_tt = _up(emb.to(torch.bfloat16), ttnn.bfloat16)
-                    updated = scatter_step_embeds_tt(
-                        base_tt,
-                        t_scalar=float(t_scalar),
-                        gen_timestep_scatter_index=c.get("gen_timestep_scatter_index"),
-                        tt_timestep_emb=tt_timestep_emb,
-                        guidance_scalar=distill_guidance,
-                        guidance_scatter_index=c.get("guidance_scatter_index"),
-                        tt_guidance_emb=tt_guidance_emb,
-                        t_r_scalar=t_r,
-                        gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
-                        tt_timestep_r_emb=tt_timestep_r_emb,
-                    )
-                    return updated
-
-                from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
-                    scatter_distill_step_embeds,
-                )
-
-                t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
-                emb = scatter_distill_step_embeds(
-                    emb,
-                    t_scalar=float(t_scalar),
-                    gen_timestep_scatter_index=c.get("gen_timestep_scatter_index"),
-                    timestep_emb=timestep_emb,
-                    guidance_scalar=distill_guidance,
-                    guidance_scatter_index=c.get("guidance_scatter_index"),
-                    guidance_emb=guidance_emb,
-                    t_r_scalar=t_r,
-                    gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
-                    timestep_r_emb=timestep_r_emb,
-                )
-            return _up(emb, ttnn.bfloat16)
-        return base
+        t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
+        updated = scatter_step_embeds_tt(
+            base,
+            t_scalar=float(t_scalar),
+            gen_timestep_scatter_index=c.get("gen_timestep_scatter_index"),
+            tt_timestep_emb=tt_timestep_emb,
+            guidance_scalar=distill_guidance,
+            guidance_scatter_index=c.get("guidance_scatter_index"),
+            tt_guidance_emb=tt_guidance_emb,
+            t_r_scalar=t_r,
+            gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
+            tt_timestep_r_emb=tt_timestep_r_emb,
+        )
+        c["base_embeds"] = updated
+        return updated
 
     for step_i, t in enumerate(timesteps):
         step_t0 = time.time()
@@ -360,8 +303,6 @@ def denoise_loop(
                 kwargs["text_pre"] = c["text_pre"]
                 kwargs["text_post"] = c.get("text_post")
             pred = step(latent, **kwargs)
-            if base is not None and c.get("base_embeds_host") is not None and not c.get("base_embeds_persistent"):
-                ttnn.deallocate(base)
             return pred
 
         pred = _one(cond)  # device NHWC flat [1,1,B*h*w,C]

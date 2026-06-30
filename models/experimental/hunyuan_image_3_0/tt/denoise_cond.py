@@ -86,9 +86,21 @@ def replace_token_at_tt(base_embeds, pos: int, token_b1h):
 
 
 def _embed_scalar_tt(embedder, scalar: float, batch: int = 1):
-    """Run a resident ``HunyuanTtTimestepEmbedder`` for one scalar -> ``[B,1,H]`` TILE."""
-    t = torch.tensor([float(scalar)] * batch, dtype=torch.float32)
+    """Run a resident ``HunyuanTtTimestepEmbedder`` for one scalar -> ``[B,1,H]`` TILE.
+
+    The ``[1,1,B,1]`` timestep tensor is built directly on device (``ttnn.full``,
+    replicated across a mesh); the embedder runs its sinusoidal + MLP featurization
+    on device. No host torch tensor is allocated per step.
+    """
+    t = ttnn.full(
+        [1, 1, batch, 1],
+        float(scalar),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=embedder.device,
+    )
     out = embedder.forward(t)
+    ttnn.deallocate(t)
     h = int(out.shape[-1])
     out = ttnn.reshape(out, [batch, 1, h])
     return out
