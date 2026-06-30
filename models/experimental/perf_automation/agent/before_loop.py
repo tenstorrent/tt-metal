@@ -294,7 +294,6 @@ def before_loop(
         )
 
     stages.start("ensure_tt_lang", "install the tt-lang kernel toolchain if missing (--no-deps, ttnn verified)")
-    _allow_no_ttl = os.environ.get("TT_PERF_ALLOW_NO_TTLANG") == "1"
     try:
         from .ttlang import ensure_ttl
 
@@ -303,18 +302,10 @@ def before_loop(
         _ttl = {"available": False, "error": str(exc)}
     if _ttl.get("available"):
         stages.done(f"tt-lang available ({_ttl.get('version')})")
-    elif _allow_no_ttl:
+    else:
         stages.done(
             f"tt-lang unavailable ({_ttl.get('tried') or _ttl.get('error')}) — "
-            "TT_PERF_ALLOW_NO_TTLANG=1 set, proceeding with the tt-lang rung skipped (N/A)"
-        )
-    else:
-        raise SystemExit(
-            "BEFORE-LOOP FAILED: tt-lang toolchain (ttl) is unavailable and could not be auto-installed "
-            f"({_ttl.get('tried') or _ttl.get('error')}). The tt-lang kernel rung cannot run without it.\n"
-            "  fix: install tt-lang first, matching your installed ttnn, e.g. "
-            "`pip install tt-lang==1.0.1 --no-deps` then verify `import ttl` and `import ttnn` both work.\n"
-            "  or set TT_PERF_ALLOW_NO_TTLANG=1 to proceed and skip the tt-lang rung (N/A)."
+            "the run HALTS later only if a material op actually reaches the tt-lang rung"
         )
 
     stages.start("discover", f"sub-agent mapping {model_root}")

@@ -191,14 +191,18 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     }
 
 
-def _can_stop(repo_root: Path, mcp_env: dict, devices: str) -> bool:
-    """Ask the gate ITSELF (not the agent) whether to stop — the deterministic stop authority."""
+def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
+    """Ask the gate ITSELF (not the agent): can_stop, and whether the run must HALT (e.g. a material
+    op needs the tt-lang rung but the ttl toolchain is not installed). Deterministic stop authority."""
     code = (
         "import sys; sys.path.insert(0, sys.argv[1]); import perf_mcp as P; "
         "t=P.termination_check\n"
         "for a in ('fn','func','_fn','__wrapped__'):\n"
         "    if hasattr(t,a): t=getattr(t,a); break\n"
-        "print('CANSTOP=' + str(bool(t().get('can_stop'))))"
+        "r=t()\n"
+        "print('CANSTOP=' + str(bool(r.get('can_stop'))))\n"
+        "print('HALT=' + str(bool(r.get('halt'))))\n"
+        "print('HALTREASON=' + str(r.get('halt_reason') or ''))"
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)  # PERF_MCP_* so the gate targets this pipeline
@@ -212,8 +216,13 @@ def _can_stop(repo_root: Path, mcp_env: dict, devices: str) -> bool:
             timeout=3600,
         )
     except Exception:  # noqa: BLE001 — gate crashed/timed out -> treat as not-done, loop retries
-        return False
-    return "CANSTOP=True" in (r.stdout or "")
+        return {"can_stop": False, "halt": False, "reason": ""}
+    out = r.stdout or ""
+    reason = ""
+    for line in out.splitlines():
+        if line.startswith("HALTREASON="):
+            reason = line[len("HALTREASON=") :]
+    return {"can_stop": "CANSTOP=True" in out, "halt": "HALT=True" in out, "reason": reason}
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -283,8 +292,16 @@ def optimize_pipeline(
     prompt = _PROMPT.format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
-    rounds, can_stop = 0, False
+    rounds, can_stop, halted = 0, False, False
     while rounds < max_rounds:
+        st = _gate_status(repo_root, mcp_env, devices)
+        if st.get("halt"):
+            print(f"  [optimize/cc] HALT — install tt-lang first, then re-run: {st.get('reason')}")
+            halted = True
+            break
+        if st.get("can_stop"):
+            can_stop = True
+            break
         subprocess.run(
             [
                 "claude",
@@ -303,11 +320,8 @@ def optimize_pipeline(
             env=cc_env(repo_root, devices),
         )
         rounds += 1
-        if _can_stop(repo_root, mcp_env, devices):
-            can_stop = True
-            break
     _emit_summary(repo_root, kernel_log, model_name, task, metric, start_sha)
-    return {"task": task, "rounds": rounds, "can_stop": can_stop}
+    return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 
 
 _GL_REL = PERF_DIR + "/GUIDELINES"
