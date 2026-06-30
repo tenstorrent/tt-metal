@@ -13,7 +13,7 @@ from models.common.utility_functions import skip_for_blackhole
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tracy import signpost
 
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 
 
 def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links):
@@ -107,7 +107,6 @@ def test_all_gather_chunks_per_sync(
 
     run_all_gather_impl(
         mesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -123,4 +122,5 @@ def test_all_gather_chunks_per_sync(
         chunks_per_sync=chunks_per_sync,
         skip_check=True,
         num_workers_per_link=num_workers_per_link,
+        all_gather_function=ttnn.experimental.all_gather_async,
     )

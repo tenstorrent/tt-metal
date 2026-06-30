@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
@@ -13,9 +13,9 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology",
+    "num_devices, ag_output_shape, dim, layout",
     [
-        (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -76,15 +76,14 @@ def test_ccl_ddr_smoke_test(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if ttnn.get_num_devices() != 4 and all_gather_topology == ttnn.Topology.Ring:
+    if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
         pytest.skip("This test is only for the quietbox")
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
     # Check all the rows and columns independantly within the device
     if cluster_axis == 0:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -92,7 +91,6 @@ def test_ccl_ddr_smoke_test(
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -100,7 +98,6 @@ def test_ccl_ddr_smoke_test(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -115,11 +112,11 @@ def test_ccl_ddr_smoke_test(
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology",
+    "num_devices, ag_output_shape, dim, layout",
     [
-        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
-        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
-        (2, [1, 1, 6016, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT),
+        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT),
+        (2, [1, 1, 6016, 2048], 3, ttnn.TILE_LAYOUT),
     ],
     ids=["4 device line", "4_device_ring", "2_device_line"],
 )
@@ -197,15 +194,14 @@ def test_ccl_other_smoke_test(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if ttnn.get_num_devices() != 4 and all_gather_topology == ttnn.Topology.Ring:
+    if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
         pytest.skip("Skipping unsupported case Ring on 2D mesh with no wraparound rings")
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
     for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
         if cluster_axis == 0:
             submesh_device = bh_2d_mesh_device.create_submesh(
@@ -217,7 +213,6 @@ def test_ccl_other_smoke_test(
             )
         run_all_gather_impl(
             submesh_device,
-            num_devices,
             ag_output_shape,
             dim,
             num_links,
@@ -225,7 +220,6 @@ def test_ccl_other_smoke_test(
             layout,
             mem_config_input,
             mem_config_ag,
-            all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,
             cluster_axis=cluster_axis,

@@ -76,7 +76,6 @@ GENERALITY_PARAMETERS = {
     "input_dtype": [ttnn.bfloat16],
     "buffer_type": [ttnn.BufferType.DRAM],
     "shard_specs": [None],
-    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
     "num_iters": [1],
 }
 
@@ -106,7 +105,6 @@ parameters = {
         "input_dtype": [ttnn.bfloat16],
         "buffer_type": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
         "shard_specs": [None] + LEAD_MODEL_SHARD_SPECS,
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }
@@ -135,11 +133,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
     if dim >= len(input_shape):
         return True, "Dim greater than rank"
-    if (
-        test_vector["topology"] == ttnn.Topology.Ring
-        and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
-    ):
-        return True, "Ring fabric config required for ring topology"
 
     return False, None
 
@@ -182,7 +175,6 @@ def run(
     buffer_type,
     shard_specs,
     num_iters,
-    topology,
     *,
     device,  # unused
 ) -> list:
@@ -210,23 +202,13 @@ def run(
             device,
         )
 
-        compute_grid_size = device.compute_with_storage_grid_size()
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-        )
-        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
-
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.all_gather(
                     tt_input,
                     dim,
                     cluster_axis=cluster_axis,
-                    mesh_device=device,
-                    topology=topology,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=num_links,
                     memory_config=output_memory_config,
                 )
                 e2e_perf = stop_measuring_time(start_time)

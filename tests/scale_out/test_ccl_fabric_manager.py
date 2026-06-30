@@ -12,10 +12,9 @@ import pytest
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import run_all_to_all_dispatch_test
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.common.utility_functions import skip_for_blackhole
-
 
 # ===========================
 # All-to-All Combine Tests
@@ -228,28 +227,20 @@ def test_all_to_all_dispatch_fabric_manager_8x4(
     ids=["DRAM_memconfig"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_manager": ttnn.FabricManagerMode.ENABLED,
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Linear,
-        ),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+            "trace_region_size": 90112,
+        },
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_manager_enabled_linear"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-@pytest.mark.parametrize(
-    "all_gather_function",
-    [ttnn.experimental.all_gather_async],
-    ids=["normal"],
-)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_all_gather_async_fabric_manager(
     mesh_device,
@@ -262,12 +253,10 @@ def test_all_gather_async_fabric_manager(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
-    all_gather_function,
 ):
     """Test all-gather async with fabric manager enabled."""
     if num_devices < 8:
@@ -279,7 +268,6 @@ def test_all_gather_async_fabric_manager(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -287,14 +275,12 @@ def test_all_gather_async_fabric_manager(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
-        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
