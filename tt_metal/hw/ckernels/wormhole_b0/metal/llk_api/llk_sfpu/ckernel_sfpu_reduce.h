@@ -731,15 +731,9 @@ inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t blo
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16, bool RECORD_REPLAY = true>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
-    // The phases-2-4 replay buffer is loop-invariant. By default it is (re)recorded here on every call
-    // for self-contained correctness. Callers that record it once in their init (via the public
-    // record_horizontal_reduce_max()) can pass RECORD_REPLAY=false to drop this ~17-instruction
-    // per-call overhead from the hot path.
-    if constexpr (RECORD_REPLAY) {
-        record_horizontal_reduce_max();
-    }
+    record_horizontal_reduce_max();
 
     // Single column tile => per-tile store is the final packer-visible result, which uses mode 9 only
     // when the OUTPUT is UInt16 in a 32-bit dest (pack_low16); otherwise it is intermediate and stays
@@ -1087,8 +1081,7 @@ template <
     ReduceDim reduce_dim,
     InstrModLoadStore INSTRUCTION_MODE,
     bool clear_high_bits,
-    bool pack_low16,
-    bool RECORD_REPLAY = true>
+    bool pack_low16>
 inline void calculate_reduce_max_min(const std::uint32_t block_ct_dim = 1, const std::uint32_t block_rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
@@ -1098,8 +1091,7 @@ inline void calculate_reduce_max_min(const std::uint32_t block_ct_dim = 1, const
         static_assert(
             pool_type == PoolType::MAX || pool_type == PoolType::SUM,
             "Row reduction (REDUCE_ROW) currently only supports MAX and SUM pool types");
-        perform_reduce_row_max<INSTRUCTION_MODE, clear_high_bits, pack_low16, RECORD_REPLAY>(
-            block_ct_dim, block_rt_dim);
+        perform_reduce_row_max<INSTRUCTION_MODE, clear_high_bits, pack_low16>(block_ct_dim, block_rt_dim);
     } else {
         // The recorded replay buffer in init_reduce_max_min has two extra SFPAND ops when clearing
         // high bits, so the per-face-pair replay window grows accordingly.
@@ -1292,8 +1284,7 @@ template <
     ReduceDim reduce_dim,
     DataFormat format,
     bool is_fp32_dest_accum_en,
-    DataFormat output_format = format,
-    bool RECORD_REPLAY = true>
+    DataFormat output_format = format>
 inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_ROW) ||
@@ -1335,7 +1326,7 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
         } else {
-            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16, RECORD_REPLAY>(
+            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(
                 block_ct_dim, block_rt_dim);
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {

@@ -529,6 +529,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative)
     {
+        // Intentionally dispatches the legacy LUT-based calculate_tanh_derivative (1 - tanh^2), not the
+        // more accurate calculate_tanh_derivative_sech2. This is the perf harness, and the legacy LUT body
+        // is exactly the kernel whose per-tile loop this PR unrolls (#pragma GCC unroll 8), so the
+        // benchmark must exercise that variant to measure the optimization. The legacy kernel's accuracy
+        // caveat is irrelevant here since correctness is covered by the dedicated accuracy tests.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh_derivative, (APPROX_MODE, 0 /* WITH_PRECOMPUTED_TANH */, ITERATIONS), dst_index, vector_mode);
     }

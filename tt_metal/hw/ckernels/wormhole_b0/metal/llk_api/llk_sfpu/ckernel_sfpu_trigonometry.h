@@ -829,7 +829,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_acosh() {
     // SFPU microcode
     // NOTE: no `#pragma GCC unroll 8` here. Measured (perf_eltwise_unary_sfpu)
-    // unroll gives <1% on acosh/asinh/atanh because each iteration is dominated
+    // unroll gives <1% on acosh/atanh because each iteration is dominated
     // by the sqrt + log (+ reciprocal) subroutines, so the 2-cycle SFPU tail
     // latency is already hidden — the unroll only grows code size.
     for (int d = 0; d < ITERATIONS; d++) {
