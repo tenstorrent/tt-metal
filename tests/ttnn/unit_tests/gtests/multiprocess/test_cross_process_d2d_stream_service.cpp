@@ -407,11 +407,12 @@ MeshWorkload make_relay_like_workload(
 // D2DStreamServiceSender: dest is the D2H backing tensor, and instead of bumping a
 // downstream data_ready_counter the worker bumps the D2H sender's write_ack_counter,
 // so the result streams to a host consumer over a PCIe socket (read_from_tensor)
-// rather than forwarding over fabric. The handshake is the D2H-inverted analog of the
-// D2D one: the persistent D2H sender mcasts transfer_done_sem (drained prev iter), the
-// worker incs write_ack_counter (this iter staged) — vs the D2D data_ready / consumed
-// pair. Upstream stays templated to mirror the relay helper, but in practice it's only
-// ever a D2DStreamServiceReceiver (the terminal stage always has a fabric inbound).
+// rather than forwarding over Fast Dispatch Command Queue. The handshake is the
+// D2H-inverted analog of the D2D one: the persistent D2H sender mcasts
+// transfer_done_sem (drained prev iter), the worker incs write_ack_counter
+// (this iter staged) — vs the D2D data_ready / consumed pair. Upstream stays
+// templated to mirror the relay helper, but in practice it's only ever a
+// D2DStreamServiceReceiver (the terminal stage always has a fabric inbound).
 template <typename Upstream>
 MeshWorkload make_d2h_relay_workload(
     Upstream* inbound,
@@ -868,49 +869,6 @@ MeshWorkload make_stress_fabric_workload(
         workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
     return workload;
-}
-
-// Assert `output` holds the iota (base + i) on every coord.
-[[maybe_unused]] void expect_output_tensor_iota(
-    const Tensor& output, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
-    // ReadShard needs a shared_ptr<MeshBuffer>, but the Tensor only exposes a
-    // `const MeshBuffer&`. Build a non-owning view over the existing device
-    // allocation (same address, no new allocation, no const_cast). The view must
-    // not outlive `output`.
-    const auto& backing = output.device_storage().get_mesh_buffer();
-    auto mesh_buffer =
-        MeshBuffer::create(backing.global_config(), backing.device_local_config(), backing.device(), backing.address());
-    const size_t num_u32 = output.buffer()->size() / sizeof(uint32_t);
-    const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
-    std::vector<uint32_t> readback;
-    for (const auto& coord : output.tensor_topology().mesh_coords()) {
-        readback.clear();
-        ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
-        EXPECT_EQ(readback, expected) << "output mismatch at " << coord << " (iota base " << base << ")";
-    }
-}
-
-// End-stage metadata check: the blob the inbound D2D receiver multicast into each
-// worker's L1 (the LAST iter's value — each iter overwrites it) must equal `expected`
-// (the last iter's propagated increment). Reads the uniform worker-grid metadata L1 on
-// every participating (coord, worker core) directly — a separate, explicit check that
-// the blob arrived intact, complementing the iota's value-driven check.
-[[maybe_unused]] void expect_worker_metadata(
-    D2DStreamServiceReceiver* inbound,
-    const std::shared_ptr<MeshDevice>& mesh,
-    const CoreRange& worker_cores,
-    uint32_t expected) {
-    const uint32_t md_addr = static_cast<uint32_t>(inbound->get_metadata_addr());
-    std::vector<uint32_t> rb;
-    for (const auto& coord : inbound->get_backing_tensor().tensor_topology().mesh_coords()) {
-        auto* device = mesh->get_device(coord);
-        for (const auto& wc : worker_cores) {
-            rb.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(device, wc, md_addr, sizeof(uint32_t), rb);
-            ASSERT_FALSE(rb.empty());
-            EXPECT_EQ(rb[0], expected) << "metadata mismatch at " << coord << " worker (" << wc.x << "," << wc.y << ")";
-        }
-    }
 }
 
 // World-size-derived forward pipeline (rank == stage), unbundled op + d2d_sync gate,
