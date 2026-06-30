@@ -32,9 +32,10 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
               3. `wan_fused_rmsnorm_post_allgather` — finalize normalization, optionally
                  split heads, apply RoPE, and cast output dtype.
 
-            By default chains the three primitives; pass `use_device_op=true` to run the
-            fused single device op (one program: per-chip reader/compute/writer with a
-            fabric-forwarder all-gather) instead.
+            By default (`use_device_op=true`) runs the fused single device op (one program:
+            per-chip reader/compute/writer with a fabric-forwarder all-gather). Pass
+            `use_device_op=false` to chain the three primitives instead (RMS-only legacy
+            baseline, kept for A/B comparison).
         )doc",
         &ttnn::experimental::wan_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
@@ -57,7 +58,7 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("use_device_op") = false,
+        nb::arg("use_device_op") = true,
         nb::arg("norm_type") = ttnn::experimental::WanFusedNormType::RMS,
         nb::arg("reciprocals") = nb::none());
 

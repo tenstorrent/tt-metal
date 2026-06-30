@@ -167,9 +167,9 @@ bool decide_streaming_low_l1(
 // rotated/output block-local (O(block_size)) and the compute fuses every POST
 // sub-phase into one per-block loop (block-major POST). This estimate sums the
 // big CBs that block-major removes (intermediate/rotated/output whole-row) plus
-// the whole-row weight/bias, against the real CB-usable L1 cap with margin; a
-// calibrated constant covers the streamed input_cb + cos/sin + the ~dozen small
-// CBs (refined to exact per-CB accounting separately). block_major implies
+// the whole-row weight/bias (exact: weight/bias_tile_bytes is the real bf16/fp32 CB
+// size), against the real CB-usable L1 cap with margin; a calibrated constant covers
+// the streamed input_cb + cos/sin + the ~dozen small stat/scalar CBs. block_major implies
 // streaming_low_l1 (input is streamed too) and per_head_norm==0 (streaming is
 // never auto-enabled for per_head_norm — that path is a separate L1 question).
 bool decide_block_major_post(
@@ -596,9 +596,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // (decide_streaming_low_l1 false). Then block-major engages on the overflow.
     // The recip CB (reduce_width*4 B) pushes a borderline-resident AG LayerNorm shard
     // (e.g. LTX TP2 at 64 tiles, only ~6.7 KB resident headroom) over L1. The resident-fit
-    // heuristics are intentionally loose (they undercount the AG stats/packet CBs by
-    // ~100 KB; see the decide_streaming accounting TODO), so neither catches the ~1.5 KB
-    // overflow. Force the streaming + block-major layout for wide-ish AG LN-with-recip
+    // heuristics account exactly for the big CBs (input/intermediate/output/weight/bias/recip/
+    // welford_zero) but still lump the small AG stats/packet CBs into a calibrated constant
+    // (~100 KB), so neither catches the ~1.5 KB recip overflow. Force the streaming +
+    // block-major layout for wide-ish AG LN-with-recip
     // shards: block-major makes the whole-row POST CBs block-local, freeing far more than
     // the recip CB costs. The 56-tile threshold keeps the smaller AG configs resident
     // (WAN TP4=40, FLUX TP2=48 fit the recip CB) while catching LTX TP2 (64).
