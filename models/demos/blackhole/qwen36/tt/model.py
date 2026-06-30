@@ -62,10 +62,14 @@ class Qwen36Model:
         # RoPE setup (for gated attention layers only)
         self.rope = Qwen36RoPESetup(mesh_device, args)
 
-        # Transformer layers
-        logger.info(f"Loading {args.n_layers} transformer layers...")
+        # Transformer layers. `layer_indices` (set by from_pretrained) selects the specific
+        # checkpoint layers to instantiate; absent it, build the first n_layers (0..n_layers-1).
+        # Each layer is constructed with its REAL checkpoint index so it loads the matching
+        # weights and resolves its type (DeltaNet vs full attention) from the full type list.
+        self.layer_indices = getattr(args, "layer_indices", None) or list(range(args.n_layers))
+        logger.info(f"Loading {len(self.layer_indices)} transformer layers (indices={self.layer_indices})...")
         self.layers = []
-        for i in tqdm(range(args.n_layers), desc="Loading layers"):
+        for i in tqdm(self.layer_indices, desc="Loading layers"):
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
 
@@ -132,7 +136,10 @@ class Qwen36Model:
 
         self.vocab_size = args.vocab_size
         self._paged_kv_caches = None
-        self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
+        # Positions WITHIN self.layers of the full-attention layers (NOT checkpoint indices): these
+        # index self.layers and the per-attention-layer KV caches. Derived from each built layer's
+        # resolved type so it stays correct when layer_indices selects a non-contiguous subset.
+        self._attention_layer_indices = [pos for pos, layer in enumerate(self.layers) if layer.is_full_attention]
         self._deltanet_external_states = None  # list of (recurrent, conv) tuples, set by allocate_kv_caches
         # Shared zero buffers for in-place DN state reset between traced replays.
         self._dn_zero_recurrent = None
@@ -176,7 +183,9 @@ class Qwen36Model:
         return logits
 
     @classmethod
-    def from_pretrained(cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, hf_model=None):
+    def from_pretrained(
+        cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, layer_indices=None, hf_model=None
+    ):
         # HF_MODEL (env var) is the single source of truth — a hub name or local path —
         # resolved by Qwen36ModelArgs via the base ModelArgs. `hf_model` is an optional
         # back-compat convenience: if given, it sets HF_MODEL before constructing args.
@@ -191,7 +200,20 @@ class Qwen36Model:
             max_seq_len=max_seq_len,
         )
 
-        if n_layers is not None:
+        # layer_indices: run ONLY these specific checkpoint layers (e.g. [0, 3, 31]) — useful for
+        # profiling/iterating on individual layers. Each selected layer still loads its own weights
+        # and keeps its true type (DeltaNet vs full attention), so the FULL attention_type_list is
+        # preserved (each Qwen36DecoderLayer indexes it by its real layer_num). n_layers is set to
+        # the count for reporting. Takes precedence over n_layers (first-N truncation).
+        if layer_indices is not None:
+            layer_indices = list(layer_indices)
+            assert layer_indices, "layer_indices must be non-empty"
+            assert all(
+                0 <= i < len(args.attention_type_list) for i in layer_indices
+            ), f"layer_indices {layer_indices} out of range [0, {len(args.attention_type_list)})"
+            args.layer_indices = layer_indices
+            args.n_layers = len(layer_indices)
+        elif n_layers is not None:
             args.n_layers = n_layers
             args.attention_type_list = args.attention_type_list[:n_layers]
 

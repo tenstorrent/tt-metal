@@ -73,37 +73,71 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         conv1d_w = torch.cat([sd[P + "q_conv.weight"], sd[P + "k_conv.weight"], sd[P + "v_conv.weight"]], dim=0)
     qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
     z_w = sd[P + "in_proj_z.weight"]
-    fused = torch.cat(
-        [
-            torch.cat([qkv_re[d * qkv_per : (d + 1) * qkv_per], z_w[d * z_per : (d + 1) * z_per]], dim=0)
-            for d in range(tp)
-        ],
-        dim=0,
-    )
+    a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
     tw = {}
     # Column-parallel qkvz in-projection (the large GDN input matmul) stored DRAM-WIDTH_SHARDED so
     # the M=1 decode matmul reads it at near-peak DRAM bandwidth (mirrors MLP w1/w3). On by default
     # for TP (the memcfg exists). Distinct `.dramshard` cache (ttnn.as_tensor reloads a cache as-is,
-    # ignoring memory_config). `ab`/`out` stay interleaved.
+    # ignoring memory_config). `out` stays interleaved.
     qkvz_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
-    qkvz_mc = args.gdn_qkvz_weight_memcfg if qkvz_sharded else ttnn.DRAM_MEMORY_CONFIG
-    tw["qkvz"] = tpc.shard_w(
-        fused,
-        mesh,
-        dim=-1,
-        memory_config=qkvz_mc,
-        cache_path=c("qkvz" + (".dramshard" if qkvz_sharded else "")),
-        dtype=ttnn.bfloat8_b,
-    )
-    # ---- fused A+B (column-parallel), per-device [a(nv_per), b(nv_per)] ----
-    a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
-    ab = torch.cat(
-        [torch.cat([a_w[d * nv_per : (d + 1) * nv_per], b_w[d * nv_per : (d + 1) * nv_per]], dim=0) for d in range(tp)],
-        dim=0,
-    )
-    tw["ab"] = tpc.shard_w(
-        ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
-    )
+    # Fold the tiny a/b (decay/beta) projection into qkvz so ONE column-parallel matmul produces
+    # [qkv|z|a|b] — eliminates a whole N=2*nv_per decode matmul (the separate `ab` below), K=dim
+    # unchanged so the qkvz matmul stays efficient. Per-device block order [qkv|z|a|b] matches the
+    # slices in _project_qkvzab. Default on whenever the qkvz weight is DRAM-sharded (TP); the
+    # interleaved single-device fallback below keeps the separate ab matmul.
+    fuse_ab = qkvz_sharded
+    if fuse_ab:
+        fused = torch.cat(
+            [
+                torch.cat(
+                    [
+                        qkv_re[d * qkv_per : (d + 1) * qkv_per],
+                        z_w[d * z_per : (d + 1) * z_per],
+                        a_w[d * nv_per : (d + 1) * nv_per],
+                        b_w[d * nv_per : (d + 1) * nv_per],
+                    ],
+                    dim=0,
+                )
+                for d in range(tp)
+            ],
+            dim=0,
+        )
+        tw["qkvz"] = tpc.shard_w(
+            fused,
+            mesh,
+            dim=-1,
+            memory_config=args.gdn_qkvzab_weight_memcfg,
+            cache_path=c("qkvzab.dramshard"),
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        fused = torch.cat(
+            [
+                torch.cat([qkv_re[d * qkv_per : (d + 1) * qkv_per], z_w[d * z_per : (d + 1) * z_per]], dim=0)
+                for d in range(tp)
+            ],
+            dim=0,
+        )
+        qkvz_mc = args.gdn_qkvz_weight_memcfg if qkvz_sharded else ttnn.DRAM_MEMORY_CONFIG
+        tw["qkvz"] = tpc.shard_w(
+            fused,
+            mesh,
+            dim=-1,
+            memory_config=qkvz_mc,
+            cache_path=c("qkvz" + (".dramshard" if qkvz_sharded else "")),
+            dtype=ttnn.bfloat8_b,
+        )
+        # ---- separate A+B (column-parallel), per-device [a(nv_per), b(nv_per)] ----
+        ab = torch.cat(
+            [
+                torch.cat([a_w[d * nv_per : (d + 1) * nv_per], b_w[d * nv_per : (d + 1) * nv_per]], dim=0)
+                for d in range(tp)
+            ],
+            dim=0,
+        )
+        tw["ab"] = tpc.shard_w(
+            ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
+        )
     # ---- out projection (row-parallel) ----
     tw["out"] = tpc.shard_w(
         sd[P + "out_proj.weight"],
@@ -147,6 +181,9 @@ class TPGatedDeltaNet:
         # Mirror the weight-load gate: qkvz stored DRAM-WIDTH_SHARDED → DRAM-sharded decode matmul
         # (see _col_proj). Must match qkvz_sharded in load_gdn_weights_tp.
         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
+        # The qkvz weight is the fused [qkv|z|a|b]; one matmul replaces qkvz + ab. Default on
+        # whenever the qkvz weight is DRAM-sharded (TP). Must match `fuse_ab` in load_gdn_weights_tp.
+        self._fuse_ab = self._dram_sharded
         # Pre-build the chunk-prefill masks ONCE (replicated across the mesh) so the seq kernel
         # reads them from cache instead of rebuilding eye/triu/tril via from_torch on every call.
         # The from_torch fallback is a host write that TT_FATALs inside the captured chunk-outer
@@ -245,6 +282,30 @@ class TPGatedDeltaNet:
             self.args.dim,
         )
 
+    def _project_qkvzab(self, x, S):
+        """Project x -> (qkv, z, a, b). Fused (P1-gdn-fuse-ab): ONE column-parallel matmul over the
+        [qkv|z|a|b] weight, then slice — folds the tiny separate `ab` matmul (N=2*nv_per) into qkvz.
+        Default: the qkvz matmul plus a separate `ab` matmul (the validated baseline). S is the
+        seq/batch dim (B in decode, T in prefill). Output slices are DRAM-interleaved either way."""
+        Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
+        if self._fuse_ab:
+            qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg)
+            qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz))
+            z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az))
+            a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv))
+            b = ttnn.slice(qkvzab, (0, 0, az + Nv), (1, S, az + 2 * Nv))
+            ttnn.deallocate(qkvzab)
+            return qkv, z, a, b
+        qkvz = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvz_progcfg)
+        qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz))
+        z = ttnn.slice(qkvz, (0, 0, qz), (1, S, az))
+        ttnn.deallocate(qkvz)
+        ab = ttnn.linear(x, self.tw["ab"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv))
+        b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv))
+        ttnn.deallocate(ab)
+        return qkv, z, a, b
+
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
@@ -277,14 +338,7 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
-        qkvz = self._col_proj(x, tw["qkvz"], self.args.gdn_qkvz_progcfg)
-        qkv = ttnn.slice(qkvz, (0, 0, 0), (1, T, self.qkv_dim_tp))
-        z = ttnn.slice(qkvz, (0, 0, self.qkv_dim_tp), (1, T, self.qkvz_dim_tp))
-        ttnn.deallocate(qkvz)
-        ab = ttnn.linear(x, tw["ab"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        a = ttnn.slice(ab, (0, 0, 0), (1, T, Nv))
-        b = ttnn.slice(ab, (0, 0, Nv), (1, T, 2 * Nv))
-        ttnn.deallocate(ab)
+        qkv, z, a, b = self._project_qkvzab(x, T)
 
         # FIR causal conv1d + SiLU over the sequence. conv_state = the carried last K-1 conv
         # inputs of the previous chunk (left context); zero == None for a from-scratch pass.
@@ -308,9 +362,9 @@ class TPGatedDeltaNet:
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
         ttnn.deallocate(conv)
-        rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=2)
-        k = ttnn.repeat_interleave(k, rf, dim=2)
+        # GQA late-expand (default): leave q/k at Nk heads here — chunk_gated_delta_rule_seq_adapter
+        # L2-norms + transforms them at Nk and expands to Nv AFTER (a cheap dim-0 block-repeat),
+        # doing ~3x less q/k transform work than pre-expanding to Nv before the L2-norm + permute.
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
@@ -390,14 +444,7 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))  # [1,B,dim]
 
-        qkvz = self._col_proj(x, tw["qkvz"], self.args.gdn_qkvz_progcfg)
-        qkv = ttnn.slice(qkvz, (0, 0, 0), (1, B, self.qkv_dim_tp))
-        z = ttnn.slice(qkvz, (0, 0, self.qkv_dim_tp), (1, B, self.qkvz_dim_tp))
-        ttnn.deallocate(qkvz)
-        ab = ttnn.linear(x, tw["ab"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        a = ttnn.slice(ab, (0, 0, 0), (1, B, Nv))
-        b = ttnn.slice(ab, (0, 0, Nv), (1, B, 2 * Nv))
-        ttnn.deallocate(ab)
+        qkv, z, a, b = self._project_qkvzab(x, B)
 
         # conv1d shift-register (copy(src, dst): dst is 2nd arg) + weighted sum + silu
         st = self.conv_states
