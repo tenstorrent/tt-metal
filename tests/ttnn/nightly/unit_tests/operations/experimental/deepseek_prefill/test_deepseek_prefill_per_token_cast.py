@@ -31,6 +31,7 @@ SHAPES = [
     (3200, 7168),
     (6400, 7168),
     (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
+    (2, 40, 1024),  # multi-row-tile batch with a partial final row-tile (R=40 -> tiles of 32 + 8)
 ]
 
 ROUNDTRIP_SHAPES = [(32, 1024), (30, 1152), (4, 1, 128, 1024)]
