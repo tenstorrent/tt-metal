@@ -1068,5 +1068,156 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
                                           << " did not contain the pattern the kernel wrote";
 }
 
+// ============================================================================
+// Scratchpad + Common-Vararg CRTA Offset Under Partial Update (regression)
+// ============================================================================
+//
+// Regression guard for the "A1" bug: UpdateProgramRunArgs once computed the common-vararg base as
+// `named CRTAs + tensor_binding_section_words`, omitting the scratchpad section. The CRTA buffer
+// layout is four sections — [named | tensor bindings | scratchpads | varargs] — and both
+// SetProgramRunArgs and the device-side crta_layout.vararg_section_offset account for the scratchpad
+// words. So for a kernel with BOTH a scratchpad binding AND a common vararg, a partial
+// UpdateProgramRunArgs would write the vararg one word too early — into the scratchpad base-address
+// slot — leaving the device reading the stale vararg from the (correct) vararg offset. The fix
+// (program_run_args.cpp) adds scratchpad_section_words to the vararg base; this test pins it.
+//
+// Layout for the producer below: [0 named | 0 tensor bindings | 1 scratchpad | 1 vararg].
+//   - scratchpad base-address slot: CRTA word 0
+//   - common vararg slot:           CRTA word 1  (== vararg_section_offset)
+//
+// Sequence: SetProgramRunArgs (vararg = OLD), then UpdateProgramRunArgs (vararg = NEW), then
+// dispatch. The producer stages [get_common_vararg(0), scratch_base] into a DFB entry; the consumer
+// drains that entry to DRAM. The scratchpad is genuinely framework-allocated here, so scratch_base
+// is a real L1 address (not a sentinel). Host then checks:
+//   word 0 (vararg)       == NEW                      — the partial update reached the real vararg slot
+//   word 1 (scratch base) != NEW (and != OLD, != 0)  — the scratchpad slot was NOT clobbered, and
+//                                                       still holds a real allocated L1 address
+//
+// With the A1 bug the update writes NEW into CRTA word 0 (the scratchpad slot) instead of word 1, so
+// the device sees word 0 (vararg) == OLD and word 1 (scratch base) == NEW — both checks fail.
+TEST_F(ProgramSpecHWTest, ScratchpadCommonVarargPartialUpdate) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t entry_size = 1024;  // bytes per DFB entry
+    constexpr uint32_t num_entries = 4;    // DFB depth
+    constexpr uint32_t kOldVararg = 0x11111111u;
+    constexpr uint32_t kNewVararg = 0x22222222u;
+
+    const NodeCoord node{0, 0};
+
+    // Output buffer holds one DFB entry (single page → single bank).
+    InterleavedBufferConfig dram_config{
+        .device = device, .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
+    auto output_buffer = CreateBuffer(dram_config);
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_common_vararg_partial_update";
+
+    // Producer (BRISC): binds a scratchpad AND declares one common vararg — the exact combination
+    // that trips the A1 offset bug. Stages [common_vararg, scratch_base] into the DFB.
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    producer.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+void kernel_main() {
+    const uint32_t vararg_value = get_common_vararg(0);
+    Scratchpad<int32_t> pad(scratch::scratch);
+    const uint32_t scratch_base = pad.get_base_addr().get_address();
+    DataflowBuffer buf(dfb::stage);
+    buf.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();
+    w[0] = vararg_value;
+    w[1] = scratch_base;
+    buf.push_back(1);
+}
+)"};
+    producer.advanced_options = KernelAdvancedOptions{.num_common_runtime_varargs = 1};
+    producer.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    // Consumer (NCRISC): drains the DFB entry to DRAM. Uses named RTAs so it can be re-supplied on
+    // the partial update below.
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+void kernel_main() {
+    auto dst_addr = get_arg(args::dst_addr);
+    auto bank_id = get_arg(args::bank_id);
+    DataflowBuffer buf(dfb::stage);
+    buf.wait_front(1);
+    uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
+    noc_async_write(buf.get_read_ptr(), dst_noc_addr, buf.get_entry_size());
+    noc_async_write_barrier();
+    buf.pop_front(1);
+}
+)"};
+    consumer.runtime_arg_schema.runtime_arg_names = {"dst_addr", "bank_id"};
+
+    auto dfb = MakeMinimalDFB("stage", entry_size, num_entries);
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"stage"}, "stage"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"stage"}, "stage"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    // Initial full set: producer's common vararg = OLD; consumer's named RTAs point at the output.
+    ProgramRunArgs set_params;
+    set_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"producer"},
+            .advanced_options = AdvancedKernelRunArgs{.common_runtime_varargs = {kOldVararg}},
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"consumer"},
+            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+        },
+    };
+    SetProgramRunArgs(program, set_params);
+
+    // Partial update: refresh the producer's common vararg to NEW. This is the path that
+    // mis-computed the vararg base when a scratchpad section is present. The consumer's named per-node
+    // RTAs are not declared enqueue-invariant, so it is re-supplied unchanged; only the producer's
+    // CRTA buffer is relevant to the bug.
+    ProgramRunArgs update_params;
+    update_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"producer"},
+            .advanced_options = AdvancedKernelRunArgs{.common_runtime_varargs = {kNewVararg}},
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"consumer"},
+            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+        },
+    };
+    UpdateProgramRunArgs(program, update_params);
+
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(output_buffer, output_data);
+
+    ASSERT_GE(output_data.size(), 2u);
+    EXPECT_EQ(output_data[0], kNewVararg)
+        << "Partial UpdateProgramRunArgs must write the common vararg to the real vararg slot "
+           "(after the scratchpad section). A wrong base writes it into the scratchpad slot instead, "
+           "leaving the device reading the stale OLD vararg.";
+    // The scratchpad base-address slot must survive the partial update. The scratchpad is really
+    // allocated, so this slot holds a live L1 address — never the vararg value. With the A1 bug the
+    // update overwrites it with kNewVararg.
+    EXPECT_NE(output_data[1], kNewVararg)
+        << "Scratchpad base-address slot was clobbered by the common-vararg partial update — the "
+           "vararg base omitted the scratchpad section (A1 bug).";
+    EXPECT_NE(output_data[1], kOldVararg) << "Scratchpad base-address slot holds a stale vararg value, not an L1 base.";
+    EXPECT_NE(output_data[1], 0u)
+        << "Scratchpad base-address slot is 0 — the framework-allocated base was not delivered.";
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
