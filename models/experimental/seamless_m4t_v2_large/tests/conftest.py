@@ -12,6 +12,11 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.token_matching_result_s
     get_token_matching_results,
     print_token_matching_summary,
 )
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_wer_helpers import (
+    clear_wer_results,
+    get_wer_results,
+    print_wer_summary,
+)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -21,9 +26,10 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     clear_token_matching_results()
+    clear_wer_results()
 
 
-def _write_summary_table(terminalreporter) -> None:
+def _write_token_matching_summary_table(terminalreporter) -> None:
     results = get_token_matching_results()
     if not results:
         return
@@ -49,6 +55,36 @@ def _write_summary_table(terminalreporter) -> None:
     tw.line("")
 
 
+def _write_wer_summary_table(terminalreporter) -> None:
+    results = get_wer_results()
+    if not results:
+        return
+
+    tw = terminalreporter._tw
+    tw.line("")
+    terminalreporter.write_sep("=", "Seamless M4T v2 E2E WER sweep summary")
+    header = f"{'Label':<18} {'Len':>5}  {'WER':>7}  {'Thr':>7}  {'RefW':>5}  {'TTW':>5}  {'Status':>6}"
+    tw.line(header)
+    tw.line("-" * len(header))
+
+    for row in results:
+        status = "PASS" if row.passed else "FAIL"
+        tw.line(
+            f"{row.label:<18} {row.seq_len:>5}  {row.wer:>6.3f}  {row.wer_threshold:>6.3f}  "
+            f"{row.reference_words:>5}  {row.tt_words:>5}  {status:>6}"
+        )
+
+    passed = sum(1 for r in results if r.passed)
+    tw.line("-" * len(header))
+    tw.line(f"Total: {passed}/{len(results)} passed")
+    tw.line("")
+
+
+def _write_summary_table(terminalreporter) -> None:
+    _write_token_matching_summary_table(terminalreporter)
+    _write_wer_summary_table(terminalreporter)
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
     _write_summary_table(terminalreporter)
@@ -57,9 +93,11 @@ def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Co
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Fallback: ensure summary is visible even if terminal reporter hook is skipped."""
-    if get_token_matching_results():
-        tr = session.config.pluginmanager.get_plugin("terminalreporter")
-        if tr is not None:
-            _write_summary_table(tr)
-        else:
-            print_token_matching_summary()
+    if not get_token_matching_results() and not get_wer_results():
+        return
+    tr = session.config.pluginmanager.get_plugin("terminalreporter")
+    if tr is not None:
+        _write_summary_table(tr)
+    else:
+        print_token_matching_summary()
+        print_wer_summary()
