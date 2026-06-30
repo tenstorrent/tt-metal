@@ -102,3 +102,35 @@ Candidate root causes (for focused follow-up):
 RECOMMENDATION: ship fused RMSNorm (validated drop-in, faster). Keep fused LayerNorm behind its
 WAN_USE_FUSED_LAYERNORM flag (default off) until the 2-stat multi-round AG is debugged. Production
 default (composite) is unaffected.
+
+### ISSUE 3 — TRIAGE RESULTS (focused unit test: test_layernorm_module_corr + LNMOD_ROWS/MEAN0/LAUNCHES knobs)
+
+**The "hang" is NOT a fused-op bug — it's a test artifact.** Isolated on wan_tp4 line AND ring:
+  fused-only, 3 launches, N=4096, mean0:  PASS, det=True, pcc 99.9902%  (no hang, deterministic)
+The 16-min hang was the BOTH-methods run (composite chain THEN fused op, back-to-back in one
+process) — the ISSUE-1 class composite/fused-transition, not the fused op. Real models run ONE
+method (env flag) and space norms apart, so the fused op does not hang in a model (the Wan block
+ran). => No fused-op hang to fix.
+
+**The correctness gap is a small, N-dependent, LN-specific (2-stat) AG error.** Single-launch
+op-level pcc vs composite (vs fp32 torch), wan_tp4 line:
+  N=256  mean4:  fused 100.0007 / comp 100.0006   gap ~0
+  N=256  mean0:  fused 100.0004 / comp 100.0007   gap ~0.0003%   (single AG round)
+  N=4096 mean0:  fused  99.9901 / comp  99.9977   gap ~0.008%    (multi AG round)
+=> the gap GROWS with N (= AG rounds), is ~0 at single-round, and is mean-INDEPENDENT.
+In the Wan block (N=24800, ~26 rounds) this op gap amplifies ~13x (vs composite's ~1.9x) to the
+0.13% block drop — the fused error is STRUCTURED (per-row, correlated), not uniform precision,
+which is why it amplifies through attention/FFN far more than composite's near-random error.
+
+RULED OUT:
+  - hang: fused op is deterministic + hang-free at multi-launch (line+ring).
+  - dropped/aliased packets: the error is small (~0.01%), not garbage; single-launch is clean.
+  - #45319 UnpackToDestFp32 (Welford input precision): that error is N-INDEPENDENT (LN reduces
+    over the feature dim, 40 tiles/token, regardless of N) — contradicts the N-growing gap.
+
+REMAINING SUSPECT: the 2-stat (mean+var) ring all-gather introduces a small structured per-row
+error that grows with round count, that RMS's 1-stat AG does not. Addressing in worker_writer /
+forwarder is structurally consistent on inspection (slot=i*256, stat s at +s*128, page per round);
+the error is subtle (not a gross misindex). Pinning it needs device-level debug (DPRINT won't
+compile in the forwarder, triage callstacks broken in-container -> code bisection), a focused
+multi-iteration effort. Fused LN stays gated; fused RMS ships.
