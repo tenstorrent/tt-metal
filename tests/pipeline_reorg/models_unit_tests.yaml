@@ -671,6 +671,21 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
+# ── ACE-Step ───────────────────────────────────────────────────────
+
+# Tier-3 minimum: one DiT decoder layer PCC (self-attn + cross-attn + MLP).
+- name: ACE-Step v1.5 unit tests
+  cmd: |
+    uv pip install -r models/experimental/ace_step_v1_5/requirements.txt
+    pytest --timeout 300 models/experimental/ace_step_v1_5/tests/test_pcc_block.py::test_dit_decoder_layer_matches_torch
+  model: ace-step-v1.5
+  skus:
+    bh_quietbox_2:
+      timeout: 5
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
+  team: models
+
 # Some tests failing PCC (0.03)
 # - name: Mamba-2.8B unit tests
 #   cmd: |
