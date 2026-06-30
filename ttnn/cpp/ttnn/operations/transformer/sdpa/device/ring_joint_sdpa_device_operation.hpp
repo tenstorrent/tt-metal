@@ -60,6 +60,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    std::optional<uint32_t> latent_v_head_dim = std::nullopt);
+    std::optional<uint32_t> latent_v_head_dim = std::nullopt,
+    const std::optional<ttnn::Tensor>& metadata = std::nullopt,
+    uint32_t kv_cache_num_layers = 1,
+    uint32_t kv_cache_layer_idx = 0);
 
 }  // namespace ttnn::prim

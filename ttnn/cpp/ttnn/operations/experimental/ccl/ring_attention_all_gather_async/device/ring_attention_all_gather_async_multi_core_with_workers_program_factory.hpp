@@ -88,6 +88,20 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // only the valid (e.g. logical_n-sized) prefix. Capped to the input height per gathered tensor.
     // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
     // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
-    std::optional<uint32_t> gather_valid_Ht = std::nullopt);
+    std::optional<uint32_t> gather_valid_Ht = std::nullopt,
+    // Trace-safe slot select: when set (with input_batch_slice_idx engaged), the readers recompute the
+    // single-slot gather offset from slot_id = metadata[0] on-device, so a captured trace replays across
+    // cache slots. metadata is the runner's [slot_id, actual_start, actual_end] uint32 DRAM tensor.
+    // std::nullopt => take the host input_batch_base (default; existing callers unaffected).
+    std::optional<Tensor> metadata = std::nullopt,
+    // Per-device Q slab in tiles (metadata path only): lets the reader recompute the gather extent
+    // (gather_valid_Ht) from metadata[1] on-device, so the gather stays bounded even when the host
+    // logical_n is a placeholder. Unused when metadata is absent.
+    uint32_t chunk_local_tiles = 0,
+    // (user, layer)-major KV-cache batch dim (metadata path only): the reader computes the gathered
+    // cache slot as slot_id * kv_cache_num_layers + kv_cache_layer_idx (slot_id = metadata[0]), matching
+    // update_padded_kv_cache. Defaults (1, 0) reduce to slot_id, so single-layer callers are unaffected.
+    uint32_t kv_cache_num_layers = 1,
+    uint32_t kv_cache_layer_idx = 0);
 
 }  // namespace ttnn

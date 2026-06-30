@@ -14,6 +14,8 @@ math gives, per (chip, local row), the global position that row carries; the tes
 input chunk on device and PCCs against a torch RoPE reference applied at those global positions.
 """
 
+import struct
+
 import pytest
 import torch
 from loguru import logger
@@ -230,3 +232,140 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
         f"{entries_after_first} to {mesh_device.num_program_cache_entries()}"
     )
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
+
+
+# 3 x uint32: [slot_id, actual_start, actual_end] — the runner's canonical h2d_socket_sync payload.
+# rotary_embedding_indexed reads kv_actual_global (= actual_start) from index 1.
+_H2D_METADATA_SIZE_BYTES = 12
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(0)
+def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
+    """The metadata path and the scalar path must produce bit-identical outputs.
+
+    Drives the metadata path from a REAL H2D service (not a hand-built tensor): push the runner's
+    canonical [slot_id, actual_start, actual_end] payload through ttnn.H2DStreamService +
+    inbound_socket_service_sync, hand the resulting device metadata tensor to the op (it reads
+    kv_actual_global = actual_start = index 1 on-device), and compare the rotated output against the
+    same call done via the original scalar kv_actual_global. Exact equality over chunk-0 and a
+    mid-cache offset."""
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+
+    n_heads = 1  # KV-rope shape (single head, SP-sharded)
+    new_isl_tiles_per_dev = 4
+    cache_tokens_per_dev = 512
+    C = new_isl_tiles_per_dev * tile  # per-device chunk (tokens)
+    chunk_global = C * sp
+    cache_global = cache_tokens_per_dev * sp
+    isl_per_chip = C  # H2D token shard per chip (tokens are unused here; only metadata matters)
+    per_chip_bytes = isl_per_chip * 4  # uint32
+
+    torch.manual_seed(0)
+    cos_full, sin_full = _make_cos_sin(cache_global, ROPE_HEAD_DIM)
+    cos_re = block_cyclic_reorder(cos_full, C, sp, seq_dim=2)
+    sin_re = block_cyclic_reorder(sin_full, C, sp, seq_dim=2)
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    from_torch_kwargs = dict(
+        device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    cos_tt = ttnn.from_torch(
+        cos_re,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        **from_torch_kwargs,
+    )
+    sin_tt = ttnn.from_torch(
+        sin_re,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        **from_torch_kwargs,
+    )
+    trans_tt = ttnn.from_torch(
+        get_rot_transformation_mat(), mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device), **from_torch_kwargs
+    )
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+
+    # Real H2D service (same construction as the runner / test_h2d_socket_sync).
+    global_spec = ttnn.TensorSpec(
+        shape=ttnn.Shape([sp, 1, isl_per_chip]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    mapper = ttnn.create_mesh_mapper(
+        mesh_device, ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
+    )
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    service = ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=8 * per_chip_bytes,
+        scratch_cb_size_bytes=per_chip_bytes,
+        mapper=mapper,
+        worker_cores=worker_cores,
+        metadata_size_bytes=_H2D_METADATA_SIZE_BYTES,
+    )
+
+    mesh_device.enable_program_cache()
+    cases = [0, chunk_global]  # chunk-0 and one full chunk (mid-cache), both tile-aligned
+
+    try:
+        for kv_actual in cases:
+            torch_input = torch.randn(1, n_heads, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16)
+            tt_input = ttnn.from_torch(
+                torch_input,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims
+                ),
+                **from_torch_kwargs,
+            )
+
+            # Metadata from the real H2D service (the token payload itself is unused here).
+            dummy_tokens = torch.zeros(sp, 1, isl_per_chip, dtype=torch.int32).contiguous().numpy()
+            meta = struct.pack("<III", 0, kv_actual, kv_actual + chunk_global)  # [slot, actual_start, actual_end]
+            service.forward_to_tensor_bytes(dummy_tokens, metadata=meta)
+            tt_tokens, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+                service, metadata_size_bytes=_H2D_METADATA_SIZE_BYTES
+            )
+            ttnn.deallocate(tt_tokens)
+
+            out_scalar = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_actual, cluster_axis=sp_axis
+            )
+            out_meta = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                tt_input, cos_tt, sin_tt, trans_tt, tt_meta, cluster_axis=sp_axis
+            )
+            ttnn.synchronize_device(mesh_device)
+
+            scalar_host = ttnn.to_torch(out_scalar, mesh_composer=composer).to(torch.float32)[:, :n_heads, :, :]
+            meta_host = ttnn.to_torch(out_meta, mesh_composer=composer).to(torch.float32)[:, :n_heads, :, :]
+            assert torch.equal(meta_host, scalar_host), (
+                f"kv_actual={kv_actual}: metadata-path output differs from scalar-path "
+                f"(max abs diff {(meta_host - scalar_host).abs().max().item()})"
+            )
+            logger.success(f"kv_actual={kv_actual}: metadata path == scalar path (bit-exact)")
+            ttnn.deallocate(tt_meta)
+            ttnn.deallocate(tt_input)
+    finally:
+        service.barrier()
+        del service

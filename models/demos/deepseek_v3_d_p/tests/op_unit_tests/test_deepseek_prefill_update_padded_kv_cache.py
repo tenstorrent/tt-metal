@@ -11,6 +11,8 @@ around the boundary write at different offsets so new tokens overwrite the prior
 cache's trailing pad cells before spilling into the next slab.
 """
 
+import struct
+
 import pytest
 import torch
 from loguru import logger
@@ -126,13 +128,13 @@ def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
                 .to(torch.bfloat16)
                 .reshape(new_isl_global, KVPE_HEAD_DIM)
             )
+            metadata = _make_metadata_tensor(mesh_device, kv_actual_global=0, slot_idx=u)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kv_cache,
                 tt_input,
-                slot_idx=u,
+                metadata,
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=0,
                 cluster_axis=sp_axis,
             )
 
@@ -154,6 +156,22 @@ def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
                 f"(max abs diff {(written.float() - expected[(u, l)].float()).abs().max().item()})"
             )
             logger.info(f"  [{dtype}] user {u} layer {l}: exact match")
+
+
+def _make_metadata_tensor(mesh_device, kv_actual_global, slot_idx):
+    """Replicate the post-h2d_socket_sync state: a small uint32 DRAM tensor, replicated
+    across the mesh, holding the runner's canonical metadata payload
+    [slot_id, actual_start, actual_end]. The op's writer kernel reads slot_idx from index 0
+    and kv_actual_global (= actual_start) from index 1 on-device (no host scalars)."""
+    payload = torch.tensor([slot_idx, kv_actual_global, kv_actual_global, 0], dtype=torch.int64).reshape(1, 1, 1, 4)
+    return ttnn.from_torch(
+        payload,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)
@@ -243,13 +261,13 @@ def test_update_padded_kv_cache_single_iteration_prefill(
             )
             # Exact reference: the input read back in natural order (same encode/decode as the cache).
             expected[(u, l)] = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+            metadata = _make_metadata_tensor(mesh_device, kv_actual_global=0, slot_idx=u)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kv_cache,
                 tt_input,
-                slot_idx=u,
+                metadata,
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=0,
                 cluster_axis=sp_axis,
             )
 
@@ -452,13 +470,13 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
                 # scatter its valid rows into the natural-order reference.
                 inp_rb = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
                 expected[(u, l)][flat_t[valid_rows]] = inp_rb[valid_rows]
+                metadata = _make_metadata_tensor(mesh_device, kv_actual_global=kv_actual, slot_idx=u)
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     kv_cache,
                     tt_input,
-                    slot_idx=u,
+                    metadata,
                     layer_idx=l,
                     num_layers=num_layers,
-                    kv_actual_global=kv_actual,
                     cluster_axis=sp_axis,
                 )
         kv_actual = valid_end
@@ -498,3 +516,185 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
             logger.info(f"  user {u} layer {l}: exact match")
 
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
+
+
+# 3 x uint32: [slot_id, actual_start, actual_end] — the runner's canonical h2d_socket_sync payload.
+_H2D_METADATA_SIZE_BYTES = 12
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layout):
+    """The metadata path and the scalar path must produce bit-identical caches.
+
+    Drives the metadata path from a REAL H2D service (not a hand-built tensor): push the runner's
+    canonical [slot_id, actual_start, actual_end] payload through ttnn.H2DStreamService +
+    inbound_socket_service_sync, hand the resulting device metadata tensor to the op, and compare the
+    written cache against the same write done via the original scalar signature. Exact equality (the
+    op is a pure copy and both paths run the identical writer math) over a couple of (slot, start)
+    chunks."""
+    if dtype == ttnn.fp8_e4m3 and not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+
+    num_users, num_layers = 2, 2
+    new_isl_tiles_per_dev = 4
+    cache_tokens_per_dev = 512
+    chunk_local = new_isl_tiles_per_dev * tile  # per-device new tokens
+    chunk_global = chunk_local * sp  # one global chunk
+    cache_global = cache_tokens_per_dev * sp
+    isl_per_chip = chunk_local  # H2D token shard per chip (tokens are independent of the KV slab)
+    per_chip_bytes = isl_per_chip * 4  # uint32
+
+    # Real H2D service: same construction as the runner / test_h2d_socket_sync.
+    global_spec = ttnn.TensorSpec(
+        shape=ttnn.Shape([sp, 1, isl_per_chip]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()]),
+    )
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    service = ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=8 * per_chip_bytes,
+        scratch_cb_size_bytes=per_chip_bytes,
+        mapper=mapper,
+        worker_cores=worker_cores,
+        metadata_size_bytes=_H2D_METADATA_SIZE_BYTES,
+    )
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2  # split the chunk across sp devices
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+
+    mesh_device.enable_program_cache()
+
+    # Two chunk-aligned cases: (slot, layer, actual_start). Both fit the cache (4 chunks per slot).
+    cases = [(0, 0, 0), (1, 1, chunk_global)]
+
+    torch.manual_seed(0)
+    try:
+        for slot_id, layer_idx, actual_start in cases:
+            actual_end = actual_start + chunk_global  # full chunk, no pad
+
+            # 1) Metadata from the real H2D service (the token payload itself is unused here).
+            dummy_tokens = torch.zeros(sp, 1, isl_per_chip, dtype=torch.int32).contiguous().numpy()
+            meta = struct.pack("<III", slot_id, actual_start, actual_end)
+            service.forward_to_tensor_bytes(dummy_tokens, metadata=meta)
+            tt_tokens, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+                service, metadata_size_bytes=_H2D_METADATA_SIZE_BYTES
+            )
+            ttnn.deallocate(tt_tokens)
+
+            # 2) One shared KV input slab, and two identical freshly-zeroed caches.
+            slab = torch.randn(chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16).reshape(
+                1, 1, chunk_global, KVPE_HEAD_DIM
+            )
+            tt_input = _make_input(
+                slab,
+                dtype,
+                layout,
+                mesh_device,
+                ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
+            )
+
+            def _fresh_cache():
+                return init_kvpe_cache(
+                    kvpe_cache_head_dim=KVPE_HEAD_DIM,
+                    mesh_device=mesh_device,
+                    seq_len=cache_global,
+                    mesh_shape=list(mesh_device.shape),
+                    sp_axis=sp_axis,
+                    num_kvpe_cache_layers=num_users * num_layers,
+                    dtype=dtype,
+                    layout=layout,
+                )
+
+            cache_meta = _fresh_cache()
+            cache_scalar = _fresh_cache()
+
+            # 3) Metadata path: slot_idx/kv_actual_global read on-device from tt_meta.
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache_meta,
+                tt_input,
+                tt_meta,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                cluster_axis=sp_axis,
+            )
+            # 4) Scalar path: original signature with host scalars.
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache_scalar,
+                tt_input,
+                slot_idx=slot_id,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                kv_actual_global=actual_start,
+                cluster_axis=sp_axis,
+            )
+            ttnn.synchronize_device(mesh_device)
+
+            # Compare only the VALID WRITTEN region (the chunk just written), not the whole cache: the
+            # unwritten / aligned ROW_MAJOR page-padding cells are uninitialized and read back as
+            # dtype-dependent garbage (e.g. NaN for bf16) that differs between the two separate cache
+            # allocations — exactly what the existing single/multi-iteration tests sidestep. Both paths
+            # run the identical writer with the same slot/offset, so the written region must byte-match.
+            batch_idx = slot_id * num_layers + layer_idx
+            local_start_row = (actual_start // chunk_global) * chunk_local  # chunk-aligned -> uniform per chip
+
+            def _written_slab(cache):
+                host = ttnn.to_torch(cache, mesh_composer=composer).to(torch.float32)[:, :1, :, :]
+                return torch.cat(
+                    [
+                        host[
+                            batch_idx,
+                            0,
+                            c * cache_tokens_per_dev
+                            + local_start_row : c * cache_tokens_per_dev
+                            + local_start_row
+                            + chunk_local,
+                            :,
+                        ]
+                        for c in range(sp)
+                    ],
+                    dim=0,
+                )
+
+            meta_slab = _written_slab(cache_meta)
+            scalar_slab = _written_slab(cache_scalar)
+            assert torch.equal(meta_slab, scalar_slab), (
+                f"slot {slot_id} layer {layer_idx} start {actual_start}: metadata-path written slab differs "
+                f"from scalar-path (max abs diff {(meta_slab - scalar_slab).abs().max().item()})"
+            )
+            logger.success(
+                f"[{dtype}] slot {slot_id} layer {layer_idx} start {actual_start}: "
+                f"metadata path == scalar path (bit-exact)"
+            )
+            ttnn.deallocate(tt_meta)
+            ttnn.deallocate(tt_input)
+    finally:
+        service.barrier()
+        del service

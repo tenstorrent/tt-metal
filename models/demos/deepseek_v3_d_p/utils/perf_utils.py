@@ -2,8 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import shutil
+import subprocess
 import tempfile
 
 import pandas as pd
@@ -235,6 +237,48 @@ def run_model_device_perf_test_with_merge(
             — prefixing them into the command doesn't work because tracy's -m flag
             mis-parses leading KEY=VAL tokens as module names.
     """
+    measured_ns, _, post_processed_results = measure_device_perf_ns(
+        command=command,
+        subdir=subdir,
+        num_iterations=num_iterations,
+        batch_size=batch_size,
+        op_filter=op_filter,
+        between_signposts=between_signposts,
+        extra_env=extra_env,
+    )
+
+    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
+    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
+    expected_results = check_device_perf(
+        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+    )
+    prep_device_perf_report(
+        model_name=model_name,
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments=comments,
+    )
+
+
+def measure_device_perf_ns(
+    command: str,
+    subdir: str,
+    num_iterations: int = 1,
+    batch_size: int = 1,
+    op_filter: str = "",
+    between_signposts: tuple[str, str] | None = None,
+    extra_env: dict | None = None,
+) -> tuple[float, pd.DataFrame, dict]:
+    """Run one tracy worker subprocess, apply ``between_signposts`` + ``op_filter``, merge multi-device
+    rows, and RETURN ``(summed DEVICE KERNEL DURATION [ns], merged_df, post_processed_results)`` WITHOUT
+    asserting against any baseline.
+
+    This is the measurement core shared by ``run_model_device_perf_test_with_merge`` (which adds the
+    baseline assert + report) and by callers that just need the number (e.g. the chunked-prefill
+    device-perf vs e2e driver). See ``run_model_device_perf_test_with_merge`` for the meaning of
+    ``op_filter`` / ``between_signposts`` / ``extra_env``.
+    """
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
 
@@ -257,7 +301,7 @@ def run_model_device_perf_test_with_merge(
     df = pd.read_csv(filename)
 
     total_rows = len(df)
-    signpost_rows = len(df[df["OP TYPE"] == "tt_signpost"])
+    signpost_rows = len(df[df["OP TYPE"] == "signpost"])
     device_rows = len(df[df["OP TYPE"] == "tt_dnn_device"])
 
     logger.debug(f"CSV total rows: {total_rows}, signposts: {signpost_rows}, device ops: {device_rows}")
@@ -293,6 +337,7 @@ def run_model_device_perf_test_with_merge(
     df_merged = merge_device_rows(df)
     logger.debug(f"Device rows after merge: {len(df_merged)}")
 
+    merged_sum_ns = 0.0
     if not df_merged.empty:
         merged_kernel_durations = df_merged["DEVICE KERNEL DURATION [ns]"].dropna().tolist()
         if merged_kernel_durations:
@@ -332,17 +377,27 @@ def run_model_device_perf_test_with_merge(
             for op_code, dur_ns in other_breakdown.items():
                 logger.info(f"  {op_code:<40} {dur_ns:>15,.0f} ns ({dur_ns / 1e3:>10,.1f} us)")
 
-    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
-    expected_results = check_device_perf(
-        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
-    prep_device_perf_report(
-        model_name=model_name,
-        batch_size=batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments=comments,
-    )
+    return float(merged_sum_ns), df_merged, post_processed_results
+
+
+def run_e2e_wall_clock(command: str, extra_env: dict | None = None) -> dict:
+    """Run the worker WITHOUT tracy as a plain subprocess; the worker writes its per-iter wall-clock
+    timings to the JSON path in ``TT_PREFILL_PERF_JSON``. Returns the parsed dict
+    (keys: per_iter_seconds, avg_iter_seconds, avg_per_chunk_seconds, num_iters, n_chunks, num_layers).
+    """
+    fd, json_path = tempfile.mkstemp(suffix=".json", prefix="e2e_perf_")
+    os.close(fd)
+    env = {**os.environ, **(extra_env or {}), "TT_PREFILL_PERF_JSON": json_path}
+    try:
+        logger.info(f"[e2e] running: {command}")
+        subprocess.run(command, shell=True, check=True, env=env)
+        with open(json_path) as f:
+            result = json.load(f)
+        logger.info(f"[e2e] parsed timings: {result}")
+        return result
+    finally:
+        if os.path.exists(json_path):
+            os.unlink(json_path)
 
 
 def run_model_device_perf_test_per_op(

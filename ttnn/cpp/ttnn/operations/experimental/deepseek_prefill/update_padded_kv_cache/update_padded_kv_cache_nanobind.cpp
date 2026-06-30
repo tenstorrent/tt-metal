@@ -14,6 +14,8 @@
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail {
 
 void bind_update_padded_kv_cache(nb::module_& mod) {
+    using ttnn::Tensor;
+    using ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::update_padded_kv_cache;
     ttnn::bind_function<"update_padded_kv_cache", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
@@ -29,12 +31,17 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             In place: returns a handle to `cache`.
 
             Cache slot is linearized users-outer, layers-inner — internally the op composes
-            ``batch_idx = slot_idx * num_layers + layer_idx``. Single-user prefill callers
-            pass ``slot_idx = 0`` and the desired ``layer_idx``.
+            ``batch_idx = slot_idx * num_layers + layer_idx``. ``slot_idx`` and ``kv_actual_global``
+            stay out of the program hash, so successive users/chunks reuse one cached program (per
+            layer).
 
-            ``slot_idx`` and ``kv_actual_global`` are per-call scalars held in common runtime args
-            and patched on cache hits, so their values stay out of the program hash and successive
-            users/chunks reuse one cached program (per layer).
+            Two call forms (identical results):
+              - scalar: ``(cache, input, slot_idx, layer_idx, num_layers, kv_actual_global,
+                cluster_axis)`` — the per-call values are host scalars patched on cache hits.
+              - metadata: ``(cache, input, metadata, layer_idx, num_layers, cluster_axis)`` — the
+                writer kernel reads ``slot_idx``/``kv_actual_global`` on-device from ``metadata``, so
+                they never touch the host dispatch path. This form is trace-safe (one captured
+                program replays across chunks/users).
 
             Args:
                 cache (ttnn.Tensor): 4D KV cache tensor on device, TILE or ROW_MAJOR layout. Sharded
@@ -44,25 +51,43 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     Seq dims stay 32-aligned in both layouts.
                 input (ttnn.Tensor): 4D input slab on device, same layout, dtype and head dim as
                     cache. Per-chip seq length = chunk_local.
-                slot_idx (int): user slot in the batched prefill cache.
+                slot_idx (int, scalar form): user slot in the batched prefill cache.
+                kv_actual_global (int, scalar form): prior valid global KV length in tokens (tile-aligned).
+                metadata (ttnn.Tensor, metadata form): small uint32 DRAM tensor, replicated across the
+                    mesh (the runner's h2d_socket_sync payload), canonical layout
+                    ``[slot_id, actual_start, actual_end]``. The writer kernel reads ``slot_idx`` from
+                    index 0 and ``kv_actual_global`` (= ``actual_start``, tokens, tile-aligned) from
+                    index 1 on-device. The caller packs valid values (host-side validation).
                 layer_idx (int): Transformer layer index for this call. Structural (hashed): one
                     cached program per layer is reused across users and chunks.
                 num_layers (int): Total layers folded into the cache batch dim. Structural —
                     fixed for the lifetime of the workload.
-                kv_actual_global (int): prior valid global KV length in tokens. Tile-aligned.
                 cluster_axis (int): Cluster axis along which the cache is sharded (0 or 1).
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
         )doc",
-        &ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::update_padded_kv_cache,
-        nb::arg("cache").noconvert(),
-        nb::arg("input").noconvert(),
-        nb::arg("slot_idx"),
-        nb::arg("layer_idx"),
-        nb::arg("num_layers"),
-        nb::arg("kv_actual_global"),
-        nb::arg("cluster_axis"));
+        // Scalar form (original signature preserved).
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
+                &update_padded_kv_cache),
+            nb::arg("cache").noconvert(),
+            nb::arg("input").noconvert(),
+            nb::arg("slot_idx"),
+            nb::arg("layer_idx"),
+            nb::arg("num_layers"),
+            nb::arg("kv_actual_global"),
+            nb::arg("cluster_axis")),
+        // Metadata form (traceable).
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, uint32_t, uint32_t, uint32_t>(
+                &update_padded_kv_cache),
+            nb::arg("cache").noconvert(),
+            nb::arg("input").noconvert(),
+            nb::arg("metadata").noconvert(),
+            nb::arg("layer_idx"),
+            nb::arg("num_layers"),
+            nb::arg("cluster_axis")));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

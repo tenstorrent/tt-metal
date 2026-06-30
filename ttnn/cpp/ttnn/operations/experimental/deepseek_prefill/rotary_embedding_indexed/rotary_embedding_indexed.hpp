@@ -23,15 +23,32 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 // shard the same way the per-chip kv-cache writer derives its `update_idxt`, so the boundary chip's
 // older-then-wrap token layout is read with a single contiguous offset.
 //
-// `kv_actual_global` is a per-call scalar (tokens, tile-aligned) held in a common runtime arg and
-// patched on cache hits, so its value is out of the program hash and successive chunks reuse one
-// cached program. Returns a new tensor with the same spec as `input`.
+// `kv_actual_global` (tokens, tile-aligned) stays out of the program hash, so successive chunks reuse
+// one cached program. Returns a new tensor with the same spec as `input`. Two call forms (identical
+// results):
+
+// (1) Scalar form: `kv_actual_global` is a host scalar held in a common runtime arg, patched on cache
+//     hits.
 ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,
     const ttnn::Tensor& sin,
     const ttnn::Tensor& trans_mat,
     uint32_t kv_actual_global,
+    uint32_t cluster_axis,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+// (2) Metadata form (traceable): the reader reads `kv_actual_global` on-device from `metadata` — a
+//     small uint32 DRAM tensor (the runner's h2d_socket_sync payload [slot_id, actual_start,
+//     actual_end]) at index 1 (= actual_start). Off the host dispatch path, so one captured program
+//     replays across chunks.
+ttnn::Tensor rotary_embedding_indexed(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& cos,
+    const ttnn::Tensor& sin,
+    const ttnn::Tensor& trans_mat,
+    const ttnn::Tensor& metadata,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);

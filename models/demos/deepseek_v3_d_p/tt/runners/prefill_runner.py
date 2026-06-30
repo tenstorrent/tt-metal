@@ -76,6 +76,12 @@ KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 # requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
 _ROUTING_USE_L1_SMALL_SEMAPHORES = VARIANT.name == "kimi_k2_6"
 _L1_SMALL_SIZE = 512 if _ROUTING_USE_L1_SMALL_SEMAPHORES else 0
+# PREFILL_USE_TRACE=1: capture the chunk forward ONCE as a metadata-driven ttnn trace and replay it per
+# chunk (collapses op2op host-dispatch gaps). Requires kv_only_last_layer + a trace DRAM region. The
+# per-chunk scalars are read on-device from a persistent metadata tensor; the per-layer migration ack is
+# chopped out of the trace and fired between segments. Default off (the eager path is unchanged).
+USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+_TRACE_REGION_SIZE = 256 * 1024 * 1024 if USE_TRACE else 0
 
 _shutdown = False
 
@@ -326,7 +332,9 @@ def main() -> None:
         f"migration={'ON (KV chunk table publish)' if enable_migration else 'OFF'}"
     )
 
-    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
+    mesh_device = open_mesh_device(
+        GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE
+    )
 
     hf_config = load_hf_config(VARIANT)
     hf_config.max_seq_len = MAX_SEQ_LEN
@@ -345,6 +353,7 @@ def main() -> None:
         model_cfg=MODEL_CFG,
         kv_only_last_layer=KV_ONLY_LAST_LAYER,
         routing_use_l1_small_for_semaphores=_ROUTING_USE_L1_SMALL_SEMAPHORES,
+        use_metadata_trace=USE_TRACE,
     )
 
     pipeline = TtDeepSeekPrefillPipeline(
@@ -385,6 +394,9 @@ def main() -> None:
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
+        # Capture the metadata trace explicitly after compile() (no-op unless PREFILL_USE_TRACE); the
+        # standalone loop has no LayerAck channel, so this captures a migration-off trace.
+        pipeline.capture_trace()
         logger.info("Setup complete, running standalone loop (file input, no socket)")
         run_standalone_loop(pipeline)
     else:
@@ -429,6 +441,10 @@ def main() -> None:
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         pipeline.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+
+        # Capture the metadata trace explicitly, AFTER the LayerAck channel is registered so the per-layer
+        # migration ack is chopped into the trace (no-op unless PREFILL_USE_TRACE). prefill() then replays.
+        pipeline.capture_trace()
 
         logger.info("Setup complete, entering request loop")
         run_request_loop(pipeline, h2d_service)
