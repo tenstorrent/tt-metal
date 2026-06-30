@@ -100,9 +100,9 @@ inline void reg_write(std::uint32_t addr, std::uint32_t data)
 
 inline std::uint64_t read_wall_clock()
 {
-    auto t6dbg                   = RISCV_DEBUG_REGS;
-    std::uint32_t timestamp_low  = t6dbg->WALL_CLOCK_0;
-    std::uint32_t timestamp_high = t6dbg->WALL_CLOCK_1_AT;
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
+    std::uint32_t timestamp_low     = t6dbg->WALL_CLOCK_0;
+    std::uint32_t timestamp_high    = t6dbg->WALL_CLOCK_1_AT;
     return (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
 }
 
@@ -163,6 +163,7 @@ inline void tensix_sync()
 
 inline void invalidate_data_cache()
 {
+    asm volatile("fence" ::: "memory");
 }
 
 inline void mop_sync()
@@ -305,7 +306,7 @@ template <std::uint32_t bitmask>
 inline void set_ttsync_enables(std::uint32_t thread_id = 0xdeadface)
 {
     static_assert((bitmask & ~TRACK_ALL) == 0, "The given bitmask targets bits outside the allowable range");
-    auto t6dbg = RISCV_DEBUG_REGS;
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
 
     if (thread_id > 3)
     {
