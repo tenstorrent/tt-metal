@@ -1,6 +1,6 @@
 # This file defines TTNN unit test groups used by:
 #   - ttnn-sanity-tests-impl.yaml (hardware CI + ttsim simulator coverage)
-# Merge-gate tests live in ttnn_smoke_merge_gate_tests.yaml (smoke).
+# Merge-gate tests live in ttnn_merge_gate_tests.yaml.
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # Optional: fast_runtime_mode_off.

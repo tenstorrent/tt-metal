@@ -52,7 +52,7 @@ jobs:
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_smoke_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_merge_gate_tests.yaml
       TTSIM_SKIP_LIST_YAML: ./tests/pipeline_reorg/ttsim-skip-list.yaml
     steps:
       - name: Checkout the repository
@@ -76,7 +76,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "smoke"
+            "merge_gate"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
