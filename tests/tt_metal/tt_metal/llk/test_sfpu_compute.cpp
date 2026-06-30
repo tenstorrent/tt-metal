@@ -398,12 +398,8 @@ bool is_close_packed_sfpu_output_f32(
 
 // ---- Typecast (data-conversion) test helpers ----------------------------------------------------
 //
-// The Quasar typecast op is a single unified kernel (ckernel_sfpu_typecast.h) templated on
-// (SRC_FMT, DST_FMT). MX <-> float typecasts are a SFPU no-op (the unpack/pack gasket performs the
-// conversion). These helpers pack each endpoint format, decode it back, and build a host golden so
-// the metal test exercises each conversion class symmetrically, mirroring the tt-llk typecast test.
-// Whole-number stimulus keeps float<->int conversions lossless; the golden re-applies the
-// destination encoding's quantization so it matches what the packer produces.
+// Pack each endpoint format, decode it back, and build a host golden so the metal test exercises each
+// conversion symmetrically (mirrors the tt-llk typecast test).
 
 inline bool typecast_is_mx(tt::DataFormat fmt) {
     return fmt == tt::DataFormat::MxFp8R || fmt == tt::DataFormat::MxFp8P;
@@ -557,7 +553,7 @@ inline std::vector<float> typecast_golden(
         for (auto& v : golden) {
             v = static_cast<float>(std::lround(v));  // float->int rounds to nearest
             if (typecast_is_unsigned(out_fmt)) {
-                v = std::max(v, 0.0f);  // unsigned dst clamps negatives to 0 (matches the SFPU)
+                v = std::clamp(v, 0.0f, 255.0f);
             }
         }
     }
@@ -603,6 +599,27 @@ struct SfpuConfig {
     bool unpack_to_dest_fp32 = false;  // Quasar Float32 path; default false keeps the bf16 path byte-identical
     bool en_32bit_dest = false;
 };
+
+// Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
+// DFBs are correctly sized even when their formats differ (e.g. Int8 in → Int32 out).
+experimental::DataflowBufferSpec make_dfb_spec(
+    const experimental::DFBSpecName& id, const SfpuConfig& cfg, tt::DataFormat fmt) {
+    return {
+        .unique_id = id,
+        .entry_size = static_cast<uint32_t>(tt::tile_size(fmt)),
+        .num_entries = static_cast<uint32_t>(cfg.num_tiles),
+        .data_format_metadata = fmt,
+    };
+}
+
+// Converts a string→string defines map to the CompilerOptions::Defines vector form.
+experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::map<std::string, std::string>& m) {
+    experimental::KernelSpec::CompilerOptions::Defines defines;
+    for (const auto& [k, v] : m) {
+        defines.emplace(k, v);
+    }
+    return defines;
+}
 
 /// Builds and runs the single-input SFPU pipeline on one core and returns the raw DST bytes:
 ///
@@ -651,18 +668,10 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const experimental::KernelSpecName WRITER{"writer"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
-    experimental::DataflowBufferSpec in_dfb_spec{
-        .unique_id = IN_DFB,
-        .entry_size = static_cast<uint32_t>(tt::tile_size(test_config.l1_input_data_format)),
-        .num_entries = static_cast<uint32_t>(test_config.num_tiles),
-        .data_format_metadata = test_config.l1_input_data_format,
-    };
-    experimental::DataflowBufferSpec out_dfb_spec{
-        .unique_id = OUT_DFB,
-        .entry_size = static_cast<uint32_t>(tt::tile_size(test_config.l1_output_data_format)),
-        .num_entries = static_cast<uint32_t>(test_config.num_tiles),
-        .data_format_metadata = test_config.l1_output_data_format,
-    };
+    const experimental::DataflowBufferSpec in_dfb_spec =
+        make_dfb_spec(IN_DFB, test_config, test_config.l1_input_data_format);
+    const experimental::DataflowBufferSpec out_dfb_spec =
+        make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -704,16 +713,11 @@ std::vector<uint32_t> run_sfpu_pipeline(
                     experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
     };
 
-    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
-    for (const auto& [k, v] : defines) {
-        compute_defines.emplace(k, v);
-    }
-
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
         .num_threads = 1,
-        .compiler_options = {.defines = std::move(compute_defines)},
+        .compiler_options = {.defines = to_kernel_defines(defines)},
         .dfb_bindings =
             {{
                  .dfb_spec_name = IN_DFB,
@@ -863,27 +867,6 @@ experimental::NodeCoord extract_single_core_node(const SfpuConfig& cfg, const ch
     const CoreRange& cr = *cfg.cores.ranges().begin();
     TT_FATAL(cr.start_coord == cr.end_coord, "{} expects a single-core CoreRange", context);
     return {cr.start_coord.x, cr.start_coord.y};
-}
-
-// Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
-// DFBs are correctly sized even when their formats differ (e.g. Int8 in → Int32 out).
-experimental::DataflowBufferSpec make_dfb_spec(
-    const experimental::DFBSpecName& id, const SfpuConfig& cfg, tt::DataFormat fmt) {
-    return {
-        .unique_id = id,
-        .entry_size = static_cast<uint32_t>(tt::tile_size(fmt)),
-        .num_entries = static_cast<uint32_t>(cfg.num_tiles),
-        .data_format_metadata = fmt,
-    };
-}
-
-// Converts a string→string defines map to the CompilerOptions::Defines vector form.
-experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::map<std::string, std::string>& m) {
-    experimental::KernelSpec::CompilerOptions::Defines defines;
-    for (const auto& [k, v] : m) {
-        defines.emplace(k, v);
-    }
-    return defines;
 }
 
 // Builds a writer_unary KernelSpec bound to a single output DFB.
@@ -1380,7 +1363,7 @@ bool run_sfpu_typecast(
     tt::DataFormat in_fmt,
     tt::DataFormat out_fmt,
     size_t num_tiles) {
-    const size_t numel = num_tiles * 32 * 32;
+    const size_t numel = num_tiles * tt::constants::TILE_HW;
     const int seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto vals = sfpu_util::generate_typecast_input(numel, seed, in_fmt, out_fmt);
     auto packed_in = sfpu_util::typecast_pack(in_fmt, vals);
@@ -1832,19 +1815,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     }
 }
 
-// Typecast (data-conversion) test fixture. Each instance is one (in_format -> out_format) pair,
-// covering the documented Quasar typecast matrix (block-float endpoints are the MX formats here;
-// UInt16 is replaced by Int16, and UInt32 is out of scope). Endpoints: Float16_b, Float32, Int32,
-// Int16 (SMAG16), UInt8, and MX (MxFp8P / MxFp8R). The compute API routes non-MX pairs through the
-// unified SFPU kernel; an MX endpoint behaves as Float16_b at the SFPU level (gasket).
-//
-// 32-bit inputs (Int32/Float32) are unpacked straight into a 32-bit Dest (UnpackToDestFp32); every other
-// input (Float16_b/MX/Int16) reaches Dest via the FPU A2D datacopy. run_sfpu_typecast picks
-// fp32_dest_acc_en and unpack_to_dest the way the typecast op does (see tt-llk test_eltwise_unary_typecast):
-// narrow integer pairs (e.g. Int16 -> Float16_b) stay in a 16-bit Dest. Skipped classes: a 16-bit input
-// widening into a 32-bit output (Float16_b/Int16 -> Float32/Int32; an MX input counts as 16-bit, so
-// MX -> Float32/Int32 is skipped too), and any UInt8 endpoint (passes in tt-llk but needs datacopy /
-// pack_src parity before it works through this compute-API harness).
+// Typecast test fixture: one (in_format -> out_format) pair per instance, covering the Quasar typecast
+// matrix over Float16_b, Float32, Int32, Int16 (SMAG16), UInt8, and MX (MxFp8P / MxFp8R). UInt16 maps to
+// Int16; UInt32 / MxFp4 are out of scope. Unsupported pairs are skipped by the gate in the test body.
 class SingleCoreSingleMeshDeviceSfpuTypecastFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<tt::DataFormat, tt::DataFormat>> {};
@@ -1863,11 +1836,13 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
     //    datapath lands, so an Int16 endpoint trips the format-consistency / pack_src derivation);
     //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32).
     // Float32 <-> Int32 and Float16_b/MX <-> Float32 still run.
+    // Int16/UInt8 support through the metal2 compute-API path is tracked in tenstorrent/tt-metal#48601.
     const bool uint8_endpoint = (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8);
     const bool int16_endpoint = (in_fmt == tt::DataFormat::Int16 || out_fmt == tt::DataFormat::Int16);
     const bool widen_to_int32 = (out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32);
     if (uint8_endpoint || int16_endpoint || widen_to_int32) {
-        GTEST_SKIP() << "typecast format not yet wired through the metal compute-API harness";
+        GTEST_SKIP() << "typecast format not yet supported through the metal2 compute-API path "
+                        "(tenstorrent/tt-metal#48601)";
     }
 
     log_info(
@@ -1880,53 +1855,39 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
     }
 }
 
+// Every directed endpoint pair (in != out), minus pairs that are not real conversions: MxFp8P <-> MxFp8R
+// (both arrive as Float16_b in Dest) and UInt8 -> Int32/Int16 (not part of the matrix).
+static std::vector<std::tuple<tt::DataFormat, tt::DataFormat>> typecast_pairs() {
+    const tt::DataFormat endpoints[] = {
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float32,
+        tt::DataFormat::Int32,
+        tt::DataFormat::Int16,
+        tt::DataFormat::UInt8,
+        tt::DataFormat::MxFp8P,
+        tt::DataFormat::MxFp8R};
+    std::vector<std::tuple<tt::DataFormat, tt::DataFormat>> pairs;
+    for (const tt::DataFormat in : endpoints) {
+        for (const tt::DataFormat out : endpoints) {
+            if (in == out) {
+                continue;
+            }
+            const bool mx_to_mx =
+                unit_tests::sfpu_util::typecast_is_mx(in) && unit_tests::sfpu_util::typecast_is_mx(out);
+            const bool uint8_to_wide_int =
+                in == tt::DataFormat::UInt8 && (out == tt::DataFormat::Int32 || out == tt::DataFormat::Int16);
+            if (!mx_to_mx && !uint8_to_wide_int) {
+                pairs.emplace_back(in, out);
+            }
+        }
+    }
+    return pairs;
+}
+
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuTypecast,
     SingleCoreSingleMeshDeviceSfpuTypecastFixture,
-    ::testing::Values(
-        // --- Float16_b <-> {Float32, Int32, Int16, UInt8} (X->Float16_b with 32-bit X is skipped) ---
-        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Float32),
-        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::Float16_b),
-        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Int32),
-        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::Float16_b),
-        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Int16),
-        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::Float16_b),
-        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::UInt8),
-        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::Float16_b),
-        // --- Float32 <-> {Int32, Int16, UInt8} (Float32-input directions skipped) ---
-        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::Int32),
-        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::Float32),
-        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::Int16),
-        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::Float32),
-        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::UInt8),
-        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::Float32),
-        // --- Int16 <-> Int32 ---
-        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::Int32),
-        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::Int16),
-        // --- MxFp8P <-> {Float16_b, Float32, Int32, Int16, UInt8} (X->MX with 32-bit X is skipped) ---
-        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Float16_b),
-        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::MxFp8P),
-        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Float32),
-        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::MxFp8P),
-        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Int32),
-        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::MxFp8P),
-        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Int16),
-        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::MxFp8P),
-        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::UInt8),
-        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::MxFp8P),
-        // --- MxFp8R <-> {Float16_b, Float32, Int32, Int16, UInt8} ---
-        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Float16_b),
-        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::MxFp8R),
-        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Float32),
-        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::MxFp8R),
-        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Int32),
-        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::MxFp8R),
-        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Int16),
-        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::MxFp8R),
-        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::UInt8),
-        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::MxFp8R),
-        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::UInt8),
-        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::UInt8)),
+    ::testing::ValuesIn(typecast_pairs()),
     [](const testing::TestParamInfo<std::tuple<tt::DataFormat, tt::DataFormat>>& info) {
         return unit_tests::sfpu_util::typecast_device_format_name(std::get<0>(info.param)) + "_to_" +
                unit_tests::sfpu_util::typecast_device_format_name(std::get<1>(info.param));
