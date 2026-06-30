@@ -26,14 +26,10 @@ def ttnn_version() -> str | None:
 
 
 def _pip(args: list[str], timeout_s: int = 600) -> bool:
+    from .pkgtools import run_pip
+
     try:
-        r = subprocess.run(
-            [sys.executable, "-m", "pip", *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-        return r.returncode == 0
+        return run_pip(args, timeout_s=timeout_s).returncode == 0
     except Exception:
         return False
 
