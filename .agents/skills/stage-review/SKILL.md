@@ -95,6 +95,25 @@ Return `more-work-needed` when evidence shows one of these:
   evidence that a hard physical device limit prevents the advertised capability
   from fitting or running and proving the largest feasible value;
 - the stage dismisses a material anomaly with prose instead of investigation.
+- an optimization stage is materially slower than an available same-model,
+  same-stage, same-hardware-family optimized reference without proving an
+  intentional workload difference, incompatible contract, correctness failure,
+  or TTNN/runtime blocker.
+- an optimized precision policy selects a slower higher-precision or
+  higher-fidelity path even though a faster lower-precision/fidelity candidate
+  passed real target-model weights or recorded target activations, and the only
+  blocker is random/synthetic "representative semantics" PCC.
+- a dominant matmul geometry sweep mixes evidence across incompatible precision
+  policies, for example measuring a smaller-core or residual-grid geometry only
+  under BFP8/HiFi while the final or mandatory policy is BFP4/LoFi. Geometry is
+  not rejected until the material geometry candidates have been measured under
+  the same dtype/fidelity policy, or an exact op-contract blocker is recorded.
+- prompt-based quality evidence violates `$qualitative-check`, for example an
+  instruct/chat model is judged only from raw completion prompts, a base model
+  is judged through invented chat prompts, or prompt-format evidence is missing.
+- a stage from full-model onward can generate text but did not run the
+  `$qualitative-check` shared suite, or did not record why the suite was
+  impossible.
 
 Do not return `more-work-needed` only because a stronger evidence format would
 be nice. If the goal and skill accept tests, code inspection, runner
@@ -146,6 +165,10 @@ For generation or serving stages, also inspect:
   that are not divisible by internal chunk, tile, block, page, or trace sizes.
   A public model/generator/serving path that rejects such lengths needs more
   work unless the HF model itself has that semantic restriction.
+- `$qualitative-check` evidence: prompt-format metadata, rendered prompts or
+  token ids, HF/full-model controls, and the shared qualitative suite as soon as
+  the stage can generate text. Missing suite output is required work unless the
+  stage records a concrete capability blocker.
 - capability-contract evidence: for nonstandard or non-LLM models, the
   model-specific equivalent of context length, cache/state semantics, mode
   switches, and advertised input/output limits.
@@ -166,6 +189,12 @@ For release stages, also inspect:
 For optimization stages, also inspect:
 
 - before/after measurements in the same regime;
+- whether the stage searched for same-model, same-stage, same-hardware-family
+  optimized references in the current checkout, run root, or provided
+  experiment artifacts. If such a reference is available, compare headline
+  latency and dominant op rows against it. A stage that only beats its original
+  functional baseline can still need more work when it regresses a known
+  optimized reference;
 - whether optimized paths from previous stages were preserved;
 - evidence for rejected optimizations or "already optimal" claims;
 - whether rejected optimizations were actually earned. For any material
@@ -194,6 +223,30 @@ For optimization stages, also inspect:
   final default run is materially slower than the candidate evidence, the stage
   must either fix the default wiring or report the final reproduced number as
   the optimized result instead of claiming the earlier candidate result;
+- whether the selected dtype/fidelity policy actually appears in measured
+  runtime rows. Policy names, constructor defaults, and JSON fields do not
+  prove that dominant matmuls used the intended weight dtype or math fidelity.
+  If `tt-perf-report` or equivalent profiler rows show BF16/BFP8 where the
+  selected policy claims BFP4, or HiFi where the selected policy claims LoFi,
+  return `more-work-needed` unless the report records an exact op-contract
+  blocker and uses the real measured dtype policy as the final result;
+- whether a reduced-precision or reduced-fidelity candidate was rejected only
+  by synthetic/random-weight evidence. Synthetic tests can reveal crashes and
+  shape bugs, but they do not by themselves justify a slower higher-precision
+  fallback when real target-model weights pass. A test called
+  "representative semantics" is still synthetic if it uses random/synthetic
+  tensors. If the stage says the candidate was faster on real weights but
+  rejected for such a synthetic PCC, return `more-work-needed` unless there is
+  model-visible correctness failure, real-weight trace/runtime failure,
+  unacceptable latency, or an exact op-contract blocker;
+- whether dominant matmul geometry was swept under the dtype/fidelity policy
+  being selected. A core-count, shard-width, `in0_block_w`, `per_core_N`, or
+  output-subblock result from BFP8/HiFi does not validate BFP4/LoFi geometry,
+  and a BFP4/LoFi result on one geometry does not reject the other material
+  geometries. If the final report leaves a dominant row `SLOW`, has low DRAM
+  utilization, reports missing output subblocks, or cites a larger-core blocker
+  without a precision-locked smaller-core or residual-grid candidate, return
+  `more-work-needed`;
 - whether performance claims compare like with like.
 
 For datatype-sweep stages, also inspect:

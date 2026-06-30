@@ -278,6 +278,8 @@ Before changing release specs, eval configs, benchmark configs, or server launch
 
 Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat template, host-sampling-only tests that need an explicit host-sampling compatibility mode, or requests whose prompt plus completion exceeds the true supported context. If the model cannot meet the context contract for any reason other than a hard physical device limit, fix the model path or report a readiness gap; do not weaken release coverage.
 
+Use `$qualitative-check` for prompt-based release checks. Release smokes, qualitative/API requests, eval harness configuration, and report interpretation must record the prompt-format decision and must not use raw-completion output from an instruct model, or invented chat prompts for a base model, as release-readiness evidence.
+
 ## Failing Release Tests
 
 If the release workflow exits nonzero because `spec_tests`, `tests`, API parameter conformance, eval harness execution, or benchmark harness execution failed, use `$autofix` before declaring the TTI release stage blocked. Give `$autofix` the exact failed command, model, device, physical host, workflow log path, server log path, report/test output path, and the smallest local repro command that preserves the failure.
@@ -354,6 +356,7 @@ Done means:
 - The copied run spec or release report data proves that the evaluated implementation path is the target `models/autoports/<model>` directory.
 - No copied final report or run spec identifies the evaluated implementation as stock `models/tt_transformers`, `models/demos`, or another packaged implementation for the same HF model.
 - The copied run spec, server launch, and report data preserve the supported context from `doc/context_contract.json`.
+- `$qualitative-check` evidence shows prompt-based release checks used the HF-declared prompt format, and `RUN_NOTES.md` records the tokenizer/chat-template decision plus the TTI/eval setting or rendered prompt evidence.
 - Valid non-aligned prompt lengths either pass, or the stage records the exact model bug and remains not ready.
 - Any failing release tests or API conformance rows were either fixed with `$autofix` and rerun, or explicitly classified as non-test readiness gaps with evidence.
 - Any failed accuracy, benchmark target, API conformance, or incomparable metric row is classified as `fixed`, `issue-waived`, or `readiness-fail`. A `readiness-fail` means the stage is not clean-pass.

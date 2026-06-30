@@ -130,7 +130,7 @@ python -m models.common.readiness_check.generate \
   --output <model_dir>/readiness_aime24_chat.refpt
 ```
 
-Raw Tale-of-Two-Cities/book references can still be useful as extra stress coverage, but they should not be the main quality gate for an instruct model unless the model lacks a usable chat template.
+Raw Tale-of-Two-Cities/book references can still be useful as extra stress coverage, but they should not be the main quality gate for an instruct model unless the model lacks a usable chat template. Use `$qualitative-check` for all prompt-based quality checks, prompt-format evidence, HF controls, and raw-completion versus chat-template classification.
 
 Generate the main reference fresh by default. Reuse a reference only when metadata under the current autoport directory proves the same HF model id and revision, tokenizer, prompt source, chat-template flag, generation length, top-k, and generation command. If any of that is missing or mismatched, regenerate the reference rather than carrying forward a possibly contaminated artifact.
 
@@ -142,6 +142,8 @@ python models/common/readiness_check/check_degenerate_output.py \
 ```
 
 and include its verdict in the stage evidence. Mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug, never a model property. The runner-side stage gate runs the same check.
+
+Shift qualitative checks left: as soon as the full model can generate text, use `$qualitative-check` to run the shared qualitative prompt suite through both the HF reference and TT generator. Later stages may add serving-specific checks, but they should not be the first place these prompts are tried.
 
 Add a focused split-sampling trace test before marking the stage complete:
 
@@ -204,7 +206,7 @@ Done means all of these are true and recorded:
 - KV-cache, page-table or position handling, prompt lengths, and repeated decode reuse;
 - context contract: HF-advertised context, full-model supported context, and any hard-physical-limit reduction evidence;
 - batch contract: batch-1 primary path, largest batch tested up to 32, and any hard-physical-limit reduction evidence;
-- full-model accuracy and qualitative generation evidence;
+- full-model accuracy and `$qualitative-check` evidence, including prompt-format metadata, rendered prompt artifacts, HF controls, and the shared qualitative prompt suite run through the TT generator;
 - split-sampling trace evidence: model trace to logits, internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, current-position coherence, and page-table refresh coverage;
 - determinism or repeated-run coverage appropriate to the implementation risk, including logit reproducibility across runs and batch positions;
 - watcher/fallback/runtime-integrity status;
