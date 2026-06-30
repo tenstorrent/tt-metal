@@ -263,9 +263,10 @@ def test_mistral_7b_executor_prefill_smoke(mesh_device, hf_model_id, seq_len: in
 def test_mistral_7b_eager_traced_prefill_logits_match(mesh_device, hf_model_id, tmp_path_factory):
     """``EagerMistralExecutor`` vs ``TracedMistralExecutor``: same prefill → host logits within tolerance.
 
-    Per ``Mistral7BExecutorRuntimeConfig.can_enable_trace``, traced prefill is gated off
-    (engine falls back to eager capture under the hood); this still exercises the traced
-    executor's surface and decode-time trace paths.
+    Per ``Mistral7BExecutorRuntimeConfig.can_enable_trace``, traced prefill is enabled for
+    the supported seq lens (N150 ``[128]``; N300/T3K ``[128, 1024]``), so at ``seq_len=128``
+    this exercises the real traced prefill capture/replay path (plus the decode-time trace
+    paths); larger seq lens fall back to eager capture under the hood.
     """
     _skip_unless_heads_divide_mesh(mesh_device)
     cache_e = tmp_path_factory.mktemp("mistral_par_e")

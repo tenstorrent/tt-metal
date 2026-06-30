@@ -219,11 +219,13 @@ def _all_gather_rmsnorm_tensor(
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         # CCL tuning: match the house default (CCL_CHUNKS_PER_SYNC / CCL_NUM_WORKERS_PER_LINK in
         # tt_ccl.py = 10 / 2) used by every shared module (Attention1D/MLP1D/RMSNorm1D) and the
-        # same-architecture llama3_8b reference (32 heads / 8 KV), which reaches T3K parity. The
-        # original port shipped a divergent 24 / 4 here. These two per-layer rmsnorm all-gathers run
-        # 64x/decode step, so on the T3K 8-device ring their per-op cost dominates -- the suspected
-        # root of the ~17% T3K decode gap vs TTTv1 (N150/N300 at parity; short/no ring). Aligning to
-        # the validated house default is correctness-neutral (all-gather result is identical).
+        # same-architecture llama3_8b reference (32 heads / 8 KV). The original port shipped a
+        # divergent 24 / 4 here. These two per-layer rmsnorm all-gathers run 64x/decode step, so on
+        # the T3K 8-device ring their per-op cost is non-trivial; aligning to the validated house
+        # default is correctness-neutral (all-gather result is identical) and removes an unexplained
+        # divergence. (The earlier "~17% T3K decode gap vs TTTv1" this was suspected to drive turned
+        # out to be a cross-box/cross-harness measurement artifact, not a real regression: on equal
+        # footing -- same box, on-device sampling -- T3K decode is at parity with TTTv1.)
         chunks_per_sync=10,
         num_workers_per_link=2,
         num_buffers_per_channel=2,
