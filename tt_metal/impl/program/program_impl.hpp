@@ -225,13 +225,10 @@ public:
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
-    // Metal 2.0: allocate program-scope L1 for each kernel's scratchpads (stacking on the DFB
-    // allocators, so must run AFTER allocate_dataflow_buffers) and patch the allocated base address
-    // into each kernel's CRTA buffer. Idempotent within a (re)allocation cycle; reset by
-    // invalidate_dataflow_buffer_allocation. Fast/mesh-dispatch only (the slow-dispatch path is
-    // forbidden for scratchpad-bearing programs by a legality check in LaunchProgram).
+    // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
+    // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
-    // True if any kernel in this program binds a scratchpad.
+    // True if any kernel in this Program binds a scratchpad.
     bool has_scratchpads() const;
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
@@ -532,9 +529,11 @@ private:
     std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
-    // Metal 2.0: guards allocate_scratchpads so it runs once per (re)allocation cycle. Reset by
-    // invalidate_dataflow_buffer_allocation (scratchpads stack on the DFB allocators, so they must be
-    // re-marked whenever the DFB layout is recomputed).
+
+    // Scratchpads (Metal 2.0 only)
+    // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
+    // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
+    // is recomputed (due to a DFB size override at runtime).
     bool scratchpads_allocated_{false};
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;

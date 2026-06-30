@@ -104,9 +104,8 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().validate_circular_buffer_region(mesh_device);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(mesh_device);
-    // Metal 2.0 scratchpads stack on the DFB allocators, so allocate them AFTER the DFBs are placed and
-    // BEFORE generate_dispatch_commands snapshots the kernels' CRTA buffers (it patches the allocated
-    // base address into them). The slow-dispatch path mirrors this ordering in ConfigureDeviceWithProgram.
+    // Metal 2.0 scratchpads stack on the DFB allocations, so must allocate them AFTER the DFBs are placed.
+    // Their locations are passed as implicit CRTAs, so allocate them BEFORE generate_dispatch_commands snapshots.
     program.impl().allocate_scratchpads(mesh_device);
     program.impl().validate_dataflow_buffer_region(mesh_device);
 }

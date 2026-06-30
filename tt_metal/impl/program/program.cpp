@@ -1284,6 +1284,7 @@ bool detail::ProgramImpl::has_scratchpads() const {
     return false;
 }
 
+// Scratchpad is a Metal 2.0-only construct.
 void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
     if (this->scratchpads_allocated_) {
         return;
@@ -1302,8 +1303,8 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
             for (auto& handle : scratchpad_handles) {
                 // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
-                // (DFBs and CBs are mutually exclusive in a program, so dfb_allocators_ own the whole
-                // region.) Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
+                // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
+                // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
                 // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
                 for (const CoreRange& core_range : kernel_cores.ranges()) {
                     bool exists = false;
@@ -1318,10 +1319,10 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                     }
                 }
 
-                // Uniform per-node base address: the scratchpad address is delivered as a common runtime
-                // arg — one value broadcast to every core the kernel runs on — so it must sit at the same
-                // L1 offset everywhere. Take the max region-end over EVERY allocator that intersects the
-                // kernel's cores (not just exact-range matches), so the scratchpad cannot overlap a DFB on
+                // Uniform per-node base address: the scratchpad address is delivered as a CRTA.
+                // It must sit at the same L1 offset everywhere that it exists.
+                // Take the max region-end over EVERY allocator that intersects the kernel's cores
+                // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
                 // an overlapping-but-different core range. Mark each such allocator exactly once.
                 std::vector<CircularBufferAllocator*> touched;
                 for (CircularBufferAllocator& a : this->dfb_allocators_) {
@@ -1343,24 +1344,29 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
 
-                // Patch the allocated address into the kernel's CRTA buffer. This runs at program-compile
-                // time, upstream of where each dispatch path delivers runtime args to the device: the
-                // fast/mesh path snapshots the CRTA buffer into the command stream; the slow-dispatch path
-                // writes it via WriteRuntimeArgsToDevice (reordered after Configure so this patch lands
-                // first). SetProgramRunArgs reserved the slot (with this handle's then-zero
-                // allocated_address); fill it now. The common_runtime_args_data pointer is the
-                // forward-compatible write path: pre-assembly it aliases the host vector, post-assembly
-                // (a re-allocation cycle) it points into the live command stream.
+                // Patch the allocated address into the kernel's CRTA buffer. This runs at Program-compile
+                // time, upstream of where dispatch delivers runtime args to the device:
+                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
                 //
-                // The guard is defensive: in every supported flow SetProgramRunArgs runs before compile
-                // and always installs a CRTA buffer for a scratchpad-bearing kernel (its second pass sizes
-                // the scratchpad section even when the kernel has no user args), so the slot exists. If
-                // allocate_scratchpads were ever reached without a prior SetProgramRunArgs, the address
-                // would be computed but not delivered — a reorder hazard, not a path that exists today.
-                if (!kernel->common_runtime_args().empty()) {
-                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
-                }
+                // An implicit CRTA slot to hold the scratchpad address is reserved at Program creation.
+                // (The actual CRTA buffer itself is allocated when SetProgramRunArgs runs.)
+                // Now, we populate the scratchpad address.
+                //
+                TT_FATAL(
+                    !kernel->common_runtime_args().empty(),
+                    "CRTA buffer is not allocated; cannot populate scratchpad addresses for kernel {}."
+                    "Ensure that SetProgramRunArgs is called before attempting to enqueue a Program.",
+                    kernel->name());
+                TT_FATAL(
+                    handle.allocated_address != 0,
+                    "Internal error: scratchpad '{}' on kernel '{}' "
+                    "has a 0 allocated address (allocation failed or was skipped).",
+                    handle.accessor_name,
+                    kernel->name());
+
+                RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                crta.data()[handle.addr_crta_word] = handle.allocated_address;
             }
         }
     }

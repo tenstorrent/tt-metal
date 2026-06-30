@@ -210,10 +210,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!scratch_entries.empty()) {
-            // ScratchpadAccessor{ADDR_CRTA_WORD, SIZE_BYTES}: pairs the word index of the scratchpad's
-            // (framework-allocated) base-address CRTA with its compile-time per-node size. The kernel-side
-            // Scratchpad(accessor) constructor unpacks both. The accessor's members are opaque, so the
-            // framework can extend it later without touching kernel source.
+            // ScratchpadAccessor scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+            // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
+            // and the scratchpad's compile-time per-node size.
+            // The kernel-side Scratchpad(accessor) constructor unpacks both.
+            // The accessor's members are opaque, so the framework can extend it later without touching
+            // kernel source.
             content << "namespace scratch {\n";
             for (const auto& entry : scratch_entries) {
                 content << "constexpr ScratchpadAccessor " << entry.name << "{" << entry.addr_crta_word << "u, "

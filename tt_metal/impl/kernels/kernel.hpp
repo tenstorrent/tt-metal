@@ -120,10 +120,17 @@ struct TensorBindingHandle {
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
-// A scratchpad is a private, blank, node-local L1 region bound to exactly one kernel. Unlike a
-// TensorBindingHandle (whose address is filled per-enqueue from a user TensorArgument), a scratchpad's
-// L1 is allocated by the framework at program-compile time; allocated_address is filled in then (0
-// until allocated) and written into the kernel's CRTA buffer at addr_crta_word.
+// A scratchpad is a private, uninitialized, node-local L1 region bound to a kernel.
+//  - The base address is allocated at Program-compile time, and is passed to the kernel as an
+//    implicit CRTA.
+//  - Since the address is persistent across enqueues, we store it on the Kernel object rather
+//    than rely on the statefulness of the CRTA buffer. (The invariant of SetProgramRunArgs is that
+//    the CRTA and RTA buffers are completely overwritten when it's called.)
+//  - It is possible for DFB size overrides to be applied between enqueues. If this happens, the
+//    allocated scratchpad addresses will update between enqueues as well.
+//  - The allocated address is 0 until allocate_scratchpads runs.
+//  - Unlike ScratchpadBindingHandle, TensorBindingHandle does NOT store the address, as for bound
+//    tensors the base address is strictly a user enqueue-time argument.
 struct ScratchpadBindingHandle {
     std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
@@ -200,9 +207,8 @@ public:
     void process_scratchpad_binding_handles(
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>)
         const override;
-    // Scratchpad binding handles are set post-construction (their size is part of compute_hash, so this
-    // must run before the kernel is compiled). Non-const accessor lets allocate_scratchpads fill
-    // each handle's allocated_address after L1 allocation.
+    // Scratchpad binding handles are set post-construction.
+    // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {
         return scratchpad_binding_handles_;
     }
@@ -302,8 +308,9 @@ protected:
     const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
-    // NON-const (unlike tensor_binding_handles_): set post-construction via set_scratchpad_binding_handles,
+    // Non-const (unlike tensor_binding_handles_): set post-construction via set_scratchpad_binding_handles,
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
+    // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
