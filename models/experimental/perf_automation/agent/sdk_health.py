@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .pkgtools import installer_hint as _hint
+
 # A trivial, no-tools agent call. Prints SDK_SMOKE_OK on a clean result, or SMOKE_ERR with the
 # REAL error the endpoint reported (status + result text) — so the caller can tell a model/auth
 # problem from a genuine SDK/CLI version issue instead of acting on the SDK's masked
@@ -132,13 +134,9 @@ def smoke_test(timeout: int = 150) -> tuple[bool, str]:
 
 
 def _pip_upgrade() -> None:
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-U", "claude-agent-sdk"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
+    from .pkgtools import run_pip
+
+    run_pip(["install", "-U", "claude-agent-sdk"], check=True)
 
 
 def ensure_compatible(autosync: bool | None = None, log=print) -> dict:
@@ -179,10 +177,10 @@ def ensure_compatible(autosync: bool | None = None, log=print) -> dict:
             "healed": False,
             "version": before,
             "detail": detail,
-            "reason": "AGENT_SDK_AUTOSYNC disabled — run: pip install -U claude-agent-sdk",
+            "reason": f"AGENT_SDK_AUTOSYNC disabled — run: {_hint()} -U claude-agent-sdk",
         }
 
-    log("      auto-syncing: pip install -U claude-agent-sdk ...")
+    log(f"      auto-syncing: {_hint()} -U claude-agent-sdk ...")
     try:
         _pip_upgrade()
     except Exception as exc:  # noqa: BLE001
