@@ -307,7 +307,7 @@ MXFP8_SRCS_SLICE_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_SCALE_BYTES) + l1_align(
     MXFP8_SLICE_ELEMENT_BYTES
 )
 
-# 32-bit SrcS mode (dest_acc): 4x16 = 64 elements per slice
+# 32-bit SrcS mode (is_32b_dest_en): 4x16 = 64 elements per slice
 #   scales:   64 / 32 = 2 bytes   -> padded to 16 B
 #   elements: 64 x 1  = 64 bytes  -> already 16 B-aligned
 #   total: 16 + 64 = 80 bytes per slice
@@ -734,7 +734,7 @@ def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatC
     return format_configs
 
 
-def is_dest_acc_needed(format: InputOutputFormat) -> bool:
+def is_32b_dest_needed(format: InputOutputFormat) -> bool:
     """
     This function is called when a format configuration for input and output is called without dest accumulation.
     If the input-output combination is an outlier that is not supported when dest accumulation is on

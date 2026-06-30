@@ -265,15 +265,15 @@ class ComputePipeline:
         if config.skip_sync:
             return ""
         dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_math_dest_section_done_<{dest_sync}, {is_32b_dest_en}>();\n"
 
     def _math_pack_sync_init(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_pack_sync_init_<{dest_sync}, {dest_acc}>();\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_math_pack_sync_init_<{dest_sync}, {is_32b_dest_en}>();\n"
 
     def _math_constants(
         self, operation: "FusedOperation", config: "GlobalConfig"
@@ -342,15 +342,15 @@ class ComputePipeline:
         if config.skip_sync:
             return ""
         dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_pack_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_pack_dest_section_done_<{dest_sync}, {is_32b_dest_en}>();\n"
 
     def _pack_dest_init(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_pack_dest_init_<{dest_sync}, {is_32b_dest_en}>();\n"
 
     def _pack_constants(
         self, operation: "FusedOperation", config: "GlobalConfig"

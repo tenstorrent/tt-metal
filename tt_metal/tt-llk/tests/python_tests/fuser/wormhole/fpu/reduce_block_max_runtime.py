@@ -30,8 +30,8 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim});\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_math_reduce_block_max_row_init_runtime_<{is_32b_dest_en}>({ct_dim});\n"
 
     def calculate(
         self,
@@ -40,8 +40,8 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_block});\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_math_reduce_block_max_row_runtime_<{is_32b_dest_en}>({block.tile_id_block});\n"
 
     def uninit(
         self,
@@ -50,5 +50,5 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_uninit_runtime_<{dest_acc}>();\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_math_reduce_block_max_row_uninit_runtime_<{is_32b_dest_en}>();\n"

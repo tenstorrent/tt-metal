@@ -11,8 +11,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -71,7 +71,7 @@ all_params = [
     {
         "testname": "eltwise_binary_sfpu_unary",
         "formats": fmt,
-        "dest_acc": dest_acc,
+        "is_32b_dest_en": is_32b_dest_en,
         "approx_mode": approx_mode,
         "mathop": binary_op,
         "unary_op": unary_op,
@@ -79,7 +79,7 @@ all_params = [
         "math_fidelity": math_fidelity,
     }
     for fmt in test_formats
-    for dest_acc in [DestAccumulation.Yes, DestAccumulation.No]
+    for is_32b_dest_en in [Fp32DestMode.Yes, Fp32DestMode.No]
     for approx_mode in [ApproximationMode.Yes, ApproximationMode.No]
     for binary_op in binary_ops
     for unary_op in unary_ops
@@ -94,7 +94,7 @@ all_params = [
 
 # Generate parameter IDs manually
 param_ids = [
-    f"bin={p['mathop'].name}|un={p['unary_op'].name}|fmt={p['formats'].input_format.name}->{p['formats'].output_format.name}|acc={p['dest_acc'].name}|approx={p['approx_mode'].name}|sync={p['dst_sync'].name}|fid={p['math_fidelity'].name}"
+    f"bin={p['mathop'].name}|un={p['unary_op'].name}|fmt={p['formats'].input_format.name}->{p['formats'].output_format.name}|acc={p['is_32b_dest_en'].name}|approx={p['approx_mode'].name}|sync={p['dst_sync'].name}|fid={p['math_fidelity'].name}"
     for p in all_params
 ]
 
@@ -112,7 +112,7 @@ def test_sweep_test(config):
     formats = config["formats"]
     binary_op = config["mathop"]
     unary_op = config["unary_op"]
-    dest_acc = config["dest_acc"]
+    is_32b_dest_en = config["is_32b_dest_en"]
     approx_mode = config["approx_mode"]
     dst_sync = config["dst_sync"]
     math_fidelity = config["math_fidelity"]
@@ -130,7 +130,7 @@ def test_sweep_test(config):
     # Temporary: skip precision-sensitive fused case we have not modelled yet
     if binary_op == MathOperation.Elwmul and unary_op == MathOperation.Square:
         pytest.skip(
-            "Known precision edge-case for Elwadd+Square with dest_acc; skipped for now"
+            "Known precision edge-case for Elwadd+Square with is_32b_dest_en; skipped for now"
         )
 
     # ------------------------------------------------------------------
@@ -217,7 +217,7 @@ def test_sweep_test(config):
         unary_op,
         golden_tensor,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.output_format,
     )
 

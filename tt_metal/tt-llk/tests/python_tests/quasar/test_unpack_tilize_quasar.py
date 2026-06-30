@@ -13,8 +13,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     UnpackerEngine,
     format_dict,
@@ -47,17 +47,17 @@ def generate_unpack_tilize_combinations(
     Generate unpack_tilize combinations.
 
     Rules:
-    1. 32-bit formats require DestAccumulation.Yes
+    1. 32-bit formats require Fp32DestMode.Yes
 
     Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, unpacker_sel, input_dimensions) tuples
+    Returns: List of (format, is_32b_dest_en, unpacker_sel, input_dimensions) tuples
     """
     dimensions_cache = {
-        (dest_acc, dest_sync): tuple(
-            generate_unary_input_dimensions(dest_acc, dest_sync)
+        (is_32b_dest_en, dest_sync): tuple(
+            generate_unary_input_dimensions(is_32b_dest_en, dest_sync)
         )
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for is_32b_dest_en in (Fp32DestMode.No, Fp32DestMode.Yes)
         for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
@@ -66,13 +66,13 @@ def generate_unpack_tilize_combinations(
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
+        fp32_dest_modes = (
+            (Fp32DestMode.Yes,)
             if in_fmt.is_32_bit()
             else (
-                (DestAccumulation.No,)
+                (Fp32DestMode.No,)
                 if in_fmt in [DataFormat.Float16, DataFormat.Int16]
-                else (DestAccumulation.No, DestAccumulation.Yes)
+                else (Fp32DestMode.No, Fp32DestMode.Yes)
             )
         )
         # 32-bit tilize uses unpack_to_dest (UNP_DEST)
@@ -82,12 +82,12 @@ def generate_unpack_tilize_combinations(
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
 
-        for dest_acc in dest_acc_modes:
+        for is_32b_dest_en in fp32_dest_modes:
             for dest_sync in (DestSync.Half, DestSync.Full):
                 for unpacker_sel in unpacker_engines:
-                    for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                    for dimensions in dimensions_cache[(is_32b_dest_en, dest_sync)]:
                         combinations.append(
-                            (fmt, dest_acc, dest_sync, unpacker_sel, dimensions)
+                            (fmt, is_32b_dest_en, dest_sync, unpacker_sel, dimensions)
                         )
 
     return combinations
@@ -113,13 +113,13 @@ ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
+    formats_32b_dest_sync_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_sync_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
+    formats_32b_dest_sync_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
 ):
-    (formats, dest_acc, dest_sync_mode, unpacker_sel, input_dimensions) = (
-        formats_dest_acc_sync_unpack_sel_dimensions[0]
+    (formats, is_32b_dest_en, dest_sync_mode, unpacker_sel, input_dimensions) = (
+        formats_32b_dest_sync_unpack_sel_dimensions[0]
     )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -167,9 +167,9 @@ def test_unpack_tilize_quasar(
             num_faces=4,
         ),
         unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
         disable_format_inference=(formats.input_format.is_mx_format()),

@@ -11,7 +11,7 @@ from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.llk_params import DestSync, Fp32DestMode, format_dict
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -65,19 +65,19 @@ def test_unpack_tilize_float(
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
     num_faces=[2, 4],
 )
 def test_unpack_tilize_float32_lossless(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     num_faces,
 ):
     unpack_tilize(
         formats,
         unpack_to_dest=True,
         validate_lossless=True,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         num_faces=num_faces,
     )
 
@@ -104,7 +104,7 @@ def test_unpack_tilize_int8(
     unpack_tilize(
         formats,
         unpack_to_dest=False,
-        dest_acc=DestAccumulation.Yes,
+        is_32b_dest_en=Fp32DestMode.Yes,
         num_faces=num_faces,
     )
 
@@ -113,7 +113,7 @@ def unpack_tilize(
     formats,
     unpack_to_dest=False,
     validate_lossless=False,
-    dest_acc=None,
+    is_32b_dest_en=None,
     num_faces=4,
 ):
     input_dimensions = [64, 64]
@@ -130,7 +130,7 @@ def unpack_tilize(
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -158,7 +158,7 @@ def unpack_tilize(
             tile_count_res=tile_cnt_A,
         ),
         unpack_to_dest=unpack_to_dest,
-        **({"dest_acc": dest_acc} if dest_acc is not None else {}),
+        **({"is_32b_dest_en": is_32b_dest_en} if is_32b_dest_en is not None else {}),
     )
 
     res_from_L1 = configuration.run().result

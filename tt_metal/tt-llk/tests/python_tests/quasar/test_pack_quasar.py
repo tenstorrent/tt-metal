@@ -14,8 +14,8 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     PackerReluType,
     format_dict,
@@ -59,7 +59,7 @@ def generate_qsr_pack_combinations(
         formats_list: List of input/output format pairs
 
     Returns:
-        List of (format, dest_acc, input_dimensions, relu_type) tuples
+        List of (format, is_32b_dest_en, input_dimensions, relu_type) tuples
     """
 
     def is_supported_format_conversion(in_fmt, out_fmt):
@@ -72,27 +72,27 @@ def generate_qsr_pack_combinations(
             return False
         return True
 
-    def get_dest_acc_modes(in_fmt):
+    def get_fp32_dest_modes(in_fmt):
         """Determine valid dest register modes depending on the input format."""
         # Having Int16 in src registers and Int32 in the dest register is not supported
         if in_fmt == DataFormat.Int16:
-            return (DestAccumulation.No,)
+            return (Fp32DestMode.No,)
         if in_fmt.is_32_bit():
-            return (DestAccumulation.Yes,)
-        return (DestAccumulation.No, DestAccumulation.Yes)
+            return (Fp32DestMode.Yes,)
+        return (Fp32DestMode.No, Fp32DestMode.Yes)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, is_32b_dest_en):
         """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
+        # Upcasting to Float32/Int32 requires is_32b_dest_en enabled
         if (
             out_fmt.is_32_bit()
             and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
+            and is_32b_dest_en == Fp32DestMode.No
         ):
             return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
+        # Int8<->UInt8 conversion requires is_32b_dest_en enabled
         if (
-            dest_acc == DestAccumulation.No
+            is_32b_dest_en == Fp32DestMode.No
             and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
             and in_fmt != out_fmt
         ):
@@ -122,8 +122,10 @@ def generate_qsr_pack_combinations(
             if in_fmt.is_integer()
             else all_relu_types
         )
-        for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+        for is_32b_dest_en in get_fp32_dest_modes(in_fmt):
+            if is_supported_dest_mode_dependent_conversion(
+                in_fmt, out_fmt, is_32b_dest_en
+            ):
                 for dest_sync in dest_sync_modes:
                     for tile_dims in SUPPORTED_TILE_SIZES:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
@@ -131,19 +133,19 @@ def generate_qsr_pack_combinations(
                         # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
                         if (
                             in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
+                            and is_32b_dest_en == Fp32DestMode.Yes
                             and tile_dims not in MX_SUPPORTED_TILE_SIZES
                         ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
                         for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            is_32b_dest_en, dest_sync=dest_sync, tile_shape=tile_shape
                         ):
                             for relu_type in relu_types:
                                 combinations.append(
                                     (
                                         fmt,
-                                        dest_acc,
+                                        is_32b_dest_en,
                                         dest_sync,
                                         dimensions,
                                         relu_type,
@@ -173,17 +175,17 @@ PACK_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dims_relu=generate_qsr_pack_combinations(PACK_FORMATS),
+    formats_32b_dest_sync_dims_relu=generate_qsr_pack_combinations(PACK_FORMATS),
 )
-def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT):
+def test_pack_quasar(formats_32b_dest_sync_dims_relu, boot_mode=BootMode.DEFAULT):
     (
         formats,
-        dest_acc,
+        is_32b_dest_en,
         dest_sync_mode,
         input_dimensions,
         relu_type,
         tile_dimensions,
-    ) = formats_dest_acc_sync_dims_relu[0]
+    ) = formats_32b_dest_sync_dims_relu[0]
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -199,12 +201,12 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
     data_formats = infer_data_formats(
         input_format=formats.input_format,
         output_format=formats.output_format,
-        is_fp32_dest_acc_en=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpacking_to_dest=unpack_to_dest,
     )
 
@@ -289,7 +291,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
         disable_format_inference=(formats.input_format.is_mx_format()),
     )

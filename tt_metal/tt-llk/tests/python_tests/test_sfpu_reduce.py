@@ -14,8 +14,8 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathOperation,
     ReducePool,
     format_dict,
@@ -258,13 +258,13 @@ def get_reduce_sum_atol(
     return max(0.05, atol)
 
 
-def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
+def is_valid_reduce_dimension(mathop, is_32b_dest_en, formats, dim):
     """Check if a dimension is valid for the given reduce operation."""
 
     try:
         num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
             DestSync.Half,
-            dest_acc,
+            is_32b_dest_en,
             formats,
             dim,
             TILE_DIMENSIONS,
@@ -281,19 +281,19 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
 @parametrize(
     formats=get_reduce_formats,
     mathop=get_supported_reduce_axioms,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     input_bounds=get_format_input_bounds,
     reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
-    dimension_combinations=lambda mathop, dest_acc, formats: [
+    dimension_combinations=lambda mathop, is_32b_dest_en, formats: [
         dim
         for dim in dimension_combinations
-        if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
+        if is_valid_reduce_dimension(mathop, is_32b_dest_en, formats, dim)
     ],
     reduced_extent=get_reduce_extents,
 )
 def test_sfpu_reduce(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     reduce_pool,
     input_bounds,
@@ -304,9 +304,9 @@ def test_sfpu_reduce(
     if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+    if formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No:
         pytest.skip(
-            reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
+            reason="32-bit formats require Fp32DestMode.Yes (HW cannot unpack into SrcA/SrcB)"
         )
 
     if (
@@ -324,11 +324,11 @@ def test_sfpu_reduce(
     if (
         formats.input_format == DataFormat.UInt16
         and formats.output_format.is_32_bit()
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     ):
         pytest.skip(
             reason="UInt16 Sum/Average widens the output to UInt32, which needs a 32-bit (fp32) dest; "
-            "DestAccumulation.No has no room to store/pack the widened result"
+            "Fp32DestMode.No has no room to store/pack the widened result"
         )
 
     min_value, max_value = input_bounds
@@ -341,7 +341,7 @@ def test_sfpu_reduce(
     # Calculate blocking parameters
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         dimension_combinations,
         TILE_DIMENSIONS,
@@ -400,7 +400,7 @@ def test_sfpu_reduce(
         mathop,
         golden_input,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.input_format,
         dst_dim,
         reduce_pool=reduce_pool,
@@ -430,7 +430,7 @@ def test_sfpu_reduce(
             tile_count_res=tile_cnt,
             twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=True,
         disable_format_inference=True,
         compile_time_formats=True,

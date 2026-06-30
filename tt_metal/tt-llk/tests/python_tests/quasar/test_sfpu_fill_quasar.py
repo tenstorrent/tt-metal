@@ -13,7 +13,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
@@ -52,7 +52,7 @@ def generate_sfpu_fill_combinations(
 
     Args: Input-output format pairs for float and int paths
 
-    Returns: List of (format, dest_acc, implied_math_format, input_dimensions) tuples
+    Returns: List of (format, is_32b_dest_en, implied_math_format, input_dimensions) tuples
     """
     combinations = []
 
@@ -60,31 +60,33 @@ def generate_sfpu_fill_combinations(
         in_fmt = fmt.input_format
 
         # SFPU unpack_to_dest requires bit-width match: 32-bit formats pair with
-        # dest_acc=Yes, non-32-bit formats pair with dest_acc=No.
-        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
+        # is_32b_dest_en=Yes, non-32-bit formats pair with is_32b_dest_en=No.
+        is_32b_dest_en = Fp32DestMode.Yes if in_fmt.is_32_bit() else Fp32DestMode.No
 
-        # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
+        # Quasar packer does not support non-Float32 to Float32 conversion when is_32b_dest_en=No
         if (
             in_fmt != DataFormat.Float32
             and fmt.output_format == DataFormat.Float32
-            and dest_acc == DestAccumulation.No
+            and is_32b_dest_en == Fp32DestMode.No
         ):
             continue
 
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
             for input_dimensions in [[32, 32], [64, 64]]:
                 combinations.append(
-                    (fmt, dest_acc, implied_math_format, input_dimensions)
+                    (fmt, is_32b_dest_en, implied_math_format, input_dimensions)
                 )
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
-    # Int32 is 32-bit → dest_acc Yes; Int16 (16-bit) and Int8/UInt8 (8-bit) → dest_acc No.
+    # Int32 is 32-bit → is_32b_dest_en Yes; Int16 (16-bit) and Int8/UInt8 (8-bit) → is_32b_dest_en No.
     # Only ImpliedMathFormat.No is exercised on the int path.
     for fmt in int_formats:
         in_fmt = fmt.input_format
-        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
+        is_32b_dest_en = Fp32DestMode.Yes if in_fmt.is_32_bit() else Fp32DestMode.No
         for input_dimensions in [[32, 32], [64, 64]]:
-            combinations.append((fmt, dest_acc, ImpliedMathFormat.No, input_dimensions))
+            combinations.append(
+                (fmt, is_32b_dest_en, ImpliedMathFormat.No, input_dimensions)
+            )
 
     return combinations
 
@@ -120,11 +122,11 @@ SFPU_FILL_INT_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_input_dims=generate_sfpu_fill_combinations(
+    formats_32b_dest_implied_math_input_dims=generate_sfpu_fill_combinations(
         SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
     ),
 )
-def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
+def test_sfpu_fill_quasar(formats_32b_dest_implied_math_input_dims):
     """
     Test fill operation on Quasar architecture.
 
@@ -143,8 +145,8 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
     Since fill ignores input values, the input stimuli are arbitrary —
     typed stimuli are still generated so the unpack path sees a valid buffer.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
+    (formats, is_32b_dest_en, implied_math_format, input_dimensions) = (
+        formats_32b_dest_implied_math_input_dims[0]
     )
 
     is_int_fill = formats.input_format.is_integer()
@@ -179,7 +181,7 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
             MathOperation.Fill,
             src_A,
             formats.output_format,
-            dest_acc,
+            is_32b_dest_en,
             formats.input_format,
             input_dimensions,
             fill_const_value=FILL_CONST_VALUE,
@@ -215,7 +217,7 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
             num_faces=num_faces,
         ),
         unpack_to_dest=True,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

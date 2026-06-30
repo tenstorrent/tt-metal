@@ -11,7 +11,7 @@ import pytest
 import yaml
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation
+from helpers.llk_params import Fp32DestMode
 from helpers.logger import logger
 from helpers.tile_constants import validate_tile_dimensions
 from pydantic import (
@@ -122,7 +122,7 @@ class OperandDefinition(BaseModel):
 class FuserConfigSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    dest_acc: DestAccumulation = DestAccumulation.No
+    is_32b_dest_en: Fp32DestMode = Fp32DestMode.No
     loop_factor: Annotated[int, Field(ge=1)] = 16
     operands: List[OperandDefinition] = Field(..., min_length=1)
     operations: List[OperationSchema] = Field(..., min_length=1)
@@ -155,7 +155,7 @@ class FuserConfigSchema(BaseModel):
                     input_fmt = formats[src_a_name]
                     output_fmt = formats[pack_entry.output]
                     if is_format_combination_outlier(
-                        input_fmt, output_fmt, self.dest_acc
+                        input_fmt, output_fmt, self.is_32b_dest_en
                     ):
                         raise ValueError(
                             f"Dest Accumulation must be enabled for {input_fmt.name} input and {output_fmt.name} output"
@@ -186,14 +186,14 @@ class FuserConfigSchema(BaseModel):
             )
 
         pipeline = [
-            op.to_fused_operation(operands, dest_acc=self.dest_acc.value)
+            op.to_fused_operation(operands, is_32b_dest_en=self.is_32b_dest_en.value)
             for op in self.operations
         ]
 
         return FuserConfig(
             pipeline=pipeline,
             global_config=GlobalConfig(
-                dest_acc=self.dest_acc,
+                is_32b_dest_en=self.is_32b_dest_en,
                 test_name=test_name,
                 loop_factor=self.loop_factor,
             ),

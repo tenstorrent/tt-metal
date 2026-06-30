@@ -266,14 +266,14 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
     return torch.tensor(scaled_blocks.flatten(), dtype=torch.bfloat16)
 
 
-def _unpack_mxfp8_srcs(packed_bytes, fp8_dtype, dest_acc: bool = False):
+def _unpack_mxfp8_srcs(packed_bytes, fp8_dtype, is_32b_dest_en: bool = False):
     """Unpack sequential SrcS slices for MX formats.
 
-    Slice geometry depends on *dest_acc*:
-      - 16-bit (dest_acc=False): 8×16 = 128 elements/slice, 144 bytes
-      - 32-bit (dest_acc=True):  4×16 =  64 elements/slice,  80 bytes
+    Slice geometry depends on *is_32b_dest_en*:
+      - 16-bit (is_32b_dest_en=False): 8×16 = 128 elements/slice, 144 bytes
+      - 32-bit (is_32b_dest_en=True):  4×16 =  64 elements/slice,  80 bytes
     """
-    if dest_acc:
+    if is_32b_dest_en:
         slice_len = MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
         slice_row_dim = SRCS_SLICE_32B_ROW_DIM
     else:
@@ -305,7 +305,7 @@ def unpack_mxfp8r(
     num_faces=4,
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Unpack MXFP8R format (E5M2 variant) to bfloat16 tensor.
@@ -316,14 +316,14 @@ def unpack_mxfp8r(
         face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
         use_srcs: If True, unpack sequential SrcS slices instead of a
             single flat tile.  Supports sub-tile sizes (any multiple of one slice).
-        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+        is_32b_dest_en: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
 
     Returns:
         torch.Tensor of bfloat16 values
     """
     if use_srcs:
-        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e5m2, dest_acc)
+        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e5m2, is_32b_dest_en)
     return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e5m2, num_faces, face_r_dim)
 
 
@@ -332,7 +332,7 @@ def unpack_mxfp8p(
     num_faces=4,
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Unpack MXFP8P format (E4M3 variant) to bfloat16 tensor.
@@ -343,14 +343,14 @@ def unpack_mxfp8p(
         face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
         use_srcs: If True, unpack sequential SrcS slices instead of a
             single flat tile.  Supports sub-tile sizes (any multiple of one slice).
-        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+        is_32b_dest_en: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
 
     Returns:
         torch.Tensor of bfloat16 values
     """
     if use_srcs:
-        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e4m3fn, dest_acc)
+        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e4m3fn, is_32b_dest_en)
     return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces, face_r_dim)
 
 
@@ -359,7 +359,7 @@ def unpack_mxfp4(
     num_faces=4,
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
@@ -381,7 +381,7 @@ def unpack_mxfp4(
         num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
         face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
         use_srcs: If True, unpack sequential SrcS slices (not yet implemented for MxFp4).
-        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry (not yet implemented for MxFp4).
+        is_32b_dest_en: If True (with use_srcs), use 32-bit SrcS slice geometry (not yet implemented for MxFp4).
 
     Returns:
         torch.Tensor of bfloat16 values
@@ -481,7 +481,7 @@ def unpack_mxint8(
     num_faces=4,
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Unpack MxInt8 format (signed S1.6 with E8M0 block scale) to bfloat16 tensor.
@@ -516,7 +516,7 @@ def unpack_mxint4(
     num_faces=4,
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Unpack MxInt4 format (signed S1.2 with E8M0 block scale) to bfloat16 tensor.
@@ -565,7 +565,7 @@ def unpack_mxint2(
     num_faces=4,
     face_r_dim=MAX_FACE_R_DIM,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Unpack MxInt2 format (signed S1.0 with E8M0 block scale) to bfloat16 tensor.
@@ -634,7 +634,7 @@ def unpack_res_tiles(
     face_r_dim: int = MAX_FACE_R_DIM,
     tile_stride_bytes: int = None,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
     twos_complement: bool = False,
 ):
     output_dtype = format_dict[output_format]
@@ -705,7 +705,7 @@ def unpack_res_tiles(
                 num_faces=num_faces,
                 face_r_dim=face_r_dim,
                 use_srcs=use_srcs,
-                dest_acc=dest_acc,
+                is_32b_dest_en=is_32b_dest_en,
             )
         elif twos_complement and unpack_func in (
             unpack_int32,

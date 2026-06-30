@@ -26,7 +26,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation
+from helpers.llk_params import Fp32DestMode
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -45,7 +45,7 @@ def _skip_if_unsupported():
 
 
 def _run_hash_kernel(
-    formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+    formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, is_32b_dest_en
 ):
     """Run the SFPU hash kernel and return the 23-bit hash."""
     configuration = TestConfig(
@@ -63,7 +63,7 @@ def _run_hash_kernel(
             tile_count_B=tile_cnt_B,
             tile_count_res=1,  # single hash tile
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
     res_from_L1 = configuration.run().result
@@ -81,9 +81,9 @@ def _run_hash_kernel(
     formats=input_output_formats([DataFormat.Int32]),
     num_tiles=[1],
     seed=[42],
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
 )
-def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
+def test_hash_cb_sfpu(formats, num_tiles, seed, is_32b_dest_en):
     """Verify the SFPU hash kernel runs and produces a valid 23-bit result."""
     _skip_if_unsupported()
 
@@ -98,7 +98,7 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
     )
 
     hw_hash = _run_hash_kernel(
-        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, is_32b_dest_en
     )
 
     # Sanity: hash should be non-zero and fit in 23 bits (each lane accumulator
@@ -117,9 +117,9 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
     formats=input_output_formats([DataFormat.Int32]),
     num_tiles=[1],
     seed=[7],
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
 )
-def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
+def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, is_32b_dest_en):
     """Two kernel runs on the same input must produce bit-identical hashes."""
     _skip_if_unsupported()
 
@@ -133,10 +133,10 @@ def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
     )
 
     h1 = _run_hash_kernel(
-        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, is_32b_dest_en
     )
     h2 = _run_hash_kernel(
-        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, is_32b_dest_en
     )
     assert h1 == h2, f"SFPU hash non-deterministic across runs: {hex(h1)} vs {hex(h2)}"
 
@@ -145,9 +145,9 @@ def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
     formats=input_output_formats([DataFormat.Int32]),
     num_tiles=[1],
     seed=[42],
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
 )
-def test_hash_cb_sfpu_discriminates(formats, num_tiles, seed, dest_acc):
+def test_hash_cb_sfpu_discriminates(formats, num_tiles, seed, is_32b_dest_en):
     """Distinct inputs must produce distinct fingerprints."""
     _skip_if_unsupported()
 
@@ -168,6 +168,10 @@ def test_hash_cb_sfpu_discriminates(formats, num_tiles, seed, dest_acc):
         input_dimensions_B=input_dimensions,
     )
 
-    ha = _run_hash_kernel(formats, input_dimensions, a_A, a_B, a_tc_A, a_tc_B, dest_acc)
-    hb = _run_hash_kernel(formats, input_dimensions, b_A, b_B, b_tc_A, b_tc_B, dest_acc)
+    ha = _run_hash_kernel(
+        formats, input_dimensions, a_A, a_B, a_tc_A, a_tc_B, is_32b_dest_en
+    )
+    hb = _run_hash_kernel(
+        formats, input_dimensions, b_A, b_B, b_tc_A, b_tc_B, is_32b_dest_en
+    )
     assert ha != hb, f"SFPU hash collided on distinct inputs: {hex(ha)}"

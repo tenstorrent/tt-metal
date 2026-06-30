@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
-from .llk_params import DestAccumulation
+from .llk_params import Fp32DestMode
 
 VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Float16_b,
@@ -84,7 +84,7 @@ def _check_register_format(data_format: DataFormat, valid_formats: list, role: s
 def is_format_combination_outlier(
     input_format: DataFormat,
     output_format: DataFormat,
-    is_fp32_dest_acc_en: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
 ) -> bool:
     """
     Checks if the given input/output format combination is an outlier case
@@ -100,7 +100,7 @@ def is_format_combination_outlier(
     Args:
         input_format: The input data format in L1
         output_format: The output data format in L1
-        is_fp32_dest_acc_en: Flag indicating if 32-bit destination accumulation is enabled (dest_acc)
+        is_32b_dest_en: Flag indicating if 32-bit destination accumulation is enabled (is_32b_dest_en)
 
     Returns:
         True if the format combination is an unsupported hardware outlier; False otherwise
@@ -109,7 +109,7 @@ def is_format_combination_outlier(
         input_format.is_exponent_B()
         and not input_format.is_float32()
         and output_format == DataFormat.Float16
-        and is_fp32_dest_acc_en == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     )
 
 
@@ -122,7 +122,7 @@ _SRCAB_ONLY_FORMATS = {
 def infer_unpack_out(
     input_format: DataFormat,
     output_format: DataFormat,
-    is_fp32_dest_acc_en: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     unpacking_to_dest: bool = False,
     unpacking_to_srcs: bool = False,
     register_format_hint: Optional[DataFormat] = None,
@@ -138,7 +138,7 @@ def infer_unpack_out(
     Args:
         input_format: The data format currently stored in L1 cache
         output_format: The final desired output format
-        is_fp32_dest_acc_en: Whether FP32 accumulation is enabled
+        is_32b_dest_en: Whether FP32 accumulation is enabled
         unpacking_to_dest: Indicates whether unpacking targets the destination register
         register_format_hint: Optional opt-in for a SrcA/SrcB-only register format
             (MxFp4_2x_A or MxFp4_2x_B). When set, returned as the unpack-out format
@@ -198,13 +198,13 @@ def infer_unpack_out(
         # When input format in L1 is Float32 + unpacking to src registers (instead of directly to dest register)
         # Source registers can store 19-bit values, so we truncate Float32 to Tf32 if we know dest will be 32-bit format
         # which preserves the 8-bit exponent and as much mantissa precision as fits. If our dst register is 16-bit we directly truncate to 16-bit format
-        if is_fp32_dest_acc_en == DestAccumulation.Yes:
+        if is_32b_dest_en == Fp32DestMode.Yes:
             return DataFormat.Tf32
         elif output_format.is_exponent_B():  # includes Float32
             return DataFormat.Float16_b  # If output Float32 or Float16_b
         return DataFormat.Float16  # Tilize to Float16
 
-    if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+    if unpacking_to_srcs and is_32b_dest_en == Fp32DestMode.Yes:
         return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
@@ -215,7 +215,7 @@ def infer_pack_in(
     input_format: DataFormat,  # Parameter not used but kept for future use.
     output_format: DataFormat,
     unpack_out: DataFormat,
-    is_fp32_dest_acc_en: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
     unpacking_to_srcs: bool = False,
@@ -227,7 +227,7 @@ def infer_pack_in(
         input_format: Input data format in L1 (unpacker input)
         output_format: Final output data format after packing
         unpack_out: The unpacker output format
-        is_fp32_dest_acc_en: Flag indicating if FP32 accumulation is enabled
+        is_32b_dest_en: Flag indicating if FP32 accumulation is enabled
         unpacking_to_dest: Whether unpacking targets the destination register
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
 
@@ -244,7 +244,7 @@ def infer_pack_in(
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
 
     if is_quasar:
-        if output_format.is_32_bit() and is_fp32_dest_acc_en == DestAccumulation.No:
+        if output_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No:
             # When the dest register is in 32-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is valid
             # because pack_in=pack_out=Fp32, which is a supported packer conversion.
             # When dest register is in 16-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is not valid
@@ -257,7 +257,7 @@ def infer_pack_in(
         if unpack_out.is_integer():
             if (
                 unpack_out == DataFormat.Int16
-                and is_fp32_dest_acc_en == DestAccumulation.Yes
+                and is_32b_dest_en == Fp32DestMode.Yes
                 and not unpacking_to_dest
             ):
                 # Int16 cannot reach a 32-bit Dest through the FPU datacopy:
@@ -268,22 +268,18 @@ def infer_pack_in(
                 )
             # When the dest register is in 32-bit mode, the packer input format is 32-bit
             return (
-                DataFormat.Int32
-                if is_fp32_dest_acc_en == DestAccumulation.Yes
-                else unpack_out
+                DataFormat.Int32 if is_32b_dest_en == Fp32DestMode.Yes else unpack_out
             )
         else:
             # When the dest register is in 32-bit mode, the packer input format is 32-bit
             return (
-                DataFormat.Float32
-                if is_fp32_dest_acc_en == DestAccumulation.Yes
-                else unpack_out
+                DataFormat.Float32 if is_32b_dest_en == Fp32DestMode.Yes else unpack_out
             )
 
     # Wormhole + FP32 dest reg datums + Float16 output: keep Float32 for packer input for conversion to desired output format
     if (
         is_wormhole
-        and is_fp32_dest_acc_en == DestAccumulation.Yes
+        and is_32b_dest_en == Fp32DestMode.Yes
         and output_format == DataFormat.Float16
     ):
         # On wormhole architecture, datums stored as Float32 in dest register,
@@ -294,7 +290,7 @@ def infer_pack_in(
     # Float32 in L1, unpacking to src regs: choose directly if packer can convert
     if unpack_out == DataFormat.Float32 and not unpacking_to_dest:
         if (
-            is_fp32_dest_acc_en == DestAccumulation.Yes
+            is_32b_dest_en == Fp32DestMode.Yes
             or output_format.is_exponent_B()
             and not output_format.is_float32()
         ):
@@ -308,30 +304,30 @@ def infer_pack_in(
     if (
         unpack_out == DataFormat.Float16
         and output_format == DataFormat.Bfp8_b
-        and is_fp32_dest_acc_en == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     ):
         return DataFormat.Bfp8
 
     # 8-bit exponent -> Float16 without float32 datums in dest reg requires Float32 on Wormhole
-    elif is_format_combination_outlier(unpack_out, output_format, is_fp32_dest_acc_en):
+    elif is_format_combination_outlier(unpack_out, output_format, is_32b_dest_en):
         # Handling a hardware limitation: cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register.
         # For wormhole architecture, gasket cannot perform this conversion and packer takes input Float32 (from dest register) converting to Float16_A.
         # For blackhole architecture, gasket able to convert Float32 to Float16_A before packing (reduces work on packer).
         return DataFormat.Float32 if is_wormhole else output_format
 
     # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
-    # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
+    # The packer reads 16-bit (or 32-bit with is_32b_dest_en) data from dest and converts to BFP for L1.
     if output_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return (
             DataFormat.Float32
-            if is_fp32_dest_acc_en == DestAccumulation.Yes
+            if is_32b_dest_en == Fp32DestMode.Yes
             else DataFormat.Float16_b
         )
 
     # Default:
     # With float32 dest reg datums, packer gasket can do any conversion thus packer input can be the desired output format
     # Otherwise, packer input stays equal to the dest register format (unpack_out) and packer performs conversion instead of the packer gasket
-    return output_format if is_fp32_dest_acc_en == DestAccumulation.Yes else unpack_out
+    return output_format if is_32b_dest_en == Fp32DestMode.Yes else unpack_out
 
 
 def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
@@ -374,7 +370,7 @@ def infer_math_format(a: DataFormat, b: DataFormat = None) -> DataFormat:
 def infer_data_formats(
     input_format: DataFormat,
     output_format: DataFormat,
-    is_fp32_dest_acc_en: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
     input_format_B: DataFormat = None,
@@ -387,7 +383,7 @@ def infer_data_formats(
     Args:
         input_format: Input data format in L1 (unpacker input). For multiple inputs, this is the format for src_A and input_format_B is used for src_B.
         output_format: Final output data format after packing
-        is_fp32_dest_acc_en: Flag indicating if FP32 accumulation is enabled
+        is_32b_dest_en: Flag indicating if FP32 accumulation is enabled
         unpacking_to_dest: Whether unpacking targets the destination register (default: False)
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
         input_format_B: Optional input data format for src_B if different from src_A, used for testing specific scenarios with different A and B formats.
@@ -426,7 +422,7 @@ def infer_data_formats(
     unpack_out_A = infer_unpack_out(
         input_format,
         output_format,
-        is_fp32_dest_acc_en,
+        is_32b_dest_en,
         unpacking_to_dest,
         register_format_hint=register_format_hint,
     )
@@ -438,7 +434,7 @@ def infer_data_formats(
         else infer_unpack_out(
             input_format_B,
             output_format,
-            is_fp32_dest_acc_en,
+            is_32b_dest_en,
             unpacking_to_dest,
             register_format_hint=register_format_hint,
         )
@@ -449,7 +445,7 @@ def infer_data_formats(
     unpack_out_S = infer_unpack_out(
         input_format,
         output_format,
-        is_fp32_dest_acc_en,
+        is_32b_dest_en,
         unpacking_to_dest,
         unpacking_to_srcs,
     )
@@ -475,7 +471,7 @@ def infer_data_formats(
         input_format,
         output_format,
         math,
-        is_fp32_dest_acc_en,
+        is_32b_dest_en,
         unpacking_to_dest,
         chip_arch,
     )  # input to the packing stage, determines what gasket can convert from dest register
@@ -492,7 +488,7 @@ def infer_data_formats(
         input_format,
         output_format,
         downstream_unpack_out_S,
-        is_fp32_dest_acc_en,
+        is_32b_dest_en,
         unpacking_to_dest,
         chip_arch,
         unpacking_to_srcs,
@@ -558,7 +554,7 @@ def build_data_formats(
 def data_formats(
     input_format: DataFormat,
     output_format: DataFormat,
-    is_fp32_dest_acc_en: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     num_iterations: int,
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
@@ -576,7 +572,7 @@ def data_formats(
     Args:
         input_format: The input data format for all pipeline runs. For multiple inputs, this is the format for src_A and input_format_B is used for src_B.
         output_format: The output data format for the final pipeline run
-        is_fp32_dest_acc_en: Whether FP32 accumulation is enabled
+        is_32b_dest_en: Whether FP32 accumulation is enabled
         num_iterations: The number of pipeline runs (iterations), determines list length
         unpacking_to_dest: Whether unpacking targets the destination register (default: False)
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
@@ -611,11 +607,11 @@ def data_formats(
         ):
             unpack_dst = DataFormat.Float16_b
             math_format = DataFormat.Float16_b
-            # When dest_acc is enabled (FP32 destination), pack_src should be Float32 to match hardware behavior
+            # When is_32b_dest_en is enabled (FP32 destination), pack_src should be Float32 to match hardware behavior
             # This affects ReLU threshold encoding - FP32 dest requires threshold in different position
             pack_src_format = (
                 DataFormat.Float32
-                if is_fp32_dest_acc_en == DestAccumulation.Yes
+                if is_32b_dest_en == Fp32DestMode.Yes
                 else DataFormat.Float16_b
             )
         elif input_format == DataFormat.Fp8_e4m3:
@@ -631,7 +627,7 @@ def data_formats(
             # by the narrow math format) yet stores the full 32-bit result, so the packer must read the
             # whole dest word: set pack_src to the 32-bit output format while leaving unpack/math narrow.
             if (
-                is_fp32_dest_acc_en == DestAccumulation.Yes
+                is_32b_dest_en == Fp32DestMode.Yes
                 and not input_format.is_32_bit()
                 and output_format.is_32_bit()
             ):
@@ -693,7 +689,7 @@ def data_formats(
         intermediate_config = infer_data_formats(
             input_format,
             input_format,
-            is_fp32_dest_acc_en,
+            is_32b_dest_en,
             unpacking_to_dest,
             chip_arch,
             input_format_B,
@@ -706,7 +702,7 @@ def data_formats(
     final_config = infer_data_formats(
         input_format,
         output_format,
-        is_fp32_dest_acc_en,
+        is_32b_dest_en,
         unpacking_to_dest,
         chip_arch,
         input_format_B,

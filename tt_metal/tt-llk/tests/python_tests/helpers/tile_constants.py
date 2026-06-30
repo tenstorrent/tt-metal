@@ -75,7 +75,7 @@ SRCS_SLICE_ELEMENT_COUNT = (
     SRCS_SLICE_ROW_DIM * SRCS_SLICE_COL_DIM
 )  # 128 elements per slice
 
-# 32-bit SrcS mode (dest_acc=Yes): register file holds 32-bit datums, halving rows
+# 32-bit SrcS mode (is_32b_dest_en=Yes): register file holds 32-bit datums, halving rows
 SRCS_SLICE_32B_ROW_DIM = 4
 SRCS_SLICE_32B_ELEMENT_COUNT = SRCS_SLICE_32B_ROW_DIM * SRCS_SLICE_COL_DIM  # 64
 
@@ -166,7 +166,7 @@ def calculate_tile_size_bytes(
     tile_dimensions,
     format_tile_sizes,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Calculate the actual tile size in bytes based on tile dimensions and data format.
@@ -183,7 +183,7 @@ def calculate_tile_size_bytes(
         format_tile_sizes: Dict mapping DataFormat to full tile size in bytes
         use_srcs: If True and MX format, compute size using per-slice 16B-aligned
             layout (SrcS blocks) instead of flat [scales][elements].
-        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+        is_32b_dest_en: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16 = 64 elements/slice) instead of 16-bit (8×16 = 128).
 
     Returns:
@@ -200,11 +200,11 @@ def calculate_tile_size_bytes(
 
     if use_srcs and data_format.is_mx_format():
         slice_elem_count = (
-            SRCS_SLICE_32B_ELEMENT_COUNT if dest_acc else SRCS_SLICE_ELEMENT_COUNT
+            SRCS_SLICE_32B_ELEMENT_COUNT if is_32b_dest_en else SRCS_SLICE_ELEMENT_COUNT
         )
         slice_byte_len = (
             MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
-            if dest_acc
+            if is_32b_dest_en
             else MXFP8_SRCS_SLICE_PACKED_BYTE_LEN
         )
         num_slices = (tile_elements + slice_elem_count - 1) // slice_elem_count

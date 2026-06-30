@@ -29,8 +29,8 @@ class ReduceBlockMaxFpu(Fpu):
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_math_reduce_block_max_row_init_<{ct_dim}, {is_32b_dest_en}>();\n"
 
     def calculate(
         self,
@@ -40,13 +40,13 @@ class ReduceBlockMaxFpu(Fpu):
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         tile_x_in_block = f"(({block.tile_id_block}) % {block.block_tiles_x})"
         tile_y_in_block = f"(({block.tile_id_block}) / {block.block_tiles_x})"
         dest_expr = f"(({tile_y_in_block}) * {block.block_tiles_x})"
         return (
             f"if (({tile_x_in_block}) % {ct_dim} == 0 ) {{\n"
-            f"    _llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}>({dest_expr});\n"
+            f"    _llk_math_reduce_block_max_row_<{ct_dim}, {is_32b_dest_en}>({dest_expr});\n"
             f"}}\n"
         )
 

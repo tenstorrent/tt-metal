@@ -15,7 +15,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BroadcastType,
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -56,7 +56,7 @@ class CT_DIM(TemplateParameter):
         ]
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     math_fidelity=[
         MathFidelity.LoFi,
         MathFidelity.HiFi2,
@@ -71,7 +71,7 @@ def test_eltwise_bcast_col_custom(
     cpp_source,
     formats,
     mathop,
-    dest_acc,
+    is_32b_dest_en,
     math_fidelity,
     broadcast_type,
     input_dimensions_A,
@@ -153,7 +153,7 @@ def test_eltwise_bcast_col_custom(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
     res_from_L1 = configuration.run().result
 

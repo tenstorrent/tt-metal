@@ -37,7 +37,7 @@ from helpers.golden_generators import (
     UntilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
+from helpers.llk_params import Fp32DestMode, TopKSortDirection, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -334,7 +334,7 @@ def run_topk_quasar_case(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=DestAccumulation.No,
+        is_32b_dest_en=Fp32DestMode.No,
         unpack_to_dest=False,
     )
 

@@ -205,7 +205,7 @@ class Operand:
     def cpp_name(self) -> str:
         return f"{self.name}_buffer"
 
-    def cpp_value(self, dest_acc: bool) -> str:
+    def cpp_value(self, is_32b_dest_en: bool) -> str:
         buffer_size = calculate_tile_size_bytes(
             data_format=self.data_format,
             tile_dimensions=(
@@ -214,7 +214,7 @@ class Operand:
             ),
             format_tile_sizes=format_tile_sizes,
             use_srcs=True,
-            dest_acc=dest_acc,
+            is_32b_dest_en=is_32b_dest_en,
         )
         return f"[[maybe_unused]] const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
@@ -376,13 +376,13 @@ class OperandRegistry:
 
             output._raw_data = raw_tensor
 
-    def generate_cpp(self, dest_acc: bool):
+    def generate_cpp(self, is_32b_dest_en: bool):
         code = "// Inputs\n"
         for operand in self.get_all_inputs():
-            code += operand.cpp_value(dest_acc)
+            code += operand.cpp_value(is_32b_dest_en)
 
         code += "// Outputs\n"
         for operand in self.get_all_outputs():
-            code += operand.cpp_value(dest_acc)
+            code += operand.cpp_value(is_32b_dest_en)
 
         return code

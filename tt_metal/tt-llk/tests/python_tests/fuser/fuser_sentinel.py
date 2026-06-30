@@ -110,15 +110,15 @@ class FuserSentinel:
         """
         src_a_fmt, src_b_fmt = self._get_src_formats(compute_node)
         unpack_to_dest = compute_node.unpack_to_dest.value
-        dest_acc = config.dest_acc
+        is_32b_dest_en = config.is_32b_dest_en
 
         unpack_A_dst = infer_unpack_out(
-            src_a_fmt, output_format, dest_acc, unpack_to_dest
+            src_a_fmt, output_format, is_32b_dest_en, unpack_to_dest
         )
         if src_b_fmt is not None:
             unpack_B_src = src_b_fmt
             unpack_B_dst = infer_unpack_out(
-                src_b_fmt, output_format, dest_acc, unpack_to_dest
+                src_b_fmt, output_format, is_32b_dest_en, unpack_to_dest
             )
         else:
             unpack_B_src = src_a_fmt
@@ -132,7 +132,7 @@ class FuserSentinel:
             src_a_fmt,
             output_format,
             math_fmt,
-            dest_acc,
+            is_32b_dest_en,
             unpack_to_dest,
             config.architecture,
         )
@@ -156,10 +156,10 @@ class FuserSentinel:
         Returns:
             (unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, math_fmt, pack_src)
         """
-        dest_acc = config.dest_acc
+        is_32b_dest_en = config.is_32b_dest_en
 
         unpack_dst = infer_unpack_out(
-            output_format, output_format, dest_acc, unpacking_to_dest=True
+            output_format, output_format, is_32b_dest_en, unpacking_to_dest=True
         )
 
         math_fmt = infer_math_format(unpack_dst)
@@ -170,7 +170,7 @@ class FuserSentinel:
             output_format,
             output_format,
             math_fmt,
-            dest_acc,
+            is_32b_dest_en,
             unpacking_to_dest=True,
             chip_arch=config.architecture,
         )
@@ -261,7 +261,7 @@ class FuserSentinel:
         self._unpack_B_src = unpack_B_src
         self._unpack_B_dst = unpack_B_dst
 
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
 
         face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
         num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
@@ -282,7 +282,7 @@ class FuserSentinel:
         self._unpack_num_faces_b = num_faces_b
 
         return (
-            f"_llk_unpack_hw_configure_<{dest_acc}>(\n"
+            f"_llk_unpack_hw_configure_<{is_32b_dest_en}>(\n"
             f"    {self._fmt(unpack_A_src)}, {self._fmt(unpack_B_src)},\n"
             f"    {self._fmt(unpack_A_dst)}, {self._fmt(unpack_B_dst)},\n"
             f"    {face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b},\n"
@@ -339,7 +339,7 @@ class FuserSentinel:
         if not (srca_changed or srcb_changed):
             return ""
 
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         code = ""
 
         if srca_changed:
@@ -355,7 +355,7 @@ class FuserSentinel:
                 else "p_dim_stride_target::IGNORE"
             )
             code += (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
+                f"_llk_unpack_reconfig_data_format_srca_impl_<{is_32b_dest_en}, {dim_stride}, {to_from_int8}>(\n"
                 f"    {self._fmt(new_A_src)}, {self._fmt(new_A_dst)}, {compute_node.src_a.tile_size}"
             )
             if srca_tile_changed:
@@ -381,7 +381,7 @@ class FuserSentinel:
                     else "p_dim_stride_target::IGNORE"
                 )
                 code += (
-                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
+                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{is_32b_dest_en}, {dim_stride}, {to_from_int8}>(\n"
                     f"    {self._fmt(new_B_src)}, {self._fmt(new_B_dst)}, {srcb_tile_size}"
                 )
                 if srcb_tile_changed:
@@ -422,9 +422,9 @@ class FuserSentinel:
 
         self._math_format = math_fmt
 
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         return (
-            f"_llk_math_hw_configure_<{dest_acc}>(\n"
+            f"_llk_math_hw_configure_<{is_32b_dest_en}>(\n"
             f"    {self._fmt(math_fmt)}, {self._fmt(math_fmt)}\n"
             f");\n"
         )
@@ -456,9 +456,9 @@ class FuserSentinel:
             or new_math.needs_int8_math_config()
             else "false"
         )
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         code = (
-            f"_llk_math_reconfig_data_format_<{dest_acc}, {to_from_int8}>(\n"
+            f"_llk_math_reconfig_data_format_<{is_32b_dest_en}, {to_from_int8}>(\n"
             f"    {self._fmt(new_math)}, {self._fmt(new_math)}\n"
             f");\n"
         )
@@ -484,7 +484,7 @@ class FuserSentinel:
         first = pack_nodes[0]
         pack_src, pack_dst = self._resolve_pack_formats(config, operation, first)
 
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         pack_size = first.output.tile_size
         face_r_dim = first.output.tile_shape.face_r_dim
         tile_c_dim = first.output.tile_shape.total_col_dim()
@@ -493,13 +493,13 @@ class FuserSentinel:
         if config.architecture == ChipArchitecture.BLACKHOLE:
             bh_pack_mode = operation.bh_tilize.pack_mode_value
             code = (
-                f"_llk_pack_hw_configure_<{dest_acc}, {bh_pack_mode}>(\n"
+                f"_llk_pack_hw_configure_<{is_32b_dest_en}, {bh_pack_mode}>(\n"
                 f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {tile_c_dim}, {num_faces}\n"
                 f");\n"
             )
         else:
             code = (
-                f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
+                f"_llk_pack_hw_configure_<{is_32b_dest_en}, PackMode::Default>(\n"
                 f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
                 f");\n"
             )
@@ -525,11 +525,11 @@ class FuserSentinel:
         if self._pack_src == pack_src and self._pack_dst == pack_dst:
             return ""
 
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         pack_size = pack_node.output.tile_size
 
         code = (
-            f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
+            f"_llk_pack_reconfig_data_format_<{is_32b_dest_en}>(\n"
             f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}\n"
             f");\n"
         )

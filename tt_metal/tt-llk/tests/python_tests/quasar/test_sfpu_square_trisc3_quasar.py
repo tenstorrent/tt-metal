@@ -12,8 +12,8 @@ import torch
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
@@ -50,7 +50,7 @@ from test_eltwise_unary_sfpu_quasar import (
 
 def generate_sfpu_square_combinations(formats_list):
     """
-    Square-only sweep for the TRISC3 variant: (fmt, dest_acc, dest_sync,
+    Square-only sweep for the TRISC3 variant: (fmt, is_32b_dest_en, dest_sync,
     implied_math_format, input_dimensions) tuples. Uniform dims [32,32]/[64,64]
     x {Half,Full} sync (the redundant [32,64] dim is dropped, matching the
     consolidated unary test).
@@ -61,13 +61,13 @@ def generate_sfpu_square_combinations(formats_list):
     input_dimension_options = ([32, 32], [64, 64])
     for fmt in formats_list:
         in_fmt = fmt.input_format
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
+        fp32_dest_modes = (
+            (Fp32DestMode.Yes,)
             if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
+            else (Fp32DestMode.No, Fp32DestMode.Yes)
         )
-        for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+        for is_32b_dest_en in fp32_dest_modes:
+            if is_invalid_quasar_sfpu_format_combination(fmt, is_32b_dest_en):
                 continue
             for dest_sync in dest_sync_modes:
                 for implied_math_format in implied_math_modes:
@@ -75,7 +75,7 @@ def generate_sfpu_square_combinations(formats_list):
                         combinations.append(
                             (
                                 fmt,
-                                dest_acc,
+                                is_32b_dest_en,
                                 dest_sync,
                                 implied_math_format,
                                 input_dimensions,
@@ -86,20 +86,20 @@ def generate_sfpu_square_combinations(formats_list):
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_implied_math_dims=generate_sfpu_square_combinations(
+    formats_32b_dest_sync_implied_math_dims=generate_sfpu_square_combinations(
         SFPU_SQUARE_FORMATS
     ),
 )
 def test_sfpu_square_trisc3_quasar(
-    formats_dest_acc_sync_implied_math_dims,
+    formats_32b_dest_sync_implied_math_dims,
 ):
     """
     Test square operation on Quasar with SFPU on TRISC3.
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    formats, dest_acc, dest_sync_mode, implied_math_format, input_dimensions = (
-        formats_dest_acc_sync_implied_math_dims[0]
+    formats, is_32b_dest_en, dest_sync_mode, implied_math_format, input_dimensions = (
+        formats_32b_dest_sync_implied_math_dims[0]
     )
 
     torch.manual_seed(42)
@@ -122,13 +122,13 @@ def test_sfpu_square_trisc3_quasar(
         MathOperation.Square,
         src_A,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.input_format,
         input_dimensions,
     )
 
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
     configuration = TestConfig(
         "sources/quasar/sfpu_square_trisc3_quasar_test.cpp",
@@ -160,7 +160,7 @@ def test_sfpu_square_trisc3_quasar(
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

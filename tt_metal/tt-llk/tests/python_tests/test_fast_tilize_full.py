@@ -14,7 +14,7 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import Fp32DestMode, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -45,7 +45,7 @@ TILE_C = 32
         InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
         InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     dimensions=[
         (1, 1),
         (1, 2),
@@ -58,7 +58,7 @@ TILE_C = 32
         (1, 9),
     ],
 )
-def test_fast_tilize_full(formats, dest_acc, dimensions):
+def test_fast_tilize_full(formats, is_32b_dest_en, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -100,7 +100,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_count,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 
@@ -157,7 +157,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
 # ============================================================
 @parametrize(
     formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     dimensions=[
         (1, 1),
         (1, 2),
@@ -170,7 +170,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
         (1, 50),
     ],
 )
-def test_fast_tilize_large(formats, dest_acc, dimensions):
+def test_fast_tilize_large(formats, is_32b_dest_en, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -209,7 +209,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_count,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 
@@ -236,7 +236,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
         InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     dimensions=[
         (1, 1),
         (1, 2),
@@ -245,7 +245,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
         (1, 8),
     ],
 )
-def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
+def test_fast_tilize_overflow_guard(formats, is_32b_dest_en, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -288,7 +288,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_count + guard_tiles,  # extra guard tile
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 

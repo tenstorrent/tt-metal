@@ -19,8 +19,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -30,7 +30,7 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    generate_sfpu_format_dest_acc_combinations,
+    generate_sfpu_format_32b_dest_combinations,
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -64,19 +64,19 @@ DIMENSION_PROFILES = (
 def _matmul_output_fits_dest(
     input_A_dimensions: list[int],
     input_B_dimensions: list[int],
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     dest_sync: DestSync,
 ) -> bool:
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    capacity_divisor = 2 if is_32b_dest_en == Fp32DestMode.Yes else 1
     max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
     return matmul_dims.output_tile_cnt <= max_tiles
 
 
 def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
     combinations = []
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
-        if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+    for fmt, is_32b_dest_en in generate_sfpu_format_32b_dest_combinations(formats_list):
+        if not fmt.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes:
             continue
         for dest_sync in (DestSync.Half, DestSync.Full):
             for implied_math_format in (
@@ -91,14 +91,14 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
                     if not _matmul_output_fits_dest(
                         input_A_dimensions,
                         input_B_dimensions,
-                        dest_acc,
+                        is_32b_dest_en,
                         dest_sync,
                     ):
                         continue
                     combinations.append(
                         (
                             fmt,
-                            dest_acc,
+                            is_32b_dest_en,
                             dest_sync,
                             implied_math_format,
                             exp_input_dimensions,
@@ -116,18 +116,18 @@ PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
+    format_32b_dest_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
 )
-def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
+def test_sfpu_exp_parallel_matmul_quasar(format_32b_dest_sync_implied_math):
     (
         formats,
-        dest_acc,
+        is_32b_dest_en,
         dest_sync,
         implied_math_format,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
-    ) = format_dest_acc_sync_implied_math[0]
+    ) = format_32b_dest_sync_implied_math[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -167,7 +167,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         input_format=formats.input_format,
         input_format_B=formats.input_format,
         output_format=formats.output_format,
-        is_fp32_dest_acc_en=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         num_iterations=1,
         unpacking_to_dest=False,
         unpacking_to_srcs=True,
@@ -186,7 +186,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         input_A_format=formats.input_format,
         input_B_format=formats.input_format,
         math_format=pack_src_format,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     generate_exp_golden = get_golden_generator(UnarySFPUGolden)
@@ -194,7 +194,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         MathOperation.Exp,
         src_exp,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.input_format,
         exp_input_dimensions,
     )
@@ -239,7 +239,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         ],
         variant_stimuli=stimuli,
         unpack_to_srcs=True,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     outcome = configuration.run()

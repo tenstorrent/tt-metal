@@ -12,8 +12,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathFidelity,
     StochasticRounding,
     Transpose,
@@ -48,7 +48,7 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+FP32_DEST_MODES = [Fp32DestMode.No, Fp32DestMode.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
 MATH_FIDELITIES = [
@@ -59,14 +59,14 @@ MATH_FIDELITIES = [
 ]
 MATMUL_COMBINATIONS = sweep_matmul(
     MATMUL_FORMATS,
-    DEST_ACC_MODES,
+    FP32_DEST_MODES,
     STOCHASTIC_ROUNDING_MODES,
     DEST_SYNC_MODES,
     math_matmul=True,
 )
 TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
     MATMUL_FORMATS,
-    DEST_ACC_MODES,
+    FP32_DEST_MODES,
     STOCHASTIC_ROUNDING_MODES,
     DEST_SYNC_MODES,
     math_matmul=True,
@@ -222,7 +222,7 @@ def test_math_matmul(
             tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
             tile_count_res=matmul_config.tile_dimensions.tile_cnt,
         ),
-        dest_acc=matmul_config.dest_acc,
+        is_32b_dest_en=matmul_config.is_32b_dest_en,
     )
     res_from_L1 = configuration.run().result
 

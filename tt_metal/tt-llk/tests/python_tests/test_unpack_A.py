@@ -20,9 +20,9 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     BroadcastType,
-    DestAccumulation,
     DestSync,
     EltwiseBinaryReuseDestType,
+    Fp32DestMode,
     StochasticRounding,
     Transpose,
     format_dict,
@@ -65,7 +65,7 @@ supported_formats = [
 broadcast_types = [
     BroadcastType.None_,
 ]
-dest_acc = [DestAccumulation.Yes, DestAccumulation.No]
+is_32b_dest_en = [Fp32DestMode.Yes, Fp32DestMode.No]
 # NOTE: disable_src_zero_flag is no longer an unpack hw_configure parameter - the Src zero-substitution
 # flag is owned by the math-side data-format state tracker. This list is kept as a
 # single value to preserve the test-variant wiring; full removal of the parameter is tracked in #47001.
@@ -519,7 +519,7 @@ def test_unpack_comprehensive(
     ]
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.Yes if acc_to_dest else DestAccumulation.No,
+        Fp32DestMode.Yes if acc_to_dest else Fp32DestMode.No,
         formats,
         raw_dimensions,
         TILE_DIMENSIONS,  # Use full tile dimensions even for partial face tests since we don't do dense tile processing here.
@@ -567,7 +567,7 @@ def test_unpack_comprehensive(
             num_faces=num_faces,
             face_r_dim=face_r_dim,
         ),
-        dest_acc=(DestAccumulation.Yes if acc_to_dest else DestAccumulation.No),
+        is_32b_dest_en=(Fp32DestMode.Yes if acc_to_dest else Fp32DestMode.No),
         unpack_to_dest=(formats.input_format.is_32_bit() and acc_to_dest),
     )
 

@@ -5,9 +5,9 @@ from typing import List
 
 import torch
 from helpers.device import BootMode
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.format_config import DataFormat, FormatConfig, is_32b_dest_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import Fp32DestMode, MathFidelity, format_dict
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
@@ -28,28 +28,30 @@ from helpers.utils import passed_test
 
 def generate_format_aware_matmul_combinations(
     formats_list: List[FormatConfig],
-    dest_acc_modes: List[DestAccumulation],
+    fp32_dest_modes: List[Fp32DestMode],
 ):
     """
     Generate matmul dimension combinations for multiple tiles.
 
     Rules:
-    1. Format outliers (Float16_b->Float16, Bfp8_b->Float16) MUST use dest_acc=Yes
+    1. Format outliers (Float16_b->Float16, Bfp8_b->Float16) MUST use is_32b_dest_en=Yes
     2. Running matmul tests on DestSync.Half, max tile count is 8
-    3. When dest_acc=Yes: max 4 tiles (32-bit dest register)
-    4. When dest_acc=No: max 8 tiles (16-bit dest register)
+    3. When is_32b_dest_en=Yes: max 4 tiles (32-bit dest register)
+    4. When is_32b_dest_en=No: max 8 tiles (16-bit dest register)
 
-    Returns: List of (format, dest_acc, dimensions) tuples
+    Returns: List of (format, is_32b_dest_en, dimensions) tuples
     """
     combinations = []
 
     for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
+        base_max_tiles = 4 if is_32b_dest_needed(fmt) else 8
 
-        for dest_acc in dest_acc_modes:
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+        for is_32b_dest_en in fp32_dest_modes:
+            max_tiles = 4 if is_32b_dest_en == Fp32DestMode.Yes else base_max_tiles
             dimensions_list = generate_matmul_dimension_combinations(max_tiles)
-            combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
+            combinations.extend(
+                [(fmt, is_32b_dest_en, dims) for dims in dimensions_list]
+            )
 
     return combinations
 
@@ -59,9 +61,9 @@ MATMUL_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32, DataFormat.Bfp8_b]
 )
 
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+FP32_DEST_MODES = [Fp32DestMode.No, Fp32DestMode.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
-    MATMUL_FORMATS, DEST_ACC_MODES
+    MATMUL_FORMATS, FP32_DEST_MODES
 )
 
 
@@ -72,20 +74,20 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    format_32b_dest_and_dims=ALL_MATMUL_COMBINATIONS,
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    format_dest_acc_and_dims,
+    format_32b_dest_and_dims,
     boot_mode=BootMode.DEFAULT,
 ):
-    torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
+    torch_format = format_dict[format_32b_dest_and_dims[0].output_format]
 
-    formats = format_dest_acc_and_dims[0]
-    dest_acc = format_dest_acc_and_dims[1]
-    input_A_dimensions = format_dest_acc_and_dims[2][0]
-    input_B_dimensions = format_dest_acc_and_dims[2][1]
+    formats = format_32b_dest_and_dims[0]
+    is_32b_dest_en = format_32b_dest_and_dims[1]
+    input_A_dimensions = format_32b_dest_and_dims[2][0]
+    input_B_dimensions = format_32b_dest_and_dims[2][1]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -145,7 +147,7 @@ def test_matmul(
             tile_count_B=tile_cnt_B,
             tile_count_res=matmul_dims.output_tile_cnt,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
     )
 

@@ -10,7 +10,7 @@ from typing import List
 import pandas as pd
 import pytest
 from helpers.chip_architecture import ChipArchitecture
-from helpers.llk_params import DestAccumulation, PerfRunType
+from helpers.llk_params import Fp32DestMode, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
 from helpers.profiler import Profiler, ProfilerData
@@ -26,7 +26,7 @@ from .fuser_sentinel import FuserSentinel
 class GlobalConfig:
     test_name: str = "fused_test"
     architecture: ChipArchitecture = None
-    dest_acc: DestAccumulation = DestAccumulation.No
+    is_32b_dest_en: Fp32DestMode = Fp32DestMode.No
     regenerate_cpp: bool = False
     profiler_enabled: bool = False
     perf_run_type: PerfRunType = None

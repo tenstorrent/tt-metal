@@ -13,7 +13,7 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
 from helpers.param_config import (
-    generate_sfpu_format_dest_acc_combinations,
+    generate_sfpu_format_32b_dest_combinations,
     input_output_formats,
     parametrize,
 )
@@ -50,22 +50,24 @@ SFPU_ADD_FORMATS = input_output_formats(
 )
 
 SFPU_ADD_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, input_dimensions)
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_ADD_FORMATS)
+    (fmt, is_32b_dest_en, implied_math_format, input_dimensions)
+    for fmt, is_32b_dest_en in generate_sfpu_format_32b_dest_combinations(
+        SFPU_ADD_FORMATS
+    )
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
-def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
+@parametrize(formats_32b_dest_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
+def test_isolate_sfpu_add_quasar(formats_32b_dest_implied_math_input_dims):
     """
     Test isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only). Two input operands unpacked to SrcS, added, packed.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
+    (formats, is_32b_dest_en, implied_math_format, input_dimensions) = (
+        formats_32b_dest_implied_math_input_dims[0]
     )
 
     torch.manual_seed(42)
@@ -145,7 +147,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
             num_faces=num_faces,
         ),
         unpack_to_srcs=True,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         disable_format_inference=formats.input_format.is_mx_format(),
     )
 

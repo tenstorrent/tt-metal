@@ -7,7 +7,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     NarrowTile,
     StochasticRounding,
     Transpose,
@@ -101,7 +101,7 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     ),
     transpose=[Transpose.No],
     narrow_tile=[NarrowTile.No, NarrowTile.Yes],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     num_faces=lambda narrow_tile: ([4, 2, 1] if narrow_tile == NarrowTile.No else [2]),
     input_dimensions=lambda narrow_tile: (
         [[32, 32], [64, 64], [32, 64], [32, 128], [128, 32]]
@@ -114,7 +114,7 @@ def test_unpack_tilize_comprehensive(
     stoch_rnd_type,
     transpose,
     narrow_tile,
-    dest_acc,
+    is_32b_dest_en,
     num_faces,
     input_dimensions,
 ):
@@ -215,7 +215,7 @@ def test_unpack_tilize_comprehensive(
             **stimuli_extra,
         ),
         unpack_to_dest=(formats.input_format in [DataFormat.Int32, DataFormat.UInt32]),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

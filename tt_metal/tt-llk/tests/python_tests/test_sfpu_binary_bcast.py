@@ -8,7 +8,7 @@ import torch
 from conftest import skip_for_quasar
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     MathOperation,
     format_dict,
 )
@@ -117,13 +117,13 @@ SUPPORTED_FORMATS = input_output_formats(
     formats=SUPPORTED_FORMATS,
     bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
     eltwise_op=SUPPORTED_ELTWISE_OPS,
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
 )
 def test_sfpu_binary_bcast(
     formats: InputOutputFormat,
     bcast_dim: BroadcastType,
     eltwise_op: MathOperation,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
 ):
     input_dimensions = [32, 32]
 
@@ -139,10 +139,10 @@ def test_sfpu_binary_bcast(
         src_A, src_B, bcast_dim, op, formats.output_format
     )
 
-    # Only Float32 (plus dest_acc=Yes) can skip srcA/srcB and unpack straight to
+    # Only Float32 (plus is_32b_dest_en=Yes) can skip srcA/srcB and unpack straight to
     # DEST. Float16_b must flow through srcA for the SFPU to consume it.
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     configuration = TestConfig(
@@ -164,7 +164,7 @@ def test_sfpu_binary_bcast(
             tile_count_B=tile_cnt_B,
             tile_count_res=1,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=unpack_to_dest,
     )
 

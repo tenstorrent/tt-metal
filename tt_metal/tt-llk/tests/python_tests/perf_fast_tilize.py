@@ -4,7 +4,7 @@
 import pytest
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, PerfRunType
+from helpers.llk_params import Fp32DestMode, PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
@@ -54,14 +54,14 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
 @parametrize(
     input_format=[DataFormat.Float32, DataFormat.Float16_b],
     output_format=[DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b],
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.Yes, Fp32DestMode.No],
     input_dimensions=generate_input_dimensions(16),
 )
 def test_fast_tilize_perf(
     perf_report,
     input_format,
     output_format,
-    dest_acc,
+    is_32b_dest_en,
     input_dimensions,
 ):
     tile_count = input_dimensions[0] * input_dimensions[1]
@@ -90,7 +90,7 @@ def test_fast_tilize_perf(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 

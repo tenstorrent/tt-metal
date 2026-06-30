@@ -4,7 +4,7 @@
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import Fp32DestMode, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -26,7 +26,7 @@ from helpers.utils import passed_test
         ],  #  Add DataFormat.Bfp8_b only as input when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run with different inputs and outputs.
         same=True,
     ),
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.Yes, Fp32DestMode.No],
     math_fidelity=[
         MathFidelity.LoFi,
         MathFidelity.HiFi2,
@@ -36,7 +36,7 @@ from helpers.utils import passed_test
 )
 def test_matmul_unpack_tilize(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     math_fidelity,
 ):
 
@@ -84,7 +84,7 @@ def test_matmul_unpack_tilize(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         L1_to_L1_iterations=L1_to_L1_iterations,
     )
 

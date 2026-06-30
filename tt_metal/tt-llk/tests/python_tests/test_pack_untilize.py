@@ -4,7 +4,7 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.constraints import get_valid_32b_dest_modes
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -14,8 +14,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     format_dict,
 )
 from helpers.param_config import (
@@ -47,7 +47,7 @@ from helpers.utils import passed_test
             DataFormat.Fp8_e4m3,
         ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    is_32b_dest_en=lambda formats: get_valid_32b_dest_modes(formats),
     input_dimensions=[[64, 64], [32, 128], [128, 128], [32, 64]],
     #  TODO add DestSync::Full tests when we have a solution for the static_assert in _llk_pack_untilize_init_ that requires block_ct_dim to be less or equal to 8,
     #  which is currently a limitation for testing DestSync::Full with the Untilize blocks calculation algorithm.
@@ -56,7 +56,7 @@ from helpers.utils import passed_test
 )
 def test_pack_untilize(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     input_dimensions,
     dest_sync,
     tile_dst_ct_offset,
@@ -83,7 +83,7 @@ def test_pack_untilize(
     data_formats = infer_data_formats(
         formats.input_format,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         False,
     )
 
@@ -93,10 +93,10 @@ def test_pack_untilize(
     if (
         formats.input_format == DataFormat.Float16
         and data_formats.pack_src.is_32_bit()
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     ):
         pytest.skip(
-            "Due to hardware limitation, cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register. Therefore using dest_acc=No is not supported in this case."
+            "Due to hardware limitation, cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register. Therefore using is_32b_dest_en=No is not supported in this case."
         )
 
     # TODO: Checkout issue #1405 on tt-llk.
@@ -105,7 +105,7 @@ def test_pack_untilize(
         and formats.input_format
         in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b)
         and formats.output_format == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
         and input_dimensions == [64, 512]
     ):
         pytest.skip("Wormhole pack_untilize does not support this format combination.")
@@ -125,14 +125,14 @@ def test_pack_untilize(
     golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
 
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     # _llk_pack_untilize_init_ has a static_assert that checks if block_ct_dim is less or equal to 8.
     # TODO: Update this logic to accept more than 8 tiles per block if the static_assert changes in the future.
     _, block_ct_dim = get_num_blocks_and_num_tiles_in_block(
         dest_sync,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -163,7 +163,7 @@ def test_pack_untilize(
             tile_count_res=tile_cnt_A,
             sfpu=False,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=unpack_to_dest,
     )
 

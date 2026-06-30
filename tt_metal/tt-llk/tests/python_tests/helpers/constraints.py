@@ -9,15 +9,15 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 
 
-def get_valid_dest_accumulation_modes(formats):
+def get_valid_32b_dest_modes(formats):
     """
     Base constraints for Dest Accumulation modes.
 
@@ -37,27 +37,27 @@ def get_valid_dest_accumulation_modes(formats):
         So I'm not sure if they should also be handled here.
 
     Constraints (Quasar only):
-        - 32-bit output (Float32, Int32) requires dest_acc=Yes, packer cannot perform upcasting to 32-bit formats
-        - UInt8 <-> Int8 conversions require dest_acc=Yes, because packer cannot convert UInt8 <-> Int8
-        - Int16 input requires dest_acc=No, packer cannot convert Int16 to and from other formats and thus
+        - 32-bit output (Float32, Int32) requires is_32b_dest_en=Yes, packer cannot perform upcasting to 32-bit formats
+        - UInt8 <-> Int8 conversions require is_32b_dest_en=Yes, because packer cannot convert UInt8 <-> Int8
+        - Int16 input requires is_32b_dest_en=No, packer cannot convert Int16 to and from other formats and thus
           32-bit dest register mode is not supported when working with Int16
     """
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = formats.input, formats.output
 
     if in_fmt in [DataFormat.Int32, DataFormat.UInt32]:
-        return [DestAccumulation.Yes]
+        return [Fp32DestMode.Yes]
 
     if chip_arch == ChipArchitecture.QUASAR:
         if out_fmt.is_32_bit():
-            return [DestAccumulation.Yes]
+            return [Fp32DestMode.Yes]
         if (in_fmt, out_fmt) in (
             (DataFormat.UInt8, DataFormat.Int8),
             (DataFormat.Int8, DataFormat.UInt8),
         ):
-            return [DestAccumulation.Yes]
+            return [Fp32DestMode.Yes]
         if in_fmt == DataFormat.Int16:
-            return [DestAccumulation.No]
+            return [Fp32DestMode.No]
     else:
         if (
             in_fmt
@@ -69,9 +69,9 @@ def get_valid_dest_accumulation_modes(formats):
             ]
             and out_fmt == DataFormat.Float16
         ):
-            return [DestAccumulation.Yes]
+            return [Fp32DestMode.Yes]
 
-    return [DestAccumulation.No, DestAccumulation.Yes]
+    return [Fp32DestMode.No, Fp32DestMode.Yes]
 
 
 def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
@@ -112,7 +112,7 @@ def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
 
 def get_valid_dest_indices(
     dest_sync: DestSync,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     formats: InputOutputFormat,
     input_dimensions: List[int],
     all_indices: bool = False,
@@ -127,7 +127,7 @@ def get_valid_dest_indices(
     # Use this function to get the number of tiles that can fit in dest.
     _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,

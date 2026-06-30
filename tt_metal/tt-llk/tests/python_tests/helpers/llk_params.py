@@ -229,7 +229,7 @@ class ReducePool(Enum):
         return f"PoolType::{self.value}"
 
 
-class DestAccumulation(Enum):
+class Fp32DestMode(Enum):
     Yes = True
     No = False
 

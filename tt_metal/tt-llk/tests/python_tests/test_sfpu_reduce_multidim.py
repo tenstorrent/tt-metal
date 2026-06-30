@@ -33,8 +33,8 @@ from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM, TILE_DIMENSIO
 from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ReducePool,
     format_dict,
 )
@@ -150,14 +150,14 @@ def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
     formats=[InputOutputFormat(fmt, fmt) for fmt in MULTIDIM_FORMATS],
     reduce_pool=lambda formats: get_multidim_pools(formats),
     num_row_tiles=ROW_TILE_COUNTS,
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
     input_bounds=lambda formats: get_multidim_input_bounds(formats),
 )
 def test_sfpu_reduce_multidim(
     formats,
     reduce_pool,
     num_row_tiles,
-    dest_acc,
+    is_32b_dest_en,
     input_bounds,
 ):
     # A column of num_row_tiles tiles, one column-tile wide: [num_row_tiles*32, 32].
@@ -168,7 +168,7 @@ def test_sfpu_reduce_multidim(
     # does not fit, the configuration is not expressible for this chained kernel.
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -231,7 +231,7 @@ def test_sfpu_reduce_multidim(
             tile_count_res=tile_cnt,
             twos_complement=use_int32_twos_complement(formats),
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=True,
         disable_format_inference=True,
         compile_time_formats=True,

@@ -13,9 +13,9 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     BroadcastType,
-    DestAccumulation,
     DestSync,
     EltwiseBinaryReuseDestType,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     Transpose,
@@ -51,7 +51,7 @@ from helpers.utils import passed_test
 ALL_TILE_DIMENSIONS = [list(td) for td in SUPPORTED_TILE_SIZES]
 
 
-def _get_valid_formats(dest_acc):
+def _get_valid_formats(is_32b_dest_en):
     """
     Filter formats based on dest accumulation:
     - If dest accumulation is enabled, input must be Float32
@@ -65,7 +65,7 @@ def _get_valid_formats(dest_acc):
         ],
         same=False,
     )
-    if dest_acc == DestAccumulation.Yes:
+    if is_32b_dest_en == Fp32DestMode.Yes:
         return [f for f in all_formats if f.input_format == DataFormat.Float32]
     return all_formats
 
@@ -113,8 +113,8 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
 
 
 @parametrize(
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    formats=lambda dest_acc: _get_valid_formats(dest_acc),
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
+    formats=lambda is_32b_dest_en: _get_valid_formats(is_32b_dest_en),
     broadcast_type=[
         BroadcastType.None_,
         BroadcastType.Row,
@@ -130,7 +130,7 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
     ),
 )
 def test_eltwise_binary(
-    dest_acc,
+    is_32b_dest_en,
     formats,
     broadcast_type,
     math_op,
@@ -158,14 +158,14 @@ def test_eltwise_binary(
         tile_dimensions=tile_dimensions,
     )
 
-    effective_dest_acc = (
-        DestAccumulation.Yes
+    effective_32b_dest = (
+        Fp32DestMode.Yes
         if formats.output_format == DataFormat.Float32
-        else dest_acc
+        else is_32b_dest_en
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        effective_dest_acc,
+        effective_32b_dest,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -291,7 +291,7 @@ def test_eltwise_binary(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=False,
     )
 
@@ -310,7 +310,7 @@ def test_eltwise_binary(
 
 
 @parametrize(
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     formats=[
         fmt
         for fmt in input_output_formats(
@@ -340,7 +340,7 @@ def test_eltwise_binary(
     ),
 )
 def test_eltwise_binary_bfp4_b(
-    dest_acc,
+    is_32b_dest_en,
     formats,
     broadcast_type,
     math_fidelity,
@@ -367,14 +367,14 @@ def test_eltwise_binary_bfp4_b(
         tile_dimensions=tile_dimensions,
     )
 
-    effective_dest_acc = (
-        DestAccumulation.Yes
+    effective_32b_dest = (
+        Fp32DestMode.Yes
         if formats.output_format == DataFormat.Float32
-        else dest_acc
+        else is_32b_dest_en
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        effective_dest_acc,
+        effective_32b_dest,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -489,7 +489,7 @@ def test_eltwise_binary_bfp4_b(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=False,
     )
 
@@ -556,14 +556,14 @@ def test_eltwise_binary_dest_reuse(
     )
 
     # Compute block/tile counts for output (determines dest register blocking)
-    effective_dest_acc = (
-        DestAccumulation.Yes
+    effective_32b_dest = (
+        Fp32DestMode.Yes
         if formats.output_format == DataFormat.Float32
-        else DestAccumulation.No
+        else Fp32DestMode.No
     )
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        effective_dest_acc,
+        effective_32b_dest,
         formats,
         output_dimensions,
         tile_dimensions,
@@ -681,7 +681,7 @@ def test_eltwise_binary_dest_reuse(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=DestAccumulation.No,
+        is_32b_dest_en=Fp32DestMode.No,
         unpack_to_dest=False,
     )
 
@@ -698,7 +698,7 @@ def test_eltwise_binary_dest_reuse(
 
 
 @parametrize(
-    dest_acc=[DestAccumulation.Yes],  # Dest accumulation is required for int8.
+    is_32b_dest_en=[Fp32DestMode.Yes],  # Dest accumulation is required for int8.
     formats=InputOutputFormat(DataFormat.Int8, DataFormat.Int8),
     broadcast_type=[
         BroadcastType.None_,
@@ -712,7 +712,7 @@ def test_eltwise_binary_dest_reuse(
     ),
 )
 def test_eltwise_binary_int8_format(
-    dest_acc,
+    is_32b_dest_en,
     formats,
     broadcast_type,
     math_fidelity,
@@ -742,14 +742,14 @@ def test_eltwise_binary_int8_format(
     src_A = (src_A % 101) - 50
     src_B = (src_B % 101) - 50
 
-    effective_dest_acc = (
-        DestAccumulation.Yes
+    effective_32b_dest = (
+        Fp32DestMode.Yes
         if formats.output_format == DataFormat.Float32
-        else dest_acc
+        else is_32b_dest_en
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        effective_dest_acc,
+        effective_32b_dest,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -834,7 +834,7 @@ def test_eltwise_binary_int8_format(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=False,
     )
 

@@ -4,7 +4,7 @@
 import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     MathOperation,
     PerfRunType,
     ReduceDimension,
@@ -39,14 +39,14 @@ REDUCE_MATHOP = {
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
 )
 def test_perf_reduce(
     perf_report,
     formats,
-    dest_acc,
+    is_32b_dest_en,
     reduce_dim,
     pool_type,
 ):
@@ -78,7 +78,7 @@ def test_perf_reduce(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=False,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)

@@ -14,7 +14,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -64,7 +64,7 @@ from helpers.utils import passed_test
         MathOperation.Square,
     ],
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.Yes, Fp32DestMode.No],
     math_fidelity=[
         MathFidelity.LoFi,
         # MathFidelity.HiFi2, TODO: FIND OUT WHY
@@ -77,7 +77,7 @@ def test_matmul_and_unary_sfpu(
     formats,
     mathop,
     approx_mode,
-    dest_acc,
+    is_32b_dest_en,
     math_fidelity,
 ):
     input_dimensions = [32, 32]
@@ -95,7 +95,7 @@ def test_matmul_and_unary_sfpu(
             MathOperation.Square,
             MathOperation.Hardsigmoid,
         ]
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
         and get_chip_architecture() == ChipArchitecture.BLACKHOLE
     ):
         pytest.skip("BFP8 does not support Log and Reciprocal operations")
@@ -126,7 +126,7 @@ def test_matmul_and_unary_sfpu(
         mathop,
         golden_tensor,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.input_format,
         input_dimensions,
     )
@@ -152,7 +152,7 @@ def test_matmul_and_unary_sfpu(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         L1_to_L1_iterations=2,
     )
 

@@ -32,14 +32,14 @@ import torch
 from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
     format_dict,
 )
 from helpers.param_config import (
-    generate_sfpu_format_dest_acc_combinations,
+    generate_sfpu_format_32b_dest_combinations,
     input_output_formats,
     parametrize,
 )
@@ -249,12 +249,12 @@ def _prepare_swiglu_inputs(
 def _generate_sfpu_swiglu_combinations(formats_list: List[FormatConfig]):
     """
     Build the parametrize product for the swiglu test. Wraps the shared
-    ``generate_sfpu_format_dest_acc_combinations`` from ``helpers.param_config``
+    ``generate_sfpu_format_32b_dest_combinations`` from ``helpers.param_config``
     with an extra ``implied_math_format`` axis.
     """
     combinations = []
 
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
+    for fmt, is_32b_dest_en in generate_sfpu_format_32b_dest_combinations(formats_list):
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
             # MX formats aren't part of this test but keep the pattern
             # consistent with other float SFPU tests.
@@ -264,7 +264,7 @@ def _generate_sfpu_swiglu_combinations(formats_list: List[FormatConfig]):
             ):
                 continue
 
-            combinations.append((fmt, dest_acc, implied_math_format))
+            combinations.append((fmt, is_32b_dest_en, implied_math_format))
 
     return combinations
 
@@ -284,12 +284,12 @@ SFPU_SWIGLU_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math=_generate_sfpu_swiglu_combinations(
+    formats_32b_dest_implied_math=_generate_sfpu_swiglu_combinations(
         SFPU_SWIGLU_FORMATS
     ),
     distribution=list(_StimulusDistribution),
 )
-def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
+def test_sfpu_swiglu_quasar(formats_32b_dest_implied_math, distribution):
     """
     Swiglu SFPU kernel end-to-end test.
 
@@ -298,7 +298,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     next 1024 → up. The first ``len(_SWIGLU_CORNER_CASES)`` lanes are
     deterministic boundary cases; the rest is sampled from ``distribution``.
     """
-    (formats, dest_acc, implied_math_format) = formats_dest_acc_implied_math
+    (formats, is_32b_dest_en, implied_math_format) = formats_32b_dest_implied_math
 
     torch.manual_seed(42)
 
@@ -326,7 +326,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
 
     # SFPU tests: unpack_to_dest only when format bit-width matches Dest mode.
     unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
+        is_32b_dest_en == Fp32DestMode.Yes
     )
 
     configuration = TestConfig(
@@ -360,7 +360,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result
@@ -397,7 +397,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
 #     guaranteed by the Quasar ISA pages; this test records what the
 #     simulator does so future kernel changes don't silently regress it.
 #
-# We use Float32/Float32 with dest_acc=Yes — the most precise path. If NaN
+# We use Float32/Float32 with is_32b_dest_en=Yes — the most precise path. If NaN
 # behavior diverges from the torch golden, the test will fail and we'll
 # document the divergence. If it converges, we lock in the behavior.
 _SWIGLU_NAN_INF_CASES = (
@@ -423,11 +423,11 @@ def test_sfpu_swiglu_nan_inf_quasar():
 
     The first ``len(_SWIGLU_NAN_INF_CASES)`` lanes hold deterministic special
     values; the rest are zeros (so any divergence is isolated to the
-    special-value lanes). We use the same Float32→Float32 dest_acc=Yes path
+    special-value lanes). We use the same Float32→Float32 is_32b_dest_en=Yes path
     as the main test and the standard ``passed_test`` tolerance.
     """
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
-    dest_acc = DestAccumulation.Yes
+    is_32b_dest_en = Fp32DestMode.Yes
     implied_math_format = ImpliedMathFormat.No
 
     torch.manual_seed(42)
@@ -462,7 +462,7 @@ def test_sfpu_swiglu_nan_inf_quasar():
     golden_tensor = golden_tile.flatten().to(format_dict[formats.output_format])
 
     unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
+        is_32b_dest_en == Fp32DestMode.Yes
     )
 
     configuration = TestConfig(
@@ -495,7 +495,7 @@ def test_sfpu_swiglu_nan_inf_quasar():
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

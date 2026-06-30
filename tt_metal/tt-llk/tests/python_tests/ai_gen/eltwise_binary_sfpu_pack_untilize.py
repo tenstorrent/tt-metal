@@ -12,8 +12,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -70,14 +70,14 @@ all_params = [
     {
         "testname": "eltwise_binary_sfpu_pack_untilize",
         "formats": fmt,
-        "dest_acc": dest_acc,
+        "is_32b_dest_en": is_32b_dest_en,
         "mathop": bin_op,
         "unary_op": un_op,
         "dst_sync": dst_sync,
         "math_fidelity": fidelity,
     }
     for fmt in _test_formats
-    for dest_acc in [DestAccumulation.Yes, DestAccumulation.No]
+    for is_32b_dest_en in [Fp32DestMode.Yes, Fp32DestMode.No]
     for bin_op in binary_ops
     for un_op in unary_ops
     for dst_sync in dst_sync_options
@@ -90,7 +90,7 @@ all_params = [
 ]
 
 param_ids = [
-    f"bin={p['mathop'].name}|un={p['unary_op'].name}|fmt={p['formats'].input_format.name}->{p['formats'].output_format.name}|acc={p['dest_acc'].name}|sync={p['dst_sync'].name}|fid={p['math_fidelity'].name}"
+    f"bin={p['mathop'].name}|un={p['unary_op'].name}|fmt={p['formats'].input_format.name}->{p['formats'].output_format.name}|acc={p['is_32b_dest_en'].name}|sync={p['dst_sync'].name}|fid={p['math_fidelity'].name}"
     for p in all_params
 ]
 
@@ -109,7 +109,7 @@ def test_sweep_test(config):
     formats = config["formats"]
     mathop = config["mathop"]  # binary op
     unary_op = config["unary_op"]
-    dest_acc = config["dest_acc"]
+    is_32b_dest_en = config["is_32b_dest_en"]
     dst_sync = config["dst_sync"]
     math_fidelity = config["math_fidelity"]
 
@@ -161,7 +161,11 @@ def test_sweep_test(config):
 
     unary_golden_fn = get_golden_generator(UnarySFPUGolden)
     unary_out = unary_golden_fn(
-        unary_op, binary_out, formats.output_format, dest_acc, formats.output_format
+        unary_op,
+        binary_out,
+        formats.output_format,
+        is_32b_dest_en,
+        formats.output_format,
     )
 
     untilize_golden_fn = get_golden_generator(UntilizeGolden)
@@ -173,7 +177,7 @@ def test_sweep_test(config):
     test_config = {
         "formats": formats,
         "testname": config["testname"],
-        "dest_acc": dest_acc,
+        "is_32b_dest_en": is_32b_dest_en,
         "dst_sync": dst_sync,
         "mathop": mathop,
         "unary_op": unary_op,

@@ -11,7 +11,7 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import Fp32DestMode, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -31,10 +31,10 @@ TILE_C = 32
 
 @parametrize(
     formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     dimensions=[(1, 2), (1, 4), (1, 8), (2, 4), (2, 8), (10, 12)],
 )
-def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
+def test_fast_tilize_metal_api(formats, is_32b_dest_en, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -74,7 +74,7 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_count,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 

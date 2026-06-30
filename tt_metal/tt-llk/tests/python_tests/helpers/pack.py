@@ -432,15 +432,17 @@ def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=1
     return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(fp8_bytes)
 
 
-def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = False):
+def _pack_mxfp8_srcs(
+    tensor, fp8_dtype, element_max_normal, is_32b_dest_en: bool = False
+):
     """Pack a tensor into per-slice SrcS blocks for MX formats.
 
     Splits the tensor into SrcS slices and packs each independently as
-    [scales][elements].  Slice geometry depends on *dest_acc*:
-      - 16-bit (dest_acc=False): 8×16 = 128 elements/slice, 144 bytes
-      - 32-bit (dest_acc=True):  4×16 =  64 elements/slice,  80 bytes
+    [scales][elements].  Slice geometry depends on *is_32b_dest_en*:
+      - 16-bit (is_32b_dest_en=False): 8×16 = 128 elements/slice, 144 bytes
+      - 32-bit (is_32b_dest_en=True):  4×16 =  64 elements/slice,  80 bytes
     """
-    if dest_acc:
+    if is_32b_dest_en:
         slice_elem_count = SRCS_SLICE_32B_ELEMENT_COUNT
         slice_row_dim = SRCS_SLICE_32B_ROW_DIM
     else:
@@ -464,7 +466,11 @@ def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = Fal
 
 
 def pack_mxfp8r(
-    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Pack tensor into MXFP8R format (MXFP8 E5M2 variant).
@@ -483,7 +489,7 @@ def pack_mxfp8r(
         num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
         face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
-        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+        is_32b_dest_en: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
 
     Returns:
@@ -499,7 +505,7 @@ def pack_mxfp8r(
             tensor,
             ml_dtypes.float8_e5m2,
             MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
-            dest_acc,
+            is_32b_dest_en,
         )
     return _pack_mxfp8(
         tensor,
@@ -511,7 +517,11 @@ def pack_mxfp8r(
 
 
 def pack_mxfp8p(
-    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Pack tensor into MXFP8P format (MXFP8 E4M3 variant).
@@ -530,7 +540,7 @@ def pack_mxfp8p(
         num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
         face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
-        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+        is_32b_dest_en: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
 
     Returns:
@@ -546,7 +556,7 @@ def pack_mxfp8p(
             tensor,
             ml_dtypes.float8_e4m3fn,
             MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-            dest_acc,
+            is_32b_dest_en,
         )
     return _pack_mxfp8(
         tensor,
@@ -562,7 +572,7 @@ def pack_mxfp4(
     num_faces=4,
     face_r_dim=16,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
     exp_rnd_en: bool = False,
 ):
     """
@@ -590,7 +600,7 @@ def pack_mxfp4(
         num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
         face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
-        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+        is_32b_dest_en: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 40 bytes/slice) instead of 16-bit (8×16, 72 bytes/slice).
         exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
             model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
@@ -858,7 +868,7 @@ def pack_mxint8(
     num_faces=4,
     face_r_dim=16,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Pack tensor into MxInt8 format (signed S1.6 elements with E8M0 block scale).
@@ -901,7 +911,7 @@ def pack_mxint4(
     num_faces=4,
     face_r_dim=16,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Pack tensor into MxInt4 format (signed S1.2 elements with E8M0 block scale).
@@ -946,7 +956,7 @@ def pack_mxint2(
     num_faces=4,
     face_r_dim=16,
     use_srcs: bool = False,
-    dest_acc: bool = False,
+    is_32b_dest_en: bool = False,
 ):
     """
     Pack tensor into MxInt2 format (signed S1.0 elements with E8M0 block scale).

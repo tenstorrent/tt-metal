@@ -5,7 +5,7 @@ import pytest
 import torch
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, format_dict, format_tile_sizes
+from helpers.llk_params import Fp32DestMode, format_dict, format_tile_sizes
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -36,12 +36,12 @@ WIDTHS = [
 @skip_for_blackhole
 @parametrize(
     formats=input_output_formats([DataFormat.Float32, DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.Yes, Fp32DestMode.No],
     dimensions=[(1, w) for w in WIDTHS],
 )
 def test_fast_tilize_tiny_tiles(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     dimensions,
 ):
 
@@ -107,7 +107,7 @@ def test_fast_tilize_tiny_tiles(
             use_dense_tile_dimensions=True,
             operand_res_tile_size=format_tile_sizes[formats.output_format],
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 

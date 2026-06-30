@@ -12,8 +12,8 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     ReluConfig,
     format_dict,
@@ -71,7 +71,7 @@ def generate_qsr_pack_l1_acc_combinations(
         formats_list: List of input/output format pairs
 
     Returns:
-        List of (format, dest_acc) tuples
+        List of (format, is_32b_dest_en) tuples
     """
 
     def is_supported_format_conversion(in_fmt, out_fmt):
@@ -85,25 +85,25 @@ def generate_qsr_pack_l1_acc_combinations(
             return False
         return True
 
-    def get_dest_acc_modes(in_fmt):
+    def get_fp32_dest_modes(in_fmt):
         """Determine valid dest register modes depending on the input format."""
         # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
         if in_fmt.is_32_bit():
-            return (DestAccumulation.Yes,)
-        return (DestAccumulation.No, DestAccumulation.Yes)
+            return (Fp32DestMode.Yes,)
+        return (Fp32DestMode.No, Fp32DestMode.Yes)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, is_32b_dest_en):
         """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
+        # Upcasting to Float32/Int32 requires is_32b_dest_en enabled
         if (
             out_fmt.is_32_bit()
             and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
+            and is_32b_dest_en == Fp32DestMode.No
         ):
             return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
+        # Int8<->UInt8 conversion requires is_32b_dest_en enabled
         if (
-            dest_acc == DestAccumulation.No
+            is_32b_dest_en == Fp32DestMode.No
             and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
             and in_fmt != out_fmt
         ):
@@ -117,33 +117,35 @@ def generate_qsr_pack_l1_acc_combinations(
         if not is_supported_format_conversion(in_fmt, out_fmt):
             continue
 
-        for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                combinations.append((fmt, dest_acc))
+        for is_32b_dest_en in get_fp32_dest_modes(in_fmt):
+            if is_supported_dest_mode_dependent_conversion(
+                in_fmt, out_fmt, is_32b_dest_en
+            ):
+                combinations.append((fmt, is_32b_dest_en))
 
     return combinations
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
-    # don't generate the No variant for them. formats_dest_acc[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc: (
+    formats_32b_dest=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
+    # don't generate the No variant for them. formats_32b_dest[0] is the InputOutputFormat (input/output pair).
+    implied_math_format=lambda formats_32b_dest: (
         [ImpliedMathFormat.Yes]
-        if formats_dest_acc[0].input_format.is_mx_format()
+        if formats_32b_dest[0].input_format.is_mx_format()
         else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
 )
 def test_pack_l1_acc_quasar(
-    formats_dest_acc,
+    formats_32b_dest,
     implied_math_format,
     dest_sync_mode,
     input_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
-    (formats, dest_acc) = formats_dest_acc
+    (formats, is_32b_dest_en) = formats_32b_dest
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -156,7 +158,7 @@ def test_pack_l1_acc_quasar(
 
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync_mode,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -202,7 +204,7 @@ def test_pack_l1_acc_quasar(
     )
 
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     configuration = TestConfig(
@@ -244,7 +246,7 @@ def test_pack_l1_acc_quasar(
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
         # MX inputs need format inference disabled so the C++ side's
         # IMPLIED_MATH_FORMAT setting drives the math format.

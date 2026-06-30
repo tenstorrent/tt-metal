@@ -5,7 +5,7 @@ from itertools import product
 
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
 )
 from helpers.param_config import parametrize
 from helpers.tensix import TensixState
@@ -36,12 +36,8 @@ def get_valid_to_from_int8(
     return any(f.is_integer() for f in formats)
 
 
-def get_valid_dest_acc(to_from_int8: bool) -> bool:
-    return (
-        [DestAccumulation.Yes]
-        if to_from_int8
-        else [DestAccumulation.No, DestAccumulation.Yes]
-    )
+def get_valid_32b_dest(to_from_int8: bool) -> bool:
+    return [Fp32DestMode.Yes] if to_from_int8 else [Fp32DestMode.No, Fp32DestMode.Yes]
 
 
 @parametrize(
@@ -61,12 +57,12 @@ def get_valid_dest_acc(to_from_int8: bool) -> bool:
         ]
     ),
     to_from_int8=lambda formats: get_valid_to_from_int8(formats),
-    dest_acc=lambda to_from_int8: get_valid_dest_acc(to_from_int8),
+    is_32b_dest_en=lambda to_from_int8: get_valid_32b_dest(to_from_int8),
 )
 def test_math_reconfig(
     formats,
     to_from_int8,
-    dest_acc,
+    is_32b_dest_en,
 ):
     prev_a, prev_b, next_a, next_b = formats
 
@@ -81,7 +77,7 @@ def test_math_reconfig(
         runtimes=[
             CONFIGURE_TEST_RUN_IDX(0),
         ],
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run()

@@ -13,9 +13,9 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     BroadcastType,
-    DestAccumulation,
     DestSync,
     EltwiseBinaryReuseDestType,
+    Fp32DestMode,
     StochasticRounding,
     Transpose,
     format_dict,
@@ -73,17 +73,17 @@ supported_formats = [
         BroadcastType.Row,
         BroadcastType.Scalar,
     ],
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.Yes, Fp32DestMode.No],
 )
 def test_unpack_bcast(
     tile_dimensions,
     formats,
     broadcast_type,
-    dest_acc,
+    is_32b_dest_en,
 ):
     # --- Skips -----------------------------------------------------------
 
-    if dest_acc == DestAccumulation.No and formats.input_format in (
+    if is_32b_dest_en == Fp32DestMode.No and formats.input_format in (
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.UInt32,
@@ -91,7 +91,7 @@ def test_unpack_bcast(
         pytest.skip("32-bit formats require dest accumulation")
 
     if (
-        dest_acc == DestAccumulation.Yes
+        is_32b_dest_en == Fp32DestMode.Yes
         and formats.input_format == DataFormat.UInt16
         and broadcast_type == BroadcastType.None_
     ):
@@ -113,11 +113,11 @@ def test_unpack_bcast(
     if (
         get_chip_architecture() == ChipArchitecture.WORMHOLE
         and broadcast_type == BroadcastType.Row
-        and dest_acc == DestAccumulation.Yes
+        and is_32b_dest_en == Fp32DestMode.Yes
         and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
     ):
         pytest.skip(
-            "Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b/Bfp8_b"
+            "Row broadcast with is_32b_dest_en=Yes broken on Wormhole for Float16_b/Bfp8_b"
         )
 
     # --- Tile geometry ---------------------------------------------------
@@ -157,7 +157,7 @@ def test_unpack_bcast(
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.No,
+        Fp32DestMode.No,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -204,9 +204,9 @@ def test_unpack_bcast(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=formats.input_format.is_32_bit()
-        and dest_acc == DestAccumulation.Yes,
+        and is_32b_dest_en == Fp32DestMode.Yes,
     )
 
     res_from_L1 = configuration.run().result

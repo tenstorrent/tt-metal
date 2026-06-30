@@ -64,7 +64,7 @@ from .golden_generators import (
 )
 from .llk_params import (
     BriscCmd,
-    DestAccumulation,
+    Fp32DestMode,
     L1Accumulation,
     Mailboxes,
     MailboxesCoverage,
@@ -596,7 +596,7 @@ class TestConfig:
         unpack_to_dest: bool = False,
         unpack_to_srcs: bool = False,
         disable_format_inference: bool = False,
-        dest_acc: DestAccumulation = DestAccumulation.No,
+        is_32b_dest_en: Fp32DestMode = Fp32DestMode.No,
         l1_acc: L1Accumulation = L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
@@ -631,7 +631,7 @@ class TestConfig:
         self.l1_acc = l1_acc
         self.skip_build_header = skip_build_header
         self.compile_time_formats = compile_time_formats
-        self.dest_acc = dest_acc
+        self.is_32b_dest_en = is_32b_dest_en
         self.requires_device_print = requires_device_print
 
         TILE_SIZES = {
@@ -641,23 +641,23 @@ class TestConfig:
         }
 
         if formats:
-            # Check if this is an outlier format combination that requires dest_acc to be enabled
-            # Automatically enable dest_acc for outlier combinations
+            # Check if this is an outlier format combination that requires is_32b_dest_en to be enabled
+            # Automatically enable is_32b_dest_en for outlier combinations
             if (
                 is_format_combination_outlier(
                     formats.input_format,
                     formats.output_format,
-                    dest_acc,
+                    is_32b_dest_en,
                 )
                 and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
             ):
-                self.dest_acc = DestAccumulation.Yes
+                self.is_32b_dest_en = Fp32DestMode.Yes
 
             self.formats_config = data_formats(
                 input_format=formats.input_format,
                 input_format_B=formats.input_format_B,
                 output_format=formats.output_format,
-                is_fp32_dest_acc_en=dest_acc,
+                is_32b_dest_en=is_32b_dest_en,
                 num_iterations=self.L1_to_L1_iterations,
                 unpacking_to_dest=self.unpack_to_dest,
                 chip_arch=TestConfig.CHIP_ARCH,
@@ -678,10 +678,10 @@ class TestConfig:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
 
-        # Inject use_srcs and dest_acc into StimuliConfig
+        # Inject use_srcs and is_32b_dest_en into StimuliConfig
         if self.variant_stimuli:
             self.variant_stimuli.set_use_srcs(self.unpack_to_srcs)
-            self.variant_stimuli.set_dest_acc(self.dest_acc)
+            self.variant_stimuli.set_32b_dest(self.is_32b_dest_en)
 
         if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
             itd_param = next(
@@ -1130,11 +1130,11 @@ class TestConfig:
 
         if self.formats_config is None:
             header_content.append(
-                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.value};"
+                f"constexpr bool is_fp32_dest_acc_en = {self.is_32b_dest_en.value};"
             )
         else:
             header_content.append(
-                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
+                f"constexpr bool is_fp32_dest_acc_en = {self.is_32b_dest_en.cpp_enum_value};"
             )
 
         if TestConfig.SPEED_OF_LIGHT:

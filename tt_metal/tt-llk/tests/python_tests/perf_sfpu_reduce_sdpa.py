@@ -4,7 +4,7 @@
 import pytest
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, MathOperation, PerfRunType, ReducePool
+from helpers.llk_params import Fp32DestMode, MathOperation, PerfRunType, ReducePool
 from helpers.param_config import (
     input_output_formats,
     parametrize,
@@ -27,7 +27,7 @@ from helpers.test_variant_parameters import (
         [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce
         same=True,
     ),
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
     loop_factor=list(
@@ -37,7 +37,7 @@ from helpers.test_variant_parameters import (
 def test_perf_sfpu_reduce_sdpa(
     perf_report,
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     reduce_pool,
     loop_factor,
@@ -88,7 +88,7 @@ def test_perf_sfpu_reduce_sdpa(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=False,  # Must be False since math kernel does A2D copy
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)

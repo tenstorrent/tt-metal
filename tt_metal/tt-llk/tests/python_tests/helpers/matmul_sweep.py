@@ -7,11 +7,11 @@ Helper functions for dimension-related calculations in matrix operations and Mat
 from dataclasses import dataclass
 from typing import Iterable, List, NamedTuple, Tuple
 
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.format_config import DataFormat, FormatConfig, is_32b_dest_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     StochasticRounding,
     Transpose,
 )
@@ -68,7 +68,7 @@ class MatmulConfig:
     stochastic_rnd: StochasticRounding
     dst_index: int
     dest_sync: DestSync
-    dest_acc: DestAccumulation
+    is_32b_dest_en: Fp32DestMode
 
 
 # ======================================================================
@@ -220,7 +220,7 @@ def generate_matmul_tiny_tiles_combinations(max_tiles: int) -> List[tuple]:
 
 def skip_matmul_combination(
     stochastic_rounding_mode: StochasticRounding,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     is_fpu_bfloat16: bool,
     kt_dim: int,
 ) -> bool:
@@ -228,7 +228,7 @@ def skip_matmul_combination(
     fpu_stochastic_modes = {StochasticRounding.Fpu, StochasticRounding.All}
     if (
         stochastic_rounding_mode in fpu_stochastic_modes
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
         and is_fpu_bfloat16
         and kt_dim >= 4
     ):
@@ -376,7 +376,7 @@ def generate_face_layout_config_sweep(math_matmul: bool) -> List[FaceLayoutConfi
 
 def sweep_matmul(
     formats_list: List[FormatConfig],
-    dest_acc_modes: List[DestAccumulation],
+    fp32_dest_modes: List[Fp32DestMode],
     all_stochastic_modes: List[StochasticRounding] = [StochasticRounding.No],
     dest_sync_modes: List[DestSync] = [DestSync.Half],
     math_matmul: bool = False,
@@ -391,17 +391,17 @@ def sweep_matmul(
     fpu_stochastic_modes = {StochasticRounding.Fpu, StochasticRounding.All}
 
     for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
+        base_max_tiles = 4 if is_32b_dest_needed(fmt) else 8
         is_fpu_bfloat16 = (
             fmt.input_format in bfloat16_formats
             and fmt.output_format in bfloat16_formats
         )
 
-        for dest_acc in dest_acc_modes:
-            if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
+        for is_32b_dest_en in fp32_dest_modes:
+            if is_32b_dest_needed(fmt) and is_32b_dest_en == Fp32DestMode.No:
                 continue
 
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+            max_tiles = 4 if is_32b_dest_en == Fp32DestMode.Yes else base_max_tiles
 
             # Use cached or newly generated dimensions
             dimensions_list = dimensions_cache.setdefault(
@@ -412,14 +412,17 @@ def sweep_matmul(
                 for dims in dimensions_list:
                     tile_dims = generate_tile_dims(dims)
                     if skip_matmul_combination(
-                        stochastic_mode, dest_acc, is_fpu_bfloat16, tile_dims.kt_dim
+                        stochastic_mode,
+                        is_32b_dest_en,
+                        is_fpu_bfloat16,
+                        tile_dims.kt_dim,
                     ):
                         continue
 
                     for dest_sync in dest_sync_modes:
                         max_dst_index = get_max_dst_index(
                             dest_sync,
-                            dest_acc == DestAccumulation.Yes,
+                            is_32b_dest_en == Fp32DestMode.Yes,
                             tile_dims.tile_cnt,
                         )
 
@@ -428,10 +431,10 @@ def sweep_matmul(
                         )
                         for face_layout_config in face_layout_config_sweep:
                             # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
-                            # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
-                            # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
+                            # In test_config.py, when compiling the test itself, is_32b_dest_en is changed to Fp32DestMode.Yes, which causes the assert to be hit.
+                            # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires is_32b_dest_en to be true
                             if (
-                                dest_acc == DestAccumulation.No
+                                is_32b_dest_en == Fp32DestMode.No
                                 and fmt.input_format == DataFormat.Float16_b
                                 and fmt.output_format == DataFormat.Float16
                             ):
@@ -444,7 +447,7 @@ def sweep_matmul(
                                 stochastic_rnd=stochastic_mode,
                                 dst_index=0,
                                 dest_sync=dest_sync,
-                                dest_acc=dest_acc,
+                                is_32b_dest_en=is_32b_dest_en,
                             )
 
                             combinations.append(base_matmul_dims)
@@ -458,7 +461,7 @@ def sweep_matmul(
                                     stochastic_rnd=stochastic_mode,
                                     dst_index=max_dst_index,
                                     dest_sync=dest_sync,
-                                    dest_acc=dest_acc,
+                                    is_32b_dest_en=is_32b_dest_en,
                                 )
                                 combinations.append(edge_case_dims)
 
@@ -467,7 +470,7 @@ def sweep_matmul(
 
 def sweep_tiny_tiles_matmul(
     formats_list: List[FormatConfig],
-    dest_acc_modes: List[DestAccumulation],
+    fp32_dest_modes: List[Fp32DestMode],
     all_stochastic_modes: List[StochasticRounding] = [StochasticRounding.No],
     dest_sync_modes: List[DestSync] = [DestSync.Half],
     math_matmul: bool = False,
@@ -478,20 +481,20 @@ def sweep_tiny_tiles_matmul(
     for dest_sync in dest_sync_modes:
         base_max_tiles = 8 if dest_sync == DestSync.Half else 16
         for fmt in formats_list:
-            for dest_acc in dest_acc_modes:
-                if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
+            for is_32b_dest_en in fp32_dest_modes:
+                if is_32b_dest_needed(fmt) and is_32b_dest_en == Fp32DestMode.No:
                     continue
 
                 for stochastic_mode in all_stochastic_modes:
                     max_tiles = (
                         base_max_tiles // 2
-                        if is_dest_acc_needed(fmt) or dest_acc == DestAccumulation.Yes
+                        if is_32b_dest_needed(fmt) or is_32b_dest_en == Fp32DestMode.Yes
                         else base_max_tiles
                     )
                     configs.append(
                         {
                             "fmt": fmt,
-                            "dest_acc": dest_acc,
+                            "is_32b_dest_en": is_32b_dest_en,
                             "stochastic_mode": stochastic_mode,
                             "dest_sync": dest_sync,
                             "max_tiles": max_tiles,
@@ -530,7 +533,7 @@ def sweep_tiny_tiles_matmul(
 
             max_dst_index = get_max_dst_index(
                 config["dest_sync"],
-                config["dest_acc"] == DestAccumulation.Yes,
+                config["is_32b_dest_en"] == Fp32DestMode.Yes,
                 tile_dims.tile_cnt,
             )
             max_dst_indices = [0]
@@ -539,10 +542,10 @@ def sweep_tiny_tiles_matmul(
 
             for max_dst_idx in max_dst_indices:
                 # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
-                # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
-                # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
+                # In test_config.py, when compiling the test itself, is_32b_dest_en is changed to Fp32DestMode.Yes, which causes the assert to be hit.
+                # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires is_32b_dest_en to be true
                 if (
-                    config["dest_acc"] == DestAccumulation.No
+                    config["is_32b_dest_en"] == Fp32DestMode.No
                     and config["fmt"].input_format == DataFormat.Float16_b
                     and config["fmt"].output_format == DataFormat.Float16
                 ):
@@ -556,7 +559,7 @@ def sweep_tiny_tiles_matmul(
                         stochastic_rnd=config["stochastic_mode"],
                         dst_index=max_dst_idx,
                         dest_sync=config["dest_sync"],
-                        dest_acc=config["dest_acc"],
+                        is_32b_dest_en=config["is_32b_dest_en"],
                     )
                 )
 

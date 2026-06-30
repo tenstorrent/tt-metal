@@ -7,7 +7,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -37,7 +37,7 @@ class CT_DIM(TemplateParameter):
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     mathop=[MathOperation.Elwsub],
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
     ct_dim=[1, 8],
@@ -47,7 +47,7 @@ def test_perf_eltwise_bcast_col_custom(
     perf_report,
     formats,
     mathop,
-    dest_acc,
+    is_32b_dest_en,
     math_fidelity,
     broadcast_type,
     ct_dim,
@@ -82,7 +82,7 @@ def test_perf_eltwise_bcast_col_custom(
             tile_count_B=1,
             tile_count_res=ct_dim,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)

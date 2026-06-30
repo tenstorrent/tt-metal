@@ -6,7 +6,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import WhereGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathOperation, format_dict
+from helpers.llk_params import Fp32DestMode, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -31,26 +31,26 @@ def torch_equal_nan(a, b):
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
 )
 def test_ttnn_where(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     test_case,
 ):
 
     if (
         formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
+    ) and is_32b_dest_en == Fp32DestMode.No:
+        pytest.skip("DataFormat.Float32 not supported with Fp32DestMode.No")
 
     if (
         formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
+    ) and is_32b_dest_en == Fp32DestMode.Yes:
+        pytest.skip("DataFormat.Float16_b not supported with Fp32DestMode.Yes")
 
     input_dimensions = [32, 32]  # Single tile dimensions
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
@@ -101,7 +101,7 @@ def test_ttnn_where(
             tile_count_C=tile_cnt_C,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 
@@ -143,14 +143,14 @@ def test_ttnn_where(
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     mathop=MathOperation.TTNNWhere,
     height=[32],
     width=[32],
 )
 def test_ttnn_where_mcw(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     height,
     width,
@@ -159,13 +159,13 @@ def test_ttnn_where_mcw(
 
     if (
         formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
+    ) and is_32b_dest_en == Fp32DestMode.No:
+        pytest.skip("DataFormat.Float32 not supported with Fp32DestMode.No")
 
     if (
         formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
+    ) and is_32b_dest_en == Fp32DestMode.Yes:
+        pytest.skip("DataFormat.Float16_b not supported with Fp32DestMode.Yes")
 
     # Create alternating pattern for condition (0, 1, 0, 1, ...)
     pattern = torch.arange(height * width) % 2
@@ -197,7 +197,7 @@ def test_ttnn_where_mcw(
             tile_count_C=1,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 

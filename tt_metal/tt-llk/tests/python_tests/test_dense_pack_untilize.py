@@ -4,7 +4,7 @@
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.llk_params import DestSync, Fp32DestMode, format_dict
 from helpers.param_config import (
     input_output_formats,
     parametrize,
@@ -72,14 +72,14 @@ def print_stimuli_and_golden(src_A, golden, input_dimensions, r_dim):
 @skip_for_wormhole
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     input_dimensions=[[32, 32], [32, 64], [32, 128], [32, 256]],
     r_dim=[1, 2, 4, 8, 16],
     dest_sync=[DestSync.Half],
 )
 def test_pack_untilize(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     input_dimensions,
     r_dim,
     dest_sync,
@@ -123,7 +123,7 @@ def test_pack_untilize(
             tile_count_res=tile_cnt_A,
             sfpu=False,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=False,
     )
 
