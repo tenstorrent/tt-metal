@@ -114,6 +114,37 @@ class GRPOConfig:
     batch_size: Optional[int] = None
 
     def __post_init__(self) -> None:
+        # num_generations is the GRPO group size: each prompt must produce at least
+        # one completion to form a group (advantages are computed within a group,
+        # and the loss normalizes by the completion count). A value <= 0 yields
+        # empty batches and divide-by-zero downstream, so fail fast here.
+        if self.num_generations <= 0:
+            raise ValueError(
+                f"grpo_config: 'num_generations' must be > 0 (got {self.num_generations}); "
+                "GRPO needs at least one completion per prompt."
+            )
+
+        # Other count fields that must be strictly positive: a value <= 0 produces
+        # empty batches / divide-by-zero in batch sizing, loss normalization, or
+        # the dataset loop. Fail fast at config-construction time.
+        for _name, _val in (
+            ("per_device_train_batch_size", self.per_device_train_batch_size),
+            ("gradient_accumulation_steps", self.gradient_accumulation_steps),
+            ("prompts_to_train", self.prompts_to_train),
+        ):
+            if _val <= 0:
+                raise ValueError(f"grpo_config: '{_name}' must be > 0 (got {_val}).")
+
+        # checkpoint_interval is only consulted when checkpointing is enabled, where
+        # it drives ``num_steps % checkpoint_interval`` -- a value <= 0 would be a
+        # modulo-by-zero. (When checkpointing is off the value is unused, so don't
+        # constrain it.)
+        if self.checkpointing and self.checkpoint_interval <= 0:
+            raise ValueError(
+                f"grpo_config: 'checkpoint_interval' must be > 0 when checkpointing is enabled "
+                f"(got {self.checkpoint_interval})."
+            )
+
         # Warn (once per construction) when a deprecated field is explicitly set.
         # TODO: remove this field and warning once all configs have migrated.
         if self.batch_size is not None:
@@ -425,8 +456,25 @@ class GRPOTrainer:
             autograd_ctx.is_parallelism_context_initialized()
             and autograd_ctx.get_parallelism_context().is_ddp_enabled()
         )
-        dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
-        dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
+        # FSDP is configured through a named mesh (axis "fsdp"), opened via
+        # ``ttml.open_device_mesh`` by the completer — not the legacy
+        # parallelism context that DDP uses. When an "fsdp" axis is present the
+        # batch is sliced across the whole mesh (dim 0) exactly like DDP, and
+        # gradients are synchronised with ``ttml.sync_gradients`` over the
+        # ("dp", "fsdp") axes (FSDP-managed params are skipped per-axis because
+        # the FSDP backward hook already reduce-scattered them).
+        mesh = ttml.maybe_mesh()
+        fsdp_enabled: bool = mesh is not None and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
+        fsdp_sync_axes: Tuple[str, ...] = (
+            tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)
+            if mesh is not None
+            else ()
+        )
+        batch_sharded: bool = ddp_enabled or fsdp_enabled
+        dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if batch_sharded else None
+        dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if batch_sharded else None
+        if not batch_sharded:
+            num_devices = 1
 
         # Derive the across-mesh micro-batch size (in completions), the per
         # micro-batch prompt count, and the generation (effective) batch size up
@@ -557,7 +605,9 @@ class GRPOTrainer:
                 warmup_factor = 1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
                 optimizer.set_lr(base_lr * warmup_factor)
 
-                if ddp_enabled:
+                if fsdp_enabled:
+                    ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
+                elif ddp_enabled:
                     ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
                 for cb in self.callbacks:

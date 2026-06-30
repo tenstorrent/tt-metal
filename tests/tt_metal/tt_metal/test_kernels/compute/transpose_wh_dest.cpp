@@ -30,8 +30,8 @@ void kernel_main() {
         copy_tile_init(dfb::in);
         copy_tile(dfb::in, 0, 0);
 
-        transpose_dest_init(dfb::in);
-        transpose_dest(0);
+        transpose_dest_init<DST_ACCUM_MODE, true /* transpose_of_faces */>(dfb::in);
+        transpose_dest<DST_ACCUM_MODE, true /* transpose_of_faces */>(0);
         tile_regs_commit();
 
         tile_regs_wait();
