@@ -1333,6 +1333,21 @@ TEST_F(ProgramSpecTestQuasar, DuplicateScratchpadNameFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate ScratchpadSpec name")));
 }
 
+TEST_F(ProgramSpecTestQuasar, ZeroSizeScratchpadFails) {
+    // A ScratchpadSpec with size_per_node == 0 (the default) reserves no L1, so the device-side
+    // accessor's operator[] would be out of bounds on first use. Bound to a kernel here so the
+    // size check — not the unbound check — is what fires.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}}};  // size_per_node defaults to 0
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("size_per_node == 0")));
+}
+
 TEST_F(ProgramSpecTestQuasar, UnknownScratchpadReferenceFails) {
     // A scratchpad_binding referencing a scratchpad_spec_name that isn't declared in spec.scratchpads.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
