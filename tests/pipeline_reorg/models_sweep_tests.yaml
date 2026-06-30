@@ -19,11 +19,14 @@
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
+    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 15
+      tier: 1
+    bh_p150:
+      timeout: 15
       tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -31,11 +34,11 @@
 - name: Llama 3.3-70B prefix-caching benchmark
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
-    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
+    pytest --timeout 1140 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
   model: llama3.3-70b
   skus:
     wh_galaxy:
-      timeout: 30
+      timeout: 20
       tier: 1
   owner_id: U09LTAPEU2U # Viktor Pus
   team: models
@@ -43,11 +46,14 @@
 - name: Llama 3.3-70B seqlen sweep (LoudBox)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+    pytest --timeout 1440 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: llama3.3-70b
   skus:
     wh_llmbox_perf:
-      timeout: 60
+      timeout: 25
+      tier: 2
+    bh_quietbox_2:
+      timeout: 25
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -55,11 +61,14 @@
 - name: Qwen3-32B seqlen sweep (LoudBox)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
-      timeout: 60
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -67,11 +76,14 @@
 - name: Gemma-3-4B seqlen sweep
   cmd: |
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
-    pytest --timeout 1800 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768
+    pytest --timeout 540 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768
   model: gemma-3-4b
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 10
+      tier: 2
+    bh_p150:
+      timeout: 10
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
