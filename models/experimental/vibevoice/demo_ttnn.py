@@ -169,8 +169,9 @@ def main() -> int:
     ap.add_argument(
         "--trace",
         action="store_true",
-        help="ttnn-trace the post-diffusion block (VV_TRACE_POSTDIFF=1) + open device with "
-        "trace region & 2 command queues. EVAL ONLY: not yet bit-exact (~0.985 PCC vs eager).",
+        help="ttnn-trace the diffusion-head (VV_TRACE_DIFFUSION=1, bit-exact) and the "
+        "post-diffusion block (VV_TRACE_POSTDIFF=1, ~0.985 PCC) + open device with trace "
+        "region & 2 command queues. EVAL ONLY while post-diffusion is not yet bit-exact.",
     )
     args = ap.parse_args()
 
@@ -181,7 +182,12 @@ def main() -> int:
 
     if args.trace:
         os.environ["VV_TRACE_POSTDIFF"] = "1"
-        print("[demo_ttnn] post-diffusion trace enabled (VV_TRACE_POSTDIFF=1)", flush=True)
+        os.environ["VV_TRACE_DIFFUSION"] = "1"
+        print(
+            "[demo_ttnn] trace enabled: post-diffusion (VV_TRACE_POSTDIFF=1) + "
+            "diffusion-head (VV_TRACE_DIFFUSION=1)",
+            flush=True,
+        )
 
     if args.text:
         text_path = Path(args.text)
@@ -294,7 +300,8 @@ def main() -> int:
 
     _open_kwargs = dict(device_id=0, l1_small_size=32768)
     if args.trace:
-        # Reserve a trace buffer + a 2nd command queue for the post-diffusion trace.
+        # Reserve a trace buffer + a 2nd command queue for the diffusion-head and
+        # post-diffusion traces (both captures are held simultaneously).
         _open_kwargs.update(trace_region_size=200_000_000, num_command_queues=2)
     mesh = ttnn.open_device(**_open_kwargs)
     try:
