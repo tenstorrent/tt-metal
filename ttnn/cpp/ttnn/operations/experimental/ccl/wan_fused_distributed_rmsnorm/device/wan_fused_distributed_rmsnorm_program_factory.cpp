@@ -688,6 +688,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // of reduce_width fp32 reciprocals; the reader fills it once, compute reads it as a
     // std::array<uint32_t, reduce_width>. A tiny stub when the LUT is unused.
     constexpr uint32_t recip_lut_cb_id = tt::CBIndex::c_18;
+    // Holds a zeroed Welford state (mean=0 tile, M2=0 tile) captured ONCE at cold start while the
+    // SFPU is clean, then reloaded each row via copy_tile + welford_restore_state to reset the
+    // welford accumulator (mirrors the standard layernorm_large_tensor_welford fuse_pre_add path).
+    // copy_tile is an unpredicated L1->DST read, so it resets every token lane — unlike
+    // welford_init's SFPLOADI clear, which a prior row's combine can leave CC-predicated (ISSUE 3A).
+    constexpr uint32_t welford_zero_cb_id = tt::CBIndex::c_21;
 
     // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
     // chunk N's post phase. The cumulative cb_wait_front in compute pairs
@@ -771,6 +777,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // stub when unused (the reader/compute gate on use_recip and never touch it).
     create_cb(recip_lut_cb_id, program, worker_core_set, use_recip_lut ? recip_lut_bytes : 4u, 1u, fp32_format);
 
+    // Zeroed welford-state scratch (LayerNorm only): 2 fp32 tiles (mean, M2). 1-tile stub otherwise.
+    create_cb(welford_zero_cb_id, program, worker_core_set, fp32_tile_size, is_layernorm ? 2u : 1u, fp32_format);
     create_cb(reduce_scalar_sum_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
     create_cb(reduce_scalar_avg_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
     create_cb(epsilon_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
@@ -1156,6 +1164,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // (array load vs soft-float 1/(N+1)); else it uses the runtime-division fallback.
         recip_lut_cb_id,
         static_cast<uint32_t>(use_recip_lut),
+        // CT 41: zeroed welford-state CB (LayerNorm warm-row accumulator reset, ISSUE 3A).
+        welford_zero_cb_id,
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32

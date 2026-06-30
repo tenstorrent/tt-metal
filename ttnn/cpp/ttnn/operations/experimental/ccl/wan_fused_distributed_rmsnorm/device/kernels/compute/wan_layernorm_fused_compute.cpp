@@ -81,6 +81,9 @@ void kernel_main() {
     // does an array load instead of a soft-float 1/(N+1) per sample. Absent -> runtime div.
     constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(39);
     constexpr uint32_t use_recip_lut = get_compile_time_arg_val(40);
+    // Zeroed welford-state CB (2 tiles: mean=0, M2=0). Captured once below while the SFPU is clean,
+    // reloaded per row to reset the welford accumulator (ISSUE 3A). See the cold-start capture.
+    constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(41);
 
     // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
     constexpr uint32_t tile_width = 32u;
@@ -126,6 +129,25 @@ void kernel_main() {
 
     binary_op_init_common(input_cb, input_cb, input_cb);
 
+    // Cold-start capture of a zeroed welford state into welford_zero_cb (mean=0 tile, M2=0 tile),
+    // done ONCE here while the SFPU condition code is clean (before any row's combine). Each row's
+    // PRE reloads this via copy_tile + welford_restore_state to reset the accumulator on the
+    // unpredicated L1->DST path — the standard layernorm_large_tensor_welford fuse_pre_add trick.
+    {
+        tile_regs_acquire();
+        welford_init();
+        welford_save_state(mean_dst);  // LREG4/5 (cleared) -> mean_dst / var_dst
+        tile_regs_commit();
+        cb_reserve_back(welford_zero_cb, 2);
+        tile_regs_wait();
+        pack_reconfig_data_format(welford_zero_cb);
+        pack_tile(mean_dst, welford_zero_cb);
+        pack_tile(var_dst, welford_zero_cb);
+        tile_regs_release();
+        cb_push_back(welford_zero_cb, 2);
+    }
+    cb_wait_front(welford_zero_cb, 2);  // resident for the whole kernel (never popped)
+
     for (uint32_t row = 0; row < num_tile_rows; row++) {
         // Resident layout: whole row stays in L1 (Welford PRE + POST re-read).
         // Streaming layout (wide shards): each pass waits/pops per block instead.
@@ -136,11 +158,23 @@ void kernel_main() {
         // -------- PHASE 1: PRE — local per-token Welford (mean, var) over the shard --------
         {
             DeviceZoneScopedN("LN_PRE_WELFORD");
-            // bf16 input -> transpose_wh_tile goes through SrcA (no SFPU replay-buffer
-            // clobber), so no welford_init<PreserveStats> recovery is needed.
-            transpose_wh_init_short(input_cb);
             tile_regs_acquire();
+            // welford_init() programs the SFPU replay buffer + address mods (needed every row).
+            // Its SFPLOADI accumulator clear is UNRELIABLE here: a prior row's combine (SFPU rsqrt
+            // with data-dependent predication) can leave the condition code predicated, so the
+            // clear skips some token lanes -> stale ~1e36 mean -> M2 overflow -> inf var -> token
+            // collapse on warm rows (ISSUE 3A). So reset the accumulator via the UNPREDICATED
+            // L1->DST path instead: copy the cold-captured zero state and welford_restore_state
+            // (mirrors layernorm_large_tensor_welford's fuse_pre_add reload).
             welford_init();
+            reconfig_data_format_srca(welford_zero_cb);
+            copy_tile_init(welford_zero_cb);
+            copy_tile(welford_zero_cb, 0, mean_dst);
+            copy_tile(welford_zero_cb, 1, var_dst);
+            welford_restore_state(mean_dst);
+            // Reconfigure the unpacker back to the bf16 input for the transpose-fed welford.
+            reconfig_data_format_srca(welford_zero_cb, input_cb);
+            transpose_wh_init_short(input_cb);
             uint32_t start_n = 0;
             if constexpr (streaming_low_l1 != 0) {
                 // Streamed 1st pass: wait + Welford + pop each block; LREG4/5 accumulate
