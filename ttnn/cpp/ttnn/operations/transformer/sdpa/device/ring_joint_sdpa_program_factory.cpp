@@ -203,8 +203,11 @@ RingWorkPlan build_ring_work_plan_impl(
 
     for (uint32_t ring_iter = 0; ring_iter < derivation.ring_size; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
+        // Gathered joint K/V is only complete at the final ring transfer, so consume it on the last
+        // ring iter (not the iter carrying ring_id == ring_size-1, which can land early when spatial
+        // doesn't span every iter). Safe: this op is always non-causal, so the final iter is never skipped.
         const bool joint_contributes =
-            ring_id == derivation.ring_size - 1 && derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
+            ring_iter == derivation.ring_size - 1 && derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
         uint32_t valid_spatial_kv_chunks = 0;
         for (uint32_t k_chunk = 0; k_chunk < derivation.num_local_k_chunks; ++k_chunk) {
             const uint32_t local_tile_start = k_chunk * derivation.k_chunk_tile_count;
@@ -342,7 +345,11 @@ RingJointRuntimeDerivation build_runtime_derivation(
     const uint32_t k_chunk_size = args.get_k_chunk_size();
     const uint32_t q_local_padded_N = q_shape[2];
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
-    const uint32_t L = has_joint_tensors ? tensor_args.joint_q->logical_shape()[2] : 0;
+    // On the sharded-joint path, joint_q holds only L/P tokens per device; use args.logical_l for
+    // the full joint length. On the replicated path, the tensor shape IS the full length.
+    const uint32_t L = tensor_args.joint_is_sharded()
+                           ? static_cast<uint32_t>(args.logical_l)
+                           : (has_joint_tensors ? tensor_args.joint_q->logical_shape()[2] : 0);
 
     RingJointRuntimeDerivation derivation;
     derivation.logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
@@ -435,12 +442,14 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
                                                        : tensor_args.input_q.device()->compute_with_storage_grid_size();
 
     const uint32_t joint_buffer_args = (L != 0) ? kReaderJointBufferArgCount : 0;
+    // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
+    const uint32_t gathered_joint_buffer_args = tensor_args.joint_is_sharded() ? 2 : 0;
     const uint32_t batch_chain_args =
         k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args = gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + 2;
-    layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + kReaderQWorkArgCount +
-                               kRingJointChainConfigArgCount + batch_chain_args + gqa_chain_args;
+    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
+    layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
+                               kReaderQWorkArgCount + kRingJointChainConfigArgCount + batch_chain_args + gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
@@ -708,6 +717,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const Tensor* joint_tensor_k = has_joint_tensors ? &tensor_args.joint_k.value() : nullptr;
     const Tensor* joint_tensor_v =
         has_joint_tensors ? (tensor_args.joint_v.has_value() ? &tensor_args.joint_v.value() : joint_tensor_k) : nullptr;
+    const bool joint_is_sharded = tensor_args.joint_is_sharded();
+    const Tensor* gathered_joint_tensor_k = joint_is_sharded ? &tensor_args.gathered_joint_k.value() : nullptr;
+    const Tensor* gathered_joint_tensor_v = joint_is_sharded ? &tensor_args.gathered_joint_v.value() : nullptr;
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v =
@@ -789,7 +801,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t padded_N = k_shape[2];
     const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
-    const uint32_t L = has_joint_tensors ? joint_tensor_q->logical_shape()[2] : 0;
+    // L: full joint sequence length. On the sharded path joint_tensor_q holds only the L/P shard,
+    // so use args.logical_l (the explicit caller-provided full length) instead.
+    const uint32_t L = joint_is_sharded ? static_cast<uint32_t>(args.logical_l)
+                                        : (has_joint_tensors ? joint_tensor_q->logical_shape()[2] : 0);
+    // L_local: per-device joint Q length (L/P on sharded path, full L on replicated path)
+    const uint32_t L_local = joint_is_sharded ? L / ring_size : L;
     const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim);
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
@@ -799,6 +816,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
+    const uint32_t Lt_local = tt::div_up(L_local, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
@@ -852,7 +870,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t total_lightweight_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
-    const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
+    // Q chunking uses L_local (per-device shard on sharded path, full L on replicated).
+    // K chunking always uses full L because gathered joint K/V spans the entire L.
+    const uint32_t num_joint_q_chunks = tt::div_up(L_local, q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
     const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
@@ -1175,6 +1195,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compile_time_active_ring_iter_mask,
         NHV,
         static_cast<uint32_t>(v_shares_k_buffer),
+        // Sharded-joint path: Lt_local (Q-axis tile count = L_local/TILE_HEIGHT) and flag.
+        Lt_local,
+        static_cast<uint32_t>(joint_is_sharded),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1186,6 +1209,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TensorAccessorArgs(joint_tensor_q->buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(joint_tensor_k->buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(joint_tensor_v->buffer()).append_to(reader_compile_time_args);
+    }
+    // Gathered joint K/V accessor args — appended after joint tensor args.
+    // IMPORTANT: these two new slots shift post_tensor_args_offset; the reader
+    // kernel must account for this in its compile-time slot index constants.
+    if (joint_is_sharded) {
+        TensorAccessorArgs(gathered_joint_tensor_k->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(gathered_joint_tensor_v->buffer()).append_to(reader_compile_time_args);
     }
 
     /**
@@ -1274,7 +1304,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         padded_Nt,
         compile_time_logical_n,
         compile_time_logical_nt,
-        Lt,
+        Lt_local,  // slot 12: per-device joint tile count (Lt_local == Lt on replicated path)
         L,
         num_local_q_chunks,
         num_joint_q_chunks,
@@ -2268,6 +2298,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(joint_tensor_k->buffer());
             reader_args.push_back(joint_tensor_v->buffer());
         }
+        if (joint_is_sharded) {
+            reader_args.push_back(gathered_joint_tensor_k->buffer());
+            reader_args.push_back(gathered_joint_tensor_v->buffer());
+        }
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_end);
         reader_args.push_checked(
@@ -2400,6 +2434,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_input_tensors.push_back(input_tensor_v);
         all_gather_output_tensors.push_back(gathered_input_tensor_v);
     }
+    // Sharded-joint path: include joint K/V in the same fused gather so gathered_joint_k/v are
+    // produced by the gather that actually runs on device. The tensors are available from
+    // tensor_args after the device op resolved and stored them in gathered_joint_k/v.
+    // The joint inputs are appended AFTER the spatial inputs, so any input index >= the spatial
+    // count is a joint input that must have its local slice written into the gathered buffer
+    // (write_local) — the reader consumes joint K/V as a complete full-L replica.
+    std::optional<uint32_t> write_local_from_input_idx = std::nullopt;
+    if (joint_is_sharded) {
+        TT_FATAL(
+            tensor_args.gathered_joint_k.has_value() && tensor_args.gathered_joint_v.has_value(),
+            "joint_is_sharded but gathered_joint_k/v not set in tensor_args");
+        write_local_from_input_idx = static_cast<uint32_t>(all_gather_input_tensors.size());
+        all_gather_input_tensors.push_back(*joint_tensor_k);
+        all_gather_output_tensors.push_back(tensor_args.gathered_joint_k.value());
+        all_gather_input_tensors.push_back(*joint_tensor_v);
+        all_gather_output_tensors.push_back(tensor_args.gathered_joint_v.value());
+    }
     // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
     // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.
     // The trailing kv_cache_batch_idx makes the gather collect only that cache slot (std::nullopt =>
@@ -2425,7 +2476,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Bound the gather to the logical_n-valid prefix at create time so the first (cache-miss)
         // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per
         // dispatch on cache hits in apply_ring_joint_scalar_runtime_args.
-        compute_gather_valid_Ht(args, tensor_args));
+        compute_gather_valid_Ht(args, tensor_args),
+        write_local_from_input_idx);
 
     return desc;
 }
