@@ -14,4 +14,5 @@ def apply_geglu(gate, up):
     """GeGLU activation: gelu(gate) * up. Gemma4 uses gelu_pytorch_tanh."""
     activated = ttnn.gelu(gate, fast_and_approximate_mode=True)
     result = ttnn.mul(activated, up)
+    activated.deallocate(True)
     return result

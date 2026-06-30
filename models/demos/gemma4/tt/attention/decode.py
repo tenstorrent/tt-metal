@@ -238,9 +238,9 @@ def decode_forward(
         # Global layers: smaller grid — head_dim=512 needs more L1 per core.
         sdpa_grid = ttnn.CoreCoord(8, 4)
     else:
-        # Sliding layers: use the full device compute grid.
-        device_grid = mesh_device.compute_with_storage_grid_size()
-        sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+        # Sliding layers: use a smaller grid to leave room for decode-path
+        # resident L1 tensors after denoise/commit handoff.
+        sdpa_grid = ttnn.CoreCoord(8, 1)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_grid,
@@ -286,6 +286,7 @@ def decode_forward(
     tt_out = concat_heads(
         tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
     )
+    tt_sdpa.deallocate(True)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 

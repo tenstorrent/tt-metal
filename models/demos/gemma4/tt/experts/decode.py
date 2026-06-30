@@ -86,7 +86,7 @@ def decode_forward(
     down_config = _build_sparse_matmul_config(batch_size, config.hidden_size)
 
     # Gate projection: [1,1,S,H] × [1,E,H,I] → [1,1,S,E,S_tile,I]
-    gate = ttnn.sparse_matmul(
+    gate_sparse = ttnn.sparse_matmul(
         hidden_states,
         weights.gate_proj,
         sparsity=sparsity,
@@ -97,14 +97,17 @@ def decode_forward(
         dtype=ttnn.bfloat16,
     )
     # sparse_matmul output uses logical intermediate dim (may differ from padded weight size)
-    sm_intermediate = gate.shape[-1]
+    sm_intermediate = gate_sparse.shape[-1]
     # Reshape 6D → 3D: [batch, num_experts, intermediate]
-    gate = ttnn.reshape(gate, (batch_size, num_experts, 1, sm_intermediate))
-    gate = ttnn.transpose(gate, 1, 2)
-    gate = ttnn.reshape(gate, (batch_size, num_experts, sm_intermediate))
+    gate_4d = ttnn.reshape(gate_sparse, (batch_size, num_experts, 1, sm_intermediate))
+    gate_sparse.deallocate(True)
+    gate_transposed = ttnn.transpose(gate_4d, 1, 2)
+    gate_4d.deallocate(True)
+    gate = ttnn.reshape(gate_transposed, (batch_size, num_experts, sm_intermediate))
+    gate_transposed.deallocate(True)
 
     # Up projection
-    up = ttnn.sparse_matmul(
+    up_sparse = ttnn.sparse_matmul(
         hidden_states,
         weights.up_proj,
         sparsity=sparsity,
@@ -114,16 +117,23 @@ def decode_forward(
         program_config=gate_up_config,
         dtype=ttnn.bfloat16,
     )
-    up = ttnn.reshape(up, (batch_size, num_experts, 1, sm_intermediate))
-    up = ttnn.transpose(up, 1, 2)
-    up = ttnn.reshape(up, (batch_size, num_experts, sm_intermediate))
+    up_4d = ttnn.reshape(up_sparse, (batch_size, num_experts, 1, sm_intermediate))
+    up_sparse.deallocate(True)
+    up_transposed = ttnn.transpose(up_4d, 1, 2)
+    up_4d.deallocate(True)
+    up = ttnn.reshape(up_transposed, (batch_size, num_experts, sm_intermediate))
+    up_transposed.deallocate(True)
 
     # GeGLU activation
     down_input = apply_geglu(gate, up)
+    gate.deallocate(True)
+    up.deallocate(True)
 
     # Prepare for down projection
-    down_input = ttnn.transpose(down_input, 1, 0)
-    down_input = ttnn.reshape(down_input, (1, num_experts, batch_size, sm_intermediate))
+    down_input_transposed = ttnn.transpose(down_input, 1, 0)
+    down_input.deallocate(True)
+    down_input = ttnn.reshape(down_input_transposed, (1, num_experts, batch_size, sm_intermediate))
+    down_input_transposed.deallocate(True)
 
     # Down projection: sparse, input is also sparse
     down = ttnn.sparse_matmul(
@@ -131,7 +141,7 @@ def decode_forward(
         weights.down_proj,
         sparsity=sparsity,
         nnz=top_k,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=down_config,
         is_input_a_sparse=True,
