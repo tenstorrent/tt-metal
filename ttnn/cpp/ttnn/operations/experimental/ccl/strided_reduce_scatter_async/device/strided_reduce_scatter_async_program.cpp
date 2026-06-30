@@ -422,6 +422,12 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             reader_compute_defines["ADDCMUL_B_BROADCAST"] = "1";
             reduce_compute_defines["ADDCMUL_B_BROADCAST"] = "1";
         }
+        constexpr uint32_t one_f32_bits = 0x3F800000u;
+        uint32_t scalar_bits = 0;
+        std::memcpy(&scalar_bits, &fused_ternary_scalar.value(), sizeof(uint32_t));
+        if (scalar_bits == one_f32_bits) {
+            reduce_compute_defines["ADDCMUL_SCALAR_IS_ONE"] = "1";
+        }
     }
 
     // KERNEL CREATION

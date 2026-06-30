@@ -633,6 +633,12 @@ all_gather_minimal_matmul_async_factory_helper(
         if (fused_ternary_input_b.value().dtype() == ttnn::DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
+        constexpr uint32_t one_f32_bits = 0x3F800000u;
+        uint32_t scalar_bits = 0;
+        std::memcpy(&scalar_bits, &fused_ternary_scalar.value(), sizeof(uint32_t));
+        if (scalar_bits == one_f32_bits) {
+            defines["ADDCMUL_SCALAR_IS_ONE"] = "1";
+        }
     }
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
