@@ -157,19 +157,19 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
 @pytest.mark.parametrize(
     "m, k, n, k_blocks, n_blocks",
     [
-        (1, 4096, 1024, 4, 32),
-        (4, 4096, 1024, 4, 32),
-        (8, 4096, 1024, 4, 32),
-        (16, 4096, 1024, 4, 32),
-        (32, 4096, 1024, 4, 32),
-        (64, 4096, 1024, 4, 32),
+        (1, 4096, 1024, 2, 32),
+        (4, 4096, 1024, 2, 32),
+        (8, 4096, 1024, 2, 32),
+        (16, 4096, 1024, 2, 32),
+        (32, 4096, 1024, 2, 32),
+        (64, 4096, 1024, 2, 32),
         # (32, 64, 256, 2, 8),
     ],
 )
 @pytest.mark.parametrize(
     "num_inputA_cores",
     [
-        (2),
+        (32),
     ],
 )
 def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks, num_inputA_cores):
@@ -183,7 +183,7 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
         f"num_inputA_cores: {num_inputA_cores}, num_inputB_cores: {num_inputB_cores}, "
         f"kc: {kc}, nc: {nc}, k_blocks: {k_blocks}, n_blocks: {n_blocks}"
     )
-    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < 128:
+    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
         pytest.skip("Skipping test as device doesn't have 128 cores")
     # torch_input_tensor_a = torch.tensor([(x ) for x in range(m)], dtype=torch.bfloat16).reshape(m, 1).expand(m, k).contiguous()
     # torch_input_tensor_a += torch.tensor([(x ) for x in range(k)], dtype=torch.bfloat16).reshape(1, k).expand(m, k).contiguous()
