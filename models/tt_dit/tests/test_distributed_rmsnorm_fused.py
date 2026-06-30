@@ -920,9 +920,15 @@ def test_layernorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_m
     3 launches. Exercises the recip LUT + LN-sized stats buffer wiring end-to-end."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
     dim = _LN_HID[model]
-    rows = 256
+    # LNMOD_ROWS lets us probe multi-AG-round behavior (block uses N~24800 -> ~775
+    # tile-rows -> many rounds; N=256 is a single round). LNMOD_MEAN0=1 uses a mean-0
+    # input (real block activations) instead of the mean-4 default.
+    rows = int(_os.getenv("LNMOD_ROWS", "256"))
     torch.manual_seed(0)
-    x_t = (torch.randn(1, 1, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
+    if _os.getenv("LNMOD_MEAN0") == "1":
+        x_t = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()
+    else:
+        x_t = (torch.randn(1, 1, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
     scale_t = torch.randn(1, 1, dim, dtype=torch.bfloat16).float()
     shift_t = torch.randn(1, 1, dim, dtype=torch.bfloat16).float()
 
