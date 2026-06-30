@@ -77,6 +77,52 @@ def _trajectory_summary(prefix: str, trajectory, *, eos_token_id: int | None) ->
     }
 
 
+def _decision_diff_summary(hf_traj, tt_traj, *, limit: int = 32) -> dict:
+    per_step = []
+    for hf_step, tt_step in zip(hf_traj.per_step, tt_traj.per_step):
+        argmax_diff = (hf_step.argmax != tt_step.argmax).nonzero(as_tuple=False)
+        accept_diff = (hf_step.accept_mask != tt_step.accept_mask).nonzero(as_tuple=False)
+        canvas_diff = (hf_step.canvas != tt_step.canvas).nonzero(as_tuple=False)
+        step_summary = {
+            "step": hf_step.step,
+            "argmax_diff_count": int(argmax_diff.shape[0]),
+            "accept_diff_count": int(accept_diff.shape[0]),
+            "canvas_diff_count": int(canvas_diff.shape[0]),
+            "argmax_diff": [],
+            "accept_diff": [],
+        }
+        for b, pos in argmax_diff[:limit].tolist():
+            step_summary["argmax_diff"].append(
+                {
+                    "batch": int(b),
+                    "pos": int(pos),
+                    "hf_argmax": int(hf_step.argmax[b, pos]),
+                    "tt_argmax": int(tt_step.argmax[b, pos]),
+                    "hf_sampled": int(hf_step.sampled[b, pos]),
+                    "tt_sampled": int(tt_step.sampled[b, pos]),
+                    "hf_accept": bool(hf_step.accept_mask[b, pos]),
+                    "tt_accept": bool(tt_step.accept_mask[b, pos]),
+                    "hf_entropy": float(hf_step.entropy[b, pos]),
+                    "tt_entropy": float(tt_step.entropy[b, pos]),
+                }
+            )
+        for b, pos in accept_diff[:limit].tolist():
+            step_summary["accept_diff"].append(
+                {
+                    "batch": int(b),
+                    "pos": int(pos),
+                    "hf_accept": bool(hf_step.accept_mask[b, pos]),
+                    "tt_accept": bool(tt_step.accept_mask[b, pos]),
+                    "hf_argmax": int(hf_step.argmax[b, pos]),
+                    "tt_argmax": int(tt_step.argmax[b, pos]),
+                    "hf_entropy": float(hf_step.entropy[b, pos]),
+                    "tt_entropy": float(tt_step.entropy[b, pos]),
+                }
+            )
+        per_step.append(step_summary)
+    return {"per_step_diffs": per_step}
+
+
 def _compare_summary(prompt: str, seed: int, hf_traj, tt_traj, *, eos_token_id: int | None) -> tuple[object, dict]:
     comparison = compare_trajectories(
         hf_traj,
@@ -102,6 +148,7 @@ def _compare_summary(prompt: str, seed: int, hf_traj, tt_traj, *, eos_token_id: 
         "per_step_canvas_agreement": comparison.per_step_canvas_agreement,
         "per_step_entropy_pcc": comparison.per_step_entropy_pcc,
         "per_step_entropy_max_abs": comparison.per_step_entropy_max_abs,
+        **_decision_diff_summary(hf_traj, tt_traj),
     }
     return comparison, summary
 
