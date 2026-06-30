@@ -554,6 +554,48 @@ def test_dispatch_matmul_bypasses_selector_when_graph_report_is_enabled(monkeypa
     assert calls == [(prepared.input_tensor_a, prepared.input_tensor_b, {})]
 
 
+def test_dispatch_matmul_bypasses_selector_for_rank1_inputs(monkeypatch):
+    class FakeTensor:
+        shape = (4,)
+
+        def device(self):
+            return "device"
+
+    a = FakeTensor()
+    b = FakeTensor()
+    calls = []
+
+    monkeypatch.setattr(
+        auto_matmul,
+        "_ttnn",
+        lambda: SimpleNamespace(
+            Tensor=FakeTensor,
+            CONFIG=SimpleNamespace(enable_graph_report=False),
+        ),
+    )
+    monkeypatch.setattr(
+        auto_matmul,
+        "_select_candidate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("selector should be bypassed")),
+    )
+
+    def base_operation(lhs, rhs, **kwargs):
+        calls.append((lhs, rhs, kwargs))
+        return "base-result"
+
+    result = auto_matmul.dispatch_matmul(
+        base_operation=base_operation,
+        input_tensor_a=a,
+        input_tensor_b=b,
+        bias=None,
+        is_linear=False,
+        auto_config=True,
+    )
+
+    assert result == "base-result"
+    assert calls == [(a, b, {})]
+
+
 def test_explain_matmul_reports_unsupported_topology_passthrough(monkeypatch):
     class FakeTensor:
         def device(self):

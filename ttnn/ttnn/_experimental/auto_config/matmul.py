@@ -127,13 +127,17 @@ def _serialize_tensor(tensor: Any) -> dict[str, Any] | None:
     }
 
 
+def _supports_matrix_auto_config(lhs_shape: tuple[int, ...], rhs_shape: tuple[int, ...]) -> bool:
+    return len(lhs_shape) >= 2 and len(rhs_shape) >= 2
+
+
 def _extract_mkn(
     lhs_shape: tuple[int, ...],
     rhs_shape: tuple[int, ...],
     transpose_a: bool,
     transpose_b: bool,
 ) -> tuple[int, int, int]:
-    if len(lhs_shape) < 2 or len(rhs_shape) < 2:
+    if not _supports_matrix_auto_config(lhs_shape, rhs_shape):
         raise ValueError("auto-config matmul requires tensors with at least 2 dimensions")
 
     lhs_rows = lhs_shape[-1] if transpose_a else lhs_shape[-2]
@@ -1695,7 +1699,7 @@ def _select_candidate(
     candidate_timings: list[dict[str, Any]] = []
     winner: Candidate | None = None
     winner_avg_us: float | None = None
-    queue_id = int(kwargs.get("queue_id") or kwargs.get("cq_id") or 0)
+    queue_id = int(kwargs["queue_id"] if "queue_id" in kwargs else (kwargs.get("cq_id") or 0))
     benchmark_accepts_queue_id = _callable_accepts_keyword(_benchmark_candidate, "queue_id")
 
     for candidate in candidates:
@@ -1801,7 +1805,26 @@ def dispatch_matmul(
             kwargs=kwargs,
         )
 
+    # 1-D inputs (e.g. dot-product: ttnn.matmul(vec, vec)) cannot be handled by
+    # the auto-config candidate families which all require M×K × K×N shapes.
+    # Check BEFORE _prepare_inputs: staging a 1-D host torch.Tensor via
+    # ttnn.as_tensor(layout=TILE_LAYOUT) would silently reshape it to 2-D,
+    # making the shape check fire too late.
+    if not _supports_matrix_auto_config(
+        _shape_to_tuple(getattr(input_tensor_a, "shape", ())),
+        _shape_to_tuple(getattr(input_tensor_b, "shape", ())),
+    ):
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=input_tensor_a,
+            input_tensor_b=input_tensor_b,
+            bias=bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
+
     prepared = _prepare_inputs(input_tensor_a, input_tensor_b, bias)
+
     if not auto_config:
         return _run_base_operation(
             base_operation=base_operation,
