@@ -89,7 +89,7 @@
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
     bh_sp1-blitz:
-      timeout: 60
+      timeout: 90
   owner_id: U08E1JCMAJF
   team: scaleout
   sp_config: sp1-blitz
