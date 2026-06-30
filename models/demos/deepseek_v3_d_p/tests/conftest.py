@@ -23,8 +23,8 @@ from transformers import AutoConfig, AutoTokenizer
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillModelAdapter, get_adapter
-from models.demos.deepseek_v3.utils.config_helpers import detect_language_model_prefix, sub_state_dict
-from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 
 # The per-model registry now lives in models/demos/common/prefill/adapter.py and is shared by the
 # runner and the tests. These aliases keep the existing fixture/test references (TestVariant /
