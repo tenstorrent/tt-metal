@@ -523,6 +523,53 @@ The original goal: Tensix markers → X280 → host → **Tracy zones**. Done vi
   `x280_zone_<id>` (no kernel-source name map yet). `--tracy`/`--freq` flags on
   `test_x280_profcons`.
 
+### 19. Productionizing — X280 drainer in device init, via a real D2H socket (bh-08)
+
+Goal: make the SPSC kernel-profiler "just work" on this branch (it BLOCKS producers when a ring
+fills, so a normal profiled run with no X280 drainer deadlocks). Plan: bring the X280 up at device
+init and feed its drained markers to **Tracy through the existing real-time-profiler (RT) path**,
+using a real tt-metal **D2H socket** as the transport. Pieces built + de-risked (all on bh-08):
+
+- **X280 boots mid-session without a chip reset.** On a clean(ish) chip the L2CPU reset toggle
+  alone boots + drains losslessly (`--no-reset`); a dirty (left-running) X280 needs a clean halt
+  on close. So device-init boot is viable; teardown must assert L2CPU reset.
+- **X280 firmware builds in the JIT phase.** Tensix `JitBuildState` is SFPI/rv32/HAL-bound and
+  can't build the rv64gcv X280 FW, so a **sibling step** in `BuildEnvManager::build_firmware`
+  (`build_env_manager.cpp`) shells the rv64 toolchain into the JIT cache (`.../firmware/x280/
+  profcons.bin`), gated on profiler-enabled + Blackhole + L2CPU; toolchain (`TT_METAL_X280_TOOLCHAIN`)
+  is a hard precondition. Verified building the `.bin` at device init.
+- **`D2HSocket` can drive the X280 L2CPU as a *sender*.** It was Tensix-worker-specific in two
+  spots (config write + the `bytes_acked` ack-write); a small `sender_is_l2cpu` extension
+  (`d2h_socket.{hpp,cpp}`) targets the L2CPU via phys→virt translation + full LIM address, and
+  skips the (nonexistent) static TLB for the dynamic `write_core` ack path. Verified: the
+  `sender_socket_md` lands in the X280 LIM (`is_d2h=1`, `fifo_total=4096`, real host FIFO addr).
+- **FW D2H-socket sender + BW bench** (`src/profsock.c`, host `--socktest`): the X280 reads the
+  socket config from LIM and runs the real `reserve → 64 B page write (PCIe-tile NOC1) → push →
+  notify` protocol; host drains via `socket.read()` (which acks back, closing flow control).
+
+**BW measured (200k × 64 B pages, lossless):**
+
+| Notify batch | D2H-socket push BW |
+|---|---|
+| 1 (per-page) | 773 MB/s |
+| **8** | **839 MB/s** (knee) |
+| 16 / 32 | 834 / 838 |
+| 64 (whole FIFO) | 780 (reserve serializes vs the drain) |
+
+- Batching the notify gains only ~8% ⇒ the notify wasn't the cost. The cap is the **host drain**:
+  `socket.read()` reads ≤64 pages/call (4 KB FIFO) → ~3,100 calls for 200k pages, per-call driver
+  overhead bounds it at **~840 MB/s** (the FW can push faster; the receiver read-loop is the limit).
+- **~840 MB/s is ~70% of the raw-relay 1.2 GB/s, but immaterial in practice** — it's drain capacity,
+  far above the actual zone-production rate.
+- **⚠️ Revisit these rates:** a future commit will make the **host side faster** (e.g. a larger FIFO
+  → more pages per `read()`, lower per-call overhead). The ~840 MB/s here is bounded by today's
+  4 KB-FIFO / per-call `read()` cost, **not** the X280 sender — re-measure the socket BW after the
+  host-side speedup lands.
+
+Files (uncommitted): `build_env_manager.cpp`, `d2h_socket.{hpp,cpp}`, `src/profsock.c`, `Makefile`,
+`test_x280_profcons.cpp` (`--derisk-socket`/`--socktest`/`--no-reset`). NEXT: on-device zone pairing
++ tagged RT page/record (type/core/risc/subdevice) + register the X280 socket with the RT receiver.
+
 ---
 
 ## Hardware facts established

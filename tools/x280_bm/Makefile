@@ -184,6 +184,16 @@ $(BUILD)/profcons_split.bin: $(BUILD)/profcons_split.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "profcons_split.bin: $$(wc -c < $@) bytes"
 
+$(BUILD)/profsock.o: src/profsock.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/profsock.elf: $(BUILD)/entry.o $(BUILD)/profsock.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/profsock.o
+
+$(BUILD)/profsock.bin: $(BUILD)/profsock.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "profsock.bin: $$(wc -c < $@) bytes"
+
 $(BUILD):
 	mkdir -p $@
 

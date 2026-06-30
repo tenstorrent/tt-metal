@@ -220,6 +220,9 @@ int main(int argc, char** argv) {
     double dev_ghz = 1.35;                   // --freq: device wall-clock GHz for cycle->ns (Blackhole ~1.35)
     int no_reset = 0;                        // --no-reset: skip tt-smi -r, boot X280 via L2CPU reset only
     int derisk_socket = 0;                   // --derisk-socket: can a D2HSocket target the X280 L2CPU as sender?
+    int socktest = 0;                        // --socktest: X280 pushes pages through a real D2H socket; measure BW
+    uint64_t sock_npages = 200000;           // --npages: pages for the socktest bench (64 B each)
+    uint64_t sock_batch = 16;                // --batch: pages pushed per notify (amortizes reserve+notify)
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -250,6 +253,12 @@ int main(int argc, char** argv) {
             no_reset = 1;
         } else if (a == "--derisk-socket") {
             derisk_socket = 1;
+        } else if (a == "--socktest") {
+            socktest = 1;
+        } else if (a == "--npages") {
+            sock_npages = std::stoull(next());
+        } else if (a == "--batch") {
+            sock_batch = std::stoull(next());
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -322,6 +331,80 @@ int main(int argc, char** argv) {
         }
         std::fflush(stdout);
         std::_Exit(0);
+    }
+
+    if (socktest) {
+        // STEP 2 BW BENCH: the X280 (profsock.bin) pushes `sock_npages` synthetic 64 B pages
+        // through a REAL D2HSocket (sender = X280 L2CPU) to the host FIFO; the host drains via
+        // socket.read() (which acks back to the X280 LIM, driving flow control). The FW times its
+        // push -> sustained D2H-socket BW, vs the raw-relay ~1.2 GB/s.
+        using tt::tt_metal::distributed::D2HSocket;
+        using tt::tt_metal::distributed::MeshCoordinate;
+        using tt::tt_metal::distributed::MeshCoreCoord;
+        auto pcie_cores = cluster.get_soc_desc(device_id).get_cores(tt::CoreType::PCIE, tt::CoordSystem::TRANSLATED);
+        auto pc = pcie_cores.front();
+        const uint32_t cfg_addr = 0x08019000u;
+        const uint64_t SOCK_DONE = 0x5005C0FFEEULL;
+
+        X280 x280(cluster, device_id, l2cpu);
+        x280.assert_reset();
+        auto bin = read_file("tools/x280_bm/build/profsock.bin");
+        x280.load_lim(bin);
+        std::vector<uint8_t> params(64, 0), zres(64, 0);
+        pack<uint64_t>(params, 0x00, (uint64_t)cfg_addr);
+        pack<uint64_t>(params, 0x08, (uint64_t)pc.x);
+        pack<uint64_t>(params, 0x10, (uint64_t)pc.y);
+        pack<uint64_t>(params, 0x18, sock_npages);
+        pack<uint64_t>(params, 0x20, sock_batch);
+        x280.write_block(params, MBOX_PARAMS);
+        x280.write_block(zres, MBOX_RESULTS);
+
+        CoreCoord l2phys = l2cpu_tile(l2cpu);
+        MeshCoreCoord sender{MeshCoordinate(0, 0), l2phys};
+        D2HSocket sock(
+            mesh, sender, 4096u, D2HSocket::ExternalConfigBuffer{.address = cfg_addr, .sender_is_l2cpu = true});
+        sock.set_page_size(64);
+
+        x280.set_reset_vectors(LIM_BASE);
+        x280.set_pll(pll);
+        x280.release_reset();
+        printf(
+            "[socktest] X280 pushing %llu x 64B pages (batch=%llu) through D2H socket; host draining...\n",
+            (unsigned long long)sock_npages,
+            (unsigned long long)sock_batch);
+
+        std::vector<uint32_t> buf(64 * 64 / sizeof(uint32_t));  // up to one FIFO (64 pages)
+        uint64_t pages_read = 0;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+        bool done = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            uint32_t avail = sock.pages_available();
+            if (avail > 0) {
+                if (avail > 64) {
+                    avail = 64;
+                }
+                sock.read(buf.data(), avail);
+                pages_read += avail;
+            }
+            if (x280.lim_rd_u64(MBOX_RESULTS + 0x18) == SOCK_DONE && pages_read >= sock_npages) {
+                done = true;
+                break;
+            }
+        }
+        uint64_t fw_bytes = x280.lim_rd_u64(MBOX_RESULTS + 0x00);
+        uint64_t cyc = x280.lim_rd_u64(MBOX_RESULTS + 0x08);
+        double mbps = cyc ? (double)fw_bytes / 1e6 / ((double)cyc / ((double)pll * 1e6)) : 0.0;
+        x280.assert_reset();  // clean halt
+        printf(
+            "[socktest] done=%d pages_read=%llu fw_bytes=%llu cycles=%llu\n",
+            done,
+            (unsigned long long)pages_read,
+            (unsigned long long)fw_bytes,
+            (unsigned long long)cyc);
+        printf(
+            "[socktest] D2H-SOCKET PUSH BW: %.0f MB/s  (64B pages, per-page notify; vs raw-relay ~1.2 GB/s)\n", mbps);
+        std::fflush(stdout);
+        std::_Exit(done ? 0 : 1);
     }
 
     CoreCoord grid = mesh->compute_with_storage_grid_size();
