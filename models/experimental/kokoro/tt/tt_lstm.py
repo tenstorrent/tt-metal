@@ -267,6 +267,34 @@ def _lstm_step_fused(
     (~8 vs ~11 µs at H=256, PCC unchanged) while keeping ``in0``/``out`` interleaved — i.e. no
     per-step reshard. See :func:`models.experimental.kokoro.tt.tt_text_encoder` and the matmul sweep.
     """
+    # Emit the recurrent matmul output L1 width-sharded whenever the tuned program config is active
+    # (the validated H=256 / 8x8 TextEncoder shape — _fused_recurrent_program_config returns None for
+    # any other BiLSTM, so this never touches the F0-sensitive prosody LSTMs). This is the fastest
+    # bf16 sweep config for [B,2H]@[2H,8H] (1D_in0 l1/dram/ws: ~7.7 vs 8.1 µs isolated). The output
+    # tiles 1-per-core over the matmul's own compute grid (per_core_N=1), and the immediate consumer
+    # below (sigmoid, memory_config-interleaved) absorbs the shard->interleaved relayout into its own
+    # kernel — so no extra per-step reshard op is added (verified in the perf report).
+    _mm_mem = memory_config
+    # Preserve the matmul's output dtype across the L1-sharded path. ttnn.matmul defaults a *sharded*
+    # output to bfloat16 even when the inputs are fp32 (an interleaved output instead preserves the
+    # input dtype), which would silently downcast the whole downstream cell-state chain to bf16 — a
+    # precision change the F0-sensitive prosody BiLSTM rejects, and a dtype mismatch against the
+    # fp32 anti-identity reorder at the final concat. Pin the output to the state dtype so the sharding
+    # is a pure placement change (bit-identical numerics), not a dtype switch.
+    _mm_dtype = None
+    if program_config is not None:
+        _grid = program_config.compute_with_storage_grid_size
+        # Tile-pad the height (B -> ceil to 32): the matmul tile-pads B internally and computes a
+        # [32, 8H/cores] shard, so passing the logical B (e.g. 2) yields a [2, ...] spec that mismatches
+        # and gets silently overridden ("Using computed config" warning). Padding here matches it exactly.
+        _padded_m = ((h.shape[0] + _TILE - 1) // _TILE) * _TILE
+        _mm_mem = ttnn.create_sharded_memory_config(
+            (_padded_m, w_h_block.shape[-1]),  # [pad(B), 8H], width-sharded over the matmul's grid
+            core_grid=ttnn.CoreGrid(y=_grid.y, x=_grid.x),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        _mm_dtype = h.dtype
     if fold_bias:
         # Fold gates_x into the recurrent matmul bias epilogue (one fp32 epilogue add): drops one
         # BinaryNg/step and is closer to the torch fp32 reference. B==1 only (see _lstm_step).
@@ -274,7 +302,8 @@ def _lstm_step_fused(
             h,
             w_h_block,
             bias=gates_x,
-            memory_config=memory_config,
+            memory_config=_mm_mem,
+            dtype=_mm_dtype,
             compute_kernel_config=compute_kernel_config,
             program_config=program_config,
         )
@@ -283,10 +312,15 @@ def _lstm_step_fused(
             h,
             w_h_block,
             bias=None,
-            memory_config=memory_config,
+            memory_config=_mm_mem,
+            dtype=_mm_dtype,
             compute_kernel_config=compute_kernel_config,
             program_config=program_config,
         )
+        # Keep gates_x as operand-a: ttnn binary ops take their output dtype from the first operand.
+        # gates_x is the fp32 input projection while gates_h (the recurrent matmul) may be bf16, so
+        # operand-a=gates_x keeps ``gates`` fp32 — both bit-faithful to the fp32 reference and dtype-
+        # consistent with the fp32 anti-identity output reorder at the final concat (see below).
         gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
         ttnn.deallocate(gates_h)
 
