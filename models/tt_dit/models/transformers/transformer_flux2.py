@@ -17,7 +17,6 @@ from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepa
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
-from ...utils.tracing import traced_function
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -296,8 +295,9 @@ class Flux2SingleTransformerBlock(Module):
 
     def x_c_merged_fused(
         self,
-        spatial,
-        prompt,
+        spatial_prompt_concat,
+        spatial_size,
+        prompt_size,
         spatial_rope,
         prompt_rope,
         spatial_sequence_length,
@@ -306,6 +306,7 @@ class Flux2SingleTransformerBlock(Module):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         # skip for compute_prompt_output = False
         if not compute_prompt_output:
+            spatial, prompt = ttnn.split(spatial_prompt_concat, [spatial_size, prompt_size], dim=1)
             return self.x_c_agmm(
                 spatial,
                 prompt,
@@ -314,14 +315,18 @@ class Flux2SingleTransformerBlock(Module):
                 spatial_sequence_length,
                 compute_prompt_output,
                 temb_mod_params,
-            )
+            )[
+                0
+            ]  # spatial only
 
         shift_msa, scale_msa, gate_msa = temb_mod_params
 
-        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
-        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        spatial_prompt = spatial_prompt_concat
+        x_c = ttnn.squeeze(
+            self.norm(ttnn.unsqueeze(spatial_prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0
+        )
+        x, c = ttnn.split(x_c, [spatial_size, prompt_size], dim=1)
 
-        x_c = ttnn.concat([x, c], dim=1)
         x_c_mlp = self.proj_mlp(x_c, parallel_config=self._parallel_config, use_heuristic_mmcfg=True)
 
         x, c = self.attn.forward(
@@ -335,22 +340,23 @@ class Flux2SingleTransformerBlock(Module):
         # concatnate and reshard x_c again
         x_c = ttnn.concat([x, c], dim=1)
 
-        spatial_prompt = ttnn.concat([spatial, prompt], dim=1)
+        # spatial_prompt = ttnn.concat([spatial, prompt], dim=1)
 
         # now concatenate on -1 dimension.
         spatial_prompt, _ = self.post_mm_common(spatial_prompt, None, x_c, x_c_mlp, None, None, False, gate_msa)
         # Gather and slice the output for both.
-        spatial = spatial_prompt[:, : spatial.shape[1], :]
-        prompt = spatial_prompt[:, spatial.shape[1] :, :]
-        return spatial, prompt
+        # spatial = spatial_prompt[:, : spatial.shape[1], :]
+        # prompt = spatial_prompt[:, spatial.shape[1] :, :]
+        return spatial_prompt
 
     # Since we do not have operations to concatenate and slice a tensor along a sharded dimension,
     # we keep the spatial and prompt tensors separate for now.
     def forward(
         self,
         *,
-        spatial: ttnn.Tensor,
-        prompt: ttnn.Tensor,
+        spatial_prompt_concat: ttnn.Tensor,
+        spatial_size: int,
+        prompt_size: int,
         time_embed: ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None,
@@ -367,10 +373,17 @@ class Flux2SingleTransformerBlock(Module):
         and ``None`` is returned for the prompt. Used by the final single block, whose prompt
         output is discarded by the transformer.
         """
-        spatial, prompt = self.x_c_merged_fused(
-            spatial, prompt, spatial_rope, prompt_rope, spatial_sequence_length, compute_prompt_output, temb_mod_params
+        spatial_prompt_concat = self.x_c_merged_fused(
+            spatial_prompt_concat,
+            spatial_size,
+            prompt_size,
+            spatial_rope,
+            prompt_rope,
+            spatial_sequence_length,
+            compute_prompt_output,
+            temb_mod_params,
         )
-        return spatial, prompt
+        return spatial_prompt_concat
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -496,7 +509,7 @@ class Flux2Transformer(Module):
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
     # supported by `reduce_scatter_minimal_async`.
-    @traced_function(device=lambda self: self.device, clone_prep_inputs=False)
+    # @traced_function(device=lambda self: self.device, clone_prep_inputs=False)
     def forward(
         self,
         spatial: ttnn.Tensor,
@@ -577,17 +590,21 @@ class Flux2Transformer(Module):
                 skip_time_embed_activation_fn=True,
             )
 
-            if i % 6 == 0:
-                ttnn.ReadDeviceProfiler(spatial.device())
+            # if i % 6 == 0:
+            #     ttnn.ReadDeviceProfiler(spatial.device())
 
         num_single_blocks = len(self.single_transformer_blocks)
+        spatial_prompt_concat = ttnn.concat([spatial, prompt], dim=1)
+        spatial_size = spatial.shape[1]
+        prompt_size = prompt.shape[1]
         for i, block in enumerate(self.single_transformer_blocks, start=1):
             # The final single block's prompt output is unused (only spatial is projected out
             # below), so skip its prompt projection. The prompt still feeds that block's
             # attention as K/V context for the spatial stream.
-            spatial, prompt = block.forward(
-                spatial=spatial,
-                prompt=prompt,
+            spatial_prompt_concat = block.forward(
+                spatial_prompt_concat=spatial_prompt_concat,
+                spatial_size=spatial_size,
+                prompt_size=prompt_size,
                 time_embed=time_embed,
                 spatial_rope=spatial_rope,
                 prompt_rope=prompt_rope,
@@ -597,8 +614,10 @@ class Flux2Transformer(Module):
                 compute_prompt_output=(i < num_single_blocks) or compute_prompt_output,
             )
 
-            if i % 6 == 0:
-                ttnn.ReadDeviceProfiler(spatial.device())
+            # if i % 6 == 0:
+            #     ttnn.ReadDeviceProfiler(spatial.device())
+
+        spatial = spatial_prompt_concat[:, :spatial_size, :]
 
         time_embed_proj = self.time_embed_out(time_embed)
         [scale, shift] = ttnn.chunk(time_embed_proj, 2, dim=-1)

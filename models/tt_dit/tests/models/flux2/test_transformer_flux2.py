@@ -254,7 +254,7 @@ def test_transformer(
     ],
     ids=[
         "bh_4x8_ring_nofsdp",
-        "bh_4x8_ring_nofsdp_sp1tp0",
+        "bh_4x8_ring_sp1tp0_nofsdp",
         "bh_4x8_ring_fsdp",
     ],
     indirect=["mesh_device", "device_params"],
@@ -410,7 +410,6 @@ def test_transformer_profile(
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
         compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything
-        traced=True,
     )
     ttnn.synchronize_device(mesh_device)
     signpost("t_start")
@@ -424,7 +423,6 @@ def test_transformer_profile(
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
         compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything
-        traced=True,
     )
     ttnn.synchronize_device(mesh_device)
     signpost("t_end")
