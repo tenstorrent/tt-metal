@@ -160,3 +160,16 @@ def test_silu_routed_expert_unchanged(mesh_device, device_params):
         hidden_dim=MiniMaxM27Config.MOE_INTERMEDIATE_SIZE,
         activation=ttnn.RoutedExpertActivation.Silu,
     )
+
+
+def test_routed_expert_activation_enum_exposed():
+    """Host-only (no device): the RoutedExpertActivation enum is reachable via the
+    public ``ttnn`` namespace. Regression guard — the C++ enum is registered on the
+    experimental ops module and must be re-exported as ``ttnn.RoutedExpertActivation``
+    in ttnn/__init__.py; without that, the SwiGluOai selection is unreachable from Python.
+    """
+    assert hasattr(ttnn, "RoutedExpertActivation"), "ttnn.RoutedExpertActivation is not exposed"
+    activation = ttnn.RoutedExpertActivation
+    assert hasattr(activation, "Silu") and hasattr(activation, "SwiGluOai"), "enum is missing Silu/SwiGluOai variants"
+    # Distinct variants so SiLU and SwiGLU-OAI cache as separate device programs.
+    assert activation.Silu != activation.SwiGluOai
