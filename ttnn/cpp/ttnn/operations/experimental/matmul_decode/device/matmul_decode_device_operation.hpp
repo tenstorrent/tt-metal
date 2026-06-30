@@ -77,15 +77,7 @@ struct MatmulDecodeDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    // Multi-core: distributes output tiles across the available core grid.
-    struct MultiCore {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    using program_factory_t = std::variant<FullWidthSharded, PartialWidthSharded, MultiCore>;
+    using program_factory_t = std::variant<FullWidthSharded, PartialWidthSharded>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

@@ -64,7 +64,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "MatmulDecode(partial): in0_tile_size: {}, in1_tile_size: {}, out_tile_size: {}",
         in0_tile_size,
@@ -100,7 +100,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         "Output tensor tile width {} must be equal to the tile width 32",
         output_tile_width);
 
-    log_info(tt::LogOp, "MatmulDecode(partial): inputA_tile: {}", inputA_tile);
+    log_debug(tt::LogOp, "MatmulDecode(partial): inputA_tile: {}", inputA_tile);
 
     IDevice* device = input_tensor_a.device();
 
