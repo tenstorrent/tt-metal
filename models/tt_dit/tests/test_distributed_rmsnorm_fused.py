@@ -956,11 +956,16 @@ def test_layernorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_m
         ccl_manager=ccl,
     )
 
+    # LNMOD_LAUNCHES: # of forward calls (default 3 for the determinism check).
+    # Set to 1 to isolate single-launch CORRECTNESS at large N from the multi-launch
+    # warm-AG hang (the block calls each norm once; the 3-launch path can deadlock).
+    n_launch = int(_os.getenv("LNMOD_LAUNCHES", "3"))
+
     def _run(use_fused):
         prev = _norm._USE_FUSED_LAYERNORM
         _norm._USE_FUSED_LAYERNORM = use_fused
         try:
-            outs = [mod.forward(x, dynamic_weight=dyn_w, dynamic_bias=dyn_b) for _ in range(3)]
+            outs = [mod.forward(x, dynamic_weight=dyn_w, dynamic_bias=dyn_b) for _ in range(n_launch)]
             gathered = [_gather(o, tp_axis) for o in outs]
             det = all(torch.equal(gathered[0], g) for g in gathered[1:])
             return gathered[0], det
