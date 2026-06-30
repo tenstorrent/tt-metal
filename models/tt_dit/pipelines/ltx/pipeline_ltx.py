@@ -90,7 +90,7 @@ DEFAULT_NEGATIVE_PROMPT = (
 def _ensure_ltx_reference_on_path() -> None:
     """Put the LTX-2 reference package (``ltx_core`` / ``ltx_pipelines``) on ``sys.path``.
 
-    Used by the host VAE encoder (I2V device-vs-host parity) and ``encode_prompts_reference``.
+    Used by the host VAE encoder (I2V device-vs-host parity).
     Honors ``LTX_REFERENCE_ROOT`` (a directory containing ``ltx_core``); otherwise falls back to
     ``<repo>/LTX-2/packages/{ltx-core,ltx-pipelines}/src`` — the layout the LTX unit tests assume
     (``git clone https://github.com/Lightricks/LTX-2`` at the repo root). No-op if already importable.
@@ -300,7 +300,6 @@ class LTXPipeline:
         mode: str = "av",
         positional_embedding_theta: float = 10000.0,
         positional_embedding_max_pos: list[int] | None = None,
-        timestep_scale_multiplier: float = 1000.0,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
         num_frames: int = 0,
@@ -375,7 +374,6 @@ class LTXPipeline:
         self.cross_attention_dim = cross_attention_dim
         self.positional_embedding_theta = positional_embedding_theta
         self.positional_embedding_max_pos = positional_embedding_max_pos or [20, 2048, 2048]
-        self.timestep_scale_multiplier = timestep_scale_multiplier
 
         self.is_fsdp = is_fsdp
         self.dynamic_load = dynamic_load
@@ -421,7 +419,6 @@ class LTXPipeline:
         # decode_audio only touches the audio decoder + vocoder, so audio_only skips building
         # AND priming the 22B transformer / video VAE / upsampler — that prime is the bulk of a
         # cold run (~100s of 22B weight push) and is pure waste for the audio test.
-        self.audio_only = audio_only
 
         if self.checkpoint_name is not None:
             self._load_config_from_checkpoint()
@@ -886,45 +883,6 @@ class LTXPipeline:
             logger.info(f"Cached device embeddings to {cache_path}")
         return results
 
-    def encode_prompts_reference(self, prompts: list[str]) -> list:
-        """Encode prompts using the official LTX-2 reference pipeline (recommended for AV mode)."""
-        assert self.checkpoint_name is not None, "checkpoint_name must be set before encode_prompts_reference"
-        assert self.gemma_path is not None, "gemma_path must be set before encode_prompts_reference"
-        try:
-            _ensure_ltx_reference_on_path()
-            from ltx_pipelines.utils.blocks import PromptEncoder
-        except ImportError as e:
-            raise ImportError(
-                "encode_prompts_reference() requires the LTX-2 reference package. "
-                "Use load_text_encoder() + __call__() for standalone text encoding."
-            ) from e
-
-        cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
-        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
-        os.makedirs(embed_cache_dir, exist_ok=True)
-
-        cache_key = hashlib.md5("||".join(prompts).encode()).hexdigest()
-        cache_path = os.path.join(embed_cache_dir, f"{cache_key}.pt")
-
-        if os.path.exists(cache_path):
-            logger.info(f"Loading cached embeddings from {cache_path}")
-            return torch.load(cache_path, weights_only=False)
-
-        # PromptEncoder owns Gemma text encoder + embeddings processor lifecycle:
-        # builds Gemma, encodes, frees, then builds the embeddings processor.
-        prompt_encoder = PromptEncoder(
-            checkpoint_path=self.checkpoint_name,
-            gemma_root=self.gemma_path,
-            dtype=torch.bfloat16,
-            device=torch.device("cpu"),
-        )
-        results = prompt_encoder(prompts)
-        del prompt_encoder
-
-        torch.save(results, cache_path)
-        logger.info(f"Cached embeddings to {cache_path}")
-        return results
-
     def _prepare_vae(self) -> None:
         """Push VAE decoder weights onto the mesh. Module was constructed in
         ``__init__``; blocking-hash subfolder forces re-load when conv3d
@@ -1120,8 +1078,6 @@ class LTXPipeline:
     ) -> torch.Tensor:
         """Decode -> CRF round-trip -> resize+center-crop -> normalize to [-1,1]. Returns
         ``(1,3,1,H,W)`` float32. Port of ``load_image_and_preprocess``; ``crf=0`` skips the codec."""
-        import math
-
         import numpy as np
         from PIL import Image
 

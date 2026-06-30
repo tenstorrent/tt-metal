@@ -149,15 +149,13 @@ class LTXUpsamplerResBlock(Module):
 def compute_upsampler_dims(
     *,
     input_hw: tuple[int, int],
-    num_frames: int | None,
+    num_frames: int,
     h_factor: int = 1,
     w_factor: int = 1,
-) -> tuple[ConvDims | None, ConvDims | None, ConvDims | None]:
+) -> tuple[ConvDims, ConvDims, ConvDims]:
     """``(pre_dims, ups_dims, post_dims)`` for the upsampler's three conv shape
     classes. T = cur_T + (kT-1); H/W are per-device shards of mesh-factor-padded
-    spatial. Returns ``(None, None, None)`` when ``num_frames`` is ``None``."""
-    if num_frames is None:
-        return None, None, None
+    spatial."""
     H_in, W_in = input_hw
     padded_h = ((H_in + h_factor - 1) // h_factor) * h_factor
     padded_w = ((W_in + w_factor - 1) // w_factor) * w_factor

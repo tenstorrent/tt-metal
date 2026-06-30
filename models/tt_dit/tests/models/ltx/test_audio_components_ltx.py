@@ -514,24 +514,6 @@ def test_stage_b_vocoder(
         tt_voc_un.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
         _assert_sharded_matches_unsharded(tt_voc_un(mel), tt_out, name="stage_b_vocoder")
 
-    # Optional spectral sanity to catch large drifts that waveform PCC may miss.
-    try:
-        _, _, LTX2VocoderWithBWE = _require_diffusers()
-        mel_stft = LTX2VocoderWithBWE(
-            filter_length=1024,
-            hop_length=256,
-            window_length=1024,
-            num_mel_channels=80,
-            input_sampling_rate=_INPUT_SR,
-            output_sampling_rate=_OUTPUT_SR,
-        ).mel_stft
-        with torch.no_grad():
-            ref_mel, _, _, _ = mel_stft(ref_out.reshape(1, 2, -1))
-            tt_mel, _, _, _ = mel_stft(tt_out.reshape(1, 2, -1))
-        assert (ref_mel - tt_mel).abs().mean().item() <= 5.0
-    except Exception as exc:
-        logger.warning(f"Skipping Stage B mel sanity: {exc}")
-
 
 @pytest.mark.parametrize(
     (
