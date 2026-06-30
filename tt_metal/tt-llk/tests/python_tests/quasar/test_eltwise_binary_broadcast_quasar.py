@@ -135,6 +135,7 @@ def test_eltwise_binary_broadcast_quasar(
         math_fidelity,
         input_format=input_format,
         input_format_B=input_format_B,
+        dest_acc=dest_acc,
     )
 
     configuration = TestConfig(

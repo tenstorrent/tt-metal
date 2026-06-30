@@ -77,6 +77,15 @@ struct ReconfigConfig {
 
 using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>>;
 
+static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
+    const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
+    return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
+}
+
 /// @brief Does Dramx3 --> Reader --> CB --> Add with acc --> CB --> Writer --> Dram
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
@@ -359,7 +368,6 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     constexpr uint32_t kNumOps = 3;
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
-    const uint32_t out_bytes = kNumOps * f16_tile_size;
 
     const CoreCoord core = {0, 0};
     auto& cq = mesh_device->mesh_command_queue();
@@ -372,7 +380,6 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .page_size = f32_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig f16_buf_cfg{.size = f16_tile_size};
     distributed::ReplicatedBufferConfig f32_buf_cfg{.size = f32_tile_size};
-    distributed::ReplicatedBufferConfig out_buf_cfg{.size = out_bytes};
 
     auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
@@ -380,7 +387,8 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
     auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto out_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(f16_tile_size, kNumOps), TensorTopology{});
 
     const experimental::DFBSpecName INP0_DFB{"in0"};
     const experimental::DFBSpecName INP1_DFB{"in1"};
@@ -392,6 +400,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     const experimental::KernelSpecName READER{"reader"};
     const experimental::KernelSpecName WRITER{"writer"};
     const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     auto make_f16_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
@@ -468,17 +477,16 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "in",
-            .endpoint_type = DFBEndpoint::CONSUMER,
-            .access_pattern = DFBAccess::STRIDED,
-        }},
-        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
             experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
                     experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
     };
@@ -516,6 +524,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
             {inp0_dfb_spec, inp1_dfb_spec, inp2_dfb_spec, inp3_dfb_spec, inp4_dfb_spec, inp5_dfb_spec, out_dfb_spec},
+        .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
 
@@ -621,19 +630,18 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out_dram->address())}, {"bank_id", 0u}, {"num_tiles", kNumOps}}}},
+            .runtime_arg_values = {{node, {{"num_tiles", kNumOps}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
+    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord, false);
+    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), dest_buffer_data);
 
     auto device_unpacked = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
     auto golden_unpacked = unpack_vector<bfloat16, uint32_t>(packed_golden);

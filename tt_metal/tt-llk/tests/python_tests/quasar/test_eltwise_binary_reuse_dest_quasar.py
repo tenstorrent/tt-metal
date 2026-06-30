@@ -301,6 +301,9 @@ def test_eltwise_binary_reuse_dest_quasar(
 
         golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
+    if formats.output_format.is_mx_format():
+        golden_tensor = quantize_mx_tensor_chunked(golden_tensor, formats.output_format)
+
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
         formats,

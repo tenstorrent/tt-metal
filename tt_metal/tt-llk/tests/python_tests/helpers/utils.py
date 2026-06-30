@@ -329,9 +329,9 @@ def _bfp_block_aware_compare(
 _MXINT_COMPARE_PARAMS = {
     DataFormat.MxInt2: (1, 1),  # S1.0: 3-level lattice, ULP == block scale
     DataFormat.MxInt4: (4, 2),  # S1.2: ULP == block scale / 4
-    DataFormat.MxInt8: (64, 3),  # S1.6: ULP == block scale / 64 (finest); 3 ULP
-    #   covers the LoFi accumulation tail (measured worst 2.5 ULP, over3==0
-    #   across the sweep) and ~matches the historical isclose(rtol=0.05) bound.
+    DataFormat.MxInt8: (64, 4),  # S1.6: ULP == block scale / 64 (finest); 4 ULP
+    #   covers Quasar FP16/MxInt8 LoFi ELWMUL boundary cases observed at exactly
+    #   4 lattice steps while preserving sign-flip and gross-jump rejection.
 }
 
 

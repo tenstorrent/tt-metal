@@ -44,7 +44,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     }
 
     constexpr CoreCoord core = {0, 0};
-    const uint32_t dram_channel = mesh_device->dram_channel_from_virtual_core(core);
+    constexpr CoreCoord dram_logical_core = {0, 0};
+    const uint32_t dram_channel = mesh_device->dram_channel_from_logical_core(dram_logical_core);
 
     // Initialize L1 signal so hart FIRST_USER_DM (2) can proceed first; the simple_tls_check
     // kernel chains the signal forward (signal_addr := hartid + 1) so hartids 2..7 run in order.

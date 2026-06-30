@@ -78,11 +78,10 @@ void run_single_core_copy_block_matmul_partials(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const experimental::NodeCoord node{0, 0};
 
-    uint32_t single_tile_size = test_config.single_tile_size;
+    tt::DataFormat data_format = test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    uint32_t single_tile_size = tt::tile_size(data_format);
     uint32_t num_tiles = test_config.num_tiles;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
-
-    tt::DataFormat data_format = test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     distributed::DeviceLocalBufferConfig dram_local_config{
         .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
