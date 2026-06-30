@@ -144,7 +144,11 @@ static vector<uint32_t> make_reader_compile_args(
     uint32_t local_addr,
     uint32_t bytes_per_txn,
     uint32_t reader_mode,
-    uint32_t num_subs) {
+    uint32_t num_subs,
+    uint32_t read_dst_addr = 0xFFFFFFFF) {  // sentinel -> defaults to local_addr (normal remote-source read)
+    if (read_dst_addr == 0xFFFFFFFF) {
+        read_dst_addr = local_addr;
+    }
     return {
         local_addr,                 // 0
         cfg.num_of_transactions,    // 1
@@ -159,6 +163,7 @@ static vector<uint32_t> make_reader_compile_args(
         (uint32_t)cfg.pattern,      // 10
         (uint32_t)cfg.same_axis,    // 11
         (uint32_t)cfg.loopback,     // 12
+        read_dst_addr,              // 13 (same-core/loopback: distinct local dest offset)
     };
 }
 
@@ -188,9 +193,10 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
 
-    // Core coordinates based on same_axis
+    // Core coordinates. For loopback (same-core / local-L1) the subordinate IS the master core, and we
+    // use two distinct L1 offsets so it is a genuine A->B local copy. Otherwise pick a near neighbour.
     CoreCoord master_coord = {0, 0};
-    CoreCoord sub_coord = cfg.same_axis ? CoreCoord{0, 1} : CoreCoord{1, 1};
+    CoreCoord sub_coord = cfg.loopback ? master_coord : (cfg.same_axis ? CoreCoord{0, 1} : CoreCoord{1, 1});
 
     // L1 address validation
     L1AddressInfo master_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, master_coord);
@@ -199,11 +205,15 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
         log_error(LogTest, "Mismatch in L1 address or size between master and subordinate cores");
         return false;
     }
-    if (master_l1.size < bytes_per_txn) {
+    const uint32_t required_l1_bytes = cfg.loopback ? 2u * (uint32_t)bytes_per_txn : (uint32_t)bytes_per_txn;
+    if (master_l1.size < required_l1_bytes) {
         log_error(LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
     uint32_t l1_base = master_l1.base_address;
+    // Source/destination L1 offsets. Distinct for loopback so the copy actually moves data.
+    const uint32_t src_off = l1_base;
+    const uint32_t dst_off = cfg.loopback ? (l1_base + (uint32_t)bytes_per_txn) : l1_base;
 
     CoreCoord phys_sub = device->worker_core_from_logical_core(sub_coord);
     uint32_t packed_sub = (phys_sub.x << 16) | (phys_sub.y & 0xFFFF);
@@ -212,7 +222,7 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
 
     if (is_write) {
         auto compile_args = make_writer_compile_args(
-            cfg, l1_base, l1_base, (uint32_t)bytes_per_txn, WRITER_MODE_UNICAST_SINGLE, 0, packed_sub);
+            cfg, src_off, dst_off, (uint32_t)bytes_per_txn, WRITER_MODE_UNICAST_SINGLE, 0, packed_sub);
         CreateKernel(
             program,
             KERNELS_DIR + "writer.cpp",
@@ -220,7 +230,8 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = cfg.noc_id, .compile_args = compile_args});
     } else {
-        auto compile_args = make_reader_compile_args(cfg, l1_base, (uint32_t)bytes_per_txn, READER_MODE_SINGLE, 0);
+        auto compile_args =
+            make_reader_compile_args(cfg, src_off, (uint32_t)bytes_per_txn, READER_MODE_SINGLE, 0, dst_off);
         CoreRangeSet master_set({CoreRange(master_coord)});
         auto kernel = CreateKernel(
             program,
@@ -239,21 +250,22 @@ static bool run_single_core(const shared_ptr<distributed::MeshDevice>& mesh_devi
     auto packed_input = make_test_data(bytes_per_txn);
     auto packed_golden = packed_input;
 
-    if (is_write) {
-        detail::WriteToDeviceL1(device, master_coord, l1_base, packed_input);
-    } else {
-        detail::WriteToDeviceL1(device, sub_coord, l1_base, packed_input);
+    // Input lives at src_off on the core the kernel reads from; output is read back from dst_off on the
+    // core the kernel writes to. For loopback both are the master core (same-core local copy).
+    CoreCoord in_core = is_write ? master_coord : sub_coord;
+    CoreCoord out_core = is_write ? sub_coord : master_coord;
+    detail::WriteToDeviceL1(device, in_core, src_off, packed_input);
+    if (cfg.loopback) {
+        // sentinel-init the destination so the equality check proves the copy actually executed
+        std::vector<uint32_t> sentinel(packed_input.size(), 0xDEADBEEF);
+        detail::WriteToDeviceL1(device, out_core, dst_off, sentinel);
     }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     execute_program(mesh_device, std::move(program));
 
     vector<uint32_t> packed_output;
-    if (is_write) {
-        detail::ReadFromDeviceL1(device, sub_coord, l1_base, bytes_per_txn, packed_output);
-    } else {
-        detail::ReadFromDeviceL1(device, master_coord, l1_base, bytes_per_txn, packed_output);
-    }
+    detail::ReadFromDeviceL1(device, out_core, dst_off, bytes_per_txn, packed_output);
 
     bool is_equal = (packed_output == packed_golden);
     if (!is_equal) {
@@ -831,6 +843,35 @@ static void sweep_one_from_one(const shared_ptr<distributed::MeshDevice>& mesh_d
     }
 }
 
+// Same-core / local-L1 (loopback): a core reads from / writes to its OWN L1. Keyed in the YAML as
+// loopback=true on UNICAST/L1, distinct from the near-core (>=1 hop) ONE_FROM_ONE/ONE_TO_ONE entries.
+// This is the access pattern of sharded in-place ops (e.g. sharded ttnn.clone).
+static void sweep_one_from_one_loopback(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    NocEstimatorConfig cfg = {
+        .test_id = test_id,
+        .pattern = NocPattern::ONE_FROM_ONE,
+        .mechanism = NocMechanism::UNICAST,
+        .memory_type = MemoryType::L1,
+        .same_axis = false,
+        .stateful = false,
+        .loopback = true,
+    };
+    packet_sizes_sweep(mesh_device, cfg);
+}
+
+static void sweep_one_to_one_loopback(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    NocEstimatorConfig cfg = {
+        .test_id = test_id,
+        .pattern = NocPattern::ONE_TO_ONE,
+        .mechanism = NocMechanism::UNICAST,
+        .memory_type = MemoryType::L1,
+        .same_axis = false,
+        .stateful = false,
+        .loopback = true,
+    };
+    packet_sizes_sweep(mesh_device, cfg);
+}
+
 static void sweep_one_to_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
     IDevice* device = mesh_device->impl().get_device(0);
     CoreCoord device_grid = device->compute_with_storage_grid_size();
@@ -1398,6 +1439,14 @@ TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToOne) {
 
 TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneFromOne) {
     unit_tests::dm::noc_estimator::sweep_one_from_one(get_mesh_device(), 801);
+}
+
+TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneFromOneLoopback) {
+    unit_tests::dm::noc_estimator::sweep_one_from_one_loopback(get_mesh_device(), 818);
+}
+
+TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToOneLoopback) {
+    unit_tests::dm::noc_estimator::sweep_one_to_one_loopback(get_mesh_device(), 819);
 }
 
 TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToAll) {

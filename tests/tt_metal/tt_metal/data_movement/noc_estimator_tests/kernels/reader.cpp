@@ -28,6 +28,10 @@ void kernel_main() {
     constexpr uint32_t pattern = get_compile_time_arg_val(10);
     constexpr uint32_t same_axis = get_compile_time_arg_val(11);
     constexpr uint32_t loopback_meta = get_compile_time_arg_val(12);
+    // Local destination address for the single-read path. Equals local_addr for the normal
+    // (remote-source) case; for same-core/loopback L1 it differs from local_addr so the read is a
+    // genuine A->B local copy (own L1[local_addr] -> own L1[read_dst_addr]) rather than a self-alias.
+    constexpr uint32_t read_dst_addr = get_compile_time_arg_val(13);
 
     Noc noc(noc_index);
     UnicastEndpoint unicast_ep;
@@ -49,7 +53,7 @@ void kernel_main() {
                         unicast_ep,
                         bytes_per_transaction,
                         {.noc_x = src_x, .noc_y = src_y, .addr = local_addr},
-                        {.addr = local_addr});
+                        {.addr = read_dst_addr});
                 }
                 noc.async_read_barrier();
             }
@@ -63,7 +67,7 @@ void kernel_main() {
                         unicast_ep,
                         bytes_per_transaction,
                         {.noc_x = src_x, .noc_y = src_y, .addr = local_addr},
-                        {.addr = local_addr},
+                        {.addr = read_dst_addr},
                         NocOptVals{.vc = vc});
                 }
                 noc.async_read_barrier();
