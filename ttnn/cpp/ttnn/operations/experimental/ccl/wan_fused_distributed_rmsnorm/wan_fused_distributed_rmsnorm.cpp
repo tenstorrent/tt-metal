@@ -122,7 +122,8 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& transformation_mat,
     const std::optional<const ttnn::Tensor>& rope_cos,
-    const std::optional<const ttnn::Tensor>& rope_sin) {
+    const std::optional<const ttnn::Tensor>& rope_sin,
+    WanFusedNormType norm_type) {
     const auto& mesh_view = mesh_device.get_view();
     const std::size_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
@@ -144,7 +145,8 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
         ttnn::ccl::Topology::Ring,
         /*multi_device_global_semaphore=*/{},
         /*sub_device_id=*/std::nullopt,
-        kernel_config_val);
+        kernel_config_val,
+        norm_type);
 
     // Forward weight/RoPE so compute_sizing's per-head-RoPE / streaming chunk clamp
     // matches the program (the buffer's window/pages follow chunk_size_rows).

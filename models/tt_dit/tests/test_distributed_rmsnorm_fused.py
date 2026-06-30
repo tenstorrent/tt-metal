@@ -56,6 +56,8 @@ from loguru import logger
 
 import ttnn
 
+from ..layers import normalization as _norm
+from ..layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ..parallel.manager import CCLManager
 from ..utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ..utils.tensor import bf16_tensor, float32_tensor, from_torch
@@ -888,6 +890,160 @@ def test_layernorm_corr(mesh_device, model, tp, topology, op_override, tp_axis, 
         )
     logger.info(f"LNCORR [{model} tp{tp}] flagged={flagged or 'NONE'} need_wide={need_wide or 'NONE'}")
     assert not flagged, f"LayerNorm correctness flagged: {flagged}"
+
+
+# ---------------------------------------------------------------------------
+# Module-level wiring: DistributedLayerNorm (adaLN) fused vs composite vs torch.
+# Phase 5: the fused Welford LN device op wired into the tt_dit module. Asserts
+# the fused path is at least as accurate as the composite baseline (both vs a
+# fp32-PyTorch reference), on the galaxy ring / line / submesh-line configs.
+# ---------------------------------------------------------------------------
+# (mesh, device_params, model, tp, topology, tp_axis, full_mesh)
+_LNMOD_PARAMS = [
+    ((4, 8), _DP_GAL, WAN, 2, ttnn.Topology.Linear, 1, False),  # submesh line 1x2
+    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, 1, False),  # submesh line 1x4
+    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, 1, False),  # submesh line 1x4 (LTX dim)
+    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, 0, False),  # 4x8 ring (TP on 4-axis)
+    ((4, 8), _DP_GAL, WAN, 8, ttnn.Topology.Linear, 1, True),  # 4x8 line (TP on full 8-axis)
+]
+_LNMOD_IDS = ["wan_tp2_line", "wan_tp4_line", "ltx_tp4_line", "wan_tp4_ring", "wan_tp8_line"]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "model", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNMOD_PARAMS, _LNMOD_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_layernorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_mesh):
+    """DistributedLayerNorm (adaLN, batch=1): fused device op vs composite chain, both
+    vs fp32-PyTorch. Fused must be >= composite in pcc (and pass), and bit-exact across
+    3 launches. Exercises the recip LUT + LN-sized stats buffer wiring end-to-end."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    dim = _LN_HID[model]
+    rows = 256
+    torch.manual_seed(0)
+    x_t = (torch.randn(1, 1, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
+    scale_t = torch.randn(1, 1, dim, dtype=torch.bfloat16).float()
+    shift_t = torch.randn(1, 1, dim, dtype=torch.bfloat16).float()
+
+    # fp32-PyTorch reference: LayerNorm(x) * (1+scale) + shift (adaLN).
+    mean = x_t.mean(-1, keepdim=True)
+    var = x_t.var(-1, unbiased=False, keepdim=True)
+    ref = ((x_t - mean) / torch.sqrt(var + NORM_EPS)) * (1.0 + scale_t) + shift_t
+    ref = ref.reshape(rows, dim)
+
+    x = bf16_tensor(x_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    dyn_w = bf16_tensor((1.0 + scale_t).to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    dyn_b = bf16_tensor(shift_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+
+    # ONE CCLManager + ONE module shared by both methods. Building a second CCLManager
+    # (a second set of fabric global-semaphores) and running the composite AG then the
+    # fused fabric-forwarder AG back-to-back deadlocked on the Ring fabric (it was fine
+    # on Linear). Mirrors production: a model holds one manager and one norm module.
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedLayerNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+
+    def _run(use_fused):
+        prev = _norm._USE_FUSED_LAYERNORM
+        _norm._USE_FUSED_LAYERNORM = use_fused
+        try:
+            outs = [mod.forward(x, dynamic_weight=dyn_w, dynamic_bias=dyn_b) for _ in range(3)]
+            gathered = [_gather(o, tp_axis) for o in outs]
+            det = all(torch.equal(gathered[0], g) for g in gathered[1:])
+            return gathered[0], det
+        finally:
+            _norm._USE_FUSED_LAYERNORM = prev
+
+    # LNMOD_METHODS=composite|fused|both (default both) — isolate a hanging path.
+    methods = _os.getenv("LNMOD_METHODS", "both")
+    comp_pcc = fused_pcc = float("nan")
+    comp_det = fused_det = True
+    if methods in ("composite", "both"):
+        comp_out, comp_det = _run(False)
+        comp_pcc = _pcc(comp_out, ref)
+        logger.info(f"LNMOD {model}_tp{tp}_{topology.name:<6} composite pcc={comp_pcc*100:.4f}% det={comp_det}")
+    if methods in ("fused", "both"):
+        fused_out, fused_det = _run(True)
+        fused_pcc = _pcc(fused_out, ref)
+        logger.info(f"LNMOD {model}_tp{tp}_{topology.name:<6} fused     pcc={fused_pcc*100:.4f}% det={fused_det}")
+    if methods != "composite":
+        assert fused_det, "fused DistributedLayerNorm not deterministic across launches"
+        # Fused must be at least as accurate as the composite baseline (small tol for
+        # bf16 reduction-order differences), and both must clear a sane bar.
+        assert fused_pcc >= 0.999, f"fused pcc too low: {fused_pcc}"
+        if methods == "both":
+            assert fused_pcc >= comp_pcc - 5e-4, f"fused ({fused_pcc}) worse than composite ({comp_pcc})"
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "model", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNMOD_PARAMS, _LNMOD_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_rmsnorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_mesh):
+    """DistributedRMSNorm (static weight): fused device op (WAN_USE_FUSED_RMSNORM) vs the
+    composite pre/AG/post chain, both vs fp32-PyTorch. Fused must be >= composite and
+    bit-exact across 3 launches. Same galaxy ring/line/submesh configs as LayerNorm.
+    One CCLManager + one module shared by both methods (see test_layernorm_module_corr)."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    dim = _LN_HID[model]
+    rows = 256
+    torch.manual_seed(0)
+    x_t = (torch.randn(1, 1, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
+    w_t = torch.randn(dim, dtype=torch.bfloat16).float()
+
+    # fp32-PyTorch reference: x / sqrt(mean(x^2)) * weight.
+    rms = x_t / torch.sqrt((x_t**2).mean(-1, keepdim=True) + NORM_EPS)
+    ref = (rms * w_t).reshape(rows, dim)
+
+    x = bf16_tensor(x_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedRMSNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=True,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+    mod.weight.data = bf16_tensor(
+        w_t.reshape(1, dim).to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1
+    )
+
+    def _run(use_fused):
+        prev = _norm._USE_FUSED_RMSNORM
+        _norm._USE_FUSED_RMSNORM = use_fused
+        try:
+            outs = [mod.forward(x) for _ in range(3)]
+            gathered = [_gather(o, tp_axis) for o in outs]
+            det = all(torch.equal(gathered[0], g) for g in gathered[1:])
+            return gathered[0], det
+        finally:
+            _norm._USE_FUSED_RMSNORM = prev
+
+    methods = _os.getenv("LNMOD_METHODS", "both")
+    comp_pcc = fused_pcc = float("nan")
+    comp_det = fused_det = True
+    if methods in ("composite", "both"):
+        comp_out, comp_det = _run(False)
+        comp_pcc = _pcc(comp_out, ref)
+        logger.info(f"RMSMOD {model}_tp{tp}_{topology.name:<6} composite pcc={comp_pcc*100:.4f}% det={comp_det}")
+    if methods in ("fused", "both"):
+        fused_out, fused_det = _run(True)
+        fused_pcc = _pcc(fused_out, ref)
+        logger.info(f"RMSMOD {model}_tp{tp}_{topology.name:<6} fused     pcc={fused_pcc*100:.4f}% det={fused_det}")
+    if methods != "composite":
+        assert fused_det, "fused DistributedRMSNorm not deterministic across launches"
+        assert fused_pcc >= 0.999, f"fused pcc too low: {fused_pcc}"
+        if methods == "both":
+            assert fused_pcc >= comp_pcc - 5e-4, f"fused ({fused_pcc}) worse than composite ({comp_pcc})"
 
 
 @pytest.mark.parametrize(
