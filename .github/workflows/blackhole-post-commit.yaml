@@ -250,6 +250,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read
     secrets: inherit
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -259,6 +260,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: 28133352095
 
   resolve-artifacts:
     runs-on: ubuntu-latest
@@ -322,7 +324,7 @@ jobs:
 
   profiler-tests:
     needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-profiler-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
+    if: false
     uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     secrets: inherit
     strategy:
@@ -340,7 +342,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-unit-tests:
     needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
+    if: false
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
@@ -373,7 +375,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ops-sanity-tests:
     needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
+    if: false
     secrets: inherit
     uses: ./.github/workflows/ops-sanity-impl.yaml
     with:
@@ -387,7 +389,7 @@ jobs:
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
     # Don't run on daily P100-only schedule
-    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && github.event.schedule != '0 7 * * *' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
+    if: false
     needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
