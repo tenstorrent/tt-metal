@@ -21,16 +21,20 @@ genuinely unoptimized.
 | reshard | 75.0 | 89.9 | +14.9 | 120% |
 | i2s | 72.9 | 86.8 | +13.9 | 119% |
 
-## Multi device (32-chip, ttsim)
+## Multi device (32-chip, ttsim) — main = actual `origin/main` build
 | op | main | spec+opts | Δ | spec = % of main |
 |----|----:|----:|----:|----:|
-| slice | 271.5 | 303.2 | +31.7 | 112% |
-| fold | 169.8 | 196.1 | +26.2 | 115% |
-| transpose | 175.0 | 200.5 | +25.5 | 115% |
-| tilize | 182.7 | 203.5 | +20.8 | 111% |
-| untilize | 177.5 | 196.2 | +18.6 | 111% |
-| i2s | 182.8 | 199.4 | +16.6 | 109% |
-| reshard | 187.3 | 203.1 | +15.8 | 108% |
+| slice | 273.2 | 303.2 | +30.0 | 111% |
+| transpose | 176.8 | 200.5 | +23.7 | 113% |
+| tilize | 181.2 | 203.5 | +22.3 | 112% |
+| fold | 174.8 | 196.1 | +21.3 | 112% |
+| untilize | 176.3 | 196.2 | +19.9 | 111% |
+| reshard | 191.6 | 203.1 | +11.5 | 106% |
+| i2s | 190.3 | 199.4 | +9.1 | 105% |
+
+(main and spec are different builds, so this is cross-build: the legacy control reads 176.8 on the
+main build vs 175.0 on the spec build → ~2µs cross-build offset on top of the sim's ±7µs run-noise.)
+
 
 ## Conclusion
 The fully-optimized spec factory adds a **~constant +14–24µs** of host dispatch over current main.
