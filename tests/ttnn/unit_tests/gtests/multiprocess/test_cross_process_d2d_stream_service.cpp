@@ -478,7 +478,7 @@ MeshWorkload make_d2h_relay_workload(
                 static_cast<uint32_t>(d2h_svc_phys.x),
                 static_cast<uint32_t>(d2h_svc_phys.y),
                 0,  // is_metadata_writer == 0
-                0,  // downstream_metadata_l1_addr == 0
+                0,  // d2h_metadata_input_addr == 0
             };
             SetRuntimeArgs(program, kernel, wc, rt_args);
         }
@@ -587,6 +587,13 @@ MeshWorkload make_stress_compute_workload(
     return workload;
 }
 
+// ForwardChainStress terminal-stage COMPUTE (d2d_stress_relay_d2h, STRESS_MODE=0): the
+// last stage's producing op. Mirrors make_stress_compute_workload (per-stage +delta
+// mutation, fused overwrite-gate, metadata forward) but streams to host via
+// D2HStreamService instead of forwarding to a D2D sender: dest is the D2H backing, the
+// gate waits the D2H transfer_done_sem (not an outbound consumed_sem), and the worker
+// bumps the D2H write_ack_counter instead of a downstream data_ready — so there is no
+// separate SIGNAL pass.
 template <typename Upstream>
 MeshWorkload make_stress_d2h_compute_workload(
     Upstream* inbound,
@@ -606,8 +613,8 @@ MeshWorkload make_stress_d2h_compute_workload(
     const uint32_t transfer_done_sem_addr = static_cast<uint32_t>(d2h_service->get_transfer_done_sem_addr());
 
     // Metadata path: read the per-stage increment from the blob the inbound service
-    // mcast into the worker grid (uniform L1 addr), and — when producing — the
-    // designated core propagates it to the outbound D2D sender's metadata buffer.
+    // mcast into the worker grid (uniform L1 addr); the designated core forwards it to
+    // the D2H service core's metadata input buffer, so the sender ships it to host inline.
     const bool metadata_enabled = metadata_size_bytes > 0;
     const uint32_t inbound_metadata_l1_addr =
         metadata_enabled ? static_cast<uint32_t>(inbound->get_metadata_addr()) : 0u;

@@ -47,7 +47,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
-// CT layout (must stay in sync with build_relay_workload in test_stream_pipeline.cpp).
+// CT layout (must stay in sync with make_d2h_relay_workload in test_cross_process_d2d_stream_service.cpp).
 constexpr uint32_t upstream_data_ready_sem_addr = get_compile_time_arg_val(0);  // local worker L1
 constexpr uint32_t upstream_backing_addr = get_compile_time_arg_val(1);         // read from (local DRAM)
 constexpr uint32_t d2h_backing_addr = get_compile_time_arg_val(2);              // write to (D2H backing, local DRAM)
