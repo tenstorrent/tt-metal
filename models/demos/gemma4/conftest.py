@@ -11,7 +11,6 @@ _DEFAULT_MAX_PREFILL = 8192
 
 
 def pytest_addoption(parser):
-    parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
     parser.addoption(
         "--speculative",
         action="store_true",
