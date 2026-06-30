@@ -45,7 +45,8 @@ DispatchMemMap::DispatchMemMap(
     noc_overlay_start_addr_(hal.get_noc_overlay_start_addr()),
     noc_stream_reg_space_size_(hal.get_noc_stream_reg_space_size()),
     noc_stream_remote_dest_buf_space_available_update_reg_index_(
-        hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index()) {
+        hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index()),
+    has_stream_registers_(hal.has_stream_registers()) {
     uint32_t l1_base;
     uint32_t l1_size;
     if (core_type == CoreType::WORKER) {
@@ -96,6 +97,9 @@ DispatchMemMap::DispatchMemMap(
             device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_TELEMETRY_SIZE;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {
             device_cq_addr_sizes_[dev_addr_idx] = sizeof(DispatchTelemetryControl);
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES) {
+            device_cq_addr_sizes_[dev_addr_idx] =
+                has_stream_registers_ ? 0 : DispatchSettings::DISPATCH_MESSAGE_ENTRIES * l1_alignment;
         } else if (
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
@@ -118,7 +122,8 @@ DispatchMemMap::DispatchMemMap(
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG ||
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY ||
-            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL ||
+            dev_addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }
@@ -231,8 +236,11 @@ uint32_t DispatchMemMap::device_print_dispatch_noc_locations_addr() const { retu
 uint32_t DispatchMemMap::device_print_dispatch_l1_cache_addr() const { return dispatch_s_buffer_end_; }
 
 uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
-    uint32_t index = ttsl::as_underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
+    const uint32_t index = ttsl::as_underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
     TT_ASSERT(index < this->device_cq_addrs_.size());
+    if (device_addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES) {
+        TT_FATAL(!this->has_stream_registers_, "Attempting to read address of unallocated memory region");
+    }
     return device_cq_addrs_[index];
 }
 
@@ -246,8 +254,10 @@ uint32_t DispatchMemMap::get_sync_offset(uint32_t index) const {
 }
 
 uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
-    // Address of the first dispatch message entry. Remaining entries are each offset by
-    // noc_stream_reg_space_size bytes.
+    if (!has_stream_registers_) {
+        // On arches without stream registers (Quasar), use the dedicated L1 worker completion counters region.
+        return get_device_command_queue_addr(CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES);
+    }
     return noc_overlay_start_addr_ + (noc_stream_reg_space_size_ * get_dispatch_stream_index(0)) +
            (noc_stream_remote_dest_buf_space_available_update_reg_index_ * sizeof(uint32_t));
 }
