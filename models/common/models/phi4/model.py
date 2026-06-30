@@ -536,7 +536,7 @@ class Phi4Transformer(LightweightModule):
         # so on-device sampling is enabled for all 1D meshes (not just num_devices >= 8). Buffers
         # are lazy (nothing materializes until the first on-device sampled decode), so this is
         # harmless when sampling_params is None (host-argmax path, the shipped demo default).
-        self.supports_on_device_sampling = self.num_devices >= 1
+        self.supports_on_device_sampling = True
         self.sampling = (
             Sampling1D(
                 vocab_size=self.vocab_size,
