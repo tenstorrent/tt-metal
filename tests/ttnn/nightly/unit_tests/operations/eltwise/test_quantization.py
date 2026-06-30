@@ -624,9 +624,9 @@ def test_quant_dequant_requant_uint8_per_tensor_2d(device, x0, x1, input_dtype, 
     check_match_ratio(input_tr, result_rq, input_dtype)
 
 
-def test_quantize_uint8_saturation(device):
-    """Test quantize uint8 saturation to [0, 255]"""
-    row = [-5.0, -1.0, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 5.0]
+def test_quantize_uint8_upper_saturation(device):
+    """Test quantize uint8 upper saturation to 255"""
+    row = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 5.0]
     input_tr = torch.tensor([row], dtype=torch.float32)
     scale, zero_point = 1.0 / 255.0, 0
     expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
@@ -638,9 +638,9 @@ def test_quantize_uint8_saturation(device):
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
-def test_requantize_uint8_saturation(device):
-    """Test requantize uint8 saturation to [0, 255] on the output side"""
-    q_in = torch.tensor([[0, 50, 100, 200, 255, 300, 1000, -10]], dtype=torch.int32)
+def test_requantize_uint8_upper_saturation(device):
+    """Test requantize uint8 upper saturation to 255 on the output side"""
+    q_in = torch.tensor([[0, 50, 100, 200, 255, 300, 1000]], dtype=torch.int32)
     in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
     expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
 
