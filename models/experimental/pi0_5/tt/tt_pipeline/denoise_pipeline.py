@@ -195,6 +195,10 @@ class TTNNPi05DenoisePipelineStage(StatelessTTNNModule):
         self._suffix_len = suffix_len
         self._position_offset = position_offset
         self._action_horizon = action_horizon
+        # Resident sliced RoPE cos/sin. The slice window (position_offset + suffix seq_len) is fixed
+        # for this stage across all denoise steps, so it is computed once on the first forward and
+        # held; the per-forward ttnn.slice pair then drops out of the captured trace.
+        self._cos_sin_resident = None
         self._raw_final_norm_mod_w = None
         self._raw_final_norm_mod_b = None
         self._precomputed_block_mods = None
@@ -259,7 +263,9 @@ class TTNNPi05DenoisePipelineStage(StatelessTTNNModule):
         else:
             h = x
         s = h.shape[-2]
-        cos, sin = _slice_rope(self.tt_cos_expert, self.tt_sin_expert, s, self._position_offset)
+        if self._cos_sin_resident is None:
+            self._cos_sin_resident = _slice_rope(self.tt_cos_expert, self.tt_sin_expert, s, self._position_offset)
+        cos, sin = self._cos_sin_resident
         for i, block in enumerate(self.blocks):
             block_mod = self._precomputed_block_mods[i]
             if self._use_concat_kv:
@@ -267,8 +273,6 @@ class TTNNPi05DenoisePipelineStage(StatelessTTNNModule):
                 h, _ = block(h, cos, sin, None, self._attention_mask, (pk, pv), False, precomputed_mod=block_mod)
             else:
                 h, _ = block(h, cos, sin, None, self._attention_mask, None, False, precomputed_mod=block_mod)
-        ttnn.deallocate(cos)
-        ttnn.deallocate(sin)
         if self._is_last and self._precomputed_final_mod is not None:
             h = self._ada_rms_norm_no_gate(h, self._precomputed_final_mod)
             h = self.suffix.project_output(h)
