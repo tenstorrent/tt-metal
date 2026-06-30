@@ -206,7 +206,11 @@ void kernel_main() {
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
-        const bool do_joint_kv = ring_id == ring_size - 1;
+        // Joint K/V is gathered over the FULL ring; consume it on the LAST ACTIVE ring iteration
+        // (when the sequencer's sync has waited for all transfers), not when ring_id == ring_size-1.
+        // The device that owns shard ring_size-1 processes that shard on its local iter 0, before the
+        // joint gather completes — the old condition deadlocked the ring. See ring_joint_reader.cpp.
+        const bool do_joint_kv = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
