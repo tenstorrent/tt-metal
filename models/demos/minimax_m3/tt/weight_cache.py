@@ -74,6 +74,10 @@ def weight_cache_is_complete(weight_cache_path, hf_config, num_layers: int, expe
         return any(r.startswith(prefix) for r in rels)
 
     use_qk_norm = bool(getattr(hf_config, "use_qk_norm", True))
+    # MoE backend selects which expert cache files exist (same env gate as tt/mlp.py): the composite
+    # EP-MoE caches per-slot weights under mlp/composite_moe and has no internal gate (it uses the
+    # top-level router); the DeepSeek-style EP-MoE caches per-local-expert weights + its own gate.
+    composite_moe = os.getenv("M3_COMPOSITE_MOE") == "1"
 
     # Top-level (embed / final norm / lm head).
     required = ["model.embed_tokens.weight", "lm_head_padded_pow2.weight", "norm/weight"]
@@ -93,13 +97,17 @@ def weight_cache_is_complete(weight_cache_path, hf_config, num_layers: int, expe
         if _is_dense_layer(hf_config, L):
             required += [f"{base}/mlp/gate_proj", f"{base}/mlp/up_proj", f"{base}/mlp/down_proj"]
         else:
-            # MoE: router + shared expert + expert-parallel routed experts (dtype-specific).
-            required += [
-                f"{base}/mlp/router/weight",
-                f"{base}/mlp/shared_expert/gate_proj",
-                f"{base}/mlp/experts_ep/layer_0.gate.weight",
-                f"{base}/mlp/experts_ep/layer_0.routed_expert.local_0_gate_dtype_{edt}",
-            ]
+            # MoE: top-level router + shared expert are common to both backends.
+            required += [f"{base}/mlp/router/weight", f"{base}/mlp/shared_expert/gate_proj"]
+            if composite_moe:
+                # Composite EP-MoE: per-slot expert weights under mlp/composite_moe (dtype-specific).
+                required.append(f"{base}/mlp/composite_moe/gate_slot0_dtype_{edt}")
+            else:
+                # DeepSeek-style EP-MoE: own gate + per-local-expert routed weights (dtype-specific).
+                required += [
+                    f"{base}/mlp/experts_ep/layer_0.gate.weight",
+                    f"{base}/mlp/experts_ep/layer_0.routed_expert.local_0_gate_dtype_{edt}",
+                ]
 
     missing = [p for p in required if not has(p)]
     if missing:
