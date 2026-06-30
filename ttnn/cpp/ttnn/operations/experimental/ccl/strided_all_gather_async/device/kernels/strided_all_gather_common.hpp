@@ -12,6 +12,7 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
@@ -88,6 +89,22 @@ FORCE_INLINE uint32_t next_mm_aligned_chunk_height(
     }
 }
 
+// Advance chunk_start_tile past one chunk without moving data. Mirrors the
+// tile-advance tail of read_chunk/write_chunk so a direction that relays only
+// half of a split slice can walk past the other half and still land on the
+// same M-block boundary a full traversal would.
+FORCE_INLINE void advance_chunk_start_tile(
+    uint32_t& chunk_start_tile, uint32_t chunk_width, uint32_t subchunk_height, uint32_t input_tensor_Wt) {
+    uint32_t chunk_start_row = chunk_start_tile / input_tensor_Wt;
+    uint32_t new_chunk_start_tile = chunk_start_tile + chunk_width;
+    uint32_t new_chunk_row = new_chunk_start_tile / input_tensor_Wt;
+    if (new_chunk_row != chunk_start_row) {
+        chunk_start_tile = (chunk_start_row + subchunk_height) * input_tensor_Wt;
+    } else {
+        chunk_start_tile = new_chunk_start_tile;
+    }
+}
+
 template <typename AddrGenType>
 FORCE_INLINE uint32_t read_chunk(
     uint32_t& chunk_start_tile,
@@ -140,32 +157,38 @@ FORCE_INLINE uint32_t read_chunk(
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
-        cb_reserve_back(cb_output_id, max_tiles_per_packet);
-        size_t l1_write_addr = get_write_ptr(cb_output_id);
-        for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
-            int32_t tile_id = get_chunk_tile(
-                worker_chunk_row,
-                worker_chunk_col,
-                ag_worker_cores,
-                subchunk_start_row,
-                subchunk_end_row,
-                subchunk_height_stride,
-                chunk_start_col,
-                chunk_end_col,
-                chunk_width,
-                read_output ? output_tensor_Wt : input_tensor_Wt,
-                input_tensor_Ht);
-            if (tile_id >= 0) {
-                uint64_t noc_read_addr =
-                    get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
-                noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
-
-                l1_write_addr += input_tensor_page_size;
-            }
-            chunk_tile_iter++;
+        {
+            DeviceZoneScopedN("CB-RESV");
+            cb_reserve_back(cb_output_id, max_tiles_per_packet);
         }
+        size_t l1_write_addr = get_write_ptr(cb_output_id);
+        {
+            DeviceZoneScopedN("READ-DRAM");
+            for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
+                int32_t tile_id = get_chunk_tile(
+                    worker_chunk_row,
+                    worker_chunk_col,
+                    ag_worker_cores,
+                    subchunk_start_row,
+                    subchunk_end_row,
+                    subchunk_height_stride,
+                    chunk_start_col,
+                    chunk_end_col,
+                    chunk_width,
+                    read_output ? output_tensor_Wt : input_tensor_Wt,
+                    input_tensor_Ht);
+                if (tile_id >= 0) {
+                    uint64_t noc_read_addr =
+                        get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
+                    noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
-        noc_async_read_barrier();
+                    l1_write_addr += input_tensor_page_size;
+                }
+                chunk_tile_iter++;
+            }
+
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_output_id, max_tiles_per_packet);
     }
 
@@ -237,7 +260,10 @@ FORCE_INLINE uint32_t write_chunk(
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_write_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
-        cb_wait_front(cb_output_id, max_tiles_per_packet);
+        {
+            DeviceZoneScopedN("CB-WAIT");
+            cb_wait_front(cb_output_id, max_tiles_per_packet);
+        }
         size_t l1_read_addr = get_read_ptr(cb_output_id);
 
         uint32_t padded_tiles = 0;
@@ -287,6 +313,7 @@ FORCE_INLINE uint32_t write_chunk(
                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_two_id, 0);
                 if ((direction == 1 && num_targets_backward_direction) ||
                     (direction == 0 && num_targets_forward_direction)) {
+                    DeviceZoneScopedN("FABRIC-WRITE");
                     fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                         &mux_connection,
                         pkt_scatter_hdr,
@@ -294,6 +321,7 @@ FORCE_INLINE uint32_t write_chunk(
                         NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {0}));
                 }
                 if (direction == 1 && write_local) {
+                    DeviceZoneScopedN("LOCAL-WRITE");
                     uint64_t local_noc0_dest_noc_addr_tile_one = output_addrgen.get_noc_addr(tile_one_id);
                     uint64_t local_noc0_dest_noc_addr_tile_two = output_addrgen.get_noc_addr(tile_two_id);
 
@@ -309,10 +337,12 @@ FORCE_INLINE uint32_t write_chunk(
                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
                 if ((direction == 1 && num_targets_backward_direction) ||
                     (direction == 0 && num_targets_forward_direction)) {
+                    DeviceZoneScopedN("FABRIC-WRITE");
                     fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                         &mux_connection, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_address0});
                 }
                 if (direction == 1 && write_local) {
+                    DeviceZoneScopedN("LOCAL-WRITE");
                     uint64_t local_noc0_dest_noc_addr = output_addrgen.get_noc_addr(tile_one_id);
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                     noc_async_write_barrier();
