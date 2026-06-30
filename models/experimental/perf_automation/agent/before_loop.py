@@ -28,6 +28,7 @@ from .events import write_event
 from .environment import environment_check
 from .model_files import read_model_files
 from .opclass import STRUCTURAL_OP_CLASSES
+from .pkgtools import installer_hint
 from .router import build_index, cache_playbook
 from .probes import PerfRunFailed
 from .run import Run
@@ -110,17 +111,14 @@ def check_dependencies() -> list[str]:
     import importlib.util
     import shutil as _shutil
 
+    from .pkgtools import installer_hint
+
+    hint = f"{installer_hint()} -r models/experimental/perf_automation/requirements-agent.txt"
     missing: list[str] = []
     if _shutil.which("tt-perf-report") is None:
-        missing.append(
-            "tt-perf-report not on PATH — install it in your tt-metal python env: "
-            "pip install tt-perf-report (see requirements-agent.txt)"
-        )
+        missing.append(f"tt-perf-report not on PATH — install the agent deps into your tt-metal venv: {hint}")
     if importlib.util.find_spec("claude_agent_sdk") is None:
-        missing.append(
-            "claude-agent-sdk not importable — install it in your tt-metal python "
-            "env: pip install claude-agent-sdk (see requirements-agent.txt)"
-        )
+        missing.append(f"claude-agent-sdk not importable — install the agent deps into your tt-metal venv: {hint}")
     return missing
 
 
@@ -290,7 +288,7 @@ def before_loop(
             "BEFORE-LOOP FAILED: agent SDK unhealthy "
             f"(claude-agent-sdk {sdk_status.get('version')}): {sdk_status.get('reason')}\n"
             f"  detail: {sdk_status.get('detail', '')}\n"
-            "  fix: pip install -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
+            f"  fix: {installer_hint()} -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
         )
 
     stages.start("ensure_tt_lang", "install the tt-lang kernel toolchain if missing (--no-deps, ttnn verified)")
