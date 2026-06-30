@@ -75,6 +75,12 @@ class LTXDistilledPipeline(LTXPipeline):
             self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
             self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
 
+        # Warm the encoder before any capture so its connector workspace isn't in a trace's
+        # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
+        if self._traced and not self.dynamic_load:
+            self.gemma_encoder_pair.ensure_loaded()
+            self.encode_prompts(["warmup"], use_cache=False)
+
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
         s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
         s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
@@ -142,9 +148,11 @@ class LTXDistilledPipeline(LTXPipeline):
             self._warmup_encode(height // 2, width // 2)
             self._warmup_encode(height, width)
 
-        # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
-        self.gemma_encoder_pair.ensure_loaded()
-        self.encode_prompts(["warmup"], use_cache=False)
+        # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
+        # already warmed before capture (above); dynamic_load / untraced warm last.
+        if self.dynamic_load or not self._traced:
+            self.gemma_encoder_pair.ensure_loaded()
+            self.encode_prompts(["warmup"], use_cache=False)
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
