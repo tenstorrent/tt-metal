@@ -13,15 +13,12 @@ set(PERF_MICROBENCH_TESTS_SRCS
     routing/test_tt_fabric.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     tensix/test_gathering.cpp
-    old/matmul/matmul_global_l1.cpp
-    old/matmul/matmul_local_l1.cpp
     old/noc/test_noc_read_global_l1.cpp
     old/noc/test_noc_read_local_l1.cpp
     old/pcie/test_enqueue_rw_buffer.cpp
     old/pcie/test_rw_buffer.cpp
     old/pcie/test_rw_device_dram.cpp
     old/pcie/test_rw_device_l1.cpp
-    1_compute_mm/test_compute_mm.cpp
     2_noc_adjacent/test_noc_adjacent.cpp
     2_noc_rtor/test_noc_rtor.cpp
     3_pcie_transfer/test_rw_buffer.cpp
@@ -30,7 +27,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
     8_dram_adjacent_core_read/test_dram_read.cpp
     9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write.cpp
     10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
-    11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
 )
 
 set(X86_64_ONLY_TESTS

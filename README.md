@@ -153,13 +153,6 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 - [Eltwise Unary OP in Vector Engine (SFPU)](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/eltwise_sfpu/eltwise_sfpu.md)
 - [Eltwise Binary OP in Matrix Engine (FPU)](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/eltwise_binary/eltwise_binary.md)
 
-### Matmul
-
-- [Matmul OP on a Single_core](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/matmul/matmul_single_core/matmul_single_core.md)
-- [Matmul OP on Multi_core (Basic)](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/matmul/matmul_multi_core/matmul_multi_core.md)
-- [Matmul Multi_core Reuse (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_reuse.md)
-- [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)
-
 ### Tools and Instruments
 
 #### [TT-NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)

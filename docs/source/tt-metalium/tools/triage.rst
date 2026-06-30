@@ -20,7 +20,7 @@ Example use with tt-metal:
 
     export TT_METAL_HOME=~/work/tt-metal
     ./build_metal.sh --build-programming-examples
-    build/programming_examples/matmul_multi_core
+    build/programming_examples/metal_example_vecadd_multi_core
     triage
 
 

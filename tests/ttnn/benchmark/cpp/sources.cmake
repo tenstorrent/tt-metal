@@ -7,5 +7,4 @@ set(BENCHMARK_SRCS
     "operations/ternary/benchmark_where.cpp"
     "benchmark_host_alloc_on_tensor_readback.cpp"
     "benchmark_host_dtype_conversion.cpp"
-    "matmul/test_matmul_benchmark.cpp"
 )

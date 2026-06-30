@@ -31,7 +31,7 @@
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/test_udm_utils.hpp"
-#include "tt_metal/programming_examples/matmul/matmul_common/bmm_op.hpp"
+#include "tests/ttnn/unit_tests/gtests/udm/pcc_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"  // for ttnn::to_memory_config
 

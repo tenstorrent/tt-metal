@@ -21,7 +21,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_compute_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datatypes_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/loopback)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/matmul)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding)
@@ -48,7 +47,6 @@ install(
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
-        matmul
         shard_data_rm
         NoC_tile_transfer
         sfpu_eltwise_chain
@@ -76,7 +74,6 @@ install(
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
-        matmul
         shard_data_rm
         NoC_tile_transfer
         sfpu_eltwise_chain
