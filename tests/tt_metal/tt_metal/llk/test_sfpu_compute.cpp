@@ -534,7 +534,12 @@ inline std::vector<float> generate_typecast_input(
     const bool mx = typecast_is_mx(in_fmt) || typecast_is_mx(out_fmt);
     const bool has_unsigned = typecast_is_unsigned(in_fmt) || typecast_is_unsigned(out_fmt);
     const float lo = (mx || has_unsigned) ? 0.0f : -64.0f;
-    const float hi = mx ? 8.0f : (has_unsigned ? 32.0f : 64.0f);
+    float hi = 64.0f;
+    if (mx) {
+        hi = 8.0f;
+    } else if (has_unsigned) {
+        hi = 32.0f;
+    }
     auto packed = generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, seed);
     auto bf = unpack_vector<bfloat16, uint32_t>(packed);
     std::vector<float> out(bf.size());
