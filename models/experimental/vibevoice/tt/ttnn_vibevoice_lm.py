@@ -43,6 +43,26 @@ _SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
     exp_approx_mode=False,
 )
 
+# Decode-only program config for the wq/wo 1536x1536 projections (single-token
+# step, Mt=1).  Sweep winner (matmul/test_matmul_32x1536x1536_sweep.py): 1D
+# mcast_in0, 8x3=24 cores, in0_block_w=4, per_core_N=2, out_subblock 1x2,
+# width-sharded output -> 12.25us vs 25.4us auto baseline (2.08x).  per_core_M=1
+# makes it valid ONLY for S==1 decode; prefill (S>1, Mt>1) keeps the auto config.
+_QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=1,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+# Width-sharded L1 output (the winning layout); the shard spec is derived from the
+# program config.  Downstream ops that need interleaved input reshard automatically.
+_QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+
 
 # ──────────────────────────────────────────────────────────────
 # Host-side weight preparation
@@ -428,7 +448,15 @@ class TTVibeVoiceLM:
         n_kv = cfg.num_key_value_heads
 
         # QKV projections [B, 1, S, n*hd]
-        q = ttnn.linear(x, layer_w.wq, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # wq is 1536x1536; on a single-token decode step (S==1) use the swept fast
+        # config (2.08x), else the auto config for prefill chunks.
+        q = ttnn.linear(
+            x,
+            layer_w.wq,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG if S == 1 else None,
+            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
         k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -606,8 +634,14 @@ class TTVibeVoiceLM:
                 out = ttnn.typecast(out, ttnn.bfloat16)
                 out = _reshape_tt(out, [B, 1, S, n_heads * head_dim])
 
-        # Output projection
-        out = ttnn.linear(out, layer_w.wo, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Output projection (1536x1536; same decode fast-path as wq).
+        out = ttnn.linear(
+            out,
+            layer_w.wo,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG if S == 1 else None,
+            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
         return out
 
     def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights) -> ttnn.Tensor:
