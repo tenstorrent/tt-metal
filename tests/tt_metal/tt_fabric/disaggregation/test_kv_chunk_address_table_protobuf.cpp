@@ -372,7 +372,8 @@ TEST(KvChunkAddressTableProtobuf, SpanConstructedManyConfigsRoundTrip) {
     // >10 configs exercises that entries are placed by name, not by raw index,
     // even though span auto-names are "0".."N-1" (which do not string-sort numerically).
     std::vector<KvChunkAddressTableConfig> cfgs;
-    for (uint32_t i = 0; i < 12; i++) {
+    cfgs.reserve(12);
+for (uint32_t i = 0; i < 12; i++) {
         cfgs.push_back({.num_layers = 1, .max_sequence_length = 64, .num_slots = 1, .chunk_n_tokens = 32});
     }
     KvChunkAddressTable original(std::span<const KvChunkAddressTableConfig>{cfgs});
