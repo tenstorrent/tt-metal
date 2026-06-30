@@ -314,6 +314,11 @@ grid_12_9_configs = {
     (8192, 6144, 9216): (8, 6, 12, (2, 2)),  # 3905.8 μs — ff1 spatial TP4_SP8 (sweep rank-1, 2026-06-12)
     # M=16384 with N=9216 (K=6144, M_b=16, formula: (63/32)×224t×2048+158KB≈1.06MB ✓)
     (16384, 6144, 9216): (16, 2, 8, (1, 4)),  # 224 tiles               [UNSWEPT ESTIMATE]
+    # MMRS→AGMM: proj_out / forward_fused_addcmul run as AGMM.
+    # K_global = K_shard × TP8 = 3072 × 8 = 24576. N = 6144 / TP8 = 768.
+    # use_case="to_out" (fused addcmul). Swept 2026-06-17, matmulshapes_new.md Section 4.
+    # (1152, 24576, 768): (3, 24, 3, (1, 3)),  # 704.1 μs — SNG_proj_out xc-merged 1024-tok (sweep rank-1, 2026-06-17)
+    # (1024, 24576, 768): (6, 24, 3, (1, 3)),  # 647.2 μs — proj_out spatial-only 1024-tok (sweep rank-1, 2026-06-17)
 }
 
 

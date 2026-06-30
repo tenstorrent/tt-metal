@@ -55,7 +55,7 @@ class Attention(Module):
         (True, 2, 2): {-1: (128, 512)},
         (True, 4, 8): {
             -1: (256, 512),  # default
-            4096: (128, 512),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
+            4096: (128, 256),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
             4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
             4096 * 16: (192, 512),  # 4096×4096  — 67.4% util (ring_sdpa_sweep_4096.md)
         },
@@ -570,14 +570,25 @@ class Attention(Module):
                 add_q = add_q * self.context_head_factors.data
 
             if shard_prompt:
-                # Prompt q/k/v are sharded on the sequence dim (dim=2) across SP. The joint SDPA
-                # needs the full prompt stream, so gather them to full prompt length. RoPE has
-                # already been applied per-rank with the matching sharded positions.
-                add_q = self.ccl_manager.all_gather(add_q, dim=2, mesh_axis=sp_axis, use_hyperparams=True)
-                add_k = self.ccl_manager.all_gather(add_k, dim=2, mesh_axis=sp_axis, use_hyperparams=True)
-                add_v = self.ccl_manager.all_gather(add_v, dim=2, mesh_axis=sp_axis, use_hyperparams=True)
+                # Sharded joint: add_q/add_k/add_v stay sharded L/P on the sequence dim (dim=2)
+                # across SP. The ring-joint SDPA gathers joint K/V internally via its fused ring
+                # all-gather (full L), keeps joint Q sharded for compute savings, and produces a
+                # sharded joint output. logical_l is the full (unsharded) prompt length; the
+                # persistent gather buffers are full-L scratch (dim-2 size *= sp_factor inside
+                # get_ag_ping_pong_buffer) so no DRAM is allocated inside trace regions.
+                # RoPE has already been applied per-rank with the matching sharded positions.
+                logical_l = add_k.shape[2] * self.parallel_config.sequence_parallel.factor
+                persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
+                persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
+            else:
+                logical_l = 0
+                persistent_joint_k = None
+                persistent_joint_v = None
         else:
             add_q = add_k = add_v = self.dummy_joint_input
+            logical_l = 0
+            persistent_joint_k = None
+            persistent_joint_v = None
 
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -595,6 +606,7 @@ class Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
+                logical_l=logical_l,
                 program_config=self.get_ring_sdpa_program_config(spatial_sequence_length),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
@@ -607,6 +619,8 @@ class Attention(Module):
                 topology=self.ccl_manager.topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid[1]),
+                persistent_output_buffer_joint_k=persistent_joint_k,
+                persistent_output_buffer_joint_v=persistent_joint_v,
             )
         else:
             assert (
@@ -628,12 +642,9 @@ class Attention(Module):
         spatial = ttnn.transformer.concatenate_heads(spatial)
         if prompt is not None:
             prompt = ttnn.transformer.concatenate_heads(prompt)
-
-            if shard_prompt:
-                # The joint SDPA produces the full prompt output replicated across SP ranks.
-                # Re-shard it on the sequence dim (dim=1) so the prompt residual stream stays
-                # sharded for the downstream projection and the next block.
-                prompt = ttnn.mesh_partition(prompt, dim=1, cluster_axis=sp_axis, memory_config=prompt.memory_config())
+            # Sharded joint: the ring-joint SDPA already produces a sharded joint output (it keeps
+            # joint Q sharded L/P), so the prompt residual stream stays sharded — no post-op
+            # mesh_partition re-shard is needed.
 
         spatial = self._project_out(
             spatial, self.to_out, addcmul_spatial_residual, addcmul_spatial_gate, is_ring, tp_axis
