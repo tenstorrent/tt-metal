@@ -445,8 +445,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
         x_CB_size_group_2 = single_tile_size * 1;
-        xmm_CB_size_group_1 = single_tile_size * 3;
-        xmm_CB_size_group_2 = single_tile_size * 3;
+        // cb_xmm double buffer. After the Welford mask-multiply reorder
+        // (`((x − μ) · rsqrt) · mask`), only one tile is live in cb_xmm at
+        // a time, so the allocation drops from 3 to 2.
+        xmm_CB_size_group_1 = single_tile_size * 2;
+        xmm_CB_size_group_2 = single_tile_size * 2;
     }
 
     // Application Setup
@@ -749,6 +752,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // See groupnorm_sharded_program_factory.cpp for the mask data path
     // selection (synthesize / partial read / full read). Synthesis can fire
     // even when the device op got no input_mask tensor — see that comment.
+    // For DRAM (no_mcast) under Welford, the host always supplies a built
+    // mask tensor (see get_mask_tensor). Synthesis is only enabled for
+    // Welford on the sharded path, where the reorder has been verified
+    // end-to-end.
     const bool synth_mask =
         !input_mask.has_value() ? !use_welford : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
     if (synth_mask) {

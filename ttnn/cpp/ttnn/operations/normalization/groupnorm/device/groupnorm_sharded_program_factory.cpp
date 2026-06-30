@@ -325,7 +325,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
-    uint32_t in2_CB_size = single_tile_size * (use_welford ? 3 : 1);
+    // cb_xmm (c_2) double buffer. After the Welford mask-multiply reorder
+    // (`((x − μ) · rsqrt) · mask`), only one tile is live in cb_xmm at a
+    // time, so the Welford allocation drops from 3 to 2.
+    uint32_t in2_CB_size = single_tile_size * (use_welford ? 2 : 1);
     // in3 - eps
     uint32_t in3_CB_size = single_tile_size;
     // gamma
@@ -582,29 +585,30 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     //      full mask tile).
     //   2. MASK_PARTIAL_READ: writer issues a gamma-style two-strip NOC read
     //      of the DRAM mask, populating only face 0 row 0 + face 1 row 0
-    //      (Phase 2 optimization). Same dtype/Welford constraints.
+    //      (Phase 2 optimization). Same dtype constraint as SYNTHESIZE.
     //   3. fallthrough: writer NOC-reads the entire 2 KB mask tile from DRAM
-    //      (legacy path, used for BFP8 and Welford).
+    //      (legacy path, used for BFP8).
     // Synthesis can fire even when no input_mask tensor was provided to the
     // device op — the kernel writes the {0/1} pattern from num_cols_per_group
     // directly into L1, no DRAM tensor needed. We always pick BFLOAT16 for
-    // the auto-built mask format, so synthesis is gated on !use_welford only.
+    // the auto-built mask format, so synthesis always fires when no mask is
+    // passed. Welford support: the Welford compute kernels were reordered to
+    // do `((x − μ) · rsqrt) · mask` with mask on the RHS row-source — same
+    // gate as the non-Welford path.
     const bool synth_mask =
-        !input_mask.has_value() ? !use_welford : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
+        !input_mask.has_value() ? true : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
     const bool synth_neg_mask =
         negative_mask.has_value() && mask_supports_synthesis(in_negative_mask_cb_data_format, use_welford);
     if (synth_mask) {
         writer_defines["MASK_SYNTHESIZE"] = "1";
         writer_defines["MASK_NUM_COLS_PER_GROUP"] = std::to_string(num_datum_row_per_group);
-    } else if (!use_welford && input_mask.has_value() && mask_format_supports_partial_read(in_mask_cb_data_format)) {
+    } else if (input_mask.has_value() && mask_format_supports_partial_read(in_mask_cb_data_format)) {
         writer_defines["MASK_PARTIAL_READ"] = "1";
     }
     if (synth_neg_mask) {
         writer_defines["NEGATIVE_MASK_SYNTHESIZE"] = "1";
         writer_defines["MASK_NUM_COLS_PER_GROUP"] = std::to_string(num_datum_row_per_group);
-    } else if (
-        !use_welford && negative_mask.has_value() &&
-        mask_format_supports_partial_read(in_negative_mask_cb_data_format)) {
+    } else if (negative_mask.has_value() && mask_format_supports_partial_read(in_negative_mask_cb_data_format)) {
         writer_defines["NEGATIVE_MASK_PARTIAL_READ"] = "1";
     }
     // writer compile time args

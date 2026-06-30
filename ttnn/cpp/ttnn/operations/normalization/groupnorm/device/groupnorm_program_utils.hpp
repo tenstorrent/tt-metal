@@ -33,14 +33,16 @@ inline bool mask_format_supports_partial_read(tt::DataFormat fmt) {
 }
 
 // True when the writer kernel can synthesize the per-group 0/1 mask directly
-// in L1 instead of fetching it from a host-built DRAM tensor. Requires:
-//   - non-block-float dtype (so the on-tile byte layout is the simple
-//     {face0_row0, face1_row0} = {[0, face_w_bytes), [face_bytes, ...)} map);
-//   - non-Welford compute path (Welford consumes the full mask tile via
-//     mul_tiles_bcast_scalar with mask on the broadcast-target side, so row 0
-//     alone is not enough).
-inline bool mask_supports_synthesis(tt::DataFormat fmt, bool use_welford) {
-    return mask_format_supports_partial_read(fmt) && !use_welford;
+// in L1 instead of fetching it from a host-built DRAM tensor. Requires
+// non-block-float dtype (so the on-tile byte layout is the simple
+// {face0_row0, face1_row0} = {[0, face_w_bytes), [face_bytes, ...)} map).
+//
+// Welford is supported: the Welford compute kernels were reordered to do
+// `((x − μ) · rsqrt) · mask` instead of `((x − μ) · mask) · rsqrt`, putting
+// the mask on the RHS row-source of a mul_tiles_bcast_rows. ROW broadcast
+// reads only mask[0, c] — exactly the row-0 bytes the synthesizer writes.
+inline bool mask_supports_synthesis(tt::DataFormat fmt, bool /*use_welford*/) {
+    return mask_format_supports_partial_read(fmt);
 }
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
