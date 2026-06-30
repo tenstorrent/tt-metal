@@ -115,13 +115,23 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
 # Tests
 # ---------------------------------------------------------------------------
 COMMON_MESH_PARAMS = [
-    pytest.param((2, 2), 0, 1, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-    pytest.param((2, 4), 0, 1, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-    pytest.param((2, 4), 1, 0, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+    pytest.param(
+        (2, 2), 0, 1, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1nl2_line_is_fsdp0"
+    ),
+    pytest.param(
+        (2, 4), 0, 1, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1nl1_line_is_fsdp1"
+    ),
+    pytest.param(
+        (2, 4), 1, 0, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0nl1_line_is_fsdp1"
+    ),
     # WH (ring) on 4x8
-    pytest.param((4, 8), 1, 0, 4, ring_params_req_exact_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+    pytest.param(
+        (4, 8), 1, 0, 4, ring_params_req_exact_devices, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1"
+    ),
     # BH (ring) on 4x8
-    pytest.param((4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+    pytest.param(
+        (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
+    ),
 ]
 
 
@@ -137,9 +147,11 @@ COMMON_MESH_PARAMS = [
             line_params_req_exact_devices,
             ttnn.Topology.Linear,
             False,
-            id="line_bh_4x8sp1tp0",
+            id="4x8sp1tp0nl2_line_is_fsdp0",
         ),
-        pytest.param((4, 32), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
+        pytest.param(
+            (4, 32), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x32sp1tp0nl2_ring_is_fsdp0"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -308,7 +320,7 @@ def test_wan_transformer_block(
             line_params_req_exact_devices,
             ttnn.Topology.Linear,
             False,
-            id="line_bh_4x8sp1tp0",
+            id="4x8sp1tp0nl2_line_is_fsdp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],
