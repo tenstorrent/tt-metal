@@ -190,9 +190,7 @@ def main():
     (options, args) = parser.parse_args()
     sys.argv[:] = args
 
-    # Accumulate mode interleaves zones from many program invocations and does not store
-    # per-program op IDs, so an ops perf report cannot be attributed and would be
-    # meaningless. Disallow -r together with --enable-accumulate-profiling.
+    # Accumulate mode stores no per-op IDs, so an ops report is meaningless: disallow -r with --enable-accumulate-profiling.
     if options.report and options.do_accumulate:
         parser.error(
             "-r (ops report) cannot be used with --enable-accumulate-profiling: "

@@ -74,10 +74,7 @@ run_accumulate_profiler_test() {
     remove_default_log_locations
     echo "Sanity test: L1-accumulate device profiling coexists with dispatch-core profiling, accumulates worker zones, and skips the perf report"
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    # Multi-invocation workload (1000 matmuls) exercises the full accumulate path
-    # (per-RISC L1 accumulation, BRISC aggregation, near-full flush + DRAM push) AND the
-    # accumulate<->dispatch-core coexistence: dispatch cores keep the classic
-    # guaranteed-slot path while worker cores accumulate, with no marker mismatch.
+    # 1000-matmul workload exercises the full accumulate path and accumulate<->dispatch-core coexistence (no marker mismatch).
     python -m tracy -p --enable-accumulate-profiling --profile-dispatch-cores -m pytest tests/ttnn/tracy/test_dispatch_profiler.py::test_with_ops -k WORKER
     python $PROFILER_TEST_SCRIPTS_ROOT/verify_accumulate_profiler.py
 }

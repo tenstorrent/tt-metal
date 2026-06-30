@@ -965,11 +965,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         }
 
         // TT_METAL_PROFILER_ACCUMULATE
-        // Accumulate multiple kernel invocations in the per-RISC L1 buffer and only push to DRAM
-        // once it is nearly full. The "main"/"main child" zones use the growing index instead of
-        // the fixed guaranteed slots. Read the residual back via DRAM_AND_L1.
-        // Default: false
-        // Usage: export TT_METAL_PROFILER_ACCUMULATE=1
+        // Accumulate kernel invocations in per-RISC L1 (main zones use the growing index), flush to DRAM when nearly
+        // full, read residual via DRAM_AND_L1. Default: false Usage: export TT_METAL_PROFILER_ACCUMULATE=1
         case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_accumulate = true;

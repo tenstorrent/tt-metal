@@ -1498,9 +1498,8 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
-    // This early-out checks HOST_BUFFER_END_INDEX (the DRAM flush count). In trace-only and
-    // accumulate modes the data lives in L1 and may never be flushed to DRAM (HOST_BUFFER_END_INDEX
-    // stays 0), so skipping this guard is required or the L1 residual would never be read.
+    // Skip the HOST_BUFFER_END_INDEX (DRAM flush count) early-out in trace-only/accumulate modes, where data stays in
+    // L1 and the index may never advance.
     if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate()) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
@@ -2333,9 +2332,8 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    // Accumulate mode interleaves zones from many program invocations in one L1 buffer
-    // and does not store per-program op IDs, so the markers cannot be attributed to ops.
-    // A per-program perf report would be meaningless, so skip report generation entirely.
+    // Accumulate mode lacks per-program op IDs (zones from many invocations are interleaved), so a per-op perf report
+    // is meaningless -- skip it.
     if (MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
         return;
     }
@@ -2692,12 +2690,8 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
     const ChipId device_id = device_core.first;
     const CoreCoord worker_core = device_core.second;
 
-    // Accumulate mode uses the same device-context calibration fallback as the default profiler
-    // (device_time anchored to the smallest WORKER marker timestamp). Do NOT override with the
-    // realtime profiler's calibration here: its anchor is the dispatch core's raw device cycle,
-    // which is a different clock reference and bit-width than the worker zones' 44-bit marker
-    // timestamps, so feeding it to the worker contexts produced out-of-range sync values and the
-    // timelines failed to render (zones placed off-screen).
+    // Accumulate uses the default calibration (device_time = smallest WORKER marker); don't use the rt anchor's
+    // dispatch-core cycle here -- different clock/bit-width yields out-of-range, off-screen zones.
 
     if (!core_sync_info.contains(worker_core)) {
         const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
@@ -2719,14 +2713,8 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
         double frequency = device_sync_info.frequency;
 
         if (realtime_sync_line.has_value() && smallest_timestamp != (1lu << 63)) {
-            // Realtime-profiler clock fit is available: anchor this worker context to that
-            // line so its zones align with the rt-profiler records (shared device wall
-            // clock). Keep device_time at the smallest WORKER marker (in-range, correct
-            // clock reference -- do NOT use the rt anchor's dispatch-core cycle here), but
-            // derive cpu_time as the host TSC at which the shared device clock reads that
-            // marker per the fit:
-            //   cpu_time = host_start + (device_time - first_timestamp) / (freq * ratio)
-            // ratio = TracyGetTimerMul(), the same TSC->ns factor the fit was built with.
+            // Anchor to the rt-profiler clock fit: keep device_time = smallest WORKER marker, but derive cpu_time from
+            // the fit (ratio = TracyGetTimerMul, the TSC->ns factor the fit used).
             const double ratio = TracyGetTimerMul();
             device_time = static_cast<double>(smallest_timestamp);
             cpu_time = realtime_sync_line->host_anchor +
