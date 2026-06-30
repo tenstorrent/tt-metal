@@ -14,7 +14,7 @@ This is observational/diagnostic — no PCC threshold assertions.
 
 import matplotlib
 
-from models.common.utility_functions import hf_cache_layer_kv
+from models.common.utility_functions import hf_cache_layer_kv, is_blackhole
 
 matplotlib.use("Agg")
 
@@ -127,6 +127,8 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [True], ids=["overlap_shared"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [True], ids=["overlap_routed"])
 @pytest.mark.timeout(0)
 def test_prefill_block_loop(
     mesh_device,
@@ -141,7 +143,13 @@ def test_prefill_block_loop(
     hf_config,
     state_dict,
     tokenizer,
+    overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
 ):
+    # The routed-expert / combine overlap is only supported on Blackhole (TtMoe asserts this).
+    if overlap_routed_expert_with_combine and not is_blackhole():
+        pytest.skip("overlap_routed_expert_with_combine=True is only supported on Blackhole")
+
     # Perf runs (skip_reference=True) measure once; PCC/divergence runs loop for 30 iters
     num_iters = 1 if skip_reference else 30
     # --- Validate fixtures ---
@@ -438,6 +446,8 @@ def test_prefill_block_loop(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:

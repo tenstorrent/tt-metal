@@ -122,6 +122,20 @@ void kernel_main() {
     uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_idx++);
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_idx++);
     uint32_t routed_expert_sem_addr = get_arg_val<uint32_t>(rt_idx++);
+    // Routed-expert semaphore per-forward reset protocol (only meaningful when overlap is enabled,
+    // i.e. routed_expert_sem_addr != 0). Every untilizer core signals the leader after its final
+    // wait_min; the leader (is_reset_leader) collects all signals, then loopback-multicasts 0 to
+    // every combine core's copy.
+    uint32_t is_reset_leader = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_leader_noc_x = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_leader_noc_y = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_barrier_sem_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_num_untilizer_cores = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_mcast_start_x = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_mcast_start_y = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_mcast_end_x = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_mcast_end_y = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t reset_num_combine_cores = get_arg_val<uint32_t>(rt_idx++);
 
     // ===== Step 1: Wait for the owning sender to multicast expert token counts + receive_buf_addr =====
     // Note: don't reset counter_ready_sem — writer_untilize on this same core also waits on it
@@ -172,6 +186,14 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* routed_expert_sem_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routed_expert_sem_addr);
             noc_semaphore_wait_min(routed_expert_sem_ptr, local_expert + 1);
+            // After clearing the final expert's wait, this core is past ALL of its routed-expert
+            // semaphore waits.
+            if (local_expert == expert_end_idx - 1) {
+                const uint64_t leader_barrier_noc_addr =
+                    get_noc_addr(reset_leader_noc_x, reset_leader_noc_y, get_semaphore(reset_barrier_sem_id));
+                noc_semaphore_inc(leader_barrier_noc_addr, 1);
+                noc_async_atomic_barrier();
+            }
         }
 
         uint32_t expert_tokens = local_expert_counts[local_expert];
@@ -292,5 +314,26 @@ void kernel_main() {
         // tile-aligned per-expert stride, so start_page_tiled (and start_token derived from
         // it) tracks both for the next iteration.
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
+    }
+
+    // Reset of the routed-expert overlap semaphore, performed once by a single leader
+    // untilizer core.
+    if (routed_expert_sem_addr != 0 && is_reset_leader != 0) {
+        volatile tt_l1_ptr uint32_t* routed_expert_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routed_expert_sem_addr);
+        volatile tt_l1_ptr uint32_t* reset_barrier_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(reset_barrier_sem_id));
+        noc_semaphore_wait(reset_barrier_sem_ptr, reset_num_untilizer_cores);
+        noc_semaphore_set(reset_barrier_sem_ptr, 0);
+        // Zero this (leader's) copy so it can serve as the 0 source for the broadcast, then
+        // loopback-multicast 0 to every combine core's copy (num_dests counts self for loopback).
+        noc_semaphore_set(routed_expert_sem_ptr, 0);
+        if (reset_num_combine_cores > 1) {
+            const uint64_t reset_mcast_noc_addr = get_noc_multicast_addr(
+                reset_mcast_start_x, reset_mcast_start_y, reset_mcast_end_x, reset_mcast_end_y, routed_expert_sem_addr);
+            noc_semaphore_set_multicast_loopback_src(
+                routed_expert_sem_addr, reset_mcast_noc_addr, reset_num_combine_cores);
+        }
+        noc_async_write_barrier();
     }
 }

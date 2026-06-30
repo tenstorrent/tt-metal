@@ -198,6 +198,8 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        overlap_shared_expert_with_dispatch: bool = True,
+        overlap_routed_expert_with_combine: bool = True,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -288,6 +290,8 @@ class TtPrefillBlock(LightweightModule):
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
+                overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
             )
         else:
             self.ffn = TtFfn(
@@ -319,6 +323,8 @@ class TtPrefillBlock(LightweightModule):
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
+        overlap_shared_expert_with_dispatch=True,
+        overlap_routed_expert_with_combine=True,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -366,8 +372,8 @@ class TtPrefillBlock(LightweightModule):
             route_scale=model_cfg.ROUTE_SCALE,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
-            overlap_shared_expert_with_dispatch=True,
-            overlap_routed_expert_with_combine=True,
+            overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+            overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
         )
