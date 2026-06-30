@@ -56,12 +56,23 @@ To sweep disjoint bands instead of a single range, for example either side of a 
 Case(op=MathOperation.Reciprocal, spec=StimuliSpec.uniform(intervals=[(-10.0, -0.01), (0.01, 10.0)]))
 ```
 
+### Exhaustive sweep (`ulp_sweep`)
+
+For BF16 or FP16, `StimuliSpec.ulp_sweep(low, high)` tests *every* representable value in the range instead of sampling it.
+
+```python
+Case(op=MathOperation.Reciprocal, spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0))
+```
+
+`input_dimensions` is set automatically and should be left unset. Coverage is limited to 8 tiles (8192 values); if the range exceeds this, only the lowest values are swept and a warning is logged. FP32 is not currently supported.
+
 ## Optional Case fields
 
 Sensible defaults cover the common cases, so override only when needed.
 
 - `expect_pass` — set to `False` to keep the run green while exploring a known-inaccurate op.
 - `name` — custom test ID or output filename. The default is `<Op>-<fmt>`.
+- `approx_mode`
 - `clamp_negative` — enable the kernel's negative-input clamp.
 - `dest_acc` and `unpack_to_dest` — override the format-derived accumulator defaults.
 - `input_dimensions` — set how many points sample the domain (see below).
