@@ -26,15 +26,33 @@ def test_parse_top_level_card_and_arch():
 
 
 def test_unknown_arch_raises():
-    with pytest.raises(EnvironmentError_):
+    with pytest.raises(EnvironmentError_):  # allow-pytest.raises: no expect_error fixture
         parse_env_snapshot('{"arch": "grayskull"}')
 
 
 def test_unparseable_snapshot_raises():
-    with pytest.raises(EnvironmentError_):
+    with pytest.raises(EnvironmentError_):  # allow-pytest.raises: no expect_error fixture
         parse_env_snapshot("not json")
 
 
 def test_probe_required():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error fixture
         environment_check()
+
+
+def test_device_count_carried_from_probe_json():
+    import json
+
+    from agent.environment import parse_env_snapshot
+
+    facts = parse_env_snapshot(json.dumps({"card": "p300c", "arch": "blackhole", "device_count": 4}))
+    assert facts["device_count"] == 4
+
+
+def test_device_count_from_device_info_list_length():
+    import json
+
+    from agent.environment import parse_env_snapshot
+
+    snap = json.dumps({"device_info": [{"board_type": "n300", "arch": "wormhole_b0"}] * 2})
+    assert parse_env_snapshot(snap)["device_count"] == 2

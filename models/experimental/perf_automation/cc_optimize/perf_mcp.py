@@ -105,12 +105,15 @@ _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
 
 # kernel-authoring evidence markers, searched in the model source tree (grounds a recorded attempt)
 _KERNEL_MARKERS = ("generic_op", "ProgramDescriptor", "KernelDescriptor", "@ttl.", "ttl.operation", "import ttl")
+_TP_SHARD_MARKERS = ("ShardTensorToMesh", "shard_tensor_to_mesh")
+_CCL_MARKERS = ("all_gather", "reduce_scatter", "all_reduce")
 
 
 def _scan_kernel_evidence() -> dict:
     """Look for real custom-kernel authoring in the model source so a recorded attempt can't be a
-    phantom. Returns {markers, cpp_files} — empty if no custom kernel is present."""
+    phantom. Returns {markers, cpp_files, tp_shard, ccl} — empty/False if nothing is present."""
     found, cpp = set(), []
+    tp_shard = ccl = False
     try:
         for p in _MODEL_ROOT.rglob("*"):
             if p.is_dir() or p.suffix not in (".py", ".cpp", ".cc", ".h", ".hpp"):
@@ -124,9 +127,13 @@ def _scan_kernel_evidence() -> dict:
             for m in _KERNEL_MARKERS:
                 if m in txt:
                     found.add(m)
+            if any(m in txt for m in _TP_SHARD_MARKERS):
+                tp_shard = True
+            if any(m in txt for m in _CCL_MARKERS):
+                ccl = True
     except Exception:  # noqa: BLE001
         pass
-    return {"markers": sorted(found), "cpp_files": cpp}
+    return {"markers": sorted(found), "cpp_files": cpp, "tp_shard": tp_shard, "ccl": ccl}
 
 
 def _load_attempts() -> list:
@@ -210,6 +217,23 @@ def _ttl_available() -> bool:
     return importlib.util.find_spec("ttl") is not None
 
 
+_TP_REGIME = os.environ.get("TT_PERF_TP_REGIME", "0") == "1"
+
+
+def set_tp_regime(enabled: bool) -> None:
+    global _TP_REGIME
+    _TP_REGIME = bool(enabled)
+
+
+def _tp_candidate(open_op: dict, op_code: str) -> bool:
+    if not _TP_REGIME:
+        return False
+    oc = (op_code or "").lower()
+    if "matmul" not in oc and "linear" not in oc:
+        return False
+    return (open_op.get("bound_by") or "").lower() in ("memory", "dram", "both")
+
+
 def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool, str, str]:
     """DETERMINISTIC ladder gate for ONE open op. Returns (done, rung, reason).
 
@@ -279,6 +303,14 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                 "cpp",
                 "tt-lang tried; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it",
             )
+    if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
+        return (
+            False,
+            "tp-fracture",
+            "single-chip levers + both kernels exhausted and this dense matmul is still memory-bound on "
+            "a mesh that cannot fit the model on one chip -> fracture the weight across the TP axis and "
+            "insert the matching CCL (GUIDELINES/08 §7); record_kernel_attempt(...,'tp-fracture',...)",
+        )
     # BOX (4) STRUCTURAL (ALWAYS ON, GENERAL — no model/architecture knowledge) — the per-op ladder
     # above (grid+dtype+tt-lang+C++) is exhausted but a MATERIAL GAP REMAINS (this op is in the
     # blocking set, so its gap >= the material threshold). That is the universal, config-free signal
@@ -440,7 +472,7 @@ def measure_candidate() -> dict:
         floor_ms = roofline.residual_report(baseline, _ENV).get("modeled_floor_ms")
     except Exception:
         pass
-    ok, reason = _rm._comparable(baseline, prof, floor_ms=floor_ms)
+    ok, reason = _rm._comparable(baseline, prof, floor_ms=floor_ms, tp_regime=_TP_REGIME)
     if not ok:
         return {"verdict": "REJECTED", "reason": reason, "device_ms": dev, "baseline_ms": base_dev}
     delta = round(base_dev - dev, 4)
@@ -540,8 +572,12 @@ def record_kernel_attempt(
         "2cq",
     }
     is_knob = (kernel_kind or "").lower() in _KNOB_KINDS
+    is_tp = (kernel_kind or "").lower() == "tp-fracture"
     ev = _scan_kernel_evidence()
-    detected = True if is_knob else bool(ev["markers"] or ev["cpp_files"])
+    if is_tp:
+        detected = bool(ev.get("tp_shard") and ev.get("ccl"))
+    else:
+        detected = True if is_knob else bool(ev["markers"] or ev["cpp_files"])
     ttl_absent = (kernel_kind or "").lower() == "tt-lang" and not _ttl_available()
     if ttl_absent:
         detected = False
@@ -565,6 +601,9 @@ def record_kernel_attempt(
             if ttl_absent
             else None
             if detected
+            else "TP attempt needs BOTH a ShardTensorToMesh AND a CCL (all_gather/reduce_scatter) in model "
+            "source — not found; attempt UNSUPPORTED and will NOT clear the op."
+            if is_tp
             else "NO kernel markers (generic_op/@ttl/.cpp/ProgramDescriptor) found in model source — this "
             "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first."
         ),
