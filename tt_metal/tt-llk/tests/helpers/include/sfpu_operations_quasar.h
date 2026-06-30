@@ -20,6 +20,7 @@
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
+#include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
@@ -85,6 +86,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         init_zero_comp();
+    }
+    else if constexpr (OPERATION == SfpuType::typecast)
+    {
+        init_typecast();
     }
 }
 
@@ -204,6 +209,14 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         call_zero_comp_operation_quasar<OPERATION, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
+    }
+    else if constexpr (OPERATION == SfpuType::typecast)
+    {
+        // Typecast is parameterized by the (input,output) DataFormat pair, which the test
+        // bakes in as the compile-time constants TYPECAST_IN_FORMAT / TYPECAST_OUT_FORMAT (set
+        // by the TYPECAST_FORMATS variant). The functor picks the conversion sequence from the
+        // pair at compile time.
+        _llk_math_eltwise_unary_sfpu_params_(calculate_typecast<TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS>, dst_index);
     }
     else
     {

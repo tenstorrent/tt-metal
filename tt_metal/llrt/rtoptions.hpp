@@ -151,15 +151,8 @@ struct FabricTelemetrySettings {
     }
 };
 
-enum class SanitizerReportMethod {
-    Default,
-    Assert,
-    Print,
-};
-
 struct SanitizerSettings {
     bool enabled = false;
-    SanitizerReportMethod method = SanitizerReportMethod::Default;
 
     std::optional<bool> pedantic = std::nullopt;
     std::optional<bool> warn = std::nullopt;

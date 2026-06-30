@@ -5,9 +5,11 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/experimental/quasar/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
 #include <ttnn/tensor/types.hpp>
 
@@ -172,10 +174,10 @@ ttnn::Tensor pad_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     if (input_tensor.dtype() == DataType::BFLOAT8_B && input_tensor.layout() == Layout::TILE) {
-        auto bfloat16_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+        auto bfloat16_tensor = ttnn::operations::experimental::quasar::typecast(input_tensor, DataType::BFLOAT16);
         auto padded_tensor =
             pad_impl(bfloat16_tensor, padding, value, use_multicore, memory_config_arg, sub_core_grids);
-        return ttnn::typecast(padded_tensor, DataType::BFLOAT8_B);
+        return ttnn::operations::experimental::quasar::typecast(padded_tensor, DataType::BFLOAT8_B);
     }
     const int original_rank = input_tensor.logical_shape().rank();
 
@@ -265,11 +267,12 @@ ttnn::Tensor invoke_rm(
             auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
             remove_prefix(output_shape, rank_diff);
             remove_prefix(padded_shape, rank_diff);
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
+            output_tensor = ttnn::operations::experimental::quasar::reshape(
+                output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
+            output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, ttnn::Shape(padded_shape));
         }
     } else {
-        output_tensor = ttnn::reshape(
+        output_tensor = ttnn::operations::experimental::quasar::reshape(
             output_tensor, update_original_shape(output_tensor.padded_shape(), input_tensor.logical_shape()));
     }
     return output_tensor;
@@ -337,7 +340,8 @@ ttnn::Tensor invoke_tile(
     if (output_tensor.memory_config().shard_spec().has_value() !=
         memory_config_arg.value_or(input_tensor.memory_config()).shard_spec().has_value()) {
         if (memory_config_arg.has_value()) {
-            output_tensor = ttnn::to_memory_config(output_tensor, memory_config_arg.value(), std::nullopt);
+            output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+                output_tensor, memory_config_arg.value(), std::nullopt);
         } else {
             // memory_config_arg is nullopt → condition can only be true if input is sharded
             // (interleaved input + nullopt config → both sides false → condition false)
@@ -347,7 +351,8 @@ ttnn::Tensor invoke_tile(
                 input_tensor.shard_spec()->grid,
                 ShardStrategy::HEIGHT,
                 ShardOrientation::ROW_MAJOR);
-            output_tensor = ttnn::to_memory_config(output_tensor, sharded_mem_config, std::nullopt);
+            output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+                output_tensor, sharded_mem_config, std::nullopt);
         }
     }
     return output_tensor;

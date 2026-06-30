@@ -424,30 +424,6 @@ def auto_output_width_shard_dim(
     return 1
 
 
-def get_tilize_drain_core() -> ttnn.CoreCoord:
-    """Return the MoE-compute tilize drain/sync core for the current architecture.
-
-    The op drains the tilize stage on a single worker core, keyed off the per-arch
-    logical worker-grid layout table in the program factory's ``get_layout()``
-    (``moe_compute_program_factory.cpp``: ``max_tilize_cores[0]``). Indices/scores must
-    be L1-sharded on this exact core so the op's non-drain tilize cores can NOC-read
-    them; a mismatch makes them ``noc_async_read`` garbage L1 addresses (CB overflow,
-    caught by watcher).
-
-    Arch is resolved internally via ``ttnn.device`` (no device handle required), so this
-    is the single source of truth for both the op tests and ``TTMoEDecodeConfig``.
-
-    Per-arch (unharvested production grids; harvested grids need #41827):
-      - WH (7x10 grid): (6, 9)
-      - BH (11x10 grid): (10, 9) — DRAM cols shifted, tilize moved to x=9,10
-    """
-    if ttnn.device.is_blackhole():
-        return ttnn.CoreCoord(10, 9)
-    if ttnn.device.is_wormhole_b0():
-        return ttnn.CoreCoord(6, 9)
-    raise ValueError(f"MoE compute tilize drain core is only defined for WH and BH; got arch {ttnn.get_arch_name()!r}")
-
-
 def prepare_w0_w1_tensor_for_moe_compute(
     torch_w0: "torch.Tensor",
     torch_w1: "torch.Tensor",
