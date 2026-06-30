@@ -301,8 +301,8 @@ public:
 
     static constexpr std::uint32_t make(ExecutionUnit exu, NativeThread thread, ExpectUninit expect_uninit, std::uint32_t id)
     {
-        return (to_underlying(thread) << THREAD_SHAMT) | (to_underlying(exu) << EXU_SHAMT) | (static_cast<std::uint32_t>(expect_uninit) << UNINIT_SHAMT) |
-               (id << ID_SHAMT);
+        return (ckernel::to_underlying(thread) << THREAD_SHAMT) | (ckernel::to_underlying(exu) << EXU_SHAMT) |
+               (static_cast<std::uint32_t>(expect_uninit) << UNINIT_SHAMT) | (id << ID_SHAMT);
     }
 
     static constexpr NativeThread thread(Operation operation)
@@ -328,7 +328,7 @@ public:
 private:
     static constexpr std::uint32_t bits(Operation operation)
     {
-        return to_underlying(operation);
+        return ckernel::to_underlying(operation);
     }
 };
 
