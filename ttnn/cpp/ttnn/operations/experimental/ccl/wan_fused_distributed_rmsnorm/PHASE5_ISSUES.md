@@ -285,3 +285,31 @@ predicated clear. `fill_tile` failed because it is ALSO SFPLOADI-predicated; `co
 FIX DIRECTION (implementable, mirrors the shipping fuse_pre_add kernel): add a small zeroed-state
 CB, pack zeros once at kernel start, and replace the per-row reset with copy_tile(zero)+restore.
 Model stays gated (_FUSED_LN_MAX_RESIDENT_TILE_COLS=40) until this lands.
+
+### ISSUE 3A + 3B — FIXED (welford warm-row accumulator reset via unpredicated reload)
+ROOT CAUSE: on the TP>1 path the per-row `combine` (legacy SFPU rsqrt + binary/square ops with
+data-dependent predication) leaves the SFPU condition code predicated, so the NEXT row's
+`welford_init()` SFPLOADI accumulator clear skips the disabled token lanes. Those lanes keep a
+stale ~1e36 running mean -> M2 overflow -> inf variance -> invstd 0 -> the token's output row
+collapses to a constant. WIDE/block-major shards collapse ~half the tokens of every warm row
+(catastrophic, non-deterministic) = ISSUE 3A; NARROW shards show the same bug as a small zero-mean
+variance perturbation = ISSUE 3B (the ~0.013% in-block regressor). Same root.
+
+FIX (mirrors layernorm_large_tensor_welford fuse_pre_add): capture a zeroed welford state into a
+dedicated CB (welford_zero_cb, c_21, 2 fp32 tiles) ONCE at cold start while the SFPU is clean
+(welford_init + welford_save_state + pack); then each row reset the accumulator via
+copy_tile(welford_zero_cb -> mean_dst/var_dst) + welford_restore_state — an UNPREDICATED L1->DST
+path that resets every lane regardless of the leaked CC, unlike the SFPLOADI clear (and fill_tile,
+which is also SFPLOADI-predicated). welford_init() is still called per row to program the replay
+buffer; only its clear is bypassed.
+
+VALIDATED (fresh galaxy, _ttnncpp.so rebuilt + synced to lib/):
+  - wan_tp2 80t WIDE: pcc(f:c) 87.5% -> 100.0005%, 960 -> 0 degenerate, deterministic.
+  - wan_tp4 80t WIDE ring4: 87.6% -> 99.9996%, 0 degenerate, deterministic.
+  - wan_tp4 40t / wan_tp8 20t NARROW: 99.987%/99.9997% -> 99.9999%/99.9997% (3B fixed too).
+  - test_layernorm_module_corr 5/5 fused=100.00%; test_rmsnorm_module_corr 5/5 (RMS unaffected by
+    the shared CB/CT-arg addition; welford_zero_cb is a 1-tile stub for RMS).
+Module width gate (_FUSED_LN_MAX_RESIDENT_TILE_COLS) REMOVED — fused LN is correct at any width.
+CAVEAT: welford_zero_cb adds 8 KB resident L1 (LN only); not yet folded into
+decide_streaming_low_l1/decide_block_major_post accounting (task #10) — fits at <=80 tiles
+(validated); very wide is_tp_1 (160t) would fail loudly via the allocator, not silently.

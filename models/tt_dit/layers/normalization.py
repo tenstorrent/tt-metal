@@ -476,28 +476,17 @@ class DistributedLayerNorm(Module):
         entry["idx"] = (entry["idx"] + 1) % len(bufs)
         return buf
 
-    # Widest per-device shard (in 32-col tiles) the fused LN runs correctly. >40 tiles trips the
-    # device op's block-major / streaming POST path, which has an OPEN correctness bug (ISSUE 3A:
-    # warm streaming rows produce inf variance for some token lanes -> those tokens collapse to a
-    # constant row, non-deterministic at TP=2; PHASE5_ISSUES.md). Triaged to the streaming-Welford
-    # + per-row combine interaction (NOT the AG, NOT the welford clear/CC/replay) but not yet fixed.
-    # Until then, wide shards fall back to the composite Welford chain (correct at any width).
-    _FUSED_LN_MAX_RESIDENT_TILE_COLS = 40
-
     def _fused_ln_supported(self, x: ttnn.Tensor, dynamic_weight, weight) -> bool:
         """The fused op requires a [1,1,N,H] input (batch==1, single channel). adaLN
         (dynamic weight/bias) and no-affine map cleanly; static ROW_MAJOR affine and
-        batch>1 fall back to the composite chain. Wide shards (block-major POST path,
-        ISSUE 3A) also fall back."""
+        batch>1 fall back to the composite chain. (Wide-shard block-major POST is now
+        correct for any width — ISSUE 3A fixed by the welford warm-row accumulator reset
+        — so there is no longer a width gate.)"""
         if len(x.shape) != 4 or x.shape[0] != 1 or x.shape[1] != 1:
             return False
         # Static affine uses the ROW_MAJOR [dim//n, n] weight the composite expects, not
         # the [1,H] TILE the fused op wants. Only adaLN/no-affine go fused.
         if dynamic_weight is None and weight is not None:
-            return False
-        # Wide per-device shards trip the broken block-major streaming POST path -> use composite.
-        width_per_device = self.embedding_dim // self.mesh_width
-        if width_per_device // self.TILE_SIZE > self._FUSED_LN_MAX_RESIDENT_TILE_COLS:
             return False
         return True
 
