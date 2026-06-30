@@ -160,6 +160,50 @@ def _apply_rope_chunked(
     return out
 
 
+def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: int = TILE_SIZE):
+    q_seq_len = tt_q.shape[-2]
+    k_seq_len = tt_k.shape[-2]
+    if q_seq_len <= chunk_size:
+        program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len)
+        kwargs = {
+            "is_causal": False,
+            "scale": 1.0,
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "program_config": program_config,
+        }
+        if attn_mask is not None:
+            kwargs["attn_mask"] = attn_mask
+        return ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)
+
+    chunks = []
+    for start in range(0, q_seq_len, chunk_size):
+        end = min(start + chunk_size, q_seq_len)
+        q_chunk = ttnn.slice(
+            tt_q,
+            [0, 0, start, 0],
+            [tt_q.shape[0], tt_q.shape[1], end, tt_q.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        mask_chunk = None
+        if attn_mask is not None:
+            mask_chunk = ttnn.slice(
+                attn_mask,
+                [0, 0, start, 0],
+                [attn_mask.shape[0], attn_mask.shape[1], end, attn_mask.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        chunks.append(
+            _sdpa_q_chunked(q_chunk, tt_k, tt_v, attn_mask=mask_chunk, head_dim=head_dim, chunk_size=chunk_size)
+        )
+        q_chunk.deallocate(True)
+        if mask_chunk is not None:
+            mask_chunk.deallocate(True)
+    out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for chunk in chunks:
+        chunk.deallocate(True)
+    return out
+
+
 def denoise_attention(
     attn,
     hidden_states,
@@ -200,22 +244,29 @@ def denoise_attention(
     tp = mesh_config.tp if mesh_config else 1
 
     xqkv = apply_qkv_projection(hidden_states, weights)
+    hidden_states.deallocate(True)
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
+    xqkv.deallocate(True)
     if kv_hidden_states is not None:
         xqkv_kv = apply_qkv_projection(kv_hidden_states, weights)
         tt_kv_q, tt_k_from_kv, tt_v_from_kv = split_qkv_heads_prefill(
             xqkv_kv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
         )
+        xqkv_kv.deallocate(True)
         tt_k.deallocate(True)
         tt_v.deallocate(True)
         tt_kv_q.deallocate(True)
         tt_k, tt_v = tt_k_from_kv, tt_v_from_kv
 
+    raw_q, raw_k, raw_v = tt_q, tt_k, tt_v
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
     tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
     tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+    raw_q.deallocate(True)
+    raw_k.deallocate(True)
+    raw_v.deallocate(True)
 
     tt_q = _apply_rope_chunked(tt_q, cos_cache, sin_cache, start_offset=q_rope_offset)
 
@@ -252,30 +303,7 @@ def denoise_attention(
         v_old = tt_v
     tt_v = tt_v_dram
 
-    q_seq_len = tt_q.shape[-2]
-    k_seq_len = tt_k.shape[-2]
-    program_config = _denoise_sdpa_program_config(config.head_dim, q_seq_len, k_seq_len)
-    if attn_mask is not None:
-        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
-            tt_q,
-            tt_k,
-            tt_v,
-            attn_mask=attn_mask,
-            is_causal=False,
-            scale=1.0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=program_config,
-        )
-    else:
-        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
-            tt_q,
-            tt_k,
-            tt_v,
-            is_causal=False,
-            scale=1.0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=program_config,
-        )
+    tt_sdpa = _sdpa_q_chunked(tt_q, tt_k, tt_v, attn_mask=attn_mask, head_dim=config.head_dim)
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)

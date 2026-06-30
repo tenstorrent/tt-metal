@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from models.experimental.diffusion_gemma.tt import diffusion_attention as DA
 from models.experimental.diffusion_gemma.tt.diffusion_attention import (
     _apply_rope_chunked,
+    _sdpa_q_chunked,
     _slice_rope_cache,
     validate_q_rope_offset,
 )
@@ -115,3 +116,65 @@ def test_apply_rope_chunked_slices_tensor_and_cache(monkeypatch):
     cache_slices = [call for call in calls if call[0] == "slice" and call[1] in {"cos", "sin"}]
     assert {tuple(call[2]) for call in cache_slices} == {(0, 0, 32, 0), (0, 0, 64, 0)}
     assert calls[-1] == ("concat", ["rope-out", "rope-out"], 2, "dram")
+
+
+def test_sdpa_q_chunked_slices_q_and_mask(monkeypatch):
+    calls = []
+
+    class _Tensor:
+        def __init__(self, name, shape):
+            self.name = name
+            self.shape = shape
+            self.deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def CoreCoord(x, y):
+            return ("grid", x, y)
+
+        @staticmethod
+        def SDPAProgramConfig(**kwargs):
+            calls.append(("program", kwargs))
+            return "program"
+
+        @staticmethod
+        def slice(tensor, starts, ends, *, memory_config=None):
+            calls.append(("slice", tensor.name, starts, ends, memory_config))
+            return _Tensor(
+                f"{tensor.name}[s{starts[2]}:{ends[2]}]",
+                [ends[idx] - starts[idx] for idx in range(4)],
+            )
+
+        @staticmethod
+        def concat(tensors, *, dim, memory_config):
+            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
+            shape = list(tensors[0].shape)
+            shape[dim] = sum(tensor.shape[dim] for tensor in tensors)
+            return _Tensor("sdpa-out", shape)
+
+    class _FakeTransformer:
+        @staticmethod
+        def scaled_dot_product_attention(q, k, v, **kwargs):
+            calls.append(("sdpa", q.name, k.name, v.name, getattr(kwargs.get("attn_mask"), "name", None), kwargs))
+            return _Tensor(f"sdpa({q.name})", q.shape)
+
+    _FakeTtnn.transformer = _FakeTransformer
+    monkeypatch.setattr(DA, "ttnn", _FakeTtnn)
+
+    out = _sdpa_q_chunked(
+        _Tensor("q", [1, 4, 96, 256]),
+        _Tensor("k", [1, 2, 128, 256]),
+        _Tensor("v", [1, 2, 128, 256]),
+        attn_mask=_Tensor("mask", [1, 1, 96, 128]),
+        head_dim=256,
+    )
+
+    assert out.shape == [1, 4, 96, 256]
+    assert [call[1] for call in calls if call[0] == "sdpa"] == ["q[s0:32]", "q[s32:64]", "q[s64:96]"]
+    assert [call[4] for call in calls if call[0] == "sdpa"] == ["mask[s0:32]", "mask[s32:64]", "mask[s64:96]"]
+    assert calls[-1] == ("concat", ["sdpa(q[s0:32])", "sdpa(q[s32:64])", "sdpa(q[s64:96])"], 2, "dram")

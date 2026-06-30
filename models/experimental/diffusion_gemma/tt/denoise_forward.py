@@ -249,7 +249,6 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, at
         prefix_kv=prefix_kv,
         q_rope_offset=q_rope_offset,
     )
-    normed.deallocate(True)
     if kv_hidden is not None:
         kv_hidden.deallocate(True)
 
