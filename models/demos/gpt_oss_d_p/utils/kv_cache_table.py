@@ -5,15 +5,19 @@
 
 Targets caches allocated by ``tt/attention/kv_cache_prefill_only.py``:
 
-  * shape per device: ``[batch, num_kv_heads // TP, max_seq_len, head_dim]``
-  * ``ReplicateTensorToMesh`` upload (separate DRAM buffer per mesh coordinate)
+  * shape per device: ``[batch, num_kv_heads // TP, max_seq_len // SP, head_dim]``
+  * ``ShardTensor2dMesh(dims=(sp_axis, None))`` upload (SP row seq shard; TP replicate)
   * non-paged ``ttnn.fill_cache`` writes
-  * ``NdShardSpec`` DRAM layout (32-token shards round-robin across 8 banks), same
-    pattern as DeepSeek ``init_kvpe_cache`` — see ``make_gpt_oss_prefill_kv_memory_config``
+  * ``NdShardSpec`` DRAM layout (32-token shards round-robin on 8 banks) — must
+    match ``kv_cache_prefill_only.make_gpt_oss_prefill_kv_memory_config`` (same
+    pattern as DeepSeek ``init_kvpe_cache``)
   * outer SP in ``GptOssPrefillPipeline`` — each SP row fills a token shard at
     **local** cache indices ``0 .. max_seq_len // SP - 1`` for its **global** slice
-  * TP — each column holds a different global KV head (tensor head dim is local)
-  * single user / ``num_slots == 1`` only (``prefill_runner`` batch size 1)
+  * TP — global KV heads sharded across columns; per-device head dim is
+    ``num_kv_heads // TP`` (local heads). Each table group is one global head at
+    ``(tp_col, head_idx_local)`` — see ``global_head_to_tp_shard``.
+  * multi-user — batch dim is ``num_slots`` (``max_local_batch_size``); table slot index
+    matches ``fill_cache(..., batch_idx=slot)`` / migration ``dst_slot``
 
 Multi-config layout (one ``KvChunkAddressTableConfig`` per K/V × global head group):
 
@@ -23,9 +27,8 @@ Multi-config layout (one ``KvChunkAddressTableConfig`` per K/V × global head gr
 
 ``KvChunkAddressTableMulti`` mocks the future C++ constructor
 ``KvChunkAddressTable(std::span<KvChunkAddressTableConfig>)`` — it stores all configs
-and one populated ``KvChunkAddressTable`` per group. ``unified_table`` aliases
-``groups[0].table`` (config index 0 = K, global head 0) until TT-Metal ships a
-true multi-config table object.
+and one populated ``KvChunkAddressTable`` per group until TT-Metal ships a true
+multi-config table object.
 
 Example::
 
@@ -70,24 +73,6 @@ class KvKind(IntEnum):
     V = 1
 
 
-def make_gpt_oss_prefill_kv_memory_config(head_dim: int) -> ttnn.MemoryConfig:
-    """DRAM memory config for prefill K/V cache — matches DeepSeek ``init_kvpe_cache`` striping."""
-    core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
-    ]
-    grid = ttnn.CoreRangeSet(core_ranges)
-    kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, CHUNK_N_TOKENS, head_dim],
-        grid=grid,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    return ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.DRAM,
-        nd_shard_spec=kv_nd_shard_spec,
-    )
-
-
 def noc_addr_for_bank_chunk(dram_base: int, bank_id: int, bank_offset: int) -> int:
     """Pack ``(bank_id, dram_base + bank_offset)`` for ``KvCacheLocation.noc_addr``."""
     return (bank_id << 32) | ((dram_base + bank_offset) & 0xFFFFFFFF)
@@ -127,13 +112,14 @@ def make_kv_chunk_table_config_for_group(
     num_transformer_layers: int,
     head_dim: int,
     max_seq_len: int,
+    num_slots: int = 1,
     chunk_n_tokens: int = CHUNK_N_TOKENS,
 ) -> ttnn.experimental.disaggregation.KvChunkAddressTableConfig:
     """One config for a single (K|V, global_head) group — ``num_layers`` = transformer depth only."""
     cfg = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
     cfg.num_layers = num_transformer_layers
     cfg.max_sequence_length = max_seq_len
-    cfg.num_slots = 1
+    cfg.num_slots = num_slots
     cfg.chunk_n_tokens = chunk_n_tokens
     cfg.chunk_size_bytes = compute_kv_chunk_size_bytes(head_dim, chunk_n_tokens)
     return cfg
@@ -145,6 +131,7 @@ def make_kv_chunk_table_configs(
     num_kv_heads: int,
     head_dim: int,
     max_seq_len: int,
+    num_slots: int = 1,
     chunk_n_tokens: int = CHUNK_N_TOKENS,
 ) -> list[tuple[KvKind, int, ttnn.experimental.disaggregation.KvChunkAddressTableConfig]]:
     """Build one config per (K|V, global_head). Returns ``(kv_kind, global_head, config)`` tuples."""
@@ -156,6 +143,7 @@ def make_kv_chunk_table_configs(
                 num_transformer_layers=num_transformer_layers,
                 head_dim=head_dim,
                 max_seq_len=max_seq_len,
+                num_slots=num_slots,
                 chunk_n_tokens=chunk_n_tokens,
             ),
         )
@@ -184,20 +172,10 @@ class KvChunkAddressTableMulti:
             raise ValueError("KvChunkAddressTableMulti requires at least one config")
         self.configs = list(configs)
         # Future: KvChunkAddressTable(std::span(self.configs))
-        self._unified_table: ttnn.experimental.disaggregation.KvChunkAddressTable | None = None
         self.groups: list[KvChunkTableGroup] = []
-
-    @property
-    def unified_table(self) -> ttnn.experimental.disaggregation.KvChunkAddressTable:
-        """Alias of ``groups[0].table`` (configs[0] = K, global head 0) for single-table call sites."""
-        if self._unified_table is None:
-            raise RuntimeError("unified_table is unavailable until group 0 is added")
-        return self._unified_table
 
     def add_group(self, group: KvChunkTableGroup) -> None:
         self.groups.append(group)
-        if group.group_index == 0:
-            self._unified_table = group.table
 
 
 def _mesh_coordinate(sp_idx: int, tp_idx: int, sp_axis: int, tp_axis: int) -> ttnn.MeshCoordinate:
@@ -224,12 +202,13 @@ def _populate_group_table(
     chunk_n_tokens: int,
     chunk_size_bytes: int,
     tp_col: int,
+    num_slots: int,
     layer_caches: Sequence[ttnn.Tensor],
     group_index: int,
     host_name: str,
 ) -> None:
-    slot = 0
     singleton_group_by_coord: dict[tuple[int, int], ttnn.experimental.disaggregation.DeviceGroupIndex] = {}
+    # Continuous bank walk per (layer, sp_row, tp_col) across all slots (batch rows in order).
     bank_state: dict[tuple[int, int, int], list[int]] = {}
 
     def singleton_group(sp_row: int, col: int):
@@ -249,25 +228,26 @@ def _populate_group_table(
             f"got {len(device_tensors)}"
         )
 
-        for position in range(0, max_seq_len, chunk_n_tokens):
-            sp_row, _local_position = global_position_to_sp_local(position, max_seq_len, sp_len)
-            group_idx = singleton_group(sp_row, tp_col)
+        for slot in range(num_slots):
+            for position in range(0, max_seq_len, chunk_n_tokens):
+                sp_row, _local_position = global_position_to_sp_local(position, max_seq_len, sp_len)
+                group_idx = singleton_group(sp_row, tp_col)
 
-            dev_key = (t_layer, sp_row, tp_col)
-            if dev_key not in bank_state:
-                bank_state[dev_key] = [0, 0]
-            bank_id, bank_offset = bank_state[dev_key]
+                dev_key = (t_layer, sp_row, tp_col)
+                if dev_key not in bank_state:
+                    bank_state[dev_key] = [0, 0]
+                bank_id, bank_offset = bank_state[dev_key]
 
-            dt = device_tensors[_device_tensor_index(sp_row, tp_col, tp_len)]
-            dram_base = dt.buffer_address()
+                dt = device_tensors[_device_tensor_index(sp_row, tp_col, tp_len)]
+                dram_base = dt.buffer_address()
 
-            location = ttnn.experimental.disaggregation.KvCacheLocation()
-            location.noc_addr = noc_addr_for_bank_chunk(dram_base, bank_id, bank_offset)
-            location.size_bytes = chunk_size_bytes
-            location.device_group_index = group_idx
-            lookup_table.set(t_layer, position, slot, location)
+                location = ttnn.experimental.disaggregation.KvCacheLocation()
+                location.noc_addr = noc_addr_for_bank_chunk(dram_base, bank_id, bank_offset)
+                location.size_bytes = chunk_size_bytes
+                location.device_group_index = group_idx
+                lookup_table.set(t_layer, position, slot, location)
 
-            bank_state[dev_key] = list(advance_bank_walk(bank_id, bank_offset, chunk_size_bytes))
+                bank_state[dev_key] = list(advance_bank_walk(bank_id, bank_offset, chunk_size_bytes))
 
 
 def create_kv_chunk_address_table_gpt_oss_prefill(
@@ -281,21 +261,27 @@ def create_kv_chunk_address_table_gpt_oss_prefill(
     num_kv_heads: int,
     head_dim: int,
     max_seq_len: int,
+    num_slots: int = 1,
     chunk_n_tokens: int = CHUNK_N_TOKENS,
 ) -> KvChunkAddressTableMulti:
     """Populate multi-config K/V chunk address tables for prefill KV caches.
 
     Creates ``2 × num_kv_heads`` config groups (K and V for each global head). Each
     group's ``config.num_layers == num_transformer_layers``; table ``layer`` equals
-    the transformer layer index.
+    the transformer layer index. ``num_slots`` is the per-device batch / user count
+    (``AttentionConfig.max_local_batch_size``); slot index matches ``fill_cache``
+    ``batch_idx`` and migration ``dst_slot``.
 
     Args:
         kv_caches: ``kv_caches[layer] == [k_cache, v_cache]`` device tensors.
         num_transformer_layers: HF ``num_hidden_layers``.
         num_kv_heads: Global GQA KV head count.
         head_dim: Per-head dimension (64 for GPT-OSS 120B).
-        max_seq_len: Cache sequence length (matches ``kv_cache_prefill_only``).
+        max_seq_len: Global sequence length (per-device cache holds ``max_seq_len // SP``).
+        num_slots: Users sharing the cache (batch dim per device).
     """
+    if num_slots < 1:
+        raise ValueError(f"num_slots must be >= 1, got {num_slots}")
     tp_len = mesh_shape[tp_axis]
     sp_len = mesh_shape[sp_axis]
     num_kv_heads_local = num_kv_heads // tp_len
@@ -310,6 +296,7 @@ def create_kv_chunk_address_table_gpt_oss_prefill(
         num_kv_heads=num_kv_heads,
         head_dim=head_dim,
         max_seq_len=max_seq_len,
+        num_slots=num_slots,
         chunk_n_tokens=chunk_n_tokens,
     )
     all_configs = [cfg for _, _, cfg in config_groups]
@@ -320,7 +307,7 @@ def create_kv_chunk_address_table_gpt_oss_prefill(
         tp_col, _head_idx_local = global_head_to_tp_shard(global_head, num_kv_heads_local)
         assert tp_col < tp_len, f"global_head {global_head} maps to tp_col {tp_col} >= tp_len {tp_len}"
         assert group_cfg.num_layers == num_transformer_layers
-        assert group_cfg.num_slots == 1
+        assert group_cfg.num_slots == num_slots
         assert group_cfg.max_sequence_length == max_seq_len
         assert group_cfg.chunk_size_bytes == compute_kv_chunk_size_bytes(head_dim, chunk_n_tokens)
 
@@ -341,6 +328,7 @@ def create_kv_chunk_address_table_gpt_oss_prefill(
             chunk_n_tokens=chunk_n_tokens,
             chunk_size_bytes=group_cfg.chunk_size_bytes,
             tp_col=tp_col,
+            num_slots=num_slots,
             layer_caches=layer_caches,
             group_index=group_index,
             host_name=host_name,
@@ -360,7 +348,7 @@ def create_kv_chunk_address_table_gpt_oss_prefill(
     logger.info(
         f"[gpt-oss-d-p-kv-table] multi-config: transformer_layers={num_transformer_layers} "
         f"num_groups={len(bundle.groups)} (2×{num_kv_heads} K/V×head) "
-        f"layers_per_config={num_transformer_layers} sp={sp_len} tp={tp_len} "
+        f"layers_per_config={num_transformer_layers} sp={sp_len} tp={tp_len} slots={num_slots} "
         f"seq={max_seq_len} chunk_bytes={bundle.configs[0].chunk_size_bytes} "
         f"total_entries={sum(g.table.total_entries() for g in bundle.groups)}"
     )
