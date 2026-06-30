@@ -33,8 +33,6 @@
 
 namespace {
 
-constexpr uint32_t TILE_WIDTH = 32;
-
 inline uint32_t non_tile_cb_page_size(tt::DataFormat data_format, uint32_t l1_alignment) {
     return std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
 }
