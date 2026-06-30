@@ -3,21 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sanity check for L1-accumulate device profiling alongside dispatch-core profiling.
-
-Run AFTER a multi-invocation workload has executed under
-``python -m tracy -p --enable-accumulate-profiling --profile-dispatch-cores ...``.
-Verifies that:
-  1. the device log was produced and contains worker-core zones,
-  2. zones from many invocations were accumulated (not just one program's worth),
-  3. the accumulate flush path ran (PROFILER-DRAM-PUSH zones present),
-  4. dispatch-core profiling coexisted (CQ-DISPATCH zones present; the run completing at
-     all means no start/end marker mismatch between the accumulating workers and the
-     classic-path dispatch cores),
-  5. the per-op perf report was skipped (meaningless without per-op IDs in accumulate).
-
-Exits non-zero with a clear message on any failure.
-"""
+"""Sanity check that L1-accumulate device profiling accumulates worker zones, runs the DRAM-push flush, coexists with dispatch-core profiling, and skips the per-op perf report."""
 
 import sys
 from pathlib import Path
@@ -28,9 +14,7 @@ from tracy.common import (
     PROFILER_CPP_DEVICE_PERF_REPORT,
 )
 
-# Single uninstrumented program across a worker grid produces at most a few thousand
-# marker rows; accumulating ~1000 invocations produces far more. Use a lower bound well
-# above one program but well below what accumulation yields.
+# Lower bound well above one program's marker rows but below what ~1000 accumulated invocations yield.
 MIN_ACCUMULATED_WORKER_ROWS = 20000
 
 
