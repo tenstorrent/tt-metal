@@ -1,26 +1,22 @@
 """PLAN section 3.1: the credential never appears in any produced artifact.
 
-Deferred from M0 (no artifact producers yet); M1 built them (Checkpoint,
-Ledger, Manifest), so it runs now: load a fake .env.agent, write a full set
-of run artifacts, then grep every produced file for the key value -> 0 hits.
-"""
+Native auth: ANTHROPIC_API_KEY comes from the shell env (no LiteLLM proxy file). It must reach the
+SDK process env ONLY — never any run artifact: write a full set (Checkpoint, Ledger, Manifest, CSV)
+then grep every produced file for the key value -> 0 hits."""
 
 from agent.checkpoint import Checkpoint
-from agent.config import apply_agent_env
+from agent.config import load_agent_env
 from agent.ledger import Ledger
 from agent.run import Run
 
 SECRET = "sk-super-secret-DO-NOT-LEAK-0123456789"
 
 
-def test_secret_never_in_artifacts(tmp_path):
-    env_file = tmp_path / ".env.agent"
-    env_file.write_text(f"LITELLM_BASE_URL=https://proxy.example\nLITELLM_API_KEY={SECRET}\n")
+def test_secret_never_in_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", SECRET)
 
-    # Key is loaded into the SDK process env ONLY (never into artifacts).
-    sdk_env: dict[str, str] = {}
-    apply_agent_env(env_file, sdk_env)
-    assert sdk_env["ANTHROPIC_API_KEY"] == SECRET
+    resolved = load_agent_env(tmp_path / ".env.agent")
+    assert resolved["ANTHROPIC_API_KEY"] == SECRET
 
     runs_root = tmp_path / "runs"
     run = Run.create(
