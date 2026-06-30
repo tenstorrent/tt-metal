@@ -163,7 +163,7 @@ def _get_prompt_embeds(
     if isinstance(encoder, Module):
         assert device is not None
 
-        tt_tokens = tensor.from_torch(tokens, device=device, dtype=ttnn.uint32)
+        tt_tokens = tensor.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_mask = tensor.from_torch(mask, device=device)
 
         tt_hidden_states = encoder.forward(
@@ -221,7 +221,7 @@ def _upsample_prompts(
     if isinstance(encoder, Module):
         assert device is not None
 
-        tt_tokens = tensor.from_torch(tokens, device=device, dtype=ttnn.uint32)
+        tt_tokens = tensor.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_mask = tensor.from_torch(mask, device=device)
 
         tt_output = encoder.generate(
