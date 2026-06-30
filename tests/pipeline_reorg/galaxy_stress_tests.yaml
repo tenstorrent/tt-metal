@@ -15,7 +15,16 @@
   team: scaleout
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   cmd: |
-    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_6U_galaxy.yaml
+    # setup-job exports TT_METAL_OPERATION_TIMEOUT_SECONDS=5 (its default hang-detection-timeout)
+    # for fast-dispatch hang detection. That 5s dispatch op-timeout is shorter than the time some
+    # legitimate subtests in this stress suite need: the size=4096 ftype=unicast FlowControlLinear/
+    # FlowControlMeshLowLatency cases drain 100k 4096B packets and take ~6.2s to finish on healthy
+    # 6U hardware (size<=2048 and the mcast variants are all <5s). Under the 5s cap the first such
+    # subtest throws "TIMEOUT: device timeout, potential hang detected" (system_memory_manager.cpp)
+    # and aborts with exit 134 - a deterministic false positive, not a real hang. Raise the op
+    # timeout to 30s (>4x the ~6.2s worst case measured on wh-glx6u-02) so it still catches true
+    # hangs but no longer trips on these legitimately long drains.
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=30 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_6U_galaxy.yaml
   skus:
     wh_galaxy_perf:
       timeout: 100
