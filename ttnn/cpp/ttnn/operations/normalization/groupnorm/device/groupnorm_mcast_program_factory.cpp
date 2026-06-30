@@ -225,13 +225,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
-    // On-core tilize/untilize of ROW_MAJOR interleaved input/output is currently implemented only
-    // on the no-mcast path (single mcast group per core).
-    TT_FATAL(
-        !tilize_in && !untilize_out,
-        "group_norm: ROW_MAJOR interleaved input/output is not supported on the multicast path yet. "
-        "Use TILE layout or use a core grid where batch >= num_virtual_rows, or shard the input.");
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -461,6 +454,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"per_core_N", per_core_Nt},
         {"per_core_N_bytes", per_core_N_bytes_padded},
         {"per_core_N_bytes_with_stride", per_core_Nt * tile_width * datum_size_bytes},
+        {"datum_size_bytes", datum_size_bytes},
         {"per_core_M", per_core_Mt_group_1},
         {"TILE_HEIGHT", tile_height},
         {"TILE_WIDTH", tile_width},
@@ -581,12 +575,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    std::map<std::string, std::string> writer_defines;
+    if (untilize_out) {
+        writer_defines["UNTILIZE_OUT"] = "1";
+    }
+
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = writer_kernel;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores_group_1;
     writer_desc.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc.named_compile_time_args = to_named_args_mcast(writer_named_compile_time_args_group_1);
+    writer_desc.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -806,6 +806,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .core_ranges = all_cores_group_1,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
+
+        constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
                 .data_format = in_data_format,
                 .page_size = in_single_tile_size,
             }}},
