@@ -42,6 +42,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/kernel_util/generic/scaler_tiles.h"
 #include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
@@ -129,6 +130,12 @@ void kernel_main() {
 
     if constexpr (!use_welford) {
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        // Single source of truth shared with the compute kernel's cb_scaler pop count (issue #48487).
+        constexpr uint32_t num_scaler_tiles =
+            norm::kernel_util::generic::reduce_scaler_tile_count(W, tt::constants::TILE_WIDTH);
+        static_assert(
+            (num_scaler_tiles == 2) == (partial_last_tile_cols > 0),
+            "scaler tile count must agree with the partial-last-tile condition");
 
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
             cb_scaler,
@@ -137,7 +144,7 @@ void kernel_main() {
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
             /*compute_uses_reduce_tile=*/true>();
 
-        if constexpr (partial_last_tile_cols > 0) {
+        if constexpr (num_scaler_tiles == 2) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 cb_scaler,
                 ckernel::PoolType::SUM,
