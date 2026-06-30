@@ -32,8 +32,9 @@ from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
 from models.common.tensor_utils import TILE_SIZE
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_wormhole_b0
 from models.tt_transformers.tt.common import Mode
+from models.common.utility_functions import is_galaxy
 
 
 def get_mlp_weights_from_ref_model(reference_mlp) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -146,6 +147,7 @@ def _get_or_init_mlp_weights(model_name: str, reference_mlp) -> None:
 # (test_mlp_1d_vs_reference) since it requires real LazyWeight instances.
 
 
+@skip_for_wormhole_b0("Read-only filesystem on wh_llmbox prevents cache writes, refs #47718")
 def test_mlp_1d_config_creation():
     """Test that MLP1DConfig dataclass can be created with explicit values."""
     from unittest.mock import MagicMock
@@ -183,6 +185,7 @@ def test_mlp_1d_config_creation():
     assert config.topology == ttnn.Topology.Ring
 
 
+@skip_for_wormhole_b0("Read-only filesystem on wh_llmbox prevents cache writes, refs #47718")
 def test_mlp_1d_config_defaults():
     """Test that MLP1DConfig has sensible defaults."""
     from unittest.mock import MagicMock
@@ -203,6 +206,7 @@ def test_mlp_1d_config_defaults():
     assert config.hidden_dim is None
 
 
+@skip_for_wormhole_b0("Read-only filesystem on wh_llmbox prevents cache writes, refs #47718")
 def test_mlp_1d_config_power_user_overrides():
     """Test that MLP1DConfig accepts power-user overrides for program configs."""
     from unittest.mock import MagicMock
@@ -513,6 +517,7 @@ def _list_non_glx_test_cases() -> list[pytest.param]:
 
 # [INFO] generate random tensor for every test case is too expensive; cache weights and reuse them across test cases
 # [INFO] separate out ttnn_mesh_device parameter allows for sharing the same mesh device across test cases
+@skip_for_wormhole_b0("Read-only filesystem on wh_llmbox prevents cache writes, refs #47718")
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [(1, 1), (1, 2), (1, 8)],
@@ -607,6 +612,7 @@ def test_mlp_1d_vs_reference(
     logger.info(f"MLP1D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
 
 
+@skip_for_wormhole_b0("Read-only filesystem on wh_llmbox prevents cache writes, refs #47718")
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [(1, 8)],
@@ -702,6 +708,7 @@ def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
 
 
 # [INFO] this test will retire once models/tt_transformers/tt/model_config.py retires
+@skip_for_wormhole_b0("Read-only filesystem on wh_llmbox prevents cache writes, refs #47718")
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
