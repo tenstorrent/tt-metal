@@ -9,6 +9,7 @@ import argparse
 import os
 
 from loguru import logger
+import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.checkpoint import (
@@ -91,6 +92,68 @@ def _prefill_prompt(checkpoint_model_inputs, prompt):
     return prefill
 
 
+def _infer_vocab_size(tokenizer, tt_model) -> int:
+    vocab_size = getattr(tokenizer, "vocab_size", None)
+    if vocab_size is not None:
+        return int(vocab_size)
+    try:
+        return len(tokenizer)
+    except TypeError:
+        pass
+    vocab_size = getattr(tt_model, "vocab_size", None)
+    if vocab_size is not None:
+        return int(vocab_size)
+    hf_config = getattr(tt_model, "hf_config", None)
+    vocab_size = getattr(hf_config, "vocab_size", None)
+    if vocab_size is None:
+        raise ValueError("could not infer vocab size for adapter-only canvas")
+    return int(vocab_size)
+
+
+def _adapter_logits_once(checkpoint_model_inputs, prompt, *, canvas_length: int, seed: int):
+    from models.experimental.diffusion_gemma.tt.denoise_forward import (
+        make_generation_logits_fn_builder_from_checkpoint_state,
+    )
+    from models.experimental.diffusion_gemma.tt.generate import (
+        host_canvas_to_device,
+        prefill_prompt_tokens,
+        tokenize_prompt,
+    )
+
+    prompt_tokens = tokenize_prompt(checkpoint_model_inputs.tokenizer, prompt)
+    prefill = prefill_prompt_tokens(checkpoint_model_inputs.tt_model, prompt_tokens)
+    logger.info(f"[prefill] prompt_len={prefill.prompt_len} cache_len={prefill.cache_len}")
+
+    adapter_kwargs = {}
+    adapter_config = getattr(checkpoint_model_inputs.tt_model, "hf_config", None)
+    if adapter_config is not None:
+        adapter_kwargs["config"] = adapter_config
+    logits_builder = make_generation_logits_fn_builder_from_checkpoint_state(
+        checkpoint_model_inputs.state_dict,
+        **adapter_kwargs,
+    )
+    adapter = logits_builder(
+        checkpoint_model_inputs.tt_model,
+        prompt_tokens=prompt_tokens,
+        prompt_len=prefill.cache_len,
+    )
+
+    vocab_size = _infer_vocab_size(checkpoint_model_inputs.tokenizer, checkpoint_model_inputs.tt_model)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+    host_canvas = torch.randint(0, vocab_size, (1, canvas_length), dtype=torch.long, generator=generator)
+    canvas = host_canvas_to_device(checkpoint_model_inputs.tt_model.mesh_device, host_canvas)
+    logits = None
+    try:
+        logits = adapter(canvas, step=0)
+        logger.info(f"[adapter] logits_shape={tuple(logits.shape)}")
+        return tuple(logits.shape)
+    finally:
+        if logits is not None:
+            adapter.reset()
+        canvas.deallocate(True)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DiffusionGemma text generation on a TT mesh.")
     parser.add_argument(
@@ -113,6 +176,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--build-only", action="store_true", help="Build the TT model, then exit before generation")
     mode.add_argument("--prefill-only", action="store_true", help="Build the TT model, prefill prompt KV, then exit")
+    mode.add_argument(
+        "--adapter-only",
+        action="store_true",
+        help="Build, prefill, run one denoise logits adapter call, then exit",
+    )
     parser.add_argument("--local-files-only", action="store_true", help="Do not fetch tokenizer files from HF hub")
     parser.add_argument("--bounded-sliding-kv-cache", action="store_true")
     return parser
@@ -163,6 +231,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.prefill_only:
             _prefill_prompt(checkpoint_model_inputs, args.prompt)
             _log_mesh_dram(mesh_device, "post-prefill")
+            return 0
+        if args.adapter_only:
+            _adapter_logits_once(
+                checkpoint_model_inputs,
+                args.prompt,
+                canvas_length=args.canvas_length,
+                seed=args.seed,
+            )
+            _log_mesh_dram(mesh_device, "post-adapter")
             return 0
         config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=args.max_denoising_steps)
         generation = generate_text_from_checkpoint_model_inputs(

@@ -62,7 +62,7 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 |---|---|---|---|
 | R0.1 | ✅ **Build real `DiffusionGemma4Model` on (1,4) mesh** from DG ckpt: load 11 shards → `remap_state_dict` → backbone_state (gemma4-keyed) + self_cond_state; build at `max_seq_len≈512, num_layers=30, create_kv_cache=True`, experts **TP-sharded** (column/row parallel per #47487). | Passed on QB2 2026-06-30: full 30 layers build-only, no OOM, per-chip DRAM post-build **13.236 GiB used / 18.631 GiB free / 31.867 GiB total**. Demo now logs baseline/post-build DRAM via `ttnn.get_memory_view`. | done |
 | R0.2 | ✅ **Prefill a short prompt (causal)** via chat template (~32 tok) → write 30-layer prompt KV (`prefill_prompt_tokens` / `collect_prompt_kv_by_layer`). | Passed on QB2 2026-06-30: full 30-layer `--prefill-only` ran default chat prompt, `prompt_len=18`, aligned `cache_len=32`, post-prefill per-chip DRAM **13.237 GiB used / 18.630 GiB free / 31.867 GiB total**. | done |
-| R0.3 | **Build denoise logits adapter from the real ckpt** (`make_generation_logits_fn_builder_from_checkpoint_state(..., prompt_len)`), then call `adapter(canvas_tokens, step=0)` once. | Returns `[1,1,256,vocab]` logits **without OOM** — critical-path step 4, the unmeasured "real-size denoise step fits" (full-canvas logits + 262k soft-embed matmul + 30-layer `[P+C]` KV concat). | **highest fit risk**; soft-embed `[256,262144]@[262144,2816]` matmul + 30× KV concat L1/DRAM |
+| R0.3 | ⛔ **Build denoise logits adapter from the real ckpt** (`make_generation_logits_fn_builder_from_checkpoint_state(..., prompt_len)`), then call `adapter(canvas_tokens, step=0)` once. | Adapter-only demo path is ready and CPU-smoke covered. QB2 attempt on 2026-06-30 was blocked before execution by `CHIP_IN_USE_0_PCIe` held by another user's `VLLM::EngineCore`; retry when device lock is free. Target remains `[1,1,256,vocab]` logits **without OOM**. | **highest fit risk**; soft-embed `[256,262144]@[262144,2816]` matmul + 30× KV concat L1/DRAM |
 | R0.4 | **Run ONE denoise block** (`denoise_and_commit_block`) with released `DiffusionConfig()` (cap steps), seeded host canvas init + injected reference Gumbel noise. | Block completes, commits 256 tokens, decodes to text (garbage allowed). | step-schedule cost; intra-block early-stop still host-side |
 | R0.5 | **Measure decision fidelity vs HF** — replay the SAME canvas/noise through `reference/generate_blocks` (replay helpers), compare per-position committed-argmax agreement. | A real-scale agreement number → updates #48291 (vs the ~50% proxy). | likely ~50% → confirms #48291 is the dominant blocker |
 | R0.6 | **Record** → update this roadmap (steps 3–4), #48291 (real-scale fidelity), #47464. | Results posted; status flipped. | — |
@@ -759,6 +759,14 @@ The full 30-layer model loaded through layer 29, initialized on-device sampling 
 R0.2 passed on QB2 with the same real checkpoint using the new prefill-only demo mode:
 `text_demo --checkpoint /home/zni/dg_models/diffusiongemma-26B-A4B-it --local-files-only --mesh P150x4 --max-seq-len 512 --prefill-only`.
 The full 30-layer model built, tokenized the default chat prompt to `prompt_len=18`, padded/wrote a `cache_len=32` frozen-prefix span through `prefill_prompt_tokens`, and closed the mesh cleanly. DRAM was baseline **0.000 GiB used / 31.867 GiB total**, post-build **13.236 GiB used / 18.631 GiB free / 31.867 GiB total**, post-prefill **13.237 GiB used / 18.630 GiB free / 31.867 GiB total**. Next R0 step: build the real-checkpoint denoise logits adapter and call it once on a 256-token canvas (R0.3).
+
+### Session 2026-06-30 — #47464 R0.3 adapter-only path ready, QB2 blocked
+
+R0.3 now has a narrow adapter-only demo mode:
+`text_demo --checkpoint /home/zni/dg_models/diffusiongemma-26B-A4B-it --local-files-only --mesh P150x4 --max-seq-len 512 --canvas-length 256 --adapter-only`.
+The path builds the full TT model, pre-fills the prompt KV, constructs the real-checkpoint generation logits builder (`make_generation_logits_fn_builder_from_checkpoint_state`), creates a seeded host canvas, converts it to the W3 controller layout, calls `adapter(canvas, step=0)` once, logs the logits shape, then resets/deallocates the adapter logits and canvas. CPU validation passed via `test_text_demo.py`.
+
+The QB2 run did not reach the adapter call: UMD blocked on `CHIP_IN_USE_0_PCIe`, held by another user's `VLLM::EngineCore` (PID 1085625 at the time). The local waiting demo process was stopped so it would not queue behind the lock. Retry the command above when the device is free; R0.3 remains unmeasured.
 
 ### Code review — 2026-06-26 (multi-agent review of the 2026-06-25 branch)
 
