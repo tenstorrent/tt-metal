@@ -64,9 +64,10 @@ def _torch_swigluoai_expert(x, w, alpha=SWIGLU_ALPHA, limit=SWIGLU_LIMIT):
     return F.linear(activated, w["down_proj"])
 
 
-def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, swiglu_oai):
-    """1 chip, 1 expert. Compares the fused op (swiglu_oai flag) vs torch reference."""
+def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, activation):
+    """1 chip, 1 expert. Compares the fused op (selected RoutedExpertActivation) vs torch reference."""
     torch.manual_seed(42)
+    is_swigluoai = activation == ttnn.RoutedExpertActivation.SwiGluOai
 
     # Weights scaled so the gate/up matmul outputs span past ±limit (so both clamp
     # branches are exercised). gate_out std ~= sqrt(emb_dim) * std_w ~= 55 * 0.08 ~= 4.4.
@@ -79,7 +80,7 @@ def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, sw
     torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
 
     with torch.no_grad():
-        if swiglu_oai:
+        if is_swigluoai:
             torch_output = _torch_swigluoai_expert(torch_input, weights)
         else:
             torch_output = _torch_silu_expert(torch_input, weights)
@@ -114,7 +115,7 @@ def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, sw
         torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        activation=(ttnn.RoutedExpertActivation.SwiGluOai if swiglu_oai else ttnn.RoutedExpertActivation.Silu),
+        activation=activation,
     )
 
     tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
@@ -124,7 +125,7 @@ def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, sw
     )[:num_tokens]
 
     passing, pcc = comp_pcc(torch_output, tt_output_torch, 0.97)
-    logger.info(f"swiglu_oai={swiglu_oai} num_tokens={num_tokens}: PCC={pcc}")
+    logger.info(f"activation={activation} num_tokens={num_tokens}: PCC={pcc}")
     assert not torch.isnan(tt_output_torch).any(), "Output contains NaN"
     assert not torch.isinf(tt_output_torch).any(), "Output contains Inf"
     assert passing, f"PCC below threshold: {pcc}"
@@ -136,13 +137,13 @@ def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, sw
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 def test_swigluoai_routed_expert(mesh_device, device_params, num_tokens):
-    """MiniMax-M3 clamped swigluoai (swiglu_oai=True) vs torch reference."""
+    """MiniMax-M3 clamped swigluoai (RoutedExpertActivation.SwiGluOai) vs torch reference."""
     run_swigluoai_routed_expert(
         mesh_device,
         num_tokens=num_tokens,
         emb_dim=MiniMaxM27Config.EMB_SIZE,
         hidden_dim=MiniMaxM27Config.MOE_INTERMEDIATE_SIZE,
-        swiglu_oai=True,
+        activation=ttnn.RoutedExpertActivation.SwiGluOai,
     )
 
 
@@ -151,11 +152,11 @@ def test_swigluoai_routed_expert(mesh_device, device_params, num_tokens):
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 def test_silu_routed_expert_unchanged(mesh_device, device_params):
-    """Sanity: swiglu_oai=False (default) still matches plain SiLU SwiGLU (DeepSeek path unchanged)."""
+    """Sanity: RoutedExpertActivation.Silu (default) still matches plain SiLU SwiGLU (DeepSeek path unchanged)."""
     run_swigluoai_routed_expert(
         mesh_device,
         num_tokens=128,
         emb_dim=MiniMaxM27Config.EMB_SIZE,
         hidden_dim=MiniMaxM27Config.MOE_INTERMEDIATE_SIZE,
-        swiglu_oai=False,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
