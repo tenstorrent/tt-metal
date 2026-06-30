@@ -701,7 +701,7 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
 tt_metal::KernelHandle create_legacy_writer_kernel(tt_metal::Program& program, const SfpuConfig& cfg) {
     return tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         cfg.cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -1134,7 +1134,7 @@ bool run_sfpu_ternary_three_input_buffer(
 
             tt_metal::CreateKernel(
                 program_,
-                "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
                 test_config.cores,
                 tt_metal::ComputeConfig{
                     .dst_full_sync_en = true,
