@@ -18,6 +18,13 @@
 //
 // Work distribution: each core processes its assigned (B, H) work units
 // sequentially. For GQA/MQA, maps Q-head index to KV-head index.
+//
+// Refinement 6 — Large sequence causal attention (S=131072):
+//   Causal block skip: when is_causal, fully-future KV-blocks (all positions
+//   above the causal diagonal) are skipped — no Q/K/V/mask tiles are pushed.
+//   This halves the reader's work for causal attention, which was the
+//   bottleneck on S=131072 (reader stuck in fill_mask_tile_uniform).
+//   Also, MAX_B_KV_T increased from 4 to 8 to halve the KV-block count.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -158,6 +165,11 @@ void kernel_main() {
 
         for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
             uint32_t q_row_start = qb * B_q_t;
+            // Refinement 6: causal block skip — fully-future KV-blocks (all
+            // positions above the causal diagonal) contribute nothing to the
+            // output. Skip pushing Q/K/V/mask tiles for them. A KV-block is
+            // fully-future when kvb_start >= (qb+1)*B_q_t.
+            uint32_t qb_end_tile = (qb + 1) * B_q_t;
 
             // D-chunk loop OUTSIDE KV-block loop.
             // Q and K are re-read per D-chunk (weights-restreaming).
@@ -166,6 +178,13 @@ void kernel_main() {
 
                 for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
                     uint32_t kv_col_start = kvb * B_kv_t;
+
+                    // Refinement 6: skip fully-future KV-blocks when is_causal.
+                    if constexpr (is_causal) {
+                        if (kv_col_start >= qb_end_tile) {
+                            continue;
+                        }
+                    }
 
                     // Push Q and K tiles for this KV-block
                     if (use_k_blocking) {

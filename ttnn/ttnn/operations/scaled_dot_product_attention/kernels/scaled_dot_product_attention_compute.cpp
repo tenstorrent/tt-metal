@@ -27,6 +27,15 @@
 //   work units to match the reader and writer, otherwise it processes only the
 //   first work unit and exits while the reader keeps pushing tiles into full
 //   CBs → CB deadlock (cb_reserve_back hang in reader).
+//
+// Refinement 6 — Large sequence causal attention (S=131072):
+//   Causal block skip: when is_causal, fully-future KV-blocks (all positions
+//   above the causal diagonal) are skipped entirely in both reader and compute.
+//   A KV-block is fully-future when kvb*B_kv_t >= (qb+1)*B_q_t. These blocks
+//   contribute nothing: exp(-inf - m) = 0, P@V = 0, m_new = max(m_old, -inf) =
+//   m_old. This halves the work for causal attention. Also increased
+//   MAX_B_KV_T from 4 to 8, halving the KV-block count and further reducing
+//   iterations by 2x. Total: 4x fewer iterations for large causal sequences.
 
 #include <cstdint>
 #include <limits>
@@ -69,13 +78,16 @@ void kernel_main() {
     constexpr uint32_t B_kv_t = get_compile_time_arg_val(1);
     constexpr uint32_t D_t = get_compile_time_arg_val(2);
     constexpr uint32_t has_mask = get_compile_time_arg_val(3);
-    constexpr uint32_t num_q_blocks = get_compile_time_arg_val(4);
-    constexpr uint32_t num_kv_blocks = get_compile_time_arg_val(5);
+    // Refinement 6: is_causal lets the compute kernel skip fully-future KV-blocks
+    // (above the causal diagonal) that contribute nothing to the output.
+    constexpr uint32_t is_causal = get_compile_time_arg_val(4);
+    constexpr uint32_t num_q_blocks = get_compile_time_arg_val(5);
+    constexpr uint32_t num_kv_blocks = get_compile_time_arg_val(6);
     // Refinement 4: D-chunking and K-blocking parameters
-    constexpr uint32_t D_BLOCK = get_compile_time_arg_val(6);
-    constexpr uint32_t num_d_chunks = get_compile_time_arg_val(7);
-    constexpr uint32_t use_k_blocking = get_compile_time_arg_val(8);
-    constexpr uint32_t k_block_dim = get_compile_time_arg_val(9);
+    constexpr uint32_t D_BLOCK = get_compile_time_arg_val(7);
+    constexpr uint32_t num_d_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t use_k_blocking = get_compile_time_arg_val(9);
+    constexpr uint32_t k_block_dim = get_compile_time_arg_val(10);
 
     constexpr uint32_t num_score_tiles = B_q_t * B_kv_t;
     constexpr uint32_t num_o_chunk_tiles = B_q_t * D_BLOCK;
@@ -121,6 +133,18 @@ void kernel_main() {
                     num_o_chunk_tiles, FillScalar<Dst::D0>{0.0f}, PackTile<cb_o, OutputLifecycle::Streaming>{});
 
                 for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
+                    // Refinement 6: causal block skip — fully-future KV-blocks
+                    // (all positions above the causal diagonal) contribute
+                    // nothing to the output: exp(-inf - m) = 0, P@V = 0,
+                    // max(m_old, -inf) = m_old. Skip them entirely.
+                    if constexpr (is_causal) {
+                        uint32_t kv_col_start = kvb * B_kv_t;
+                        uint32_t qb_end_tile = (qb + 1) * B_q_t;
+                        if (kv_col_start >= qb_end_tile) {
+                            continue;
+                        }
+                    }
+
                     // Phase 1: QK^T score matmul: S = Q @ K^T
                     if constexpr (use_k_blocking) {
                         // K-blocking: matmul_block handles num_k_blocks > 1 internally.

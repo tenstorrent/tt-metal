@@ -7,7 +7,7 @@ import math, struct, ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 MAX_B_Q_T = 4
-MAX_B_KV_T = 4
+MAX_B_KV_T = 8  # Refinement 6: increased from 4 to halve KV-block count for large S
 MAX_D_BLOCK = 4  # Max D tiles per D-chunk in the PV matmul (constant-bounds O/V CBs)
 
 
@@ -239,13 +239,16 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    # Compute CT args: [B_q_t, B_kv_t, D_t, has_mask, num_q_blocks, num_kv_blocks,
-    #                   D_BLOCK, num_d_chunks, use_k_blocking, k_block_dim]
+    # Compute CT args: [B_q_t, B_kv_t, D_t, has_mask, is_causal, num_q_blocks,
+    #                   num_kv_blocks, D_BLOCK, num_d_chunks, use_k_blocking, k_block_dim]
+    # Refinement 6: is_causal lets the compute kernel skip fully-future KV-blocks
+    # (above the causal diagonal) that contribute nothing to the output.
     compute_ct_args = [
         B_q_t,
         B_kv_t,
         D_t,
         1 if has_mask else 0,
+        1 if is_causal else 0,
         num_q_blocks,
         num_kv_blocks,
         D_BLOCK,
