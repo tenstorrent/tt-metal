@@ -9,6 +9,9 @@ import torch
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
     build_self_conditioning_embedding_weight,
     build_self_conditioning,
+    TtSelfConditioning,
+    _dram_for_rms_norm,
+    _rms_norm_dram,
     validate_self_conditioning_state,
 )
 
@@ -121,3 +124,226 @@ def test_build_self_conditioning_embedding_weight_rejects_hidden_mismatch():
         build_self_conditioning_embedding_weight(
             "device", torch.ones(3, 8), hidden_size=16, tensor_fn=lambda *a, **k: None
         )
+
+
+def test_dram_for_rms_norm_moves_l1_or_sharded_inputs(monkeypatch):
+    calls = []
+
+    class _Mem:
+        def __init__(self, buffer_type, *, sharded=False):
+            self.buffer_type = buffer_type
+            self._sharded = sharded
+
+        def is_sharded(self):
+            return self._sharded
+
+    class _Tensor:
+        def __init__(self, name, mem):
+            self.name = name
+            self._mem = mem
+            self.shape = (1, 1, 32, 8)
+
+        def memory_config(self):
+            return self._mem
+
+    class _FakeTtnn:
+        class BufferType:
+            DRAM = "dram"
+
+        DRAM_MEMORY_CONFIG = "dram-memcfg"
+
+        @staticmethod
+        def to_memory_config(tensor, memory_config):
+            calls.append((tensor, memory_config))
+            return _Tensor(f"{tensor.name}-dram", _Mem("dram"))
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+
+    dram = _Tensor("dram", _Mem("dram"))
+    l1 = _Tensor("l1", _Mem("l1"))
+    sharded_dram = _Tensor("sharded", _Mem("dram", sharded=True))
+
+    assert _dram_for_rms_norm(dram) is dram
+    assert _dram_for_rms_norm(l1).name == "l1-dram"
+    assert _dram_for_rms_norm(sharded_dram).name == "sharded-dram"
+    assert calls == [(l1, "dram-memcfg"), (sharded_dram, "dram-memcfg")]
+
+
+def test_forward_requests_dram_rms_norm_outputs(monkeypatch):
+    calls = []
+
+    class _Mem:
+        buffer_type = "dram"
+
+        def is_sharded(self):
+            return False
+
+    class _Tensor:
+        def __init__(self, name):
+            self.name = name
+            self.shape = (1, 1, 32, 8)
+            self.deallocated = False
+
+        def memory_config(self):
+            return _Mem()
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        class BufferType:
+            DRAM = "dram"
+
+        DRAM_MEMORY_CONFIG = "dram-memcfg"
+
+        @staticmethod
+        def rms_norm(tensor, **kwargs):
+            calls.append(("rms_norm", tensor, kwargs))
+            return _Tensor(f"norm({tensor.name})")
+
+        @staticmethod
+        def linear(tensor, weight):
+            calls.append(("linear", tensor, weight))
+            return _Tensor(f"linear({tensor.name})")
+
+        @staticmethod
+        def gelu(tensor, *, fast_and_approximate_mode):
+            calls.append(("gelu", tensor, fast_and_approximate_mode))
+            return tensor
+
+        @staticmethod
+        def mul(lhs, rhs):
+            calls.append(("mul", lhs, rhs))
+            return _Tensor("hidden")
+
+        @staticmethod
+        def add(lhs, rhs):
+            calls.append(("add", lhs, rhs))
+            return _Tensor("summed")
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+    module = TtSelfConditioning.__new__(TtSelfConditioning)
+    module.eps = 1e-6
+    module.pre_norm_weight = "pre-weight"
+    module.gate_proj = "gate"
+    module.up_proj = "up"
+    module.down_proj = "down"
+
+    out = module.forward(_Tensor("embeds"), _Tensor("signal"))
+
+    assert out.name == "norm(summed)"
+    rms_calls = [call for call in calls if call[0] == "rms_norm"]
+    assert len(rms_calls) == 2
+    assert rms_calls[0][2]["memory_config"] == "dram-memcfg"
+    assert rms_calls[0][2]["weight"] == "pre-weight"
+    assert rms_calls[1][2]["memory_config"] == "dram-memcfg"
+    assert "weight" not in rms_calls[1][2]
+
+
+def test_condition_without_prev_logits_uses_post_norm_fast_path(monkeypatch):
+    calls = []
+
+    class _Mem:
+        buffer_type = "dram"
+
+        def is_sharded(self):
+            return False
+
+    class _Tensor:
+        def __init__(self, name):
+            self.name = name
+            self.shape = (1, 1, 32, 8)
+
+        def memory_config(self):
+            return _Mem()
+
+    class _FakeTtnn:
+        class BufferType:
+            DRAM = "dram"
+
+        DRAM_MEMORY_CONFIG = "dram-memcfg"
+
+        @staticmethod
+        def rms_norm(tensor, **kwargs):
+            calls.append(("rms_norm", tensor, kwargs))
+            return _Tensor(f"norm({tensor.name})")
+
+        @staticmethod
+        def mul(*args, **kwargs):
+            raise AssertionError("zero-signal MLP path should be skipped")
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+    module = TtSelfConditioning.__new__(TtSelfConditioning)
+    module.eps = 1e-6
+
+    out = module.condition(_Tensor("embeds"), None, "embedding")
+
+    assert out.name == "norm(embeds)"
+    assert len(calls) == 1
+    assert calls[0][0] == "rms_norm"
+    assert calls[0][1].name == "embeds"
+    assert calls[0][2] == {"epsilon": 1e-6, "memory_config": "dram-memcfg"}
+
+
+def test_rms_norm_dram_chunks_long_sequences(monkeypatch):
+    calls = []
+
+    class _Mem:
+        buffer_type = "dram"
+
+        def is_sharded(self):
+            return False
+
+    class _Tensor:
+        def __init__(self, name, shape=(1, 1, 96, 8)):
+            self.name = name
+            self.shape = shape
+            self.deallocated = False
+
+        def memory_config(self):
+            return _Mem()
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        class BufferType:
+            DRAM = "dram"
+
+        DRAM_MEMORY_CONFIG = "dram-memcfg"
+
+        @staticmethod
+        def slice(tensor, starts, ends, *, memory_config):
+            calls.append(("slice", tensor.name, starts, ends, memory_config))
+            return _Tensor(f"{tensor.name}[{starts[2]}:{ends[2]}]", (1, 1, ends[2] - starts[2], 8))
+
+        @staticmethod
+        def rms_norm(tensor, **kwargs):
+            calls.append(("rms_norm", tensor.name, kwargs))
+            return _Tensor(f"norm({tensor.name})", tensor.shape)
+
+        @staticmethod
+        def concat(tensors, *, dim, memory_config):
+            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
+            return _Tensor("concat", (1, 1, sum(tensor.shape[2] for tensor in tensors), 8))
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+
+    out = _rms_norm_dram(_Tensor("x"), epsilon=1e-6)
+
+    assert out.name == "concat"
+    assert [call[0] for call in calls] == ["slice", "rms_norm", "slice", "rms_norm", "slice", "rms_norm", "concat"]
+    assert calls[-1] == (
+        "concat",
+        ["norm(x[0:32])", "norm(x[32:64])", "norm(x[64:96])"],
+        2,
+        "dram-memcfg",
+    )

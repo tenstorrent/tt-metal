@@ -101,6 +101,44 @@ def build_self_conditioning_embedding_weight(
     )
 
 
+def _dram_for_rms_norm(tensor):
+    memory_config = tensor.memory_config()
+    if memory_config.buffer_type == ttnn.BufferType.DRAM and not memory_config.is_sharded():
+        return tensor
+    return ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32):
+    norm_input = _dram_for_rms_norm(tensor)
+    seq_len = norm_input.shape[-2]
+    kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    if weight is not None:
+        kwargs["weight"] = weight
+    if seq_len <= chunk_size:
+        out = ttnn.rms_norm(norm_input, **kwargs)
+        if norm_input is not tensor:
+            norm_input.deallocate(True)
+        return out
+
+    chunks = []
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        chunk = ttnn.slice(
+            norm_input,
+            [0, 0, start, 0],
+            [norm_input.shape[0], norm_input.shape[1], end, norm_input.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        chunks.append(ttnn.rms_norm(chunk, **kwargs))
+        chunk.deallocate(True)
+    out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for chunk in chunks:
+        chunk.deallocate(True)
+    if norm_input is not tensor:
+        norm_input.deallocate(True)
+    return out
+
+
 class TtSelfConditioning:
     def __init__(
         self,
@@ -149,7 +187,7 @@ class TtSelfConditioning:
         Zero signal -> ``post_norm(inputs_embeds)`` (NOT inputs_embeds), matching the
         decoder: it always post-normalizes its input embeddings.
         """
-        normed = ttnn.rms_norm(signal_tt, weight=self.pre_norm_weight, epsilon=self.eps)
+        normed = _rms_norm_dram(signal_tt, weight=self.pre_norm_weight, epsilon=self.eps)
 
         gate = ttnn.linear(normed, self.gate_proj)
         gate = ttnn.gelu(gate, fast_and_approximate_mode=True)  # gelu_pytorch_tanh
@@ -165,7 +203,7 @@ class TtSelfConditioning:
 
         summed = ttnn.add(inputs_embeds_tt, sc)
         sc.deallocate(True)
-        out = ttnn.rms_norm(summed, epsilon=self.eps)  # scaleless post_norm
+        out = _rms_norm_dram(summed, epsilon=self.eps)  # scaleless post_norm
         summed.deallocate(True)
         return out
 
@@ -201,11 +239,8 @@ class TtSelfConditioning:
         result is ``post_norm(inputs_embeds)``.
         """
         if prev_logits_tt is None:
-            signal = ttnn.mul(inputs_embeds_tt, 0.0)  # zeros, same shape/layout/dtype
-        else:
-            signal = self.soft_embedding(
-                prev_logits_tt, embedding_weight_tt, compute_kernel_config=compute_kernel_config
-            )
+            return _rms_norm_dram(inputs_embeds_tt, epsilon=self.eps)
+        signal = self.soft_embedding(prev_logits_tt, embedding_weight_tt, compute_kernel_config=compute_kernel_config)
         out = self.forward(inputs_embeds_tt, signal)
         signal.deallocate(True)
         return out
