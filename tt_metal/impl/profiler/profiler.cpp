@@ -782,7 +782,10 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                          marker.risc == tracy::RiscType::NCRISC)) {
                         zones_by_op[program_execution_uid].push_back(marker);
                     }
-                } else if (isMarkerATimestampedDatapoint(marker)) {
+                } else if (isMarkerATimestampedDatapoint(marker) && marker.marker_id != PERF_COUNTER_PROFILER_ID) {
+                    // Perf-counter markers share the TS_DATA type but carry counter data, not a noc
+                    // event; decoding their payload as NocEventMetadata yields a bogus xfer_type that
+                    // trips the validity assert in coalesceFabricEvents.
                     timestamped_datapoints_by_op[program_execution_uid].push_back(marker);
                 }
             }

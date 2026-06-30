@@ -149,10 +149,27 @@ process loads them from `build_Release/lib/` via RUNPATH — only `cmake --insta
 build` refreshes `lib/`. Build **and** install, or the device silently runs stale
 profiler code.
 
+## Counters + noc-traces together (Phase 3b — the "multi-chip hang" was a crash)
+
+Running `--profiler-capture-perf-counters` together with `--collect-noc-traces`
+aborted in `coalesceFabricEvents` (`TT_FATAL ... Invalid NoC transfer type`) —
+not the device hang the plan assumed. Root cause: perf-counter markers
+(`marker_id == PERF_COUNTER_PROFILER_ID`) share the `TS_DATA` marker type with
+noc-event markers, so they leaked into `timestamped_datapoints_by_op` and the
+fabric coalescer decoded their counter payload as `NocEventMetadata`, producing a
+bogus `noc_xfer_type`. Fixed by excluding counter markers from that filter
+(`profiler.cpp`, `convertNocTracePacketsToJson`). Verified on BH 2x4 (8-chip,
+FABRIC_1D): `fpu,instrn` + `--collect-noc-traces` now runs clean and emits
+per-device `noc_trace_*.json` for all 8 chips.
+
+Caveat still open: a full 928-op block overflows the profiler DRAM marker buffer
+("buffers were full, markers were dropped") — noc BW is undercounted until the
+capture is scoped (fewer ops / `--dump-device-data-mid-run` to drain mid-run).
+
 ## Open items (not yet implemented)
 
-- **NoC BW % vs analytical for a CCL op** (Phase 3 full gate) and **the
-  noc-trace fabric/ethernet hang** (Phase 3b) — need a multi-chip run.
+- **NoC BW % vs analytical for a CCL op** (Phase 3 full gate) — the noc bytes
+  now capture; the analytical-peak gate on a CCL op is still unwired.
 - **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork change
   (`tt_metal/third_party/tracy/`). Verified: the `QueueType` enum has no
   `GpuZoneText`/`GpuValue` (only Begin/End GPU variants), so a true hover-tooltip
