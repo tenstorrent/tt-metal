@@ -20,6 +20,13 @@
 //   and compute for constant-bounded CBs.
 //   For fp32 (use_k_blocking), the QK^T matmul uses matmul_block with
 //   num_k_blocks > 1 so cb_q and cb_k are bounded by k_block_dim.
+//
+// Refinement 5 — Large unequal-seqlen cross-attention:
+//   Added work-unit loop. When num_work_units > num_cores (e.g. H_q=71 > 64),
+//   some cores get >1 work unit. The compute kernel must loop over all assigned
+//   work units to match the reader and writer, otherwise it processes only the
+//   first work unit and exits while the reader keeps pushing tiles into full
+//   CBs → CB deadlock (cb_reserve_back hang in reader).
 
 #include <cstdint>
 #include <limits>
@@ -92,128 +99,227 @@ void kernel_main() {
     constexpr auto pv_shape = MatmulBlockShape::of(B_q_t, D_BLOCK, 1, 1, B_kv_t, 1);
     constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
 
-    for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
-        // D-chunk loop OUTSIDE KV-block loop.
-        // For each D-chunk, run the full online softmax recurrence independently.
-        // O is bounded by D_BLOCK (not D_t). QK^T is recomputed per D-chunk.
-        for (uint32_t dc = 0; dc < num_d_chunks; ++dc) {
-            // Phase 0: Init running state for this Q-block + D-chunk
-            eltwise_chain(B_q_t, FillScalar<Dst::D0>{NEG_INF}, PackTile<cb_max_old, OutputLifecycle::Streaming>{});
-            eltwise_chain(B_q_t, FillScalar<Dst::D0>{0.0f}, PackTile<cb_sum_old, OutputLifecycle::Streaming>{});
-            eltwise_chain(num_o_chunk_tiles, FillScalar<Dst::D0>{0.0f}, PackTile<cb_o, OutputLifecycle::Streaming>{});
+    // Refinement 5: work-unit loop. The reader and writer both loop over
+    // num_work_units (assigned (B,H) pairs). The compute kernel MUST also
+    // loop over num_work_units — otherwise, when a core gets >1 work unit
+    // (e.g. H_q=71 > 64 cores → some cores get 2), compute processes only
+    // the first work unit and exits, while the reader keeps pushing tiles
+    // into full CBs → CB deadlock (cb_reserve_back hang in reader).
+    uint32_t rt_idx = 0;
+    uint32_t num_work_units = get_arg_val<uint32_t>(rt_idx++);
 
-            for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
-                // Phase 1: QK^T score matmul: S = Q @ K^T
-                if constexpr (use_k_blocking) {
-                    // K-blocking: matmul_block handles num_k_blocks > 1 internally.
-                    // Q is NOT retained across KV-blocks — consumed per K-block.
-                    // interm_buf shares scores_buf's L1 region (SubblockMajor spill/reload).
-                    matmul_block<
-                        true,
-                        false,
-                        LastBlockTarget::Out,
-                        OutputCBLayout::SubblockMajor,
-                        matmul_config::InitMode::Short,
-                        InputPolicy::WaitAndPopPerKBlock,
-                        InputPolicy::WaitAndPopPerKBlock,
-                        NoPostCompute,
-                        NoPreKBlock,
-                        NoPostKBlock,
-                        0,
-                        NoKBlockInnerDimFn,
-                        NoIn0Source,
-                        NoIn1BaseOffset,
-                        false,
-                        NoneActivation,
-                        matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
-                        q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
-                } else {
-                    // Non-K-blocking: single K-block, Q retained across KV-blocks
-                    // (WaitAndRetainOnLastBlock skips pop on the last/only K-block).
-                    matmul_block<
-                        true,
-                        false,
-                        LastBlockTarget::Out,
-                        OutputCBLayout::SubblockMajor,
-                        matmul_config::InitMode::Short,
-                        InputPolicy::WaitAndRetainOnLastBlock,
-                        InputPolicy::WaitAndPopPerKBlock,
-                        NoPostCompute,
-                        NoPreKBlock,
-                        NoPostKBlock,
-                        0,
-                        NoKBlockInnerDimFn,
-                        NoIn0Source,
-                        NoIn1BaseOffset,
-                        false,
-                        NoneActivation,
-                        matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
-                        q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
-                }
-
-                // Phase 2: Scale scores by scale_factor (scalar broadcast)
-                mul<cb_scores,
-                    cb_scale_factor,
-                    cb_scores,
-                    BroadcastDim::Scalar,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk>(num_score_tiles);
-
-                // Phase 3a/3b: Mask add or passthrough copy
-                if constexpr (has_mask) {
-                    add<cb_scores, cb_mask, cb_scores_masked>(EltwiseShape::grid(B_q_t, B_kv_t));
-                } else {
-                    copy<cb_scores, cb_scores_masked>(num_score_tiles);
-                }
-
-                // Phase 4: Row-max of scores (WaitUpfrontNoPop — scores survive for phase 8)
-                reduce<
-                    PoolType::MAX,
-                    ReduceDim::REDUCE_ROW,
-                    cb_scores_masked,
-                    cb_scaler_max,
-                    cb_max_new,
-                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
-
-                // Phase 4b: Compute running max: m_new = max(m_old, m_blk)
+    for (uint32_t wu = 0; wu < num_work_units; ++wu) {
+        for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
+            // D-chunk loop OUTSIDE KV-block loop.
+            // For each D-chunk, run the full online softmax recurrence independently.
+            // O is bounded by D_BLOCK (not D_t). QK^T is recomputed per D-chunk.
+            for (uint32_t dc = 0; dc < num_d_chunks; ++dc) {
+                // Phase 0: Init running state for this Q-block + D-chunk
+                eltwise_chain(B_q_t, FillScalar<Dst::D0>{NEG_INF}, PackTile<cb_max_old, OutputLifecycle::Streaming>{});
+                eltwise_chain(B_q_t, FillScalar<Dst::D0>{0.0f}, PackTile<cb_sum_old, OutputLifecycle::Streaming>{});
                 eltwise_chain(
-                    B_q_t,
-                    CopyTile<
-                        cb_max_old,
-                        Dst::D0,
-                        InputLifecycle::HeldBulk,
-                        CopyTileReconfig::Input,
-                        OperandKind::Block>{},
-                    CopyTile<
-                        cb_max_new,
-                        Dst::D1,
+                    num_o_chunk_tiles, FillScalar<Dst::D0>{0.0f}, PackTile<cb_o, OutputLifecycle::Streaming>{});
+
+                for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
+                    // Phase 1: QK^T score matmul: S = Q @ K^T
+                    if constexpr (use_k_blocking) {
+                        // K-blocking: matmul_block handles num_k_blocks > 1 internally.
+                        // Q is NOT retained across KV-blocks — consumed per K-block.
+                        // interm_buf shares scores_buf's L1 region (SubblockMajor spill/reload).
+                        matmul_block<
+                            true,
+                            false,
+                            LastBlockTarget::Out,
+                            OutputCBLayout::SubblockMajor,
+                            matmul_config::InitMode::Short,
+                            InputPolicy::WaitAndPopPerKBlock,
+                            InputPolicy::WaitAndPopPerKBlock,
+                            NoPostCompute,
+                            NoPreKBlock,
+                            NoPostKBlock,
+                            0,
+                            NoKBlockInnerDimFn,
+                            NoIn0Source,
+                            NoIn1BaseOffset,
+                            false,
+                            NoneActivation,
+                            matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
+                            q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
+                    } else {
+                        // Non-K-blocking: single K-block, Q retained across KV-blocks
+                        // (WaitAndRetainOnLastBlock skips pop on the last/only K-block).
+                        matmul_block<
+                            true,
+                            false,
+                            LastBlockTarget::Out,
+                            OutputCBLayout::SubblockMajor,
+                            matmul_config::InitMode::Short,
+                            InputPolicy::WaitAndRetainOnLastBlock,
+                            InputPolicy::WaitAndPopPerKBlock,
+                            NoPostCompute,
+                            NoPreKBlock,
+                            NoPostKBlock,
+                            0,
+                            NoKBlockInnerDimFn,
+                            NoIn0Source,
+                            NoIn1BaseOffset,
+                            false,
+                            NoneActivation,
+                            matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
+                            q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
+                    }
+
+                    // Phase 2: Scale scores by scale_factor (scalar broadcast)
+                    mul<cb_scores,
+                        cb_scale_factor,
+                        cb_scores,
+                        BroadcastDim::Scalar,
                         InputLifecycle::Streaming,
-                        CopyTileReconfig::Input,
-                        OperandKind::Scalar>{},
-                    BinaryMax<Dst::D0, Dst::D1, Dst::D0>{},
-                    PackTile<cb_max_new, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+                        InputLifecycle::HeldBulk>(num_score_tiles);
 
-                // Phase 5: Compute alpha = exp(m_old - m_new)
-                eltwise_chain(
-                    B_q_t,
-                    BinaryFpu<
-                        cb_max_old,
+                    // Phase 3a/3b: Mask add or passthrough copy
+                    if constexpr (has_mask) {
+                        add<cb_scores, cb_mask, cb_scores_masked>(EltwiseShape::grid(B_q_t, B_kv_t));
+                    } else {
+                        copy<cb_scores, cb_scores_masked>(num_score_tiles);
+                    }
+
+                    // Phase 4: Row-max of scores (WaitUpfrontNoPop — scores survive for phase 8)
+                    reduce<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        cb_scores_masked,
+                        cb_scaler_max,
                         cb_max_new,
-                        BinaryFpuOp::Sub,
-                        BroadcastDim::None,
-                        InputLifecycle::Bulk,
-                        InputLifecycle::HeldBulk,
-                        BinaryDataFormatReconfig::Input,
-                        Dst::D0,
-                        OperandKind::Block,
-                        OperandKind::Block>{},
-                    Exp<>{},
-                    PackTile<cb_alpha, OutputLifecycle::Streaming>{});
+                        ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
 
-                // Phase 6: Rescale O: O *= alpha (Col broadcast)
+                    // Phase 4b: Compute running max: m_new = max(m_old, m_blk)
+                    eltwise_chain(
+                        B_q_t,
+                        CopyTile<
+                            cb_max_old,
+                            Dst::D0,
+                            InputLifecycle::HeldBulk,
+                            CopyTileReconfig::Input,
+                            OperandKind::Block>{},
+                        CopyTile<
+                            cb_max_new,
+                            Dst::D1,
+                            InputLifecycle::Streaming,
+                            CopyTileReconfig::Input,
+                            OperandKind::Scalar>{},
+                        BinaryMax<Dst::D0, Dst::D1, Dst::D0>{},
+                        PackTile<cb_max_new, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+
+                    // Phase 5: Compute alpha = exp(m_old - m_new)
+                    eltwise_chain(
+                        B_q_t,
+                        BinaryFpu<
+                            cb_max_old,
+                            cb_max_new,
+                            BinaryFpuOp::Sub,
+                            BroadcastDim::None,
+                            InputLifecycle::Bulk,
+                            InputLifecycle::HeldBulk,
+                            BinaryDataFormatReconfig::Input,
+                            Dst::D0,
+                            OperandKind::Block,
+                            OperandKind::Block>{},
+                        Exp<>{},
+                        PackTile<cb_alpha, OutputLifecycle::Streaming>{});
+
+                    // Phase 6: Rescale O: O *= alpha (Col broadcast)
+                    mul<cb_o,
+                        cb_alpha,
+                        cb_o,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::HeldBulk,
+                        OutputLifecycle::Streaming,
+                        BinaryDataFormatReconfig::Input,
+                        PackTileReconfig::Output,
+                        OperandKind::Scalar,
+                        OperandKind::Col>(EltwiseShape::grid(B_q_t, D_BLOCK));
+
+                    // Phase 7: Rescale l: l *= alpha (Col broadcast)
+                    mul<cb_sum_old,
+                        cb_alpha,
+                        cb_sum_old,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::HeldBulk,
+                        OutputLifecycle::Streaming,
+                        BinaryDataFormatReconfig::Input,
+                        PackTileReconfig::Output,
+                        OperandKind::Scalar,
+                        OperandKind::Col>(EltwiseShape::col(B_q_t));
+
+                    // Drain cb_alpha (HeldBulk — not popped by mul)
+                    cb_pop_front(cb_alpha, B_q_t);
+
+                    // Phase 8: Subtract m_new from scores (Col broadcast)
+                    sub<cb_scores_masked,
+                        cb_max_new,
+                        cb_scores_masked,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::HeldBulk,
+                        OutputLifecycle::Streaming,
+                        BinaryDataFormatReconfig::Input,
+                        PackTileReconfig::Output,
+                        OperandKind::Scalar,
+                        OperandKind::Col>(EltwiseShape::grid(B_q_t, B_kv_t));
+
+                    // Phase 9: Exp of scores
+                    unary<Exp<>, cb_scores_masked, cb_exp_scores>(num_score_tiles);
+
+                    // Phase 10: Row-sum of exp scores
+                    reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        cb_exp_scores,
+                        cb_scaler_sum,
+                        cb_sum_new,
+                        ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+
+                    // Phase 11: Update l: l_i += l_blk
+                    add<cb_sum_old, cb_sum_new, cb_sum_old>(B_q_t);
+
+                    // Phase 12: PV matmul: P @ V → cb_o_accum
+                    // in0_policy=WaitAndPopPerKBlock: exp_scores consumed per K-block
+                    // (single K-block=B_kv_t, so all exp_scores tiles are popped)
+                    matmul_block<
+                        false,
+                        false,
+                        LastBlockTarget::Out,
+                        OutputCBLayout::SubblockMajor,
+                        matmul_config::InitMode::Short,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        NoPostCompute,
+                        NoPreKBlock,
+                        NoPostKBlock,
+                        0,
+                        NoKBlockInnerDimFn,
+                        NoIn0Source,
+                        NoIn1BaseOffset,
+                        false,
+                        NoneActivation,
+                        matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
+                        exp_scores_buf, v_buf, o_accum_buf, o_accum_buf, pv_shape);
+
+                    // Phase 12b: O += P@V result
+                    add<cb_o, cb_o_accum, cb_o>(num_o_chunk_tiles);
+
+                    // Phase 13: Update m: m_i = m_new
+                    copy<cb_max_new, cb_max_old>(B_q_t);
+                }
+
+                // Phase 14: Normalize O by l_i and write to output CB
+                unary<Recip<>, cb_sum_old, cb_sum_old>(B_q_t);
                 mul<cb_o,
-                    cb_alpha,
-                    cb_o,
+                    cb_sum_old,
+                    cb_out,
                     BroadcastDim::Col,
                     InputLifecycle::Streaming,
                     InputLifecycle::HeldBulk,
@@ -223,106 +329,19 @@ void kernel_main() {
                     OperandKind::Scalar,
                     OperandKind::Col>(EltwiseShape::grid(B_q_t, D_BLOCK));
 
-                // Phase 7: Rescale l: l *= alpha (Col broadcast)
-                mul<cb_sum_old,
-                    cb_alpha,
-                    cb_sum_old,
-                    BroadcastDim::Col,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk,
-                    OutputLifecycle::Streaming,
-                    BinaryDataFormatReconfig::Input,
-                    PackTileReconfig::Output,
-                    OperandKind::Scalar,
-                    OperandKind::Col>(EltwiseShape::col(B_q_t));
+                // Drain persistent state CBs for next D-chunk
+                // cb_o already drained by phase 14 mul (Streaming input pops all tiles)
+                cb_pop_front(cb_sum_old, B_q_t);
+                cb_pop_front(cb_max_old, B_q_t);
 
-                // Drain cb_alpha (HeldBulk — not popped by mul)
-                cb_pop_front(cb_alpha, B_q_t);
-
-                // Phase 8: Subtract m_new from scores (Col broadcast)
-                sub<cb_scores_masked,
-                    cb_max_new,
-                    cb_scores_masked,
-                    BroadcastDim::Col,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk,
-                    OutputLifecycle::Streaming,
-                    BinaryDataFormatReconfig::Input,
-                    PackTileReconfig::Output,
-                    OperandKind::Scalar,
-                    OperandKind::Col>(EltwiseShape::grid(B_q_t, B_kv_t));
-
-                // Phase 9: Exp of scores
-                unary<Exp<>, cb_scores_masked, cb_exp_scores>(num_score_tiles);
-
-                // Phase 10: Row-sum of exp scores
-                reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_ROW,
-                    cb_exp_scores,
-                    cb_scaler_sum,
-                    cb_sum_new,
-                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
-
-                // Phase 11: Update l: l_i += l_blk
-                add<cb_sum_old, cb_sum_new, cb_sum_old>(B_q_t);
-
-                // Phase 12: PV matmul: P @ V → cb_o_accum
-                // in0_policy=WaitAndPopPerKBlock: exp_scores consumed per K-block
-                // (single K-block=B_kv_t, so all exp_scores tiles are popped)
-                matmul_block<
-                    false,
-                    false,
-                    LastBlockTarget::Out,
-                    OutputCBLayout::SubblockMajor,
-                    matmul_config::InitMode::Short,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    NoPostCompute,
-                    NoPreKBlock,
-                    NoPostKBlock,
-                    0,
-                    NoKBlockInnerDimFn,
-                    NoIn0Source,
-                    NoIn1BaseOffset,
-                    false,
-                    NoneActivation,
-                    matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
-                    exp_scores_buf, v_buf, o_accum_buf, o_accum_buf, pv_shape);
-
-                // Phase 12b: O += P@V result
-                add<cb_o, cb_o_accum, cb_o>(num_o_chunk_tiles);
-
-                // Phase 13: Update m: m_i = m_new
-                copy<cb_max_new, cb_max_old>(B_q_t);
+                // For non-K-blocking: drain cb_q at the end of the D-chunk
+                // (Q was retained across KV-blocks via WaitAndRetainOnLastBlock,
+                // but needs to be freed for the next D-chunk's Q push)
+                if constexpr (!use_k_blocking) {
+                    cb_wait_front(cb_q, B_q_t * D_t);
+                    cb_pop_front(cb_q, B_q_t * D_t);
+                }
             }
-
-            // Phase 14: Normalize O by l_i and write to output CB
-            unary<Recip<>, cb_sum_old, cb_sum_old>(B_q_t);
-            mul<cb_o,
-                cb_sum_old,
-                cb_out,
-                BroadcastDim::Col,
-                InputLifecycle::Streaming,
-                InputLifecycle::HeldBulk,
-                OutputLifecycle::Streaming,
-                BinaryDataFormatReconfig::Input,
-                PackTileReconfig::Output,
-                OperandKind::Scalar,
-                OperandKind::Col>(EltwiseShape::grid(B_q_t, D_BLOCK));
-
-            // Drain persistent state CBs for next D-chunk
-            // cb_o already drained by phase 14 mul (Streaming input pops all tiles)
-            cb_pop_front(cb_sum_old, B_q_t);
-            cb_pop_front(cb_max_old, B_q_t);
-
-            // For non-K-blocking: drain cb_q at the end of the D-chunk
-            // (Q was retained across KV-blocks via WaitAndRetainOnLastBlock,
-            // but needs to be freed for the next D-chunk's Q push)
-            if constexpr (!use_k_blocking) {
-                cb_wait_front(cb_q, B_q_t * D_t);
-                cb_pop_front(cb_q, B_q_t * D_t);
-            }
-        }
-    }
+        }  // end Q-block loop
+    }  // end work-unit loop (Refinement 5)
 }

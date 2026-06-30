@@ -253,11 +253,31 @@ def create_program_descriptor(
         1 if use_k_blocking else 0,
         k_block_dim,
     ]
+
+    # Compute RT args: [num_work_units, (b, h) * num_work_units]
+    # Refinement 5: the compute kernel must loop over work units to match
+    # the reader and writer, otherwise it deadlocks when a core gets >1 WU.
+    compute_rt_args = ttnn.RuntimeArgs()
+    wu_assigned = 0
+    for ci, core in enumerate(cores):
+        if u2 == 0:
+            units = u1
+        else:
+            g1c = (num_work_units - num_cores * u2) // (u1 - u2)
+            units = u1 if ci < g1c else u2
+        rt = [units]
+        for i in range(units):
+            bh = wu_assigned + i
+            rt.append(bh // H_q)
+            rt.append(bh % H_q)
+        wu_assigned += units
+        compute_rt_args[core.x][core.y] = rt
+
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
-        runtime_args=[],
+        runtime_args=compute_rt_args,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
