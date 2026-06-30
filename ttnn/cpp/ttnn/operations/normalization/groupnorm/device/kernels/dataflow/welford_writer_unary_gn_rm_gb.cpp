@@ -12,6 +12,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
@@ -92,13 +95,24 @@ void kernel_main() {
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
 #if defined(MASK_PARTIAL_READ)
-    // Welford consumes the mask via mul_tiles_bcast_scalar — element (0,0) only.
-    // We still populate face 1 row 0 alongside face 0 row 0 for consistency with
-    // the gamma read pattern in the same kernel family; the cost is negligible.
+    // After the Welford mask-multiply reorder, the compute kernel uses
+    // mul_tiles_bcast_rows for the mask, which unpacks face 0 row 0 + face 1
+    // row 0 only — exactly the gamma-style two-strip pattern that the
+    // non-Welford writer uses.
     constexpr uint32_t mask_tile_hw = tt::constants::TILE_HW;
     constexpr uint32_t input_mask_element_bytes = input_mask_single_tile_size_bytes / mask_tile_hw;
     constexpr uint32_t input_mask_face_bytes = input_mask_element_bytes * tt::constants::FACE_HW;
     constexpr uint32_t input_mask_face_w_bytes = input_mask_element_bytes * tt::constants::FACE_WIDTH;
+#endif
+
+#if defined(MASK_SYNTHESIZE)
+    // Group sizing for in-kernel mask synthesis. num_cols_per_group is the
+    // number of channels per group; the row_offset wrapping recurrence
+    // mirrors groupnorm_input_mask.cpp:60-72.
+    constexpr uint32_t MASK_NUM_COLS_PER_GROUP_V = MASK_NUM_COLS_PER_GROUP;
+    constexpr uint32_t MASK_TILE_W = tt::constants::TILE_WIDTH;
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W =
+        (MASK_NUM_COLS_PER_GROUP_V % MASK_TILE_W == 0) ? 0 : (MASK_NUM_COLS_PER_GROUP_V % MASK_TILE_W);
 #endif
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
@@ -121,7 +135,28 @@ void kernel_main() {
     cb_input_mask.reserve_back(block_w * num_groups_per_core);
     uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#if defined(MASK_SYNTHESIZE)
+    // start_stride for the first group on this core is 0. Subsequent groups
+    // advance row_offset by group_size_mod_tile_w with wrapping.
+    uint32_t mask_row_offset = 0;
+#endif
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
+#if defined(MASK_SYNTHESIZE)
+        // Write face 0 row 0 + face 1 row 0 of each of the block_w mask tiles
+        // for this group directly — no DRAM read.
+        tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+            l1_write_addr_input_mask,
+            mask_row_offset,
+            MASK_NUM_COLS_PER_GROUP_V,
+            block_w,
+            input_mask_single_tile_size_bytes,
+            MASK_TILE_W,
+            tt::tt_metal::groupnorm::BF16_ONE,
+            tt::tt_metal::groupnorm::BF16_ZERO);
+        mask_row_offset =
+            tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, MASK_TILE_W);
+        l1_write_addr_input_mask += block_w * input_mask_single_tile_size_bytes;
+#else
         for (uint32_t j = 0; j < block_w; ++j) {
 #if defined(MASK_PARTIAL_READ)
             // Face 1 sits at tile byte offset `face_bytes` (=512 for bf16),
@@ -166,6 +201,7 @@ void kernel_main() {
             noc.async_read_barrier();
             l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
         }
+#endif  // MASK_SYNTHESIZE
     }
     cb_input_mask.push_back(block_w * num_groups_per_core);
 

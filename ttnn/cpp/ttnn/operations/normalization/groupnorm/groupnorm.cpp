@@ -102,26 +102,15 @@ ttnn::Tensor get_mask_tensor(
     const std::optional<ttnn::Tensor>& negative_mask,
     const CoreGrid& core_grid,
     const int num_groups,
-    bool use_welford) {
+    bool /*use_welford*/) {
     ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
     if (!input_mask.has_value() and !negative_mask.has_value()) {
         // Synthesis path: the writer kernel writes the per-group {0.0, 1.0}
         // mask directly in L1 from a small recurrence (see
-        // groupnorm_mask_synthesize.hpp). Skip the host-side build when the
-        // chosen program factory's writer + compute supports synthesis.
-        //
-        // Sharded (welford or not): synthesis is supported.
-        // DRAM (mcast/no_mcast):
-        //   - non-Welford: synthesis is supported.
-        //   - Welford: NOT yet supported — the DRAM Welford compute path has
-        //     a known issue with row-0-only mask data that the sharded path
-        //     does not (see the program-factory comments). Until that is
-        //     resolved, fall through and build the DRAM mask here so the
-        //     writer does a full-tile NOC read.
-        const bool is_sharded = input_tensor.is_sharded();
-        if (is_sharded || !use_welford) {
-            return ttnn::Tensor();
-        }
+        // groupnorm_mask_synthesize.hpp). Skip the host-side build — every
+        // (sharded/DRAM × welford/legacy) writer + compute combination
+        // supports synthesis after the welford mask-multiply reorder.
+        return ttnn::Tensor();
         // create input mask
         int64_t num_channel = input_tensor.padded_shape()[-1];
         int64_t num_cores_across_channel;
@@ -382,13 +371,10 @@ Tensor group_norm(
     // auto generate mask tensor if both input_mask and negative_mask are not provided
     // (skipped entirely when the writer kernel will synthesize the mask in-L1).
     //
-    // Synthesis gating must agree with the program-factory selection:
-    //   - sharded (any compute mode): synthesis fires; skip the build.
-    //   - non-sharded (DRAM) non-Welford: synthesis fires; skip the build.
-    //   - non-sharded (DRAM) Welford: NOT yet enabled in the factory; let
-    //     get_mask_tensor build the DRAM mask so the writer NOC-reads it.
-    const bool is_sharded = input_tensor.is_sharded();
-    const bool will_synthesize = !input_mask.has_value() && !negative_mask.has_value() && (is_sharded || !use_welford);
+    // Synthesis is supported on every (sharded/DRAM × welford/legacy)
+    // writer + compute combination, so we always skip the host-side build
+    // when no mask was passed and no negative mask was requested.
+    const bool will_synthesize = !input_mask.has_value() && !negative_mask.has_value();
     std::optional<ttnn::Tensor> mask_for_op = input_mask;
     if (!will_synthesize) {
         ttnn::Tensor mask = operations::normalization::get_mask_tensor(

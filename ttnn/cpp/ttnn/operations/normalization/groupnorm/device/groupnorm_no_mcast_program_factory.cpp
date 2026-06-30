@@ -400,7 +400,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    uint32_t in_mask_CB_size = use_welford ? input_mask.value().physical_volume() * input_mask.value().element_size()
+    // Welford writer reserves block_w * num_groups_per_core tiles up-front
+    // and the compute kernel waits on all of them; non-Welford double-buffers
+    // block_wt tiles. When the mask is synthesized in-L1 we have no caller
+    // tensor to size against — the Welford expression below works either way.
+    uint32_t in_mask_CB_size = use_welford ? input_mask_num_tiles_per_core * in_mask_single_tile_size
                                            : block_wt * in_mask_single_tile_size * 2;
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;
     uint32_t interm_block_tiles_group_1 = in0_block_tiles_group_1;
@@ -750,17 +754,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     std::map<std::string, std::string> writer_defines;
     // See groupnorm_sharded_program_factory.cpp for the mask data path
-    // selection (synthesize / partial read / full read). Synthesis can fire
+    // selection (synthesize / partial read / full read). Synthesis fires
     // even when the device op got no input_mask tensor — see that comment.
-    // For DRAM (no_mcast) under Welford, the host always supplies a built
-    // mask tensor (see get_mask_tensor). Synthesis is only enabled for
-    // Welford on the sharded path, where the reorder has been verified
-    // end-to-end.
+    // The Welford writer (welford_writer_unary_gn_rm_gb.cpp) and compute
+    // kernel (welford_groupnorm.cpp) both support synthesis + row-0-only
+    // mask data after the mask-multiply reorder.
     const bool synth_mask =
-        !input_mask.has_value() ? !use_welford : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
+        !input_mask.has_value() ? true : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
     if (synth_mask) {
         writer_defines["MASK_SYNTHESIZE"] = "1";
-    } else if (!use_welford && input_mask.has_value() && mask_format_supports_partial_read(in_mask_cb_data_format)) {
+        writer_defines["MASK_NUM_COLS_PER_GROUP"] = std::to_string(num_channels_per_group);
+    } else if (input_mask.has_value() && mask_format_supports_partial_read(in_mask_cb_data_format)) {
         writer_defines["MASK_PARTIAL_READ"] = "1";
     }
 

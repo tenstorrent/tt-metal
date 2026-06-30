@@ -12,6 +12,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t TILE_HW = TILE_HW_VAL;
@@ -63,13 +66,23 @@ void kernel_main() {
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
 #if defined(MASK_PARTIAL_READ)
-    // The Welford kernel consumes the mask via mul_tiles_bcast_scalar, which
-    // unpacks element (0, 0) of the source tile only (byte offset 0 in face
-    // 0). We still populate face 1 row 0 alongside face 0 row 0 — same
-    // gamma-style pattern as the non-Welford writer; cheap and consistent.
+    // After the Welford mask-multiply reorder, the compute kernel uses
+    // mul_tiles_bcast_rows for the mask, which unpacks face 0 row 0 + face 1
+    // row 0 only — exactly the gamma-style two-strip pattern that the
+    // non-Welford writer uses.
     const uint32_t input_mask_element_bytes = input_mask_single_tile_size_bytes / TILE_HW;
     const uint32_t input_mask_face_bytes = input_mask_element_bytes * tt::constants::FACE_HW;
     const uint32_t input_mask_face_w_bytes = input_mask_element_bytes * tt::constants::FACE_WIDTH;
+#endif
+
+#if defined(MASK_SYNTHESIZE)
+    // Group sizing for in-kernel mask synthesis. num_cols_per_group is the
+    // number of channels per group; the row_offset wrapping recurrence
+    // mirrors groupnorm_input_mask.cpp:60-72.
+    constexpr uint32_t MASK_NUM_COLS_PER_GROUP_V = MASK_NUM_COLS_PER_GROUP;
+    constexpr uint32_t MASK_TILE_W = tt::constants::TILE_WIDTH;
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W =
+        (MASK_NUM_COLS_PER_GROUP_V % MASK_TILE_W == 0) ? 0 : (MASK_NUM_COLS_PER_GROUP_V % MASK_TILE_W);
 #endif
 
     constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
@@ -77,18 +90,35 @@ void kernel_main() {
     generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#if defined(MASK_SYNTHESIZE)
+    // start_stride for the first group on this core is 0. Subsequent
+    // groups advance row_offset by group_size_mod_tile_w with wrapping.
+    uint32_t mask_row_offset = 0;
+#endif
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
         cb_input_mask.reserve_back(block_w);
         uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
+#if defined(MASK_SYNTHESIZE)
+        // Write face 0 row 0 + face 1 row 0 of each of the block_w mask
+        // tiles directly, no DRAM read.
+        tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+            l1_write_addr_input_mask,
+            mask_row_offset,
+            MASK_NUM_COLS_PER_GROUP_V,
+            block_w,
+            input_mask_single_tile_size_bytes,
+            MASK_TILE_W,
+            tt::tt_metal::groupnorm::BF16_ONE,
+            tt::tt_metal::groupnorm::BF16_ZERO);
+        mask_row_offset =
+            tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, MASK_TILE_W);
+#else
         for (uint32_t j = 0; j < block_w; ++j) {
 #if defined(MASK_PARTIAL_READ)
             // See writer_unary_sharded_gn_rm_gb_v2.cpp for the byte map. Face 1
             // sits at byte offset `face_bytes` (typically 512 for bf16), so
             // the second strip is fetched from DRAM at `offset_bytes =
-            // input_mask_face_bytes`. Welford's SCALAR-broadcast unpacker
-            // reads element (0,0) only, but the gamma-style two-strip pattern
-            // populates both face 0 row 0 and face 1 row 0 — a tiny bit of
-            // redundancy in exchange for one consistent read pattern.
+            // input_mask_face_bytes`.
 #ifdef ARCH_BLACKHOLE
             noc.async_read(
                 mask,
@@ -128,6 +158,7 @@ void kernel_main() {
             input_mask_tile_id += 1;
         }
         noc.async_read_barrier();
+#endif  // MASK_SYNTHESIZE
         cb_input_mask.push_back(block_w);
     }
 
