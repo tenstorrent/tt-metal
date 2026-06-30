@@ -101,6 +101,8 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
+    // Temporary workaround due to race vs. host deasserting TRISC reset.
+    // https://github.com/tenstorrent/tt-metal/issues/48064
     assert_trisc_reset();
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
