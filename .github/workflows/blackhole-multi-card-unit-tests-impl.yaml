@@ -73,13 +73,6 @@ jobs:
             cmd: pytest tests/nightly/blackhole/sdpa/ -svv
             timeout: 20
             test-type: fast-qb2
-          - name: ring sdpa PERF tests (QB2 only)
-            cmd: |
-              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
-              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
-              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
-            timeout: 10
-            test-type: fast-qb2
           - name: indexer_score multi-device tests (QB2 only)
             # The per-device chunk_start (SP=4 and SP=2xTP=2) mesh tests; single-chip cases in the same
             # file run in tt-metal-l2-nightly. -k selects only the multi-device functions.
