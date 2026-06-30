@@ -53,9 +53,10 @@ private:
  *
  * The region is provided as raw, uninitialized memory, with no synchronization of read/write
  * across threads. Avoiding undefined-behavior access is the user's responsibility; typical kinds
- * of UB access here include:
+ * of undefined behavior access here include:
  * 1. Reading uninitialized data.
- * 2. Data races across threads.
+ * 2. Data races across threads in multi-threaded kernels.
+ * 3. Data races across pipeline stages (Unpack/Math/Pack) in compute kernels.
  *
  * Indexed access via operator[] is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
  *
@@ -115,36 +116,36 @@ public:
         return size_type{sentinel_addr_.get_address() - start_addr_.get_address()};
     }
 
-    /** @brief Raw, directly-dereferenceable L1 pointer to the start of the scratchpad.
+    /** @brief L1 base address of the scratchpad, as a raw uint32_t byte address.
      *
-     * Escapes the bounds-checked index accessor; staying within size() is then the caller's
-     * responsibility. Mirrors LocalTensorAccessor::get_unsafe_ptr().
-     */
-    [[nodiscard]] tt_l1_ptr T* get_unsafe_ptr() const noexcept { return start_addr_.get_unsafe_ptr(); }
-
-    /** @brief L1 base address of the scratchpad, as a raw byte address.
+     * This is the form most kernel-side APIs consume (NOC transfers, CB/LLK configuration, ...).
      *
-     * The form most kernel-side APIs consume (NOC transfers, CB/LLK configuration, ...). Mirrors
-     * LocalTensorAccessor::get_bank_base_address() — without the "bank": a scratchpad is private
-     * node-local L1, not a tensor shard.
-     *
-     * @return the scratchpad's L1 base address
+     * @return the base address of the scratchpad (as uint32_t)
      */
     [[nodiscard]] uint32_t get_base_address() const noexcept {
         return static_cast<uint32_t>(start_addr_.get_address());
     }
 
-    /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
-     * (pointer arithmetic, scoped_lock, comparisons, ...). Mirrors LocalTensorAccessor::local_mem().
+    /** @brief Raw, directly-dereferenceable L1 pointer to the start of the scratchpad.
+     *
+     * Escapes the bounds-checked index accessor; staying within size() is the caller's responsibility.
+     * Indexed access via operator[] should be preferred where possible (it has an ASSERT bounds check).
+     *
+     * @return a raw pointer to the start of the scratchpad
      */
-    [[nodiscard]] const pointer& local_mem() const noexcept { return start_addr_; }
+    [[nodiscard]] tt_l1_ptr T* get_unsafe_ptr() const noexcept { return start_addr_.get_unsafe_ptr(); }
 
     // begin/end pair to enable range-based-for over the entire scratchpad region.
-    // This does not support standard-library algorithms that require a conforming iterator:
-    // `CoreLocalMem<T>` does not satisfy the named iterator requirements.
+    // NOTE: This does not support standard-library algorithms that require a conforming iterator:
+    //       `CoreLocalMem<T>` does not satisfy the named iterator requirements.
     using iterator = pointer;
     [[nodiscard]] iterator begin() const noexcept { return start_addr_; }
     [[nodiscard]] iterator end() const noexcept { return sentinel_addr_; }
+
+    /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
+     * (pointer arithmetic, scoped_lock, comparisons, ...).
+     */
+    [[nodiscard]] const pointer& local_mem() const noexcept { return start_addr_; }
 
 private:
     // constexpr note:

@@ -19,10 +19,13 @@ namespace tt::tt_metal::experimental {
 // uninitialized region of node-local SRAM ("L1") for a kernel to use as
 // working memory.
 //
-// A scratchpad has a single property: its size (per node, in bytes). Its
-// contents are uninitialized; the bound kernel must write before it reads. The
-// kernel accesses it via the device-side accessor:
+// A scratchpad is private to its bound kernel. Both DM and compute kernels may use
+// scratchpads. The kernel accesses it via the device-side accessor:
 //   auto s = Scratchpad(scratch::<accessor_name>);
+//
+// KERNEL BINDING: By default, a scratchpad instance is private to a single kernel
+//   instance. It is legal for more than one KernelSpec to bind to the same
+//   ScratchpadSpec only if they occupy disjoint node sets.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
 //   execution lifetime, alongside DFBs (and from the same region of L1).
@@ -31,15 +34,15 @@ namespace tt::tt_metal::experimental {
 //   independent scratchpad instance is allocated per node where its bound kernel
 //   runs, in that node's local SRAM ("L1").
 //
-// BINDING: By default, a scratchpad instance is private to a single kernel
-//   instance. It is legal for more than one KernelSpec to bind to the same
-//   ScratchpadSpec only if they occupy disjoint node sets.
+// PLACEMENT: Derived from its bound kernel(s)'s WorkUnitSpec membership, like DFB.
+//   Node-local resources (scratchpad, DFB) derive their node set from their
+//   kernel bindings; cross-node resources (semaphore, cross-node DFB) must specify
+//   their node set explicitly.
 //
-// PLACEMENT: Derived. Scratchpad is a *node-local resource* so the scratchpad's
-//   node set is inferred from the bound kernels' WorkUnitSpec target_nodes.
-//   (This is the same convention as DFB, also a node-local resource. Semaphore
-//   and cross-node DFB are non-node-local resources; they assign target nodes
-//   explicitly in their specs.)
+// CAUTION: Scratchpad is a raw memory with no synchronization semantics.
+//   Be cautious when using it in compute kernels, as the Unpack/Math/Pack pipeline
+//   stages run on different physical RISC-V cores. Likewise, be cautious when using
+//   it in multi-threaded kernels, as each thread runs on different RISC-V core(s).
 //
 // ============================================================================
 
@@ -51,6 +54,7 @@ struct ScratchpadSpec {
     ScratchpadSpecName unique_id;
 
     // Size of the SRAM ("L1") region reserved on each node, in bytes.
+    // (Only occupies space on nodes where the scratchpad's bound kernel instances run.)
     uint32_t size_per_node = 0;
 };
 
