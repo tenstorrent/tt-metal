@@ -77,6 +77,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     operations::transformer::SDPAProgramConfig program_config,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -93,7 +94,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt);
+    std::optional<uint32_t> kv_actual_isl = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

@@ -124,13 +124,15 @@ void kernel_main() {
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_base[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        // valid_pages_per_batch_head: clamp the gather to the logical_n-valid slab prefix so only
-        // kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page counts
-        // and the ring slice protocol stay matched. Default (full input) leaves the range unchanged.
+        // valid_pages_per_batch_head (slot 8): clamp the gather to the logical_n-valid slab prefix so
+        // only kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page
+        // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
         if (valid_pages < input_tile_id_end[input_idx]) {
             input_tile_id_end[input_idx] = valid_pages;
         }
+        // write_local (slot 9): writer-only (local-slice completion). Read here for arg-index alignment.
+        (void)get_arg_val<uint32_t>(arg_idx++);
     }
 
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
@@ -280,6 +282,11 @@ void kernel_main() {
             }
         }
     }
+    // Flush non-posted atomics from op_signaler before kernel exit (mirrors the writer's barrier).
+    if constexpr (fuse_op) {
+        noc_obj.async_atomic_barrier();
+    }
+
     // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

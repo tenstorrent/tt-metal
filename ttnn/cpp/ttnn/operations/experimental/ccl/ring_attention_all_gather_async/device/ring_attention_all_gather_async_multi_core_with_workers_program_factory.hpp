@@ -40,12 +40,17 @@ constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
 // All-gather writer runtime-arg layout: [0]=dim, [1]=sem_noc0_x, [2]=sem_noc0_y, [3]=ring_size,
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
-constexpr uint32_t kTensorDescriptorFieldCount = 9;
+// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, tile_id_start, tile_id_end,
+// input_batch_base (offset 7), valid_pages_per_batch_head (offset 8), write_local (offset 9).
+constexpr uint32_t kTensorDescriptorFieldCount = 10;
 constexpr uint32_t kInputBatchBaseFieldOffset = 7;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
 // slab prefix so the gather moves only kv_actual-sized data, not the whole oversized cache.
 constexpr uint32_t kValidPagesFieldOffset = 8;
+// write_local: writer also places this input's local slice into this device's own gathered output
+// buffer (local-slice completion). Consumed by the writer; the reader skips it for index alignment.
+constexpr uint32_t kWriteLocalFieldOffset = 9;
 
 inline uint32_t input_batch_base_pages(
     uint32_t batch_idx, uint32_t num_heads, uint32_t tensor_height_tiles, uint32_t tensor_width_tiles) {
@@ -88,6 +93,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // only the valid (e.g. logical_n-sized) prefix. Capped to the input height per gathered tensor.
     // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
     // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
-    std::optional<uint32_t> gather_valid_Ht = std::nullopt);
+    std::optional<uint32_t> gather_valid_Ht = std::nullopt,
+    // When set, inputs with index >= this value also have their local slice written into this
+    // device's own gathered output buffer (write_local). Lets a consumer (ring-joint SDPA sharded
+    // joint) read the gathered buffer as a complete full-length replica. std::nullopt => off for all
+    // inputs (default: local slice omitted from the gathered buffer, the startup-latency optimization).
+    std::optional<uint32_t> write_local_from_input_idx = std::nullopt);
 
 }  // namespace ttnn
