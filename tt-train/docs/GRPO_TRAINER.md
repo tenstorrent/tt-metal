@@ -11,49 +11,24 @@ conventions where possible so that users familiar with TRL face minimal friction
 
 ```python
 from datasets import load_dataset
-from transformers import AutoTokenizer
-from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
-from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter
+from ttml.trainers import GRPOConfig, GRPOTrainer
 
-model_id = "meta-llama/Llama-3.2-1B-Instruct"
-tokenizer = AutoTokenizer.from_pretrained(model_id)
+# 1. A GRPOCompleter handles model loading, text generation, and
+#    forward passes. The trainer is agnostic to which one you pass.
+#    See "GRPOCompleter" below for the contract.
+completer = MyCompleter(...)
 
-# 1. Prepare dataset — must have a "prompt" column
-def format_example(example):
-    messages = [
-        {"role": "system", "content": "Answer Yes or No."},
-        {"role": "user", "content": example["question"]},
-    ]
-    return {
-        "prompt": tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True),
-        "answer": "yes" if example["answer"] else "no",
-    }
+# 2. Dataset must have a "prompt" column. All other columns are
+#    forwarded by name to the reward function.
+dataset = load_dataset("...", split="train").map(format_example)
 
-dataset = load_dataset("google/boolq", split="train").map(format_example)
-
-# 2. Define a reward function
+# 3. Reward function. The trainer matches parameter names to
+#    available data; declare **kwargs to receive everything.
 def my_reward(completions, answer, **kwargs):
     return [2.0 if c.strip().lower().startswith(a) else -1.0
             for c, a in zip(completions, answer)]
 
-# 3. Define a callback for logging
-class LogCallback(TrainerCallback):
-    def on_step_end(self, trainer, step, **kwargs):
-        print(f"Step {step} | Reward: {kwargs['reward_mean']:.4f} | Len: {kwargs['mean_completion_len']:.2f}")
-
-# 4. Create a completer (handles model loading + device setup)
-completer = LlamaGRPOCompleter(
-    ctx=LlamaCompletionCtx(
-        max_tokens_to_complete=256,
-        temperature=0.7,
-        completions_per_prompt=8,
-    ),
-    transformer_config={...},   # see Transformer Config below
-    device_config={"enable_ddp": True, "mesh_shape": [1, 2]},
-    model_source=model_id,
-)
-
-# 5. Train
+# 4. Train.
 trainer = GRPOTrainer(
     completer=completer,
     dataset=dataset,
@@ -62,16 +37,25 @@ trainer = GRPOTrainer(
         num_generations=8,
         max_completion_length=256,
         gradient_accumulation_steps=4,
-        logging_steps=1,
         prompts_to_train=1600,
+        logging_steps=1,
     ),
     reward_func=my_reward,
-    optimizer_dict={"type": "MorehAdamW", "lr": 5e-6},
-    callbacks=[LogCallback()],
-    model_source=model_id,
+    optimizer_dict={"type": "MorehAdamW", "lr": 5.0e-6},
+    callbacks=[],                    # optional; see "Callbacks" below
+    model_source="...",              # used only for HF config in checkpoints
 )
 trainer.train()
 ```
+
+`GRPOTrainer` is agnostic to model architecture, device topology, and
+rank count. It only calls `completer.generate(...)`,
+`completer.compute_nlog_probs(...)`, and the standard
+`TrainerCallback` hooks. Where generation runs — in-process on the
+same mesh as the policy, or on a peer MPI rank — is the completer's
+choice. For a worked-out two-rank deployment (separate trainer and
+inference ranks, weight push every step), see the
+[BoolQ example](../sources/examples/grpo/boolq/README.md).
 
 ---
 
@@ -85,9 +69,13 @@ GRPO training is split into two components:
 - **`GRPOTrainer`** — model-agnostic training loop that drives reward computation,
   advantage estimation, and policy gradient updates.
 
-This separation means the trainer does not need to know anything about model
-architecture or device topology. To support a new model family, implement a new
-`GRPOCompleter` subclass (see [GRPOCompleter](#grpocompleter)).
+This separation means the trainer does not need to know anything
+about model architecture, device topology, or rank count. The trainer
+only calls `completer.generate(...)`, `completer.compute_nlog_probs(...)`,
+and the standard `TrainerCallback` hooks; whether generation runs
+in-process on the same mesh as the policy or on a peer MPI rank is
+the completer's choice. To support a new model family, implement a
+new `GRPOCompleter` subclass (see [GRPOCompleter](#grpocompleter)).
 
 ---
 
@@ -115,38 +103,9 @@ model architecture (Llama, Qwen, etc.).
 | `generate_str` | `(prompt_strs: List[str]) -> List[str]` | Generate completions from string prompts, returning decoded strings. |
 | `compute_nlog_probs` | `(prompts, completions) -> (nlog_probs, mask)` | Compute per-token negative log probabilities for prompt+completion pairs. Returns tensors `[B_local, T_padded]`. |
 
-### LlamaGRPOCompleter
-
-```python
-from utils.llama_completer import LlamaGRPOCompleter, LlamaCompletionCtx
-```
-
-Llama-specific implementation of `GRPOCompleter`. Handles model loading from
-HuggingFace or local safetensors, device mesh setup, KV-cache management,
-and autoregressive generation.
-
-```python
-completer = LlamaGRPOCompleter(
-    ctx=LlamaCompletionCtx(
-        max_tokens_to_complete=256,
-        temperature=0.7,
-        completions_per_prompt=8,
-    ),
-    transformer_config={...},
-    device_config={"enable_ddp": True, "mesh_shape": [1, 2]},
-    model_source="meta-llama/Llama-3.2-1B-Instruct",
-)
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `ctx` | `LlamaCompletionCtx` | Generation parameters (max tokens, temperature, completions per prompt). |
-| `transformer_config` | `dict` | Model architecture config (see [Transformer Config](#transformer-config)). |
-| `device_config` | `dict` | Device mesh configuration (see [Device Config](#device-config)). |
-| `model_source` | `str` | HuggingFace model ID or path to a local directory containing `model.safetensors`. |
-
-Device setup (`enable_fabric`, `open_device`, `initialize_parallelism_context`)
-is performed inside the completer constructor.
+The shipped concrete completer is `LlamaGRPOCompleter` (in
+`tt-train/sources/examples/grpo/utils/llama_grpo_completer.py`),
+documented alongside the [BoolQ example](../sources/examples/grpo/boolq/README.md).
 
 ---
 
@@ -203,7 +162,7 @@ GRPOTrainer(
 | `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
 | `config` | `GRPOConfig` | Training configuration (see above). |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
-| `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](../../docs/TTML_ONBOARDING.md). Must include a `"type"` key. |
+| `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `model_source` | `str \| None` | HuggingFace model ID or local path. Used only for saving HF config in checkpoints. |
 
@@ -297,6 +256,13 @@ The trainer has no built-in logging. All monitoring, CSV writing, and console
 output is handled through callbacks. The `trainer` argument gives callbacks
 access to `trainer.model` and `trainer.config`.
 
+> **Cross-rank weight transfer**: a completer that runs generation on
+> a peer MPI rank can use a `TrainerCallback` to push freshly-updated
+> policy weights to the peer after each optimizer step. The trainer
+> itself does not know about this — it just fires `on_step_end`. See
+> the [BoolQ example](../sources/examples/grpo/boolq/README.md) for
+> the shipped pattern (`WeightSyncCallback` + `TttInferenceClient`).
+
 ---
 
 ## Transformer Config
@@ -308,7 +274,7 @@ path to a separate file via `transformer_config_path:`. The path may use
 be a plain absolute/relative path; relative paths are resolved against the
 YAML file's directory. The external file must contain a top-level
 `transformer_config` mapping. See
-[`configs/model_configs/`](../../../configs/model_configs/) for available model
+[`configs/model_configs/`](../configs/model_configs/) for available model
 config files.
 
 ```yaml
@@ -341,45 +307,65 @@ optimizer_dict = {
 ```
 
 Any optimizer registered with `ttml.optimizers.register_optimizer` can be used.
-See [TTML Onboarding — Optimizers](../../docs/TTML_ONBOARDING.md) for the full list of
+See [TTML Onboarding — Optimizers](TTML_ONBOARDING.md) for the full list of
 built-in optimizers.
 
 ---
 
 ## Device Config
 
-Device mesh and distributed training configuration, passed to the completer:
+There is no separate `device_config` parameter on `GRPOTrainer` or on
+the abstract `GRPOCompleter`. The mesh is configured in a YAML
+training config (`device_config:` block) and applied by your
+entrypoint:
 
-```python
-device_config = {
-    "enable_ddp": True,
-    "mesh_shape": [1, 2],       # [rows, cols] of the device mesh
-}
+```yaml
+device_config:
+  mesh_shape: [1, 2]
+  enable_ddp: true
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enable_ddp` | `bool` | `False` | Enable distributed data-parallel training. |
-| `mesh_shape` | `list[int]` | `[1, 1]` | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`. |
-| `device_ids` | `list[int] \| None` | `None` | Specific device IDs to use (default: auto-select). |
+The entrypoint reads this block, opens the mesh, and hands the opened
+mesh + flags to whatever concrete `GRPOCompleter` it constructs:
 
-Device setup is handled by the completer constructor, not the trainer.
+```python
+mesh_device = ttnn.open_mesh_device(
+    mesh_shape=ttnn.MeshShape(*device_config.mesh_shape), ...
+)
+completer = MyCompleter(..., mesh_device=mesh_device, enable_ddp=device_config.enable_ddp)
+```
+
+Different completer implementations consume these differently — the
+abstract base imposes no kwargs of its own.
 
 ---
 
 ## DDP / Multi-device
 
-DDP is configured through `device_config` passed to the completer. When
-`enable_ddp=True`:
+When the YAML config sets `enable_ddp: true` and `mesh_shape: [1, N]`,
+the policy is replicated across the N chips of the trainer's mesh and
+data parallelism is applied within that mesh:
 
-1. The completer opens the device mesh with the specified `mesh_shape` and
-   initialises the parallelism context.
-2. Input tensors are sharded across devices along the batch dimension.
-3. Gradients are synchronized via `ttml.core.distributed.synchronize_gradients`
-   before each optimizer step.
+1. The completer initialises ttml's parallelism context against the
+   already-opened mesh.
+2. Input batches are sharded across the N chips along the batch
+   dimension. Each chip processes
+   `batch_size // (N * gradient_accumulation_steps)` prompts per
+   micro-batch.
+3. Gradients are synchronized via
+   `ttml.core.distributed.synchronize_gradients` before each
+   optimizer step.
 
-`batch_size` specifies the **global** batch size across all devices. Each device
-processes `batch_size // total_devices` prompts per batch.
+`batch_size` in `GRPOConfig` is the **global** batch size across the
+mesh, not per-chip.
+
+This section describes only the trainer's own mesh — the in-process
+data parallelism that the trainer drives. If your completer also runs
+generation on a peer MPI rank, the topology over there is independent
+of `GRPOTrainer` and lives in the completer / its example doc.
+
+> Sharded TP / CP is not exercised by `GRPOTrainer` today; this
+> section assumes replicated parameters with batch-dim sharding.
 
 ---
 
@@ -433,7 +419,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 | **Batch size** | `per_device_train_batch_size` (per device) | `batch_size` (global, across all devices) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |
-| **Device setup** | Handled by HF Accelerate | Handled by the completer via `device_config` dict |
+| **Device setup** | Handled by HF Accelerate | Caller opens the mesh from a YAML `device_config:` block and hands it to the completer |
 | **KL penalty** | `beta` parameter | Not implemented (equivalent to `beta=0.0`) |
 | **Callbacks** | HF `TrainerCallback` with `on_log(args, state, control, logs)` | `TrainerCallback` with `on_step_end(trainer, step, **kwargs)` |
 
@@ -441,39 +427,17 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 ## Examples
 
-### Training
+The repository ships one GRPO example today:
 
-[`boolq_training_example.py`](boolq_training_example.py) — trains
-Llama-3.2-1B-Instruct on BoolQ using `GRPOTrainer` with a custom reward
-function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
+- [`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/)
+  — Llama-3.2-1B-Instruct trained on `google/boolq`. Uses a two-rank
+  deployment (policy on the trainer rank, generation worker on a peer
+  rank). See
+  [`boolq/README.md`](../sources/examples/grpo/boolq/README.md) for
+  the deployment-level details (topology, components, run
+  instructions).
 
-```bash
-python3 boolq_training_example.py
-```
-
-### Accuracy Evaluation
-
-[`boolq_accuracy_example.py`](boolq_accuracy_example.py) — evaluates a
-model on the BoolQ validation set with greedy decoding (`temperature=0`)
-and writes per-question results to a CSV. Runs on 1 device (p150) with
-`PROMPTS_TO_VALIDATE=20` by default.
-
-```bash
-python3 boolq_accuracy_example.py
-```
-
-To evaluate a fine-tuned checkpoint, change `MODEL_ID` to the directory
-containing `model.safetensors`.
-
-### Tests
-
-[`test_batched_vs_single_completion.py`](test_batched_vs_single_completion.py) —
-verifies that batched inference produces identical outputs to one-by-one
-inference under greedy decoding. Runs on a single device.
-
-```bash
-pytest test_batched_vs_single_completion.py
-```
+A single-rank example does not ship today.
 
 ---
 

@@ -543,7 +543,7 @@ class Attention(LightweightModule):
     ) -> None:
         """In-place replace the on-device attention weights via ``ttnn.copy``.
 
-        HF-format input contract (see ``HF_LLAMA_FORMAT.md``):
+        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``):
 
         * keys (required) -- HF ``self_attn.{q,k,v,o}_proj.weight``.
         * keys (optional) -- HF ``self_attn.{q,k,v}_proj.bias``;
