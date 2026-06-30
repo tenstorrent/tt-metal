@@ -24,11 +24,38 @@ uniform across SP devices (no per-device offset needed). Causality is encoded en
 selection; sparse_sdpa_msa applies no token mask.
 """
 
+import os
+
 import torch
 
 import ttnn
 
 from .operations import apply_qk_norm_per_head, apply_rope
+
+
+def _dbg_msa_save(t, device, layer_idx, name):
+    """DBG_MSA_BLOCKIDS=1: save a per-query MSA tensor (block_ids or block_scores), reassembled across SP
+    rows on the query axis (col-0 device of each row), so we can diff chunked vs one-shot per global query
+    position. -> /tmp/m3_msa/L{idx}_{name}.pt, shape [1, num_groups, S_global, last]."""
+    if os.getenv("DBG_MSA_BLOCKIDS") != "1" or layer_idx is None:
+        return
+    try:
+        import os as _os
+
+        rows, cols = tuple(device.shape)
+        dts = ttnn.get_device_tensors(t)
+        shards = [ttnn.to_torch(dts[r * cols]) for r in range(rows)]  # col-0 of each SP row
+        full = torch.cat(shards, dim=2)  # concat on the query (Sq) axis -> global order
+        _os.makedirs("/tmp/m3_msa", exist_ok=True)
+        torch.save(full, f"/tmp/m3_msa/L{layer_idx}_{name}.pt")
+        from loguru import logger
+
+        logger.info(f"[MSA L{layer_idx} {name}] saved {tuple(full.shape)}")
+    except Exception as e:
+        from loguru import logger
+
+        logger.info(f"[MSA L{layer_idx} {name}] failed: {e}")
+
 
 # M3 sparse_attention_config (configs/MiniMax-M3/config.json).
 BLOCK_SIZE = 128
@@ -87,7 +114,20 @@ def _sink_mask(num_groups, nblk, device):
 
 
 def msa_indexer_sparse(
-    index_q, index_k, q, k, v, *, chunk_start_idx, scale, num_groups, device, return_block_ids=False, cluster_axis=None
+    index_q,
+    index_k,
+    q,
+    k,
+    v,
+    *,
+    chunk_start_idx,
+    scale,
+    num_groups,
+    device,
+    return_block_ids=False,
+    cluster_axis=None,
+    layer_idx=None,
+    dbg_tag=None,
 ):
     """The MSA op chain over a FULL-context (already-gathered) K/V; index_q/q may stay SP-sharded.
 
@@ -99,6 +139,18 @@ def msa_indexer_sparse(
       (Replaces the old host-built per-device chunk_offset tile; mesh-coord approach, #47939.)
     -> out  [1, Hq, Sq, head_dim]
     """
+    # DBG: dump the indexer's actual inputs to localize a chunked-vs-oneshot score divergence.
+    if os.getenv("DBG_MSA_BLOCKIDS") == "1" and layer_idx is not None and dbg_tag is not None:
+        _dbg_msa_save(index_q, device, layer_idx, f"{dbg_tag}_idxq")  # sharded on Sq -> global order
+        try:  # index_k is the full gathered context, replicated across rows -> dev0 has it all
+            import os as _os
+
+            ik0 = ttnn.to_torch(ttnn.get_device_tensors(index_k)[0]).float()
+            _os.makedirs("/tmp/m3_msa", exist_ok=True)
+            torch.save(ik0, f"/tmp/m3_msa/L{layer_idx}_{dbg_tag}_idxk.pt")
+        except Exception:
+            pass
+
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
     block_scores = ttnn.experimental.indexer_score_msa(
         index_q,
@@ -115,9 +167,11 @@ def msa_indexer_sparse(
     # already force-locals the current block (+inf), so we only add the sink here.
     nblk = block_scores.shape[-1]
     block_scores = ttnn.add(block_scores, _sink_mask(num_groups, nblk, device))
+    _dbg_msa_save(block_scores, device, layer_idx, f"{dbg_tag}_scores" if dbg_tag else None)
 
     # Top-k block ids (uint32 row-major) — the block selection that encodes causality.
     block_ids = ttnn.experimental.topk_large_indices(block_scores, k=TOPK_BLOCKS)
+    _dbg_msa_save(block_ids, device, layer_idx, dbg_tag)
 
     # sparse_sdpa_msa: q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
     out = ttnn.transformer.sparse_sdpa_msa(
@@ -135,8 +189,20 @@ def msa_indexer_sparse(
 
 
 def msa_sp_attention_nocache(
-    q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cached_len, s_local, scale, num_groups=1,
+    q,
+    k,
+    v,
+    index_q,
+    index_k,
+    *,
+    mesh_config,
+    ccl_manager,
+    cached_len,
+    s_local,
+    scale,
+    num_groups=1,
     return_block_ids=False,
+    layer_idx=None,
 ):
     """Sharded-query MSA under SP: AllGather only the KEYS; q/index_q stay sharded (S/sp rows/device).
 
@@ -164,6 +230,8 @@ def msa_sp_attention_nocache(
         num_groups=num_groups,
         device=device,
         cluster_axis=sp_axis,
+        layer_idx=layer_idx,
+        dbg_tag="nocache",
     )
 
 
@@ -199,6 +267,7 @@ def msa_sp_attention(
     chunk_local,
     scale,
     num_groups=1,
+    layer_idx=None,
 ):
     """Cross-chunk MSA: the CURRENT chunk's queries attend the ACCUMULATED context read from the
     block-cyclic SP cache (the multi-chunk read path; ``msa_sp_attention_nocache`` is its single-chunk,
@@ -222,13 +291,15 @@ def msa_sp_attention(
     device = ccl_manager.mesh_device
     sp = device.shape[sp_axis]
 
+    # KNOWN BUG (chunked-only): this device gather mis-orders the context (index_k PCC ~0.517 vs golden)
+    # because to_memory_config does not delinearize the NdShard ("slab") cache to logical order, AND a
+    # host-reorder workaround (from_torch) makes the indexer/sparse TensorAccessor read an invalid DRAM
+    # bank (TT_FATAL "core 8-0"). PROPER FIX is a slab-aware kernel cache-read (see KERNEL TODO in msa
+    # docstring / memory): make sparse_sdpa_msa + indexer_score_msa read the NdShard cache directly via
+    # kv_cache_batch_idx/actual_isl like ring_joint. Until then the chunked MSA path is not correct.
     def gather_natural(t):
-        # Cache slices come out ND_SHARDED (the persistent cache's DRAM NdShard layout), which AllGather
-        # rejects — convert to interleaved DRAM first. No-op for already-interleaved op-test inputs.
         t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
         full_bc = mesh_config.allgather(t, ccl_manager, axis=sp_axis, dim=2)
-        # The persistent cache is bf8 (a tile-only block format); the reorder needs ROW_MAJOR, so cast to
-        # bf16 first. No-op for the bf16 op-test inputs; required for the bf8 cache slices from the model.
         if full_bc.dtype != ttnn.bfloat16:
             full_bc = ttnn.typecast(full_bc, ttnn.bfloat16)
         return _blockcyclic_to_natural(full_bc, sp, n_chunks, chunk_local)
@@ -249,4 +320,6 @@ def msa_sp_attention(
         num_groups=num_groups,
         device=device,
         cluster_axis=sp_axis,
+        layer_idx=layer_idx,
+        dbg_tag="cacheread",
     )

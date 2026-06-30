@@ -29,7 +29,7 @@ import torch
 
 import ttnn
 
-NUM_GEN = 6
+NUM_GEN = int(os.getenv("NUM_GEN", "6"))
 TARGET_LEN = 5120  # 8 * 640 — divisible by SP=8 and by 32 (tile)
 
 # A coherent long passage; repeated to ~TARGET_LEN tokens so MSA has real blocks to select over.
@@ -126,8 +126,20 @@ def main():
         toks[0, :real_len] = torch.tensor(ids, dtype=torch.int32)
         print(f"[sp-gen] real_len={real_len} padded_seq={seq} ({seq//sp}/row)", flush=True)
 
-        state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+        # Cache-only weight load (Pavlo's weight_cache): when the tilized cache is complete, pass an empty
+        # state_dict so the modules load tilized tensors straight from cache (ttnn.as_tensor cache hit) and
+        # we skip the ~869GB bf16 source read (~1h20m -> ~2.5min). Force the source with M3_FORCE_LOAD_WEIGHTS=1.
         cache = model_args.weight_cache_path(ttnn.bfloat8_b)
+        from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
+
+        if os.getenv("M3_FORCE_LOAD_WEIGHTS") != "1" and (
+            os.getenv("M3_WEIGHTS_FROM_CACHE") == "1"
+            or weight_cache_is_complete(cache, hf_config, hf_config.num_hidden_layers, expert_dtype)
+        ):
+            print("[sp-gen] tilized weight cache complete -> cache-only (skip ~869GB source read)", flush=True)
+            state_dict = {}
+        else:
+            state_dict = ModelArgs.load_state_dict(model_args.weights_path)
         mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
         ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
         # ep_seq_len_per_chip = per-device token count (640 for SP). DP uses the full seq (5120).
