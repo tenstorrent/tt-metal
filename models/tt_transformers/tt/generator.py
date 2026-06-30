@@ -541,23 +541,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         **kwargs,
     ):
         self.mode = Mode.PREFILL
-        # Prefill norms / LM-head all-gathers are pinned to prefetcher.worker_sub_device_id
-        # (sub-device 1), which only exists on the prefetcher's sub-device manager (#47820). So once
-        # the prefetcher is active, keep prefill on that manager -- load its sub-device topology
-        # (decode prefetch runtime is not needed for prefill) so prefill ops and traces use the same
-        # manager as decode. Prefill traces captured during early warmup, before the prefetcher
-        # initialized (on the device's default manager, worker_sub_device_id=None), are stale once it
-        # takes over, so drop them once so they recapture under the prefetcher's manager.
-        prefetcher_active = False
+        # Prefill runs on the device's default sub-device manager (full Tensix grid). When the DRAM
+        # prefetcher is enabled it loads its own sub-device manager for decode (#47820); revert to the
+        # default manager here so prefill programs fit the grid and prefill traces are captured and
+        # replayed on the same manager. Decode re-loads the prefetcher's manager via switch_mode().
+        # Prefill norms avoid the prefetcher's worker sub-device via the mode gate in DistributedNorm.
         for i in range(len(self.model)):
             prefetcher = getattr(self.model[i], "prefetcher", None)
             if prefetcher is not None and prefetcher.is_initialized:
-                prefetcher.prefetcher_sub_device.load()
-                prefetcher_active = True
-        if prefetcher_active and not getattr(self, "_prefill_traces_on_prefetcher_mgr", False):
-            self.trace_id_prefill = defaultdict(lambda: None)
-            self.trace_id_prefill_sampling = defaultdict(lambda: None)
-            self._prefill_traces_on_prefetcher_mgr = True
+                self.model_args[i].mesh_device.clear_loaded_sub_device_manager()
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
