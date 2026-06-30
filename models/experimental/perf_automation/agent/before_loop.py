@@ -40,7 +40,7 @@ DEFAULT_CACHE = PKG_ROOT / ".cache" / "playbook_index.json"
 FIXTURES = PKG_ROOT / "tests" / "fixtures"
 
 METRIC_UNITS = {"device_ms": "ms", "wall_ms": "ms", "fps": "fps", "throughput_tok_s": "tok/s"}
-N_STAGES = 7
+N_STAGES = 8
 
 
 _SHAPE_CONFIG_CRASH_RE = re.compile(
@@ -291,6 +291,30 @@ def before_loop(
             f"(claude-agent-sdk {sdk_status.get('version')}): {sdk_status.get('reason')}\n"
             f"  detail: {sdk_status.get('detail', '')}\n"
             "  fix: pip install -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
+        )
+
+    stages.start("ensure_tt_lang", "install the tt-lang kernel toolchain if missing (--no-deps, ttnn verified)")
+    _allow_no_ttl = os.environ.get("TT_PERF_ALLOW_NO_TTLANG") == "1"
+    try:
+        from .ttlang import ensure_ttl
+
+        _ttl = ensure_ttl(cache_dir=str(Path(__file__).resolve().parent.parent))
+    except Exception as exc:
+        _ttl = {"available": False, "error": str(exc)}
+    if _ttl.get("available"):
+        stages.done(f"tt-lang available ({_ttl.get('version')})")
+    elif _allow_no_ttl:
+        stages.done(
+            f"tt-lang unavailable ({_ttl.get('tried') or _ttl.get('error')}) — "
+            "TT_PERF_ALLOW_NO_TTLANG=1 set, proceeding with the tt-lang rung skipped (N/A)"
+        )
+    else:
+        raise SystemExit(
+            "BEFORE-LOOP FAILED: tt-lang toolchain (ttl) is unavailable and could not be auto-installed "
+            f"({_ttl.get('tried') or _ttl.get('error')}). The tt-lang kernel rung cannot run without it.\n"
+            "  fix: install tt-lang first, matching your installed ttnn, e.g. "
+            "`pip install tt-lang==1.0.1 --no-deps` then verify `import ttl` and `import ttnn` both work.\n"
+            "  or set TT_PERF_ALLOW_NO_TTLANG=1 to proceed and skip the tt-lang rung (N/A)."
         )
 
     stages.start("discover", f"sub-agent mapping {model_root}")
