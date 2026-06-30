@@ -131,10 +131,15 @@ class WanAttentionBlock(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # k_chunk_size sets the per-core K cache footprint. Big `dim` (e.g.
+        # Cosmos3's mid block at dim=640) overflows L1 with k_chunk=256, so
+        # drop to 128 there. Wan2.2's max attention dim is 384, comfortably
+        # within k_chunk=256.
+        _k_chunk = 128 if dim >= 512 else 256
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
-            k_chunk_size=256,
+            k_chunk_size=_k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -490,6 +495,256 @@ class WanCausalConv3d(Module):
         )
 
         return x_BTHWC
+
+
+class AvgDown3D(Module):
+    """Spatial+temporal pixel-shuffle pool. Stateless. Mirrors the host
+    `AvgDown3D` in `vae_wan2_1_encoder_host.py`.
+
+    Input  (BTHWC):  (B, T,        H,    W,    in_C)
+    Output (BTHWC):  (B, T // ft,  H/fs, W/fs, out_C)
+
+    The block first folds (ft, fs, fs) of pixels into channels in the host's
+    exact channel order [c × ft × fs_h × fs_w] (so that the subsequent
+    `mean` over a `group_size`-sized stride averages the same source pixels
+    the host would), then averages.
+
+    Assumes T is a multiple of ft and H, W (per-shard) divisible by fs.
+    Caller must zero-pad T externally if needed (mirrors host's
+    `F.pad(x, (0,0,0,0,pad_t,0))`).
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        out_channels: int,
+        factor_t: int,
+        factor_s: int = 1,
+    ) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.factor_t = factor_t
+        self.factor_s = factor_s
+        self.factor = factor_t * factor_s * factor_s
+        assert in_channels * self.factor % out_channels == 0, (
+            f"AvgDown3D: in_channels*factor ({in_channels}*{self.factor}) "
+            f"must be divisible by out_channels ({out_channels})"
+        )
+        self.group_size = in_channels * self.factor // out_channels
+
+    @staticmethod
+    def host_forward(
+        x_BCTHW_host: torch.Tensor,
+        *,
+        in_channels: int,
+        out_channels: int,
+        factor_t: int,
+        factor_s: int,
+    ) -> torch.Tensor:
+        """Pure-host BCTHW implementation — verbatim mirror of the diffusers
+        AvgDown3D forward. Caller is responsible for device↔host transfer."""
+        import torch.nn.functional as F
+
+        x = x_BCTHW_host
+        if factor_t == 1 and factor_s == 1:
+            return x
+        pad_t = (factor_t - x.shape[2] % factor_t) % factor_t
+        if pad_t > 0:
+            x = F.pad(x, (0, 0, 0, 0, pad_t, 0))
+        B, C, T, H, W = x.shape
+        x = x.view(B, C, T // factor_t, factor_t, H // factor_s, factor_s, W // factor_s, factor_s)
+        x = x.permute(0, 1, 3, 5, 7, 2, 4, 6).contiguous()
+        factor = factor_t * factor_s * factor_s
+        x = x.view(B, C * factor, T // factor_t, H // factor_s, W // factor_s)
+        group_size = in_channels * factor // out_channels
+        x = x.view(B, out_channels, group_size, T // factor_t, H // factor_s, W // factor_s)
+        return x.mean(dim=2)
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        ft = self.factor_t
+        fs = self.factor_s
+        in_C = self.in_channels
+        out_C = self.out_channels
+        if ft == 1 and fs == 1:
+            return x_BTHWC
+
+        B, T, H, W, _ = x_BTHWC.shape
+
+        # Match host's front-pad on T: pad_t = (ft - T%ft)%ft zeros prepended.
+        pad_t = (ft - T % ft) % ft
+        if pad_t > 0:
+            # ttnn.pad supports only the lowest 3 dims on rank>4 tensors; collapse
+            # H*W into one dim, pad on T, restore.
+            x = ttnn.reshape(x_BTHWC, (B, T, H * W, in_C))
+            x = ttnn.pad(x, [(0, 0), (pad_t, 0), (0, 0), (0, 0)], value=0.0)
+            T = T + pad_t
+            x_BTHWC = ttnn.reshape(x, (B, T, H, W, in_C))
+
+        # Channel order must match host's `[c × ft × fs_h × fs_w]` for the
+        # subsequent group-mean to average the right source pixels. Fold ft
+        # first (outermost in offset), then fs_h, then fs_w (innermost).
+        x = x_BTHWC
+
+        if ft > 1:
+            x = ttnn.reshape(x, (B, T // ft, ft, H, W, in_C))
+            x = ttnn.permute(x, (0, 1, 3, 4, 5, 2))
+            x = ttnn.reshape(x, (B, T // ft, H, W, in_C * ft))
+            T = T // ft
+
+        c_so_far = in_C * ft
+        if fs > 1:
+            x = ttnn.reshape(x, (B, T, H // fs, fs, W, c_so_far))
+            x = ttnn.permute(x, (0, 1, 2, 4, 5, 3))
+            x = ttnn.reshape(x, (B, T, H // fs, W, c_so_far * fs))
+            H = H // fs
+            c_so_far = c_so_far * fs
+
+            x = ttnn.reshape(x, (B, T, H, W // fs, fs, c_so_far))
+            x = ttnn.permute(x, (0, 1, 2, 3, 5, 4))
+            x = ttnn.reshape(x, (B, T, H, W // fs, c_so_far * fs))
+            W = W // fs
+            c_so_far = c_so_far * fs
+
+        # x: (B, T/ft, H/fs, W/fs, in_C*factor). Split channel into (out_C, group)
+        # and mean.
+        x = ttnn.reshape(x, (B, T, H, W, out_C, self.group_size))
+        x = ttnn.mean(x, dim=-1)
+        return x
+
+
+class DupUp3D(Module):
+    """Spatial+temporal pixel-unshuffle duplicate-up. Stateless. Mirrors the
+    host `DupUp3D` in `vae_wan2_1_encoder_host.py`.
+
+    Input  (BTHWC):  (B, T,      H,    W,    in_C)
+    Output (BTHWC):  (B, T * ft, H*fs, W*fs, out_C)
+
+    Each input channel is duplicated `repeats = out_C * factor / in_C` times
+    contiguously (channel-axis `repeat_interleave`), then the (ft, fs, fs)
+    block is unfolded into spatial+temporal positions in the host's exact
+    order. With `first_chunk=True` the leading `ft - 1` time positions are
+    dropped (matches the host's `x[:, :, ft-1:, :, :]` boundary trim).
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        out_channels: int,
+        factor_t: int,
+        factor_s: int = 1,
+    ) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.factor_t = factor_t
+        self.factor_s = factor_s
+        self.factor = factor_t * factor_s * factor_s
+        assert out_channels * self.factor % in_channels == 0, (
+            f"DupUp3D: out_channels*factor ({out_channels}*{self.factor}) "
+            f"must be divisible by in_channels ({in_channels})"
+        )
+        self.repeats = out_channels * self.factor // in_channels
+
+    @staticmethod
+    def host_forward(
+        x_BCTHW_host: torch.Tensor,
+        *,
+        in_channels: int,
+        out_channels: int,
+        factor_t: int,
+        factor_s: int,
+        first_chunk: bool = False,
+    ) -> torch.Tensor:
+        """Pure-host BCTHW implementation — verbatim mirror of the diffusers
+        DupUp3D forward. Caller is responsible for device↔host transfer."""
+        factor = factor_t * factor_s * factor_s
+        repeats = out_channels * factor // in_channels
+        x = x_BCTHW_host.repeat_interleave(repeats, dim=1)
+        x = x.view(
+            x.size(0),
+            out_channels,
+            factor_t,
+            factor_s,
+            factor_s,
+            x.size(2),
+            x.size(3),
+            x.size(4),
+        )
+        x = x.permute(0, 1, 5, 2, 6, 3, 7, 4).contiguous()
+        x = x.view(
+            x.size(0),
+            out_channels,
+            x.size(2) * factor_t,
+            x.size(4) * factor_s,
+            x.size(6) * factor_s,
+        )
+        if first_chunk:
+            x = x[:, :, factor_t - 1 :, :, :]
+        return x
+
+    def forward(self, x_BTHWC: ttnn.Tensor, first_chunk: bool = False) -> ttnn.Tensor:
+        ft = self.factor_t
+        fs = self.factor_s
+
+        if ft == 1 and fs == 1 and self.repeats == 1:
+            return x_BTHWC
+
+        # Channel-chunk to cap peak memory: post-repeat_interleave tensor is
+        # `factor`× the input. With K chunks, peak intermediate is (factor/K)×.
+        # Each chunk processes in_channels/K input channels → out_channels/K
+        # output channels. K must divide both; for configs where out_channels <
+        # in_channels (e.g. 1024→512), K must additionally divide in/out so the
+        # group structure stays consistent. Tunable via env so we can dial it
+        # for the largest decoder block under transformer pressure.
+        K = int(os.environ.get("TT_DIT_VAE_DUPUP_CHUNKS", "1"))
+        if K > 1 and (self.in_channels % K or self.out_channels % K):
+            K = 1
+        c_step = self.in_channels // K
+
+        pieces = []
+        for k in range(K):
+            x_chunk = x_BTHWC[..., k * c_step : (k + 1) * c_step] if K > 1 else x_BTHWC
+            pieces.append(self._forward_one(x_chunk, first_chunk=first_chunk))
+
+        if K == 1:
+            return pieces[0]
+        return ttnn.concat(pieces, dim=4)
+
+    def _forward_one(self, x_BTHWC: ttnn.Tensor, first_chunk: bool = False) -> ttnn.Tensor:
+        ft = self.factor_t
+        fs = self.factor_s
+        B, T, H, W, c_in = x_BTHWC.shape
+        # Per-chunk in_C/out_C scaled with chunk size. repeats is invariant
+        # (depends only on factor and in/out ratio, which the chunking preserves).
+        out_C = c_in * self.repeats // (ft * fs * fs)
+
+        if self.repeats != 1:
+            x = ttnn.repeat_interleave(x_BTHWC, self.repeats, dim=4)
+        else:
+            x = x_BTHWC
+
+        if fs > 1:
+            x = ttnn.reshape(x, (B, T, H, W, out_C * ft * fs, fs))
+            x = ttnn.permute(x, (0, 1, 2, 3, 5, 4))
+            x = ttnn.reshape(x, (B, T, H, W * fs, out_C * ft * fs))
+
+            x = ttnn.reshape(x, (B, T, H, W * fs, out_C * ft, fs))
+            x = ttnn.permute(x, (0, 1, 2, 5, 3, 4))
+            x = ttnn.reshape(x, (B, T, H * fs, W * fs, out_C * ft))
+            H = H * fs
+            W = W * fs
+
+        if ft > 1:
+            x = ttnn.reshape(x, (B, T, H, W, out_C, ft))
+            x = ttnn.permute(x, (0, 1, 5, 2, 3, 4))
+            x = ttnn.reshape(x, (B, T * ft, H, W, out_C))
+            if first_chunk:
+                x = x[:, ft - 1 :, :, :, :]
+
+        return x
 
 
 class WanResidualBlock(Module):
@@ -1093,6 +1348,283 @@ class WanResample(Module):
         return x_conv_BTHWC, logical_h, logical_w
 
 
+class WanResidualDownBlock(Module):
+    """Residual variant of an encoder downsample stage. Mirrors the host
+    `WanResidualDownBlock` in `vae_wan2_1_encoder_host.py`.
+
+    Composes `num_res_blocks × WanResidualBlock` + an optional `WanResample`
+    on the main path, plus an `AvgDown3D` shortcut path averaged into the
+    output:
+
+        x_copy = clone(x)
+        for resnet in self.resnets: x = resnet(x)
+        if self.downsampler: x = self.downsampler(x)
+        return x + self.avg_shortcut(x_copy)
+
+    `down_flag=False` for the last encoder stage drops both `downsampler`
+    and reduces `avg_shortcut` to an identity-ish (factor=1) op — matches
+    the host's per-level wiring.
+
+    State-dict key convention (matches diffusers' AutoencoderKLWan):
+      - avg_shortcut.*
+      - resnets.{0..N-1}.*
+      - downsampler.* (when present)
+    """
+
+    def __init__(
+        self,
+        *,
+        in_dim: int,
+        out_dim: int,
+        num_res_blocks: int,
+        temperal_downsample: bool = False,
+        down_flag: bool = False,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        res_dims: ConvDims = ConvDims(),
+        tconv_dims: ConvDims = ConvDims(),
+        spatial_dims: ConvDims = ConvDims(),
+    ) -> None:
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.down_flag = down_flag
+        self.temperal_downsample = temperal_downsample
+        self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
+
+        self.avg_shortcut = AvgDown3D(
+            in_channels=in_dim,
+            out_channels=out_dim,
+            factor_t=2 if temperal_downsample else 1,
+            factor_s=2 if down_flag else 1,
+        )
+
+        resnets = ModuleList()
+        current_in = in_dim
+        for _ in range(num_res_blocks):
+            resnets.append(
+                WanResidualBlock(
+                    in_dim=current_in,
+                    out_dim=out_dim,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    conv_dims=res_dims,
+                )
+            )
+            current_in = out_dim
+        self.resnets = resnets
+
+        if down_flag:
+            mode = "downsample3d" if temperal_downsample else "downsample2d"
+            self.downsampler = WanResample(
+                dim=out_dim,
+                mode=mode,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                dtype=dtype,
+                tconv_dims=tconv_dims,
+                spatial_dims=spatial_dims,
+            )
+        else:
+            self.downsampler = None
+
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+        logical_w: int = 0,
+    ) -> tuple[ttnn.Tensor, int, int]:
+        x_shortcut_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        shortcut_BTHWC = self.avg_shortcut(x_shortcut_BTHWC)
+
+        for resnet in self.resnets:
+            x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+
+        if self.downsampler is not None:
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            x_BTHWC, logical_h, logical_w = self.downsampler(
+                x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w
+            )
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
+        shortcut_BTHWC = ttnn.to_layout(shortcut_BTHWC, ttnn.TILE_LAYOUT)
+
+        # Diagnostic mode: TT_DIT_VAE_SHORTCUT_MODE = "main_only" returns the
+        # main path without the avg_shortcut addition; "shortcut_only" returns
+        # just the shortcut. Lets us bisect which branch of the residual is
+        # producing the wrong values vs host.
+        _short_mode = os.environ.get("TT_DIT_VAE_SHORTCUT_MODE", "both")
+        if _short_mode == "main_only":
+            return x_BTHWC, logical_h, logical_w
+        if _short_mode == "shortcut_only":
+            return shortcut_BTHWC, logical_h, logical_w
+        x_BTHWC = ttnn.add(x_BTHWC, shortcut_BTHWC)
+        return x_BTHWC, logical_h, logical_w
+
+
+class WanResidualUpBlock(Module):
+    """Residual variant of a decoder upsample stage. Mirrors the host
+    `WanResidualUpBlock` in `vae_wan2_1_encoder_host.py`.
+
+    Composes `(num_res_blocks + 1) × WanResidualBlock` + an optional
+    `WanResample` on the main path, plus a `DupUp3D` shortcut averaged
+    into the output ONLY when `up_flag=True`:
+
+        x_copy = clone(x)
+        for resnet in self.resnets: x = resnet(x)
+        if self.upsampler: x = self.upsampler(x)
+        if self.avg_shortcut: x = x + self.avg_shortcut(x_copy, first_chunk)
+
+    Note the asymmetry vs the encoder's residual down block: the up block
+    has NO shortcut when up_flag=False (top of decoder stack), whereas the
+    encoder always has a shortcut (factor=1 identity when down_flag=False).
+    This matches diffusers' AutoencoderKLWan exactly.
+
+    State-dict key convention:
+      - avg_shortcut.* (when present)
+      - resnets.{0..N}.*
+      - upsampler.* (when present)
+    """
+
+    def __init__(
+        self,
+        *,
+        in_dim: int,
+        out_dim: int,
+        num_res_blocks: int,
+        temperal_upsample: bool = False,
+        up_flag: bool = False,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        res_dims: ConvDims = ConvDims(),
+        tconv_dims: ConvDims = ConvDims(),
+        spatial_dims: ConvDims = ConvDims(),
+    ) -> None:
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.up_flag = up_flag
+        self.temperal_upsample = temperal_upsample
+        self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
+
+        if up_flag:
+            self.avg_shortcut = DupUp3D(
+                in_channels=in_dim,
+                out_channels=out_dim,
+                factor_t=2 if temperal_upsample else 1,
+                factor_s=2,
+            )
+        else:
+            self.avg_shortcut = None
+
+        resnets = ModuleList()
+        current_in = in_dim
+        for _ in range(num_res_blocks + 1):
+            resnets.append(
+                WanResidualBlock(
+                    in_dim=current_in,
+                    out_dim=out_dim,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    conv_dims=res_dims,
+                )
+            )
+            current_in = out_dim
+        self.resnets = resnets
+
+        if up_flag:
+            upsample_mode = "upsample3d" if temperal_upsample else "upsample2d"
+            self.upsampler = WanResample(
+                dim=out_dim,
+                mode=upsample_mode,
+                resample_out_dim=out_dim,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                dtype=dtype,
+                tconv_dims=tconv_dims,
+                spatial_dims=spatial_dims,
+            )
+        else:
+            self.upsampler = None
+
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+        logical_w: int = 0,
+        first_chunk: bool = False,
+    ) -> tuple[ttnn.Tensor, int, int]:
+        _t = os.environ.get("TT_DIT_VAE_TIMING") == "1"
+        if _t:
+            import time as _time
+
+            _id = f"{tuple(x_BTHWC.shape)}->C{self.out_dim}"
+            ttnn.synchronize_device(self.mesh_device)
+            _t0 = _time.perf_counter()
+
+        shortcut_BTHWC = None
+        if self.avg_shortcut is not None:
+            x_shortcut_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            effective_first_chunk = first_chunk if feat_cache is not None else True
+            shortcut_BTHWC = self.avg_shortcut(x_shortcut_BTHWC, first_chunk=effective_first_chunk)
+        if _t:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_shortcut = _time.perf_counter()
+
+        for resnet in self.resnets:
+            x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        if _t:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_resnets = _time.perf_counter()
+
+        if self.upsampler is not None:
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            x_BTHWC, logical_h, logical_w = self.upsampler(
+                x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w
+            )
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        if _t:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_upsampler = _time.perf_counter()
+
+        if shortcut_BTHWC is not None:
+            shortcut_BTHWC = ttnn.to_layout(shortcut_BTHWC, ttnn.TILE_LAYOUT)
+            x_BTHWC = ttnn.add(x_BTHWC, shortcut_BTHWC)
+
+        if _t:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_end = _time.perf_counter()
+            print(
+                f"[wan-up-dbg] {_id} "
+                f"shortcut={(_t_shortcut-_t0)*1000:.0f}ms "
+                f"resnets={(_t_resnets-_t_shortcut)*1000:.0f}ms "
+                f"upsampler={(_t_upsampler-_t_resnets)*1000:.0f}ms "
+                f"shortcut_add={(_t_end-_t_upsampler)*1000:.0f}ms "
+                f"total={(_t_end-_t0)*1000:.0f}ms",
+                flush=True,
+            )
+
+        return x_BTHWC, logical_h, logical_w
+
+
 class WanUpBlock(Module):
     def __init__(
         self,
@@ -1202,13 +1734,13 @@ class WanDecoder3d(Module):
     ) -> None:
         super().__init__()
 
-        assert not is_residual, "is_residual is not supported"
         self.dim = dim
         self.z_dim = z_dim
         self.dim_mult = dim_mult
         self.num_res_blocks = num_res_blocks
         self.attn_scales = attn_scales
         self.temperal_upsample = temperal_upsample
+        self.is_residual = is_residual
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -1278,20 +1810,35 @@ class WanDecoder3d(Module):
             T_res, T_tconv, T_spatial = stage_t[i]
 
             # Create and add the upsampling block
-            # NOTE: Different codepath if is_residual. Not implemented yet.
-            up_block = WanUpBlock(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                num_res_blocks=num_res_blocks,
-                upsample_mode=upsample_mode,
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-                parallel_config=parallel_config,
-                dtype=dtype,
-                res_dims=ConvDims(T_res, stage_h, stage_w),
-                tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
-                spatial_dims=ConvDims(T_spatial, next_h, next_w),
-            )
+            if is_residual:
+                up_block = WanResidualUpBlock(
+                    in_dim=in_dim,
+                    out_dim=out_dim,
+                    num_res_blocks=num_res_blocks,
+                    temperal_upsample=temperal_upsample[i] if up_flag else False,
+                    up_flag=up_flag,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    res_dims=ConvDims(T_res, stage_h, stage_w),
+                    tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
+                    spatial_dims=ConvDims(T_spatial, next_h, next_w),
+                )
+            else:
+                up_block = WanUpBlock(
+                    in_dim=in_dim,
+                    out_dim=out_dim,
+                    num_res_blocks=num_res_blocks,
+                    upsample_mode=upsample_mode,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    res_dims=ConvDims(T_res, stage_h, stage_w),
+                    tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
+                    spatial_dims=ConvDims(T_spatial, next_h, next_w),
+                )
             self.up_blocks.append(up_block)
 
         # output blocks
@@ -1330,7 +1877,6 @@ class WanDecoder3d(Module):
         first_chunk: bool = False,
         logical_w: int = 0,
     ) -> tuple[ttnn.Tensor, int, int]:
-        # NOTE: first_chunk is not used. It would be needed for WanResidualUpBlock.
         ## conv1
         if feat_cache is not None:
             idx = feat_idx[0]
@@ -1347,12 +1893,35 @@ class WanDecoder3d(Module):
 
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
 
+        _dbg = os.environ.get("TT_DIT_VAE_DEBUG") == "1"
+
+        def _level_stats(name, t):
+            if not _dbg:
+                return
+            shard0 = ttnn.get_device_tensors(t)[0]
+            host = ttnn.to_torch(shard0).to(torch.float32)
+            print(
+                f"[wan-decoder-dbg] {name}: shape={tuple(t.shape)} "
+                f"min={host.min().item():.4f} max={host.max().item():.4f} "
+                f"mean={host.mean().item():.4f} std={host.std().item():.4f}",
+                flush=True,
+            )
+
+        _level_stats("post_conv_in", x_BTHWC)
+
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        _level_stats("post_mid_block", x_BTHWC)
 
         ## upsamples
-        for up_block in self.up_blocks:
-            x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        for i, up_block in enumerate(self.up_blocks):
+            if isinstance(up_block, WanResidualUpBlock):
+                x_BTHWC, logical_h, logical_w = up_block(
+                    x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w, first_chunk=first_chunk
+                )
+            else:
+                x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+            _level_stats(f"up_block[{i}]:{type(up_block).__name__}", x_BTHWC)
 
         ## head
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
@@ -1435,8 +2004,8 @@ class WanDecoder(Module):
     ) -> None:
         super().__init__()
 
-        assert not is_residual, "is_residual is not supported"
         self.z_dim = z_dim
+        self.is_residual = is_residual
         self.temperal_upsample = temperal_downsample[::-1]
         self.out_channels = out_channels
         decoder_base_dim = decoder_base_dim or base_dim
@@ -1527,6 +2096,7 @@ class WanDecoder(Module):
                 feat_cache=None,
                 feat_idx=None,
                 logical_w=logical_w,
+                first_chunk=True,
             )
             output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
         else:
@@ -1539,6 +2109,7 @@ class WanDecoder(Module):
                     feat_cache=self._feat_cache,
                     feat_idx=self._conv_idx,
                     logical_w=logical_w,
+                    first_chunk=(t_start == 0),
                 )
                 out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
                 if output_BCTHW is None:
@@ -1574,13 +2145,13 @@ class WanEncoder3D(Module):
     ) -> None:
         super().__init__()
 
-        assert not is_residual, "is_residual is not supported"
         self.dim = dim
         self.z_dim = z_dim
         self.dim_mult = dim_mult
         self.num_res_blocks = num_res_blocks
         self.attn_scales = attn_scales
         self.temperal_downsample = temperal_downsample
+        self.is_residual = is_residual
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -1621,6 +2192,28 @@ class WanEncoder3D(Module):
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
             stage_h, stage_w = stage_hw[i]
             res_dims = ConvDims(stage_t[i].T_res, stage_h, stage_w)
+            down_flag = i != len(dim_mult) - 1
+            if is_residual:
+                # Residual variant: one composite block per dim_mult level.
+                # Matches host's `WanResidualDownBlock(in, out, ..., down_flag)`.
+                next_h, next_w = stage_hw[i + 1] if down_flag else (stage_h, stage_w)
+                self.down_blocks.append(
+                    WanResidualDownBlock(
+                        in_dim=in_dim,
+                        out_dim=out_dim,
+                        num_res_blocks=num_res_blocks,
+                        temperal_downsample=temperal_downsample[i] if down_flag else False,
+                        down_flag=down_flag,
+                        mesh_device=mesh_device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                        dtype=dtype,
+                        res_dims=res_dims,
+                        tconv_dims=ConvDims(stage_t[i].T_tconv, next_h, next_w),
+                        spatial_dims=ConvDims(stage_t[i].T_spatial, stage_h, stage_w),
+                    )
+                )
+                continue
 
             for _ in range(num_res_blocks):
                 self.down_blocks.append(
@@ -1647,7 +2240,7 @@ class WanEncoder3D(Module):
                 in_dim = out_dim
 
             # downsample block
-            if i != len(dim_mult) - 1:
+            if down_flag:
                 mode = "downsample3d" if temperal_downsample[i] else "downsample2d"
                 next_h, next_w = stage_hw[i + 1]
                 self.down_blocks.append(
@@ -1727,8 +2320,27 @@ class WanEncoder3D(Module):
 
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
 
+        # Per-level diagnostic. Set TT_DIT_VAE_DEBUG=1 to dump stats after every
+        # down_block (and after conv_in / mid_block / norm_out). Cheap to emit
+        # because we just ttnn.to_torch the first device shard for sanity stats.
+        _dbg = os.environ.get("TT_DIT_VAE_DEBUG") == "1"
+
+        def _level_stats(name: str, t: ttnn.Tensor) -> None:
+            if not _dbg:
+                return
+            shard0 = ttnn.get_device_tensors(t)[0]
+            host = ttnn.to_torch(shard0).to(torch.float32)
+            print(
+                f"[wan-encoder-dbg] {name}: shape={tuple(t.shape)} "
+                f"min={host.min().item():.4f} max={host.max().item():.4f} "
+                f"mean={host.mean().item():.4f} std={host.std().item():.4f}",
+                flush=True,
+            )
+
+        _level_stats("post_conv_in", x_BTHWC)
+
         ## downsamples
-        for down_block in self.down_blocks:
+        for i, down_block in enumerate(self.down_blocks):
             if isinstance(down_block, WanResample):
                 x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
                 x_BTHWC, logical_h, logical_w = down_block(
@@ -1743,11 +2355,17 @@ class WanEncoder3D(Module):
                 x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
             elif isinstance(down_block, WanAttentionBlock):
                 x_BTHWC = down_block(x_BTHWC, logical_h, logical_w=logical_w)
+            elif isinstance(down_block, WanResidualDownBlock):
+                x_BTHWC, logical_h, logical_w = down_block(
+                    x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w
+                )
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
+            _level_stats(f"down_block[{i}]:{type(down_block).__name__}", x_BTHWC)
 
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        _level_stats("post_mid_block", x_BTHWC)
 
         ## head
         x_silu_tile_BTHWC = self.norm_out(x_BTHWC)
@@ -1942,6 +2560,7 @@ class WanVAEDecoderAdapter:
 
         self._decoder = WanDecoder(
             base_dim=self._torch_vae.config.base_dim,
+            decoder_base_dim=getattr(self._torch_vae.config, "decoder_base_dim", None),
             z_dim=self._torch_vae.config.z_dim,
             dim_mult=self._torch_vae.config.dim_mult,
             num_res_blocks=self._torch_vae.config.num_res_blocks,

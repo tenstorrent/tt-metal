@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os as _os_for_fidelity
+
 import torch
 
 import ttnn
@@ -11,8 +13,18 @@ from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
-    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    # TT_DIT_BF16_HIFI4=1 forces bf16 matmuls to HiFi4 (full 8-bit mantissa per multiply).
+    # Cost: ~2x matmul time. Used to probe whether SP-vs-noSP divergence at production
+    # 64-layer depth is precision-bound or structural.
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi4
+    if _os_for_fidelity.environ.get("TT_DIT_BF16_HIFI4") in ("1", "true", "True")
+    else ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
+    # bfloat8_b weights are already 1-byte quantized; LoFi math is the
+    # conventional pairing (matches the BFP8 weight precision). HiFi2 is
+    # safe but throws away the perf win — the matmul engine fills cycles
+    # waiting on the 8-bit weight feed.
+    ttnn.bfloat8_b: ttnn.MathFidelity.LoFi,
 }
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
