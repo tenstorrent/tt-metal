@@ -697,7 +697,7 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
         tt_memory_config=dram_memcfg,
     )
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError):  # allow-pytest.raises: unchanged from main
         if op_name == "layer_norm_pre_all_gather":
             ttnn.layer_norm_pre_all_gather(
                 tt_inp, residual_input_tensor=tt_res, dtype=ttnn.bfloat16, memory_config=dram_memcfg
@@ -928,19 +928,15 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
 def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offset, use_residual):
     """Welford pre_all_gather stats are accurate for Float32 input regardless of mean offset.
 
-    The Welford kernel requires fp32 precision end-to-end: the input CB and the intermediate
-    scratch CB must both use Float32 format, and the unpacker must be configured with
-    unpack_to_dest_mode=UnpackToDestFp32 so that fp32 values are not silently downcast to
-    TF32 (10 mantissa bits) when routed through SrcA. When either of these conditions is
-    violated, the Welford (x - M) subtraction catastrophically loses precision at large offsets
-    because the subtracted values share a large common exponent.
+    The Welford kernel requires fp32 precision end-to-end: input/scratch CBs use Float32,
+    UnpackToDestFp32 avoids TF32 truncation when unpacking through SrcA, and
+    welford_init<WelfordInitMode::PreserveStats>() re-records the SFPU replay buffer after
+    each transpose_tile when UnpackToDestFp32 is active.
 
-    When use_residual=True, a zero residual is passed to trigger the FUSE_PRE_ADD code path.
-    A zero residual is mathematically a no-op, so a correct end-to-end fp32 pipeline would
-    produce stats identical to the no-residual case. FUSE_PRE_ADD instead routes the input
-    through add_tiles on the FPU, which truncates SrcA/SrcB to TF32. At offset=1e6 the TF32
-    ULP (~512) dwarfs the underlying randn variation (~1), so the variance signal is destroyed
-    inside the add before welford runs.
+    When use_residual=True, a zero residual triggers FUSE_PRE_ADD. That is a no-op, so stats
+    must match the no-residual case. The fp32 FUSE path uses copy_tile + add_binary_tile on
+    the SFPU (UnpackToDestEn) instead of add_tiles on the FPU, which would truncate SrcA/SrcB
+    to TF32 and destroy the variance signal at offset=1e6 before Welford runs.
     """
 
     torch.manual_seed(0)
