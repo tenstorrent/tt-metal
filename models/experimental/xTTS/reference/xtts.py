@@ -129,9 +129,6 @@ class XttsArgs(Coqpit):
         gpt_batch_size (int): The size of the auto-regressive batch.
         enable_redaction (bool, optional): Whether to enable redaction. Defaults to True.
         kv_cache (bool, optional): Whether to use the kv_cache. Defaults to True.
-        gpt_checkpoint (str, optional): The checkpoint for the autoregressive model. Defaults to None.
-        clvp_checkpoint (str, optional): The checkpoint for the ConditionalLatentVariablePerseq model. Defaults to None.
-        decoder_checkpoint (str, optional): The checkpoint for the DiffTTS model. Defaults to None.
         num_chars (int, optional): The maximum number of characters to generate. Defaults to 255.
 
         For GPT model:
@@ -147,15 +144,11 @@ class XttsArgs(Coqpit):
         gpt_train_solo_embeddings (bool, optional): Whether to train embeddings for the autoregressive model. Defaults to False.
         gpt_code_stride_len (int, optional): The hop_size of dvae and consequently of the gpt output. Defaults to 1024.
         gpt_use_masking_gt_prompt_approach (bool, optional):  If True, it will use ground truth as prompt and it will mask the loss to avoid repetition. Defaults to True.
-        gpt_use_perceiver_resampler (bool, optional):  If True, it will use perceiver resampler from flamingo paper - https://arxiv.org/abs/2204.14198. Defaults to False.
     """
 
     gpt_batch_size: int = 1
     enable_redaction: bool = False
     kv_cache: bool = True
-    gpt_checkpoint: str = None
-    clvp_checkpoint: str = None
-    decoder_checkpoint: str = None
     num_chars: int = 255
 
     # XTTS GPT Encoder params
@@ -174,7 +167,6 @@ class XttsArgs(Coqpit):
     gpt_stop_audio_token: int = 8193
     gpt_code_stride_len: int = 1024
     gpt_use_masking_gt_prompt_approach: bool = True
-    gpt_use_perceiver_resampler: bool = False
 
     # HifiGAN Decoder params
     input_sample_rate: int = 22050
@@ -205,8 +197,6 @@ class Xtts(BaseTTS):
         super().__init__(config, ap=None, tokenizer=None)
         self.mel_stats_path = None
         self.config = config
-        self.gpt_checkpoint = self.args.gpt_checkpoint
-        self.decoder_checkpoint = self.args.decoder_checkpoint  # TODO: check if this is even needed
         self.models_dir = config.model_dir
         self.gpt_batch_size = self.args.gpt_batch_size
 
@@ -236,7 +226,6 @@ class Xtts(BaseTTS):
                 num_audio_tokens=self.args.gpt_num_audio_tokens,
                 start_audio_token=self.args.gpt_start_audio_token,
                 stop_audio_token=self.args.gpt_stop_audio_token,
-                use_perceiver_resampler=self.args.gpt_use_perceiver_resampler,
                 code_stride_len=self.args.gpt_code_stride_len,
             )
 
@@ -269,40 +258,18 @@ class Xtts(BaseTTS):
             audio = torchaudio.functional.resample(audio, sr, 22050)
         if length > 0:
             audio = audio[:, : 22050 * length]
-        if self.args.gpt_use_perceiver_resampler:
-            style_embs = []
-            for i in range(0, audio.shape[1], 22050 * chunk_length):
-                audio_chunk = audio[:, i : i + 22050 * chunk_length]
-
-                # if the chunk is too short ignore it
-                if audio_chunk.size(-1) < 22050 * 0.33:
-                    continue
-
-                mel_chunk = wav_to_mel_cloning(
-                    audio_chunk,
-                    mel_norms=self.mel_stats.cpu(),
-                    n_fft=2048,
-                    hop_length=256,
-                    win_length=1024,
-                    power=2,
-                    normalized=False,
-                    sample_rate=22050,
-                    f_min=0,
-                    f_max=8000,
-                    n_mels=80,
-                )
-                style_emb = self.gpt.get_style_emb(mel_chunk.to(self.device), None)
-                style_embs.append(style_emb)
-
-            # mean style embedding
-            cond_latent = torch.stack(style_embs).mean(dim=0)
-        else:
-            mel = wav_to_mel_cloning(
-                audio,
+        # XTTS-v2: chunk audio, encode each via PerceiverResampler, mean over chunks
+        style_embs = []
+        for i in range(0, audio.shape[1], 22050 * chunk_length):
+            audio_chunk = audio[:, i : i + 22050 * chunk_length]
+            if audio_chunk.size(-1) < 22050 * 0.33:
+                continue
+            mel_chunk = wav_to_mel_cloning(
+                audio_chunk,
                 mel_norms=self.mel_stats.cpu(),
-                n_fft=4096,
-                hop_length=1024,
-                win_length=4096,
+                n_fft=2048,
+                hop_length=256,
+                win_length=1024,
                 power=2,
                 normalized=False,
                 sample_rate=22050,
@@ -310,7 +277,9 @@ class Xtts(BaseTTS):
                 f_max=8000,
                 n_mels=80,
             )
-            cond_latent = self.gpt.get_style_emb(mel.to(self.device))
+            style_emb = self.gpt.get_style_emb(mel_chunk.to(self.device), None)
+            style_embs.append(style_emb)
+        cond_latent = torch.stack(style_embs).mean(dim=0)
         return cond_latent.transpose(1, 2)
 
     @torch.inference_mode()
@@ -738,7 +707,6 @@ class Xtts(BaseTTS):
         vocab_path=None,
         eval=True,
         strict=True,
-        use_deepspeed=False,
         speaker_file_path=None,
     ):
         """
@@ -772,17 +740,11 @@ class Xtts(BaseTTS):
 
         checkpoint = self.get_compatible_checkpoint_state_dict(model_path)
 
-        # deal with v1 and v1.1. V1 has the init_gpt_for_inference keys, v1.1 do not
-        try:
-            self.load_state_dict(checkpoint, strict=strict)
-        except:
-            if eval:
-                self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache)
-            self.load_state_dict(checkpoint, strict=strict)
+        self.load_state_dict(checkpoint, strict=strict)
 
         if eval:
             self.hifigan_decoder.eval()
-            self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache, use_deepspeed=use_deepspeed)
+            self.gpt.init_gpt_for_inference(kv_cache=self.args.kv_cache)
             self.gpt.eval()
 
     def train_step(self):
