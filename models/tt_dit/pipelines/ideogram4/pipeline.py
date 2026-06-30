@@ -213,6 +213,10 @@ def _dq(path):
 # test_transformer_ideogram4.py). k_chunk is 256 on Blackhole.
 _SP_K_CHUNK = 256
 
+# Max prompt length. Mirrors the reference Ideogram4PipelineConfig.max_text_tokens (2048):
+# the reference rejects (does NOT truncate) prompts longer than this, so we do the same.
+MAX_TEXT_TOKENS = 2048
+
 
 def _sp_padded_len(seq_len: int, sp_factor: int) -> int:
     """Pad the sequence so each SP shard is k_chunk- and tile-aligned (ring SDPA).
@@ -381,6 +385,11 @@ class Ideogram4Pipeline:
         )
         ids = self.tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"]
         n_text = ids.shape[1]
+        if n_text > MAX_TEXT_TOKENS:
+            raise ValueError(
+                f"prompt tokenizes to {n_text} text tokens; Ideogram 4 supports at most "
+                f"{MAX_TEXT_TOKENS}. Matches the reference pipeline, which raises rather than truncating."
+            )
         cos, sin = create_rope_tensors(1, n_text, None, self._enc_head_dim, self._enc_rope_theta, self._enc_mrope)
         tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
         taps = self.encoder.forward(
