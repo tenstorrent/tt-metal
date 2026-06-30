@@ -280,6 +280,14 @@ class TtSelfConditioning:
         ``compute_kernel_config`` (bf16 over a 262k-wide reduction is lossy — see the
         bfp8 entropy drift); a moderate vocab is fine in bf16.
         """
+        vocab_size = prev_logits_tt.shape[-1]
+        vocab_chunk_size = 8192
+        if vocab_size > vocab_chunk_size:
+            return self._soft_embedding_chunked(
+                prev_logits_tt,
+                embedding_weight_tt,
+                vocab_chunk_size=vocab_chunk_size,
+            )
         if compute_kernel_config is not None:
             probs = ttnn.softmax(
                 prev_logits_tt, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
@@ -290,6 +298,59 @@ class TtSelfConditioning:
         probs.deallocate(True)
         # canonical: * embed_scale = hidden_size**0.5 (the tied embedding's scale). The pre_norm eps
         # floor does NOT absorb this at the tiny soft-RMS of a 262k-vocab softmax, so it is load-bearing.
+        scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
+        signal.deallocate(True)
+        return scaled
+
+    def _soft_embedding_chunked(self, prev_logits_tt, embedding_weight_tt, *, vocab_chunk_size: int):
+        """Streaming ``softmax(prev_logits) @ embedding`` over vocab chunks.
+
+        This avoids materializing a production-vocab probability tensor whose
+        softmax program has a large static circular-buffer footprint.
+        """
+        logits_max = ttnn.max(prev_logits_tt, dim=-1, keepdim=True)
+        numerator = None
+        denominator = None
+        vocab_size = prev_logits_tt.shape[-1]
+        hidden_size = embedding_weight_tt.shape[-1]
+        for start in range(0, vocab_size, vocab_chunk_size):
+            end = min(start + vocab_chunk_size, vocab_size)
+            logits_chunk = ttnn.slice(
+                prev_logits_tt,
+                [0, 0, 0, start],
+                [prev_logits_tt.shape[0], prev_logits_tt.shape[1], prev_logits_tt.shape[2], end],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            shifted = ttnn.subtract(logits_chunk, logits_max)
+            logits_chunk.deallocate(True)
+            exp_chunk = ttnn.exp(shifted)
+            shifted.deallocate(True)
+            denom_chunk = ttnn.sum(exp_chunk, dim=-1, keepdim=True)
+            embed_chunk = ttnn.slice(
+                embedding_weight_tt,
+                [0, 0, start, 0],
+                [embedding_weight_tt.shape[0], embedding_weight_tt.shape[1], end, hidden_size],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            numer_chunk = ttnn.matmul(exp_chunk, embed_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            exp_chunk.deallocate(True)
+            embed_chunk.deallocate(True)
+            if numerator is None:
+                numerator = numer_chunk
+                denominator = denom_chunk
+            else:
+                next_numerator = ttnn.add(numerator, numer_chunk)
+                numerator.deallocate(True)
+                numer_chunk.deallocate(True)
+                numerator = next_numerator
+                next_denominator = ttnn.add(denominator, denom_chunk)
+                denominator.deallocate(True)
+                denom_chunk.deallocate(True)
+                denominator = next_denominator
+        logits_max.deallocate(True)
+        signal = ttnn.div(numerator, denominator)
+        numerator.deallocate(True)
+        denominator.deallocate(True)
         scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
         signal.deallocate(True)
         return scaled

@@ -166,6 +166,13 @@ def _reset_logits_fn(logits_fn: TtLogitsFn) -> None:
         reset()
 
 
+def _deallocate_logits_if_unowned(logits_fn: TtLogitsFn, logits) -> None:
+    owns_logits = getattr(logits_fn, "owns_logits", None)
+    if callable(owns_logits) and owns_logits(logits):
+        return
+    logits.deallocate(True)
+
+
 def denoise_block(
     logits_fn: TtLogitsFn,
     init_canvas: ttnn.Tensor,
@@ -214,7 +221,7 @@ def denoise_block(
         sampled = _ids_to_torch(res.sampled)
         accept_mask = _accept_to_torch(res.accept_mask)
         host_canvas = _ids_to_torch(res.canvas)
-        logits.deallocate(True)
+        _deallocate_logits_if_unowned(logits_fn, logits)
         entropy_mean = entropy.mean().item()
         records.append(
             StepRecord(

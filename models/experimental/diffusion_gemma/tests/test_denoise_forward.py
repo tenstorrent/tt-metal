@@ -364,6 +364,23 @@ def test_denoise_logits_adapter_threads_canvas_rope_offset():
     assert calls[0]["q_rope_offset"] == 576
 
 
+def test_denoise_logits_adapter_reports_retained_logits_ownership():
+    def _fake_logits_from_tokens(tt_model, **kwargs):
+        del tt_model, kwargs
+        return "logits"
+
+    adapter = DenoiseLogitsAdapter(
+        object(),
+        prompt_hidden_by_layer=["prompt"],
+        logits_from_tokens=_fake_logits_from_tokens,
+    )
+
+    logits = adapter("canvas", 0)
+
+    assert adapter.owns_logits(logits)
+    assert not adapter.owns_logits("other")
+
+
 def test_embed_canvas_tokens_rejects_batch_greater_than_one():
     with pytest.raises(ValueError, match="batch=1"):
         embed_canvas_tokens(object(), _FakeTensor([2, 256]))

@@ -350,6 +350,98 @@ def test_rms_norm_dram_chunks_long_sequences(monkeypatch):
     )
 
 
+def test_soft_embedding_chunks_large_vocab_without_full_softmax(monkeypatch):
+    calls = []
+
+    class _Tensor:
+        def __init__(self, name, shape):
+            self.name = name
+            self.shape = shape
+            self.deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def softmax(*args, **kwargs):
+            raise AssertionError("chunked path must not materialize full softmax")
+
+        @staticmethod
+        def max(tensor, *, dim, keepdim):
+            calls.append(("max", tensor.name, dim, keepdim))
+            return _Tensor(f"max({tensor.name})", (1, 1, tensor.shape[2], 1))
+
+        @staticmethod
+        def slice(tensor, starts, ends, *, memory_config):
+            calls.append(("slice", tensor.name, starts, ends, memory_config))
+            shape = (
+                ends[0] - starts[0],
+                ends[1] - starts[1],
+                ends[2] - starts[2],
+                ends[3] - starts[3],
+            )
+            return _Tensor(f"{tensor.name}[{starts[2]}:{ends[2]},{starts[3]}:{ends[3]}]", shape)
+
+        @staticmethod
+        def subtract(a, b):
+            calls.append(("subtract", a.name, b.name))
+            return _Tensor(f"sub({a.name},{b.name})", a.shape)
+
+        @staticmethod
+        def exp(tensor):
+            calls.append(("exp", tensor.name))
+            return _Tensor(f"exp({tensor.name})", tensor.shape)
+
+        @staticmethod
+        def sum(tensor, *, dim, keepdim):
+            calls.append(("sum", tensor.name, dim, keepdim))
+            return _Tensor(f"sum({tensor.name})", (tensor.shape[0], tensor.shape[1], tensor.shape[2], 1))
+
+        @staticmethod
+        def matmul(a, b, *, memory_config):
+            calls.append(("matmul", a.name, b.name, memory_config))
+            return _Tensor(f"matmul({a.name},{b.name})", (a.shape[0], a.shape[1], a.shape[2], b.shape[-1]))
+
+        @staticmethod
+        def add(a, b):
+            calls.append(("add", a.name, b.name))
+            return _Tensor(f"add({a.name},{b.name})", a.shape)
+
+        @staticmethod
+        def div(a, b):
+            calls.append(("div", a.name, b.name))
+            return _Tensor(f"div({a.name},{b.name})", a.shape)
+
+        @staticmethod
+        def multiply(tensor, scalar):
+            calls.append(("multiply", tensor.name, scalar))
+            return _Tensor(f"mul({tensor.name})", tensor.shape)
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+    module = TtSelfConditioning.__new__(TtSelfConditioning)
+    module.hidden_size = 8
+
+    out = module._soft_embedding_chunked(
+        _Tensor("logits", (1, 1, 32, 64)),
+        _Tensor("embedding", (1, 1, 64, 8)),
+        vocab_chunk_size=32,
+    )
+
+    assert out.name.startswith("mul(div(")
+    assert [call[0] for call in calls].count("matmul") == 2
+    assert [call for call in calls if call[0] == "slice"] == [
+        ("slice", "logits", [0, 0, 0, 0], [1, 1, 32, 32], "dram"),
+        ("slice", "embedding", [0, 0, 0, 0], [1, 1, 32, 8], "dram"),
+        ("slice", "logits", [0, 0, 0, 32], [1, 1, 32, 64], "dram"),
+        ("slice", "embedding", [0, 0, 32, 0], [1, 1, 64, 8], "dram"),
+    ]
+
+
 def test_width_sharded_rms_norm_uses_sharded_program_for_production_width(monkeypatch):
     calls = []
 

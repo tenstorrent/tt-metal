@@ -76,3 +76,52 @@ def test_denoise_block_deallocates_consumed_injected_noise(monkeypatch):
     assert gumbel_noise.deallocated
     assert noise_tokens.deallocated
     assert logits.deallocated
+
+
+def test_denoise_block_leaves_callback_owned_logits_for_self_conditioning(monkeypatch):
+    gumbel_noise = _FakeTensor("gumbel")
+    noise_tokens = _FakeTensor("noise")
+    logits = _FakeTensor("logits")
+    init_canvas = _FakeTensor("init-canvas")
+    next_canvas = _FakeTensor("next-canvas")
+
+    result = DL.TtDenoiseStepResult(
+        canvas=next_canvas,
+        accept_mask=_FakeTensor("accept"),
+        entropy=_FakeTensor("entropy"),
+        sampled=_FakeTensor("sampled"),
+        argmax=_FakeTensor("argmax"),
+    )
+
+    class _StatefulLogits:
+        prev_logits = None
+
+        def __call__(self, canvas, step):
+            del canvas, step
+            self.prev_logits = logits
+            return logits
+
+        def owns_logits(self, value):
+            return self.prev_logits is value
+
+        def reset(self):
+            self.prev_logits.deallocate(True)
+            self.prev_logits = None
+
+    logits_fn = _StatefulLogits()
+
+    monkeypatch.setattr(DL, "denoise_step", lambda *args, **kwargs: result)
+    monkeypatch.setattr(DL, "_ids_to_torch", lambda tensor: torch.ones(1, 1, dtype=torch.long))
+    monkeypatch.setattr(DL, "_entropy_to_torch", lambda tensor: torch.zeros(1, 1, dtype=torch.float32))
+    monkeypatch.setattr(DL, "_accept_to_torch", lambda tensor: torch.ones(1, 1, dtype=torch.bool))
+
+    trajectory = DL.denoise_block(
+        logits_fn,
+        init_canvas,
+        DiffusionConfig(max_denoise_steps=1, entropy_stop_threshold=1.0, stable_steps_to_halt=0),
+        gumbel_noise_fn=lambda step: gumbel_noise,
+        noise_tokens_fn=lambda step: noise_tokens,
+    )
+
+    assert trajectory.halted
+    assert logits.deallocated

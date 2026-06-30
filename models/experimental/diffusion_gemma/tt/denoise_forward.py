@@ -540,6 +540,10 @@ class DenoiseLogitsAdapter:
             old_prev_logits.deallocate(True)
         return logits
 
+    def owns_logits(self, logits) -> bool:
+        """Return True when ``logits`` is retained for next-step self-conditioning."""
+        return self.prev_logits is logits
+
     def reset(self):
         if self.prev_logits is not None:
             self.prev_logits.deallocate(True)
