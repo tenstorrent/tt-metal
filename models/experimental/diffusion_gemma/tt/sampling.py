@@ -52,24 +52,27 @@ def token_entropy(logits, temperature: float = 1.0):
     """
     z = temperature_scale(logits, temperature)
     zmax = ttnn.max(z, dim=-1, keepdim=True)
-    shifted = ttnn.subtract(z, zmax)
-    exp_shifted = ttnn.exp(shifted)
-    sum_exp = ttnn.sum(exp_shifted, dim=-1, keepdim=True)
+    shifted = ttnn.subtract(z, zmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    exp_shifted = ttnn.exp(shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sum_exp = ttnn.sum(exp_shifted, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     log_sum_exp = ttnn.log(sum_exp)
-    log_sum = ttnn.add(log_sum_exp, zmax)
-    probs = ttnn.div(exp_shifted, sum_exp)
-    expected_terms = ttnn.multiply(probs, z)
-    expected_z = ttnn.sum(expected_terms, dim=-1, keepdim=True)
-    entropy = ttnn.subtract(log_sum, expected_z)
+    # H = logsumexp(z) - E[z].  Since shifted = z - zmax, compute the
+    # algebraically equivalent log(sum(exp(shifted))) - E[shifted] to avoid
+    # subtracting two large, nearly equal values for very confident logits.
+    # Use Σ(exp(shifted) * shifted) / Σexp directly so a full probability tensor
+    # is not live alongside the full shifted tensor in the production path.
+    expected_terms = ttnn.multiply(exp_shifted, shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sum_weighted_shifted = ttnn.sum(expected_terms, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    expected_shifted = ttnn.div(sum_weighted_shifted, sum_exp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entropy = ttnn.subtract(log_sum_exp, expected_shifted)
     zmax.deallocate(True)
     shifted.deallocate(True)
     exp_shifted.deallocate(True)
     sum_exp.deallocate(True)
     log_sum_exp.deallocate(True)
-    log_sum.deallocate(True)
-    probs.deallocate(True)
     expected_terms.deallocate(True)
-    expected_z.deallocate(True)
+    sum_weighted_shifted.deallocate(True)
+    expected_shifted.deallocate(True)
     _deallocate_scaled_if_temporary(z, logits)
     return entropy  # H = logsumexp(z) - Σ softmax(z)·z
 

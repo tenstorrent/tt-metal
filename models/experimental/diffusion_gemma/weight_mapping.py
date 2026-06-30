@@ -50,6 +50,10 @@ _IGNORED_PREFIXES = (
     "model.embed_vision.",
 )
 
+# Tied lm_head materialized at runtime by newer transformers (tie_word_embeddings=
+# True). Not on disk; numerically identical to decoder.embed_tokens. Ignored.
+_TIED_LM_HEAD_KEYS = frozenset({"lm_head.weight"})
+
 
 def gemma4_key_for(dg_key: str) -> Optional[str]:
     """Return the gemma4 backbone key for a DiffusionGemma **text-backbone** key.
@@ -95,6 +99,12 @@ def classify_keys(keys) -> RemapResult:
             self_cond.append(k)
         elif k.startswith(DG_DECODER_PREFIX):
             backbone[k] = GEMMA4_LM_PREFIX + k[len(DG_DECODER_PREFIX) :]
+        elif k in _TIED_LM_HEAD_KEYS:
+            # tie_word_embeddings=True: newer transformers materializes a tied
+            # `lm_head.weight` (a view of decoder.embed_tokens) into state_dict().
+            # It is absent from the on-disk checkpoint; gemma4 reconstructs its own
+            # tied lm_head from embed_tokens, so this redundant key is ignored.
+            ignored.append(k)
         elif any(k.startswith(p) for p in _IGNORED_PREFIXES):
             ignored.append(k)
         else:

@@ -86,6 +86,14 @@ def test_unknown_keys_are_not_folded_into_ignored():
     assert res.unknown == ["model.unexpected.weight"]
 
 
+def test_tied_lm_head_key_is_ignored():
+    res = classify_keys(["lm_head.weight"])
+
+    assert not res.backbone
+    assert res.ignored == ["lm_head.weight"]
+    assert not res.unknown
+
+
 def test_remap_state_dict_rejects_unknown_keys():
     with pytest.raises(ValueError, match="unknown DiffusionGemma checkpoint keys"):
         remap_state_dict({"model.unexpected.weight": object()})
