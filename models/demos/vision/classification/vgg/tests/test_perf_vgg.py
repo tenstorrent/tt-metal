@@ -115,7 +115,7 @@ def test_vgg(
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_vgg(batch_size, model_name):
     subdir = model_name
-    num_iterations = 1
+    num_iterations = 2
     margin = 0.03
 
     if model_name == "ttnn_vgg11":
