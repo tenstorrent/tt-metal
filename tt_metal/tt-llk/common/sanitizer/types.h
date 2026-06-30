@@ -284,10 +284,13 @@ public:
         Yes = true
     };
 
-    static constexpr std::size_t ID_WIDTH     = 27;
-    static constexpr std::size_t UNINIT_WIDTH = 1;
-    static constexpr std::size_t EXU_WIDTH    = 2;
+    // [31:30] THREAD | [29:28] EXU | [27] UNINIT | [26:0] ID
     static constexpr std::size_t THREAD_WIDTH = 2;
+    static constexpr std::size_t EXU_WIDTH    = 2;
+    static constexpr std::size_t UNINIT_WIDTH = 1;
+    static constexpr std::size_t ID_WIDTH     = 27;
+
+    static_assert(THREAD_WIDTH + EXU_WIDTH + UNINIT_WIDTH + ID_WIDTH == 32, "Operation fields must exactly fill the 32-bit underlying type");
 
     static constexpr std::size_t ID_SHAMT     = 0;
     static constexpr std::size_t UNINIT_SHAMT = ID_SHAMT + ID_WIDTH;
