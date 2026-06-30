@@ -160,14 +160,14 @@ def test_warm_harness(
 
     vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
     als = AudioLatentShape.from_video_pixel_shape(vps)
-    _lat = os.environ.get("AUDIO_LATENT") or os.path.join(
-        os.path.dirname(__file__), "fixtures", "girl_audio_latent.npy"
-    )
-    if os.path.exists(_lat):
+    # Seeded synthetic latent scaled to a real girl-clip audio latent's stats (mean≈0.2, std≈0.92).
+    # AUDIO_LATENT (.npy or .pt) overrides to decode a real dumped latent.
+    _lat = os.environ.get("AUDIO_LATENT")
+    if _lat and os.path.exists(_lat):
         latent = (torch.from_numpy(np.load(_lat)) if _lat.endswith(".npy") else torch.load(_lat)).float()
     else:
         torch.manual_seed(0)
-        latent = torch.randn(1, als.frames, pipeline.in_channels, dtype=torch.float32) * 0.5
+        latent = torch.randn(1, als.frames, pipeline.in_channels, dtype=torch.float32) * 0.92 + 0.2
 
     # COLD: one-time device-side program/mesh-workload assembly (~317s on 4x8, NOT JIT).
     t0 = time.perf_counter()
