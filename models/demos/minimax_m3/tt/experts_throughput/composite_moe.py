@@ -23,6 +23,7 @@ this is the FUNCTIONAL bring-up path.
 import torch
 
 import ttnn
+from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 
 from .activation import apply_swiglu
 
@@ -44,6 +45,7 @@ class CompositeEPMoE:
         hidden_dim,
         num_experts,
         weights_dtype=ttnn.bfloat8_b,
+        weight_cache_path=None,
         swiglu_limit=7.0,
         alpha=1.702,
     ):
@@ -63,26 +65,41 @@ class CompositeEPMoE:
 
         # Per-slot sharded weights: slot e tensor on device i holds expert (i*epc + e). Built by stacking
         # the per-device expert for each slot, reshaping to (rows, cols, ...) and 2D-sharding dims=(0,1).
-        def shard_slot(per_expert, slot, transpose):
-            t = torch.stack([per_expert[i * self.epc + slot] for i in range(self.ndev)])  # [ndev,a,b]
-            if transpose:
+        # Cached via ttnn.as_tensor(cache_file_name=) — a populated cache loads the tilized weights and
+        # skips the bf16 source read. routed_expert_weights=None (cache-only) builds an empty placeholder
+        # of the right per-mesh shape; as_tensor loads the real tensor from disk and ignores it. NOTE: this
+        # 2D-sharded (dims=(0,1)) layout differs from the EP TtRoutedExpert cache, so it has its OWN files.
+        # Per-slot shapes after the HF (out,in)->(in,out) transpose: gate/up are (emb, hid), down is (hid, emb).
+        cache_only = routed_expert_weights is None
+        gu_shape = (rows, cols, self.emb_dim, self.hidden_dim)  # gate/up per device: (emb, hid)
+        dn_shape = (rows, cols, self.hidden_dim, self.emb_dim)  # down per device: (hid, emb)
+
+        def shard_slot(per_expert, slot, cache_name, placeholder_shape):
+            if per_expert is None:
+                t = torch.empty(*placeholder_shape)  # cache-only: as_tensor loads from cache, ignores this
+            else:
+                t = torch.stack([per_expert[i * self.epc + slot] for i in range(self.ndev)])  # [ndev,a,b]
                 t = t.transpose(1, 2).contiguous()  # HF (out,in) -> ttnn.linear (in,out)
-            a, b = t.shape[1], t.shape[2]
-            t = t.reshape(rows, cols, a, b)
-            return ttnn.from_torch(
+                a, b = t.shape[1], t.shape[2]
+                t = t.reshape(rows, cols, a, b)
+            return ttnn.as_tensor(
                 t,
                 device=mesh_device,
                 dtype=weights_dtype,
                 layout=ttnn.TILE_LAYOUT,
+                cache_file_name=get_cache_file_name(weight_cache_path, cache_name),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(0, 1)),
             )
 
-        gp = [w["gate_proj"].float() for w in routed_expert_weights]
-        up = [w["up_proj"].float() for w in routed_expert_weights]
-        dn = [w["down_proj"].float() for w in routed_expert_weights]
-        self.gate_s = [shard_slot(gp, e, True) for e in range(self.epc)]  # [emb, hid] per device
-        self.up_s = [shard_slot(up, e, True) for e in range(self.epc)]
-        self.down_s = [shard_slot(dn, e, True) for e in range(self.epc)]  # [hid, emb] per device
+        gp = up = dn = None
+        if not cache_only:
+            gp = [w["gate_proj"].float() for w in routed_expert_weights]
+            up = [w["up_proj"].float() for w in routed_expert_weights]
+            dn = [w["down_proj"].float() for w in routed_expert_weights]
+        self.gate_s = [shard_slot(gp, e, f"gate_slot{e}", gu_shape) for e in range(self.epc)]  # [emb,hid]/dev
+        self.up_s = [shard_slot(up, e, f"up_slot{e}", gu_shape) for e in range(self.epc)]
+        self.down_s = [shard_slot(dn, e, f"down_slot{e}", dn_shape) for e in range(self.epc)]  # [hid,emb]/dev
         # this device's global expert id for each local slot: device i (linear r*cols+c) -> i*epc + e
         gid = torch.arange(self.ndev).reshape(rows, cols, 1) * self.epc + torch.arange(self.epc).reshape(1, 1, -1)
         self.gid_s = ttnn.from_torch(

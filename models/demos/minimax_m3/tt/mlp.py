@@ -45,16 +45,41 @@ def _dbg_alldev(tag, t):
         logger.info(f"[MLP {tag}] failed: {e}")
 
 
-def _ep_cache_dir(tensor_cache_path):
-    """EP sub-modules (gate/routed_expert) want a Path *directory* for weight caching
-    (they do `path / name`). Return a Path dir under the layer's cache, or None."""
+def _make_cache_subdir(tensor_cache_path, name):
+    """Create (if needed) and return a Path subdir of the layer's weight cache for EP / composite
+    expert weights (they do `path / cache_name`). Returns None when no cache path is configured.
+
+    Raises a clear, actionable error if the cache dir is not writable — typically the shared weight
+    cache is owned by another user (read-only), so building a NOT-yet-cached set of weights (e.g. the
+    composite MoE on its first run) fails. The fix is to point TT_CACHE_PATH at a directory you own."""
     if not tensor_cache_path:
         return None
     from pathlib import Path
 
-    d = Path(str(tensor_cache_path)) / "experts_ep"
-    d.mkdir(parents=True, exist_ok=True)
+    d = Path(str(tensor_cache_path)) / name
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise PermissionError(
+            f"Cannot create weight-cache dir {d}: {e}. The cache directory is not writable (often "
+            f"because it is owned by another user). Set TT_CACHE_PATH to a directory you own to "
+            f"populate the cache there — optionally seed it from the existing cache first with "
+            f"`cp -a --reflink=auto '<existing tensor_cache_...>' \"$TT_CACHE_PATH\"/` to avoid "
+            f"re-tilizing the shared weights."
+        ) from e
     return d
+
+
+def _ep_cache_dir(tensor_cache_path):
+    """Cache dir for the DeepSeek-style EP sub-modules (gate / routed_expert)."""
+    return _make_cache_subdir(tensor_cache_path, "experts_ep")
+
+
+def _composite_cache_dir(tensor_cache_path):
+    """Cache dir for the composite EP-MoE per-slot expert weights. Kept SEPARATE from `experts_ep`
+    because the composite 2D-sharded gate/up/down layout differs from the EP TtRoutedExpert layout,
+    so the two backends must not share cache files."""
+    return _make_cache_subdir(tensor_cache_path, "composite_moe")
 
 
 class MLP:
@@ -153,25 +178,18 @@ class MLP:
         # capacity). Composite validated at SP=8xTP=4xEP=32 real weights = PCC 0.9998 (test_composite_moe_sp).
         self.composite_moe = os.getenv("M3_COMPOSITE_MOE") == "1"
         if self.composite_moe:
-            if cache_only:
-                # CompositeEPMoE tilizes experts from the source state_dict on every run (raw
-                # ttnn.from_torch, no cache_file_name), so it can't load cache-only. Force the source
-                # read or use the cached EP-MoE path.
-                raise NotImplementedError(
-                    "M3_COMPOSITE_MOE=1 does not support cache-only weight loading. Unset M3_COMPOSITE_MOE "
-                    "to use the cached EP-MoE path, or set M3_FORCE_LOAD_WEIGHTS=1 to read the bf16 source."
-                )
             from .experts_throughput.composite_moe import CompositeEPMoE
 
             self.experts = CompositeEPMoE(
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
-                routed_expert_weights=routed_w,
+                routed_expert_weights=routed_w,  # None in cache-only mode -> CompositeEPMoE loads from cache
                 emb_dim=hf_config.hidden_size,
                 hidden_dim=hf_config.intermediate_size,
                 num_experts=E,
                 weights_dtype=expert_weight_dtype,
+                weight_cache_path=_composite_cache_dir(tensor_cache_path),
                 swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
                 alpha=getattr(hf_config, "swiglu_alpha", 1.702),
             )
