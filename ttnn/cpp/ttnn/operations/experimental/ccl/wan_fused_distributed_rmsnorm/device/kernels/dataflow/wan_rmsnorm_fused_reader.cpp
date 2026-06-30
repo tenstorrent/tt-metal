@@ -121,11 +121,17 @@ void kernel_main() {
 
     // Row-broadcast weight / bias live in a TILE-layout [1, H] tensor where
     // only the first face-row of each face carries data — the rest is zero.
-    // Reading just face_row_bytes per face avoids paying the full 4 KB/tile
-    // bandwidth cost (measured ~13% e2e win on the N=2368 Wan config).
-    constexpr uint32_t bf16_datum_size_bytes = 2;
-    constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * bf16_datum_size_bytes;
-    constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
+    // Reading just face_row_bytes per face avoids paying the full tile bandwidth
+    // cost (measured ~13% e2e win on the N=2368 Wan config). The datum size is
+    // derived from the CB tile size (tile_bytes / TILE_HW) so the read works for
+    // both bf16 (2 B) and fp32 (4 B) weight/bias.
+    constexpr uint32_t kTileHW = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;  // 1024
+    const uint32_t weight_datum_bytes = weight_tile_bytes / kTileHW;
+    const uint32_t weight_face_row_bytes = tt::constants::FACE_WIDTH * weight_datum_bytes;
+    const uint32_t weight_face_bytes = tt::constants::FACE_HW * weight_datum_bytes;
+    const uint32_t bias_datum_bytes = bias_tile_bytes / kTileHW;
+    const uint32_t bias_face_row_bytes = tt::constants::FACE_WIDTH * bias_datum_bytes;
+    const uint32_t bias_face_bytes = tt::constants::FACE_HW * bias_datum_bytes;
 
     // Weight + bias are consumed in the POST phase (sub-phases 2 / 2.5) which
     // only start after chunk 0's AG completes. So both reads can be deferred
@@ -239,8 +245,11 @@ void kernel_main() {
                     uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                         uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
-                        noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes);
-                        noc_async_read(weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes);
+                        noc_async_read(weight_noc_addr, weight_wr_ptr, weight_face_row_bytes);
+                        noc_async_read(
+                            weight_noc_addr + weight_face_bytes,
+                            weight_wr_ptr + weight_face_bytes,
+                            weight_face_row_bytes);
                         weight_wr_ptr += weight_tile_bytes;
                     }
                     noc_async_read_barrier();
@@ -258,8 +267,9 @@ void kernel_main() {
                     uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                         uint64_t bias_noc_addr = get_noc_addr(col_tile + i, bias_accessor);
-                        noc_async_read(bias_noc_addr, bias_wr_ptr, face_row_bytes);
-                        noc_async_read(bias_noc_addr + face_bytes, bias_wr_ptr + face_bytes, face_row_bytes);
+                        noc_async_read(bias_noc_addr, bias_wr_ptr, bias_face_row_bytes);
+                        noc_async_read(
+                            bias_noc_addr + bias_face_bytes, bias_wr_ptr + bias_face_bytes, bias_face_row_bytes);
                         bias_wr_ptr += bias_tile_bytes;
                     }
                     noc_async_read_barrier();

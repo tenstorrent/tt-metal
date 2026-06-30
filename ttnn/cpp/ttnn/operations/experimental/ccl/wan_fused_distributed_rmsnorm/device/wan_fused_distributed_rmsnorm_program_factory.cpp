@@ -129,6 +129,7 @@ bool decide_streaming_low_l1(
     uint32_t intermediate_tile_bytes,
     uint32_t output_tile_bytes,
     bool has_weight,
+    uint32_t weight_tile_bytes,
     bool per_head_norm,
     uint32_t extra_resident_bytes = 0u) {
     // per_head_norm uses head-block reduces over small head_dim shards; its L1
@@ -144,9 +145,9 @@ bool decide_streaming_low_l1(
     const uint64_t intermediate_bytes = 2ull * padded_row * intermediate_tile_bytes;
     // output_cb is 2 padded rows.
     const uint64_t output_bytes = 2ull * padded_row * output_tile_bytes;
-    // Broadcast weight is num_tile_cols bf16 tiles (2048 B). Per-token is larger
-    // but those shapes have small num_tile_cols and don't trigger streaming.
-    const uint64_t weight_bytes = has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;
+    // Broadcast weight is num_tile_cols tiles of weight_tile_bytes (2048 bf16 / 4096 fp32).
+    // Per-token is larger but those shapes have small num_tile_cols and don't trigger streaming.
+    const uint64_t weight_bytes = has_weight ? static_cast<uint64_t>(num_tile_cols) * weight_tile_bytes : 0ull;
     constexpr uint64_t kFixedOverheadBytes = 196608ull;      // ~192 KB of small CBs
     constexpr uint64_t kResidentL1BudgetBytes = 1572864ull;  // static-CB cap per core
     // extra_resident_bytes: CBs the resident layout adds beyond the above (e.g. the
@@ -178,6 +179,8 @@ bool decide_block_major_post(
     uint32_t output_tile_bytes,
     bool has_weight,
     bool has_bias,
+    uint32_t weight_tile_bytes,
+    uint32_t bias_tile_bytes,
     bool fuse_rope,
     bool is_layernorm,
     uint64_t l1_cap_bytes) {
@@ -187,9 +190,9 @@ bool decide_block_major_post(
     // rotated_input_cb is whole-row for RoPE; LayerNorm always uses it as the
     // (x-mean) xmm buffer, so it's whole-row there too (RMS no-rope leaves it tiny).
     whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
-    whole_row += 2ull * padded * output_tile_bytes;                                           // output_cb (2 rows)
-    whole_row += has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;          // weight_cb (bf16)
-    whole_row += has_bias ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;            // bias_cb (bf16)
+    whole_row += 2ull * padded * output_tile_bytes;                                             // output_cb (2 rows)
+    whole_row += has_weight ? static_cast<uint64_t>(num_tile_cols) * weight_tile_bytes : 0ull;  // weight_cb
+    whole_row += has_bias ? static_cast<uint64_t>(num_tile_cols) * bias_tile_bytes : 0ull;      // bias_cb
     // Streamed input_cb + resident cos/sin + the dozen small fp32 stat/scalar CBs +
     // forwarder packet/header. Calibrated against the observed FLUX TP=2 feat-3072
     // streamed-input allocation (1,601,824 B at the same big-CB sum).
@@ -522,6 +525,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const bool use_recip_lut = is_layernorm && reciprocals.has_value();
     const uint32_t recip_lut_bytes = num_tile_cols * 128u;
 
+    // weight/bias CB formats follow the tensor dtype (bf16 or fp32). Computed here (before the
+    // L1 decisions) so the resident-budget estimates count the true CB byte size for fp32 affine.
+    const tt::DataFormat weight_format = has_weight ? datatype_to_dataformat_converter(weight->dtype()) : bf16_format;
+    const tt::DataFormat bias_format = has_bias ? datatype_to_dataformat_converter(bias->dtype()) : bf16_format;
+    const uint32_t weight_tile_sz = tt::tile_size(weight_format);
+    const uint32_t bias_tile_sz = tt::tile_size(bias_format);
+    // welford_zero_cb (LayerNorm warm-row accumulator reset): 2 resident fp32 tiles, always present
+    // for LN. Counted in the resident budget so wide LN shards correctly choose block-major.
+    const uint32_t welford_zero_bytes = is_layernorm ? 2u * fp32_tile_size : 0u;
+
     // Streaming low-L1 fallback: when the resident input_cb + row-sized
     // intermediate/rotated/output CBs would overflow L1, stream input_cb in
     // block_size chunks for PRE + a POST re-read pass instead. See
@@ -534,8 +547,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         intermediate_tile_size,
         output_tile_size,
         has_weight,
+        weight_tile_sz,
         args.per_head_norm,
-        use_recip_lut ? recip_lut_bytes : 0u);
+        (use_recip_lut ? recip_lut_bytes : 0u) + welford_zero_bytes);
     // Block-major POST: even input-streaming leaves intermediate/rotated/output
     // whole-row, which overflows L1 on wide low-TP shards. When so, shrink those
     // CBs to block-local + run the fused per-block POST. Margin below l1_size_per_core
@@ -563,6 +577,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // Account for the resident recip CB so the block-major decision still fits L1.
         l1_cap_bytes -= recip_lut_bytes;
     }
+    // welford_zero_cb is resident for LN regardless of layout; reserve it from the cap too.
+    l1_cap_bytes -= welford_zero_bytes;
     const bool overflows_resident_post = decide_block_major_post(
         num_tile_cols,
         block_size,
@@ -570,6 +586,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         output_tile_size,
         has_weight,
         has_bias,
+        weight_tile_sz,
+        bias_tile_sz,
         fuse_rope,
         is_layernorm,
         l1_cap_bytes);
@@ -768,11 +786,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // worth of weight tiles (one row's slice at a time), popped per row by
     // compute. Broadcast weight/bias holds a single row's worth, retained
     // across the whole worker. has_bias is implied by has_weight.
+    // weight/bias CBs use the tensor's own dtype (bf16 or fp32) — fp32 affine keeps the
+    // modulation precision adaLN needs; the reader derives its face-row stride from the
+    // CB tile size, the compute reconfigs the FPU operand format, so no kernel change needed.
+    // (weight_format / bias_format / weight_tile_sz / bias_tile_sz computed earlier, by the
+    // L1-decision block, so the resident estimates see the true fp32 sizes.)
     const uint32_t weight_cb_tiles =
         has_weight ? (per_token_weight ? chunk_size_rows * num_tile_cols : num_tile_cols) : 1;
-    create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, weight_cb_tiles, bf16_format);
+    create_cb(weight_cb_id, program, worker_core_set, weight_tile_sz, weight_cb_tiles, weight_format);
     const uint32_t bias_cb_tiles = has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols : num_tile_cols) : 1;
-    create_cb(bias_cb_id, program, worker_core_set, bf16_tile_size, bias_cb_tiles, bf16_format);
+    create_cb(bias_cb_id, program, worker_core_set, bias_tile_sz, bias_cb_tiles, bias_format);
     // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
     // stub when unused (the reader/compute gate on use_recip and never touch it).
     create_cb(recip_lut_cb_id, program, worker_core_set, use_recip_lut ? recip_lut_bytes : 4u, 1u, fp32_format);

@@ -81,7 +81,10 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
 
     if (weight.has_value()) {
         TT_FATAL(weight->layout() == Layout::TILE, "Weight layout must be TILE");
-        TT_FATAL(weight->dtype() == DataType::BFLOAT16, "Weight dtype must be BFLOAT16");
+        TT_FATAL(
+            weight->dtype() == DataType::BFLOAT16 || weight->dtype() == DataType::FLOAT32,
+            "Weight dtype must be BFLOAT16 or FLOAT32, got {}",
+            weight->dtype());
         TT_FATAL(
             weight->padded_shape()[-1] == padded[3],
             "Weight last dim ({}) must equal input H per device ({})",
@@ -101,7 +104,10 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     if (bias.has_value()) {
         TT_FATAL(weight.has_value(), "bias requires weight to also be provided");
         TT_FATAL(bias->layout() == Layout::TILE, "Bias layout must be TILE");
-        TT_FATAL(bias->dtype() == DataType::BFLOAT16, "Bias dtype must be BFLOAT16");
+        TT_FATAL(
+            bias->dtype() == DataType::BFLOAT16 || bias->dtype() == DataType::FLOAT32,
+            "Bias dtype must be BFLOAT16 or FLOAT32, got {}",
+            bias->dtype());
         TT_FATAL(
             bias->padded_shape()[-1] == padded[3],
             "Bias last dim ({}) must equal input H per device ({})",
