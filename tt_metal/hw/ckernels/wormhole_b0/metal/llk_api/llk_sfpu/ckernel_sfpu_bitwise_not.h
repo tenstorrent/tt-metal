@@ -17,9 +17,8 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_bitwise_not() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::LREG4, ADDR_MOD_3, 0);
-        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::LREG4, ADDR_MOD_3, 0);
+        vInt v = dst_reg[0];
+        dst_reg[0] = ~v;
         dst_reg++;
     }
 }

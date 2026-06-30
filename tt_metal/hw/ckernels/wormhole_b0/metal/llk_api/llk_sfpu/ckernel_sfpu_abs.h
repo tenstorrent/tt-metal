@@ -26,9 +26,8 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs_int32() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(1, InstrModLoadStore::INT32, 3, 0);
-        TTI_SFPABS(0, 1, 0, 0);
-        TTI_SFPSTORE(0, InstrModLoadStore::INT32, 3, 0);
+        vInt v = dst_reg[0];
+        dst_reg[0] = reinterpret<vInt>(sfpi::abs(v));
         dst_reg++;
     }
 }
