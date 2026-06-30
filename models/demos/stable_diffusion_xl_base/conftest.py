@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings
 from pathlib import Path
 
 import pytest
@@ -217,26 +216,6 @@ def sdxl_refiner_pipeline_location(model_location_generator, is_ci_v2_env):
 def pytest_configure(config):
     """Override global timeout setting for SDXL tests"""
     config.option.timeout = 0
-
-    # Suppress noisy, non-actionable import-time warnings emitted when ttnn's native
-    # extension modules are (re-)imported under these tests. These originate in
-    # third-party / generated code and cannot be fixed cleanly at the source:
-    #   - nanobind re-registers its operation wrapper types ("type 'X' was already
-    #     registered!") because the _ttnn module uses multi-phase (PEP 489) init and
-    #     its module dict survives past nanobind's Py_AtExit leak checker. This is a
-    #     known, benign double-registration (see ttnn-nanobind bind_function.hpp).
-    #   - SWIG-generated C extension types (SwigPyPacked / SwigPyObject / swigvarlink)
-    #     lack a __module__ attribute on newer CPython, raising DeprecationWarnings.
-    warnings.filterwarnings(
-        "ignore",
-        message=r"nanobind: type .* was already registered!",
-        category=RuntimeWarning,
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r"builtin type (SwigPyPacked|SwigPyObject|swigvarlink) has no __module__ attribute",
-        category=DeprecationWarning,
-    )
 
 
 def pytest_addoption(parser):
