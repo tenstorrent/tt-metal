@@ -32,7 +32,7 @@ Each configuration file contains global settings followed by an `operations` lis
 
 ```yaml
 # Global Settings (apply to all operations)
-dest_acc: true               # 16-bit or 32-bit dest mode
+is_32b_dest_en: true         # 16-bit or 32-bit dest mode
 loop_factor: 16              # Loop factor for performance tests
 
 operations:
@@ -75,27 +75,27 @@ operations:
 
 Global settings are specified at the top level of the YAML file. These settings apply to all operations in the pipeline.
 
-### `dest_acc` (boolean, optional)
+### `is_32b_dest_en` (boolean, optional)
 Controls whether dest operates in 32-bit accumulation mode for all operations in the pipeline. When set to `true`, dest operates in 32-bit format. When set to `false`, dest operates in 16-bit format.
 
-**Important:** The `dest_acc` setting cannot be changed in the middle of kernel execution. All operations in a fused pipeline must use the same `dest_acc` setting.
+**Important:** The `is_32b_dest_en` setting cannot be changed in the middle of kernel execution. All operations in a fused pipeline must use the same `is_32b_dest_en` setting.
 
-**When to use `dest_acc: true`:**
+**When to use `is_32b_dest_en: true`:**
 
 1. **Any 32‑bit formats (Float32)**
-  If any operation in the fused pipeline uses a 32‑bit data format (`Float32`) as `input_format` or `output_format`, `dest_acc` should be set to `true` for all operations so that dest can store 32‑bit values.
+  If any operation in the fused pipeline uses a 32‑bit data format (`Float32`) as `input_format` or `output_format`, `is_32b_dest_en` should be set to `true` for all operations so that dest can store 32‑bit values.
 
 2. **8‑bit exponent → Float16 conversions (`Float16_b` / `Bfp8_b` → `Float16`)**
-  When the input format has an 8‑bit exponent (`Float16_b`, `Bfp8_b`) and the `output_format` is `Float16` (5‑bit exponent), a 32‑bit intermediate in dest is required. In this case `dest_acc` must be set to `true`.
+  When the input format has an 8‑bit exponent (`Float16_b`, `Bfp8_b`) and the `output_format` is `Float16` (5‑bit exponent), a 32‑bit intermediate in dest is required. In this case `is_32b_dest_en` must be set to `true`.
 
 3. **Improved numerical precision (optional)**
-  For all other supported format combinations where both `dest_acc: false` and `true` are allowed, you can enable `dest_acc: true` to accumulate in 32‑bit for better numerical accuracy, at the cost of reduced dest tile capacity.
+  For all other supported format combinations where both `is_32b_dest_en: false` and `true` are allowed, you can enable `is_32b_dest_en: true` to accumulate in 32‑bit for better numerical accuracy, at the cost of reduced dest tile capacity.
 
 **Dest Tile Capacity:**
 
-The available dest tile capacity depends on both `dest_acc` and the per-operation `dest_sync` setting:
+The available dest tile capacity depends on both `is_32b_dest_en` and the per-operation `dest_sync` setting:
 
-| Dest Capacity                 | `dest_acc: false` (16-bit) | `dest_acc: true` (32-bit) |
+| Dest Capacity                 | `is_32b_dest_en: false` (16-bit) | `is_32b_dest_en: true` (32-bit) |
 |-------------------------------|-----------------------------|----------------------------|
 | `dest_sync: "Half"` (default) | 8 tiles                     | 4 tiles                    |
 | `dest_sync: "Full"`           | 16 tiles                    | 8 tiles                    |
@@ -349,7 +349,7 @@ Controls the block size processed per L1-to-L1 run, in `[height, width]` element
 #### `dest_sync` (string, optional)
 Controls the synchronization mode between the math unit and packer. When set to `"SyncHalf"` (the default), dest operates in half synchronization mode (double buffering), where the math unit and packer can work on different halves of dest simultaneously. When set to `"SyncFull"`, dest operates in full synchronization mode (single buffering), where the math unit and packer share the full dest space without overlap.
 
-**Important:** Due to the synchronization between unpacker and packer (the unpacker waits for the packer from the previous operation to finish), `dest_sync` does not impact overall pipeline performance. It only affects dest capacity. See the dest tile capacity table in the [Global Settings](#global-settings) section for how `dest_sync` and `dest_acc` interact.
+**Important:** Due to the synchronization between unpacker and packer (the unpacker waits for the packer from the previous operation to finish), `dest_sync` does not impact overall pipeline performance. It only affects dest capacity. See the dest tile capacity table in the [Global Settings](#global-settings) section for how `dest_sync` and `is_32b_dest_en` interact.
 
 #### `math_fidelity` (string, required)
 Controls the precision/speed tradeoff for math operations. Available settings are `"LoFi"`, `"HiFi2"`, `"HiFi3"`, and `"HiFi4"`. Higher fidelity settings provide greater precision at the cost of slower execution. The actual impact depends on the specific operation.

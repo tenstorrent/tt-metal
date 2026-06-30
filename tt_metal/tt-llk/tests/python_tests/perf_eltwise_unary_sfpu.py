@@ -32,7 +32,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-_OPS_WITHOUT_DEST_ACC = {
+_OPS_WITHOUT_FP32_DEST = {
     MathOperation.Abs,
     MathOperation.Acosh,
     MathOperation.Asinh,
@@ -69,7 +69,7 @@ _OPS_WITH_STABLE_SORT = {
 
 
 def _get_fp32_dest_modes(mathop):
-    if mathop in _OPS_WITHOUT_DEST_ACC:
+    if mathop in _OPS_WITHOUT_FP32_DEST:
         return [Fp32DestMode.No]
     return [Fp32DestMode.Yes, Fp32DestMode.No]
 

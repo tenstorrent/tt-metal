@@ -47,7 +47,7 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [Fp32DestMode.No, Fp32DestMode.Yes]
+FP32_DEST_MODES = [Fp32DestMode.No, Fp32DestMode.Yes]
 STOCHASTIC_ROUNDING_MODES = [
     StochasticRounding.No,
     StochasticRounding.Fpu,
@@ -61,14 +61,14 @@ DEST_SYNC_MODES = [DestSync.Half]
 
 MATMUL_COMBINATIONS = sweep_matmul(
     MATMUL_FORMATS,
-    DEST_ACC_MODES,
+    FP32_DEST_MODES,
     STOCHASTIC_ROUNDING_MODES,
     DEST_SYNC_MODES,
 )
 
 TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
     MATMUL_FORMATS,
-    DEST_ACC_MODES,
+    FP32_DEST_MODES,
     STOCHASTIC_ROUNDING_MODES,
     DEST_SYNC_MODES,
 )

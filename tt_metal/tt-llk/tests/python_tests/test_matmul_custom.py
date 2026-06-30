@@ -65,9 +65,9 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Bfp8_b,
     ]
 )
-DEST_ACC_MODES = [Fp32DestMode.No, Fp32DestMode.Yes]
+FP32_DEST_MODES = [Fp32DestMode.No, Fp32DestMode.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
-    MATMUL_FORMATS, DEST_ACC_MODES
+    MATMUL_FORMATS, FP32_DEST_MODES
 )
 
 

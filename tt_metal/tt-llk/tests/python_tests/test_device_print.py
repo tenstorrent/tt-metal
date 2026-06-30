@@ -287,7 +287,7 @@ def test_dprint_tensix(case):
         ]
     )
 
-    # bf16 round-trips through DEST: DestAcc.Yes widens to fp32 with zero low
-    # bits; DestAcc.No keeps it as Float16_b.
+    # bf16 round-trips through DEST: Fp32DestMode.Yes widens to fp32 with zero low
+    # bits; Fp32DestMode.No keeps it as Float16_b.
     expected = src_A.to(torch.float32).flatten().tolist()
     assert decoded == pytest.approx(expected, abs=0.01)
