@@ -6,7 +6,6 @@ from itertools import chain, product
 
 import pytest
 import torch
-from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -43,6 +42,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+from conftest import skip_for_coverage
+
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Log1p,
     MathOperation.Exp,
@@ -50,12 +51,36 @@ SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Sqrt,
 ]
 
+# Per-op tolerance overrides (atol, rtol, pcc) for ops whose dispatched SFPU
+# kernel is intentionally low-accuracy and cannot meet the default golden
+# tolerance. TanhDerivative routes through the legacy LUT-based
+# calculate_tanh_derivative (1 - tanh^2) — the exact kernel whose per-tile loop
+# PR #48473 unrolls — which is a coarse piecewise-linear approximation. The
+# relaxed bound still catches a functional regression (e.g. an unroll
+# miscompile, which historically produced invalid assembly for these loops and
+# would collapse correlation), without flagging the LUT's inherent error.
+RELAXED_TOLERANCE_OPS = {
+    MathOperation.TanhDerivative: dict(atol=0.25, rtol=0.05, pcc=0.9),
+}
+
 ALL_MATHOPS = [
     MathOperation.Abs,
     MathOperation.Atanh,
     MathOperation.Asinh,
     MathOperation.Acosh,
+    MathOperation.Atan,
     MathOperation.Cos,
+    MathOperation.Cosh,
+    MathOperation.Sinh,
+    MathOperation.Tan,
+    MathOperation.Erf,
+    MathOperation.Erfc,
+    MathOperation.Expm1,
+    MathOperation.TanhDerivative,
+    MathOperation.Floor,
+    MathOperation.Ceil,
+    MathOperation.Trunc,
+    MathOperation.Frac,
     MathOperation.Log,
     MathOperation.Log1p,
     MathOperation.Reciprocal,
@@ -172,6 +197,17 @@ def test_eltwise_unary_sfpu_float(
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.Acosh,
+        MathOperation.Atan,
+        MathOperation.Cosh,
+        MathOperation.Sinh,
+        MathOperation.Tan,
+        MathOperation.Erf,
+        MathOperation.Expm1,
+        MathOperation.TanhDerivative,
+        MathOperation.Floor,
+        MathOperation.Ceil,
+        MathOperation.Trunc,
+        MathOperation.Frac,
         MathOperation.Log,
         MathOperation.Log1p,
         MathOperation.Reciprocal,
@@ -199,6 +235,15 @@ def test_eltwise_unary_sfpu_float(
 
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
+
+    if mathop == MathOperation.Tan and formats.input_format == DataFormat.Bfp8_b:
+        # tan is singular near pi/2; the Bfp8_b default stimuli range [0, ~2.9]
+        # straddles the pole, where tiny input quantization differences explode
+        # the output and make a golden comparison meaningless. The float formats
+        # use the benign [0.1, 1.1] range (< pi/2), so tan is still exercised.
+        pytest.skip(
+            reason="tan is ill-conditioned near pi/2 for the Bfp8_b input range"
+        )
 
     if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
         # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
@@ -288,6 +333,17 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.Acosh,
+        MathOperation.Atan,
+        MathOperation.Cosh,
+        MathOperation.Sinh,
+        MathOperation.Tan,
+        MathOperation.Erf,
+        MathOperation.Expm1,
+        MathOperation.TanhDerivative,
+        MathOperation.Floor,
+        MathOperation.Ceil,
+        MathOperation.Trunc,
+        MathOperation.Frac,
         MathOperation.Log,
         MathOperation.Log1p,
         MathOperation.Reciprocal,
@@ -462,9 +518,20 @@ def eltwise_unary_sfpu(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    relaxed = RELAXED_TOLERANCE_OPS.get(mathop)
+    if relaxed is not None:
+        passed = passed_test(
+            golden_tensor,
+            res_tensor,
+            formats.output_format,
+            custom_atol=relaxed["atol"],
+            custom_rtol=relaxed["rtol"],
+            custom_pcc_threshold=relaxed["pcc"],
+        )
+    else:
+        passed = passed_test(golden_tensor, res_tensor, formats.output_format)
+
+    assert passed, "Assert against golden failed"
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
