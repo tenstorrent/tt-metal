@@ -14,10 +14,6 @@ not divisible by 8).
 
 Usage::
 
-    # Generate reference first (required for token-accuracy):
-    HF_HUB_OFFLINE=1 ./python_env/bin/python \\
-      models/common/tests/demos/phi4/generate_controlled_refpt.py --hf-model microsoft/phi-4
-
     # Token accuracy test (accuracy mode)
     MESH_DEVICE=N300 HF_MODEL=microsoft/phi-4 \\
       pytest models/common/tests/demos/phi4/demo.py -k "not performance and token-accuracy" -v
@@ -29,8 +25,8 @@ Usage::
 LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` is set,
 otherwise ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
-Reference artifact (``.refpt``): generate with ``generate_controlled_refpt.py`` before running
-token-accuracy tests. Written to ``models/tt_transformers/tests/reference_outputs/phi-4.refpt``.
+Reference artifact (``.refpt``): the token-accuracy test gates on the committed book reference
+``models/tt_transformers/tests/reference_outputs/phi-4.refpt`` (real-corpus teacher-forced targets).
 """
 
 import json
@@ -60,8 +56,7 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # PERF.md numbers are per-user, measured at batch-1 (prefill 512, 200 decode iters). tok/s/u and
 # TTFT are therefore asserted only on the batch-1 perf case; batch-32 is informational (aggregate
 # TTFT differs and per-user throughput drifts with the larger workload). Accuracy thresholds are
-# compared against the CPU-greedy controlled refpt (intrinsic top-1 ceiling verified by
-# generate_controlled_refpt.py; see skills/reference-sanity.md).
+# compared against the committed book reference refpt (real-corpus teacher-forced targets).
 EXPECTED_METRICS = {
     "performance": {
         "N300": {"top1": 97, "top5": 100, "tok_s_u": 37.34, "ttft_ms": 123.33},
@@ -177,9 +172,8 @@ def load_reference_data(hf_model_id: str):
     ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(
-            f"Reference file not found: {ref_path}. "
-            f"Generate with: python models/common/tests/demos/phi4/generate_controlled_refpt.py "
-            f"--hf-model {hf_model_id}"
+            f"Reference file not found: {ref_path}. Expected the committed book reference "
+            f"(generated via models/tt_transformers/tests/generate_reference_outputs.py)."
         )
     ref_data = torch.load(ref_path, map_location="cpu")
     return (
