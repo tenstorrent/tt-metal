@@ -7,7 +7,12 @@ import math, struct, ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 MAX_B_Q_T = 4
-MAX_B_KV_T = 8  # Refinement 6: increased from 4 to halve KV-block count for large S
+MAX_B_KV_T = 4  # Max KV-block size in tiles (fp32-safe default)
+# Refinement 6: larger KV-block for bf16/bf8b reduces KV-block count (and thus
+# online-softmax recurrence steps), improving both performance and numerical
+# accuracy on long sequences. fp32 tiles are 4x larger, so B_kv_t=8 causes OOM
+# with fp32 input — only enable for non-fp32 dtypes.
+MAX_B_KV_T_LARGE = 8
 MAX_D_BLOCK = 4  # Max D tiles per D-chunk in the PV matmul (constant-bounds O/V CBs)
 
 
@@ -35,7 +40,11 @@ def create_program_descriptor(
     S_q_tiles = (S_q + TILE_DIM - 1) // TILE_DIM
     S_kv_tiles = (S_kv + TILE_DIM - 1) // TILE_DIM
     B_q_t = min(MAX_B_Q_T, S_q_tiles)
-    B_kv_t = min(MAX_B_KV_T, S_kv_tiles)
+    # Refinement 6: use larger B_kv_t for non-fp32 dtypes to reduce KV-block
+    # count (fewer softmax recurrence steps → better accuracy on long sequences).
+    # fp32 tiles are 4x larger → B_kv_t=8 causes OOM with fp32 input.
+    max_b_kv_t = MAX_B_KV_T_LARGE if query.dtype != ttnn.float32 else MAX_B_KV_T
+    B_kv_t = min(max_b_kv_t, S_kv_tiles)
     # Ensure B_q_t divides S_q_tiles so every Q-block is full (no partial last block).
     # The kernel uses B_q_t as a compile-time constant for CB sizing and loop bounds,
     # so a partial last block would read/write out-of-bounds tiles. Reduce B_q_t to
