@@ -200,7 +200,13 @@ class DistributedRMSNorm(Module):
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
     def _ensure_fused_stats_buffer(
-        self, x: ttnn.Tensor, num_heads_per_device: int, rope_cos=None, rope_sin=None, trans_mat=None
+        self,
+        x: ttnn.Tensor,
+        num_heads_per_device: int,
+        rope_cos=None,
+        rope_sin=None,
+        trans_mat=None,
+        per_head_norm: bool = False,
     ):
         """Lazy-allocate the persistent stats buffer for the fused device op.
 
@@ -211,9 +217,13 @@ class DistributedRMSNorm(Module):
         default num_links (=1), so we leave create_stats_buffer at its default too;
         but we MUST forward weight/RoPE or the buffer is sized for a different chunk
         than the kernel writes, silently corrupting each chunk's last AG row.
+
+        per_head_norm must match the value passed to wan_fused_distributed_rmsnorm:
+        when True, create_stats_buffer returns None (no DRAM scratch needed on the
+        is_tp_1 path) and we propagate that to skip the buffer pool entirely.
         """
         has_rope = rope_cos is not None
-        key = (tuple(x.shape), num_heads_per_device, has_rope)
+        key = (tuple(x.shape), num_heads_per_device, has_rope, per_head_norm)
         cache = getattr(self, "_fused_stats_buffer_cache", None)
         if cache is None:
             cache = {}
@@ -235,6 +245,7 @@ class DistributedRMSNorm(Module):
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
+                    per_head_norm=per_head_norm,
                     weight=self.weight.data if self.weight is not None else None,
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
@@ -283,7 +294,12 @@ class DistributedRMSNorm(Module):
 
         if _USE_FUSED_RMSNORM:
             persistent_output_buffer = self._ensure_fused_stats_buffer(
-                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+                x,
+                num_heads_per_device,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                per_head_norm=per_head_norm,
             )
             return ttnn.experimental.wan_fused_distributed_rmsnorm(
                 x,
@@ -294,6 +310,7 @@ class DistributedRMSNorm(Module):
                 persistent_output_buffer=persistent_output_buffer,
                 epsilon=self.norm_eps,
                 num_heads_per_device=num_heads_per_device,
+                per_head_norm=per_head_norm,
                 weight=self.weight.data if self.weight is not None else None,
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
                 transformation_mat=trans_mat,
