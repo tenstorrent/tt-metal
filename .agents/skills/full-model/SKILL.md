@@ -168,6 +168,8 @@ python models/common/readiness_check/check_degenerate_output.py \
 
 and include its verdict in the stage evidence. Mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug, never a model property. The runner-side stage gate runs the same check.
 
+Shift qualitative checks left: as soon as the full model can generate text, use `$qualitative-check` to run the shared qualitative prompt suite through both the HF reference and TT generator. Later stages may add serving-specific checks, but they should not be the first place these prompts are tried.
+
 Add a focused split-sampling trace test before marking the stage complete:
 
 - capture/replay two or more decode steps with different token and current-position values;
