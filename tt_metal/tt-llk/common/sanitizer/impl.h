@@ -519,7 +519,6 @@ static inline bool fsm_check(ThreadOutputContext& context, const FsmState& curre
     // INITIALIZED[Op] -> INITIALIZED[Any]: WARN (Functionally valid, Performance loss)
     // INITIALIZED[Op] -> UNINITIALIZED[Op]: WARN (Functionally valid, Performance loss)
     //
-    // sstanisic fixme: remove reconfig between init and execute
     // IF EXPECT_UNINIT == FALSE
     //     INITIALIZED[Op] -> RECONFIGURED: Valid
     //
