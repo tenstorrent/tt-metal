@@ -348,7 +348,7 @@ struct Metal2BindingsSnapshot {
     struct ScratchEntry {
         std::string name;
         uint32_t size_bytes;
-        uint32_t addr_crta_offset;
+        uint32_t addr_crta_word;
     };
 
     bool is_metal2 = false;
@@ -375,8 +375,7 @@ struct Metal2BindingsSnapshot {
                  std::to_string(ta.addr_crta_offset);
         }
         for (const auto& sp : scratch_accessors) {
-            s +=
-                ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_offset);
+            s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
         }
         for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
@@ -708,8 +707,8 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
     kernel.process_scratchpad_binding_handles(
-        [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_off) {
-            s.scratch_accessors.push_back({name, size_bytes, addr_crta_off});
+        [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+            s.scratch_accessors.push_back({name, size_bytes, addr_crta_word});
         });
     return s;
 }
@@ -787,9 +786,8 @@ static void emit_metal2_namespaces(
     if (!s.scratch_accessors.empty()) {
         f << "namespace scratch {\n";
         for (const auto& sp : s.scratch_accessors) {
-            f << "using " << sp.name << "_t = ::scratchpad::ScratchpadBindingToken<" << sp.size_bytes << "u, "
-              << sp.addr_crta_offset << "u>;\n";
-            f << "constexpr " << sp.name << "_t " << sp.name << "{};\n";
+            f << "constexpr ScratchpadAccessor " << sp.name << "{" << sp.addr_crta_word << "u, " << sp.size_bytes
+              << "u};\n";
         }
         f << "}  // namespace scratch\n";
     }

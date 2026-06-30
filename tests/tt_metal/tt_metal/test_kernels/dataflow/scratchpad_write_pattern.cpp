@@ -27,8 +27,8 @@ void kernel_main() {
     // Host-known L1 address to report the scratchpad's base address into (named per-node RTA).
     uintptr_t report_addr = get_arg(args::report_addr);
 
-    // Construct the scratchpad accessor from the codegen-emitted token. Element type is the kernel
-    // author's choice (uint32_t here); size()/size_bytes() come from the token's compile-time SIZE.
+    // Construct the scratchpad from the codegen-emitted accessor. Element type is the kernel
+    // author's choice (uint32_t here); size()/size_in_bytes() come from the accessor's compile-time size.
     auto s = Scratchpad<uint32_t>(scratch::pad);
 
     // (a) Write a known pattern across the whole scratchpad. The base value is non-trivial so a
@@ -43,5 +43,5 @@ void kernel_main() {
     // ReadFromDeviceL1 after the (blocking) enqueue completes — the same pattern test_add_two_ints
     // and test_single_dm_l1_write rely on for Gen1.
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-    report[0] = s.get_base_address();
+    report[0] = s.get_base_addr().get_address();
 }

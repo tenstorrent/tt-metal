@@ -128,12 +128,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     struct ScratchEntry {
         string name;
         uint32_t size_bytes;
-        uint32_t addr_crta_offset;
+        uint32_t addr_crta_word;
     };
     vector<ScratchEntry> scratch_entries;
     settings.process_scratchpad_binding_handles(
-        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_offset) {
-            scratch_entries.push_back({name, size_bytes, addr_crta_offset});
+        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+            scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
     // Emit the header content:
@@ -171,7 +171,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
         if (!scratch_entries.empty()) {
             // The full Scratchpad accessor (NOC-free, so it compiles on both data-movement and
-            // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
+            // compute/TRISC builds), which also pulls in the ScratchpadAccessor binding type.
             content << "#include \"api/scratchpad.h\"\n";
         }
         content << "\n";
@@ -210,15 +210,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!scratch_entries.empty()) {
-            // ScratchpadBindingToken<SIZE_BYTES, ADDR_CRTA_OFFSET>: pairs the scratchpad's compile-time
-            // size with the byte offset of its (framework-allocated) base-address CRTA. The kernel-side
-            // Scratchpad(token) constructor unpacks both. Per-binding type alias (`<name>_t`) lets the
-            // framework extend the underlying token template later without touching kernel source.
+            // ScratchpadAccessor{ADDR_CRTA_WORD, SIZE_BYTES}: pairs the word index of the scratchpad's
+            // (framework-allocated) base-address CRTA with its compile-time per-node size. The kernel-side
+            // Scratchpad(accessor) constructor unpacks both. The accessor's members are opaque, so the
+            // framework can extend it later without touching kernel source.
             content << "namespace scratch {\n";
             for (const auto& entry : scratch_entries) {
-                content << "using " << entry.name << "_t = ::scratchpad::ScratchpadBindingToken<" << entry.size_bytes
-                        << "u, " << entry.addr_crta_offset << "u>;\n";
-                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+                content << "constexpr ScratchpadAccessor " << entry.name << "{" << entry.addr_crta_word << "u, "
+                        << entry.size_bytes << "u};\n";
             }
             content << "}  // namespace scratch\n";
         }

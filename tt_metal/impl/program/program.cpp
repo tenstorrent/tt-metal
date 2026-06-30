@@ -1359,7 +1359,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 // would be computed but not delivered — a reorder hazard, not a path that exists today.
                 if (!kernel->common_runtime_args().empty()) {
                     RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta.data()[handle.addr_crta_offset / sizeof(uint32_t)] = handle.allocated_address;
+                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
                 }
             }
         }

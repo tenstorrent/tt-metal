@@ -3577,8 +3577,8 @@ void kernel_main() {
 // ----------------------------------------------------------------------------
 //
 // Like the TensorAccessor smoke above, these JIT-compile a kernel that constructs a Scratchpad from
-// its binding token (scratch::<name>) and reads the CRTA-injected base address — exercising the
-// generated scratch:: namespace + token alias and the device-side Scratchpad ctor. Compile-only on
+// its binding accessor (scratch::<name>) and reads the CRTA-injected base address — exercising the
+// generated scratch:: namespace + ScratchpadAccessor object and the device-side Scratchpad ctor. Compile-only on
 // the mock Wormhole device (Gen1: the Quasar TRISC firmware isn't built in this checkout, so a
 // Quasar JIT-compile would fail at link).
 
@@ -3593,7 +3593,7 @@ TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeDMKernel) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     Scratchpad<int32_t> pad(scratch::scratch);
-    volatile uint32_t base = pad.get_base_address();
+    volatile uint32_t base = pad.get_base_addr().get_address();
     (void)base;
 }
 )"};
@@ -3623,7 +3623,7 @@ TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeComputeKernel) {
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     Scratchpad<int32_t> pad(scratch::scratch);
-    volatile uint32_t base = pad.get_base_address();
+    volatile uint32_t base = pad.get_base_addr().get_address();
     (void)base;
 }
 )"};

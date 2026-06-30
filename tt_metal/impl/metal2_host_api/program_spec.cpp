@@ -2333,7 +2333,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 // Per-kernel resolved scratchpad bindings:
 //  - one CRTA word per binding (the scratchpad's allocated L1 base address), in declaration order
 //  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
-//    each binding's absolute CRTA word index (and thus addr_crta_offset) is fixed at codegen time
+//    each binding's absolute CRTA word index (and thus addr_crta_word) is fixed at codegen time
 //    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
 // The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
 struct ScratchpadBindingsForKernel {
@@ -2355,7 +2355,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         ScratchpadBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
-        handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+        handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding

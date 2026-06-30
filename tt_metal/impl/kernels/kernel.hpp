@@ -123,11 +123,11 @@ struct TensorBindingHandle {
 // A scratchpad is a private, blank, node-local L1 region bound to exactly one kernel. Unlike a
 // TensorBindingHandle (whose address is filled per-enqueue from a user TensorArgument), a scratchpad's
 // L1 is allocated by the framework at program-compile time; allocated_address is filled in then (0
-// until allocated) and written into the kernel's CRTA buffer at addr_crta_offset.
+// until allocated) and written into the kernel's CRTA buffer at addr_crta_word.
 struct ScratchpadBindingHandle {
     std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
-    uint32_t size_bytes = 0;         // per-node size; emitted as the token's compile-time SIZE_BYTES
-    uint32_t addr_crta_offset = 0;   // byte offset of the base-address slot within the kernel's CRTA buffer
+    uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
+    uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
 };
 
@@ -198,7 +198,7 @@ public:
                                             uint32_t num_runtime_field_crta_words)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_offset)>)
+        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>)
         const override;
     // Scratchpad binding handles are set post-construction (their size is part of compute_hash, so this
     // must run before the kernel is compiled). Non-const accessor lets allocate_scratchpads fill

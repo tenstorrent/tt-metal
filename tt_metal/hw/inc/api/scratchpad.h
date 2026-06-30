@@ -5,118 +5,148 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/core_local_mem.h"
-#include "internal/risc_attribs.h"  // tt_l1_ptr (named in get_unsafe_ptr's return type)
+#include "api/debug/assert.h"
+#include "experimental/kernel_args.h"
 
-// Forward declared from the kernel's API header (api/dataflow/dataflow_api.h for data movement,
-// api/compute/common.h for compute/TRISC), which the kernel TU includes before the generated
-// kernel_bindings header. Declaring it here — rather than including either API — keeps this
-// header usable on both kernel types (mirrors api/tensor/tensor_accessor_args.h).
-template <typename T>
-T get_common_arg_val(int arg_idx);
+// Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
+// The user will never directly interact with this type.
+//
+// The user's host code declares an accessor_name when binding a scratchpad to a kernel.
+// The user then uses that accessor_name to construct a Scratchpad in the kernel code.
+//
+// Usage example:
+//   // (Host code declares "my_scratchpad_name" as the scratchpad accessor name for this kernel.)
+//   // In the kernel code:
+//   Scratchpad<int32_t> my_pad(scratch::my_scratchpad_name);
+//
+// Here my_scratchpad_name is a constexpr ScratchpadAccessor, auto-included in
+// kernel_bindings_generated.h.
+class ScratchpadAccessor {
+public:
+    explicit constexpr ScratchpadAccessor(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
+        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
-namespace scratchpad {
+private:
+    template <typename T>
+    friend class Scratchpad;
 
-// ScratchpadBindingToken:
-//
-// == What is it? ==
-// This is a codegen-emitted handle for a Metal 2.0 kernel's scratchpad binding.
-// The user never interacts with this type directly; they use an opaque token (defined in the
-// auto-generated kernel_bindings_generated.h) to construct a Scratchpad accessor from it.
-//
-// The user's kernel code looks like:
-//   auto s = Scratchpad<uint32_t>(scratch::my_host_declared_accessor_name);
-//
-// == How does it work? ==
-// For each kernel scratchpad binding, headergen emits the following into kernel_bindings_generated.h:
-//   - A type alias:  using my_scratch_name_t = ScratchpadBindingToken<SIZE_BYTES, ADDR_CRTA_OFFSET>;
-//   - A token value: constexpr my_scratch_name_t my_scratch_name{};
-//
-// The token carries two pieces, both fixed by the host ProgramSpec:
-//   - SIZE_BYTES:        the scratchpad's per-node size, delivered as an implicit compile-time arg (CTA).
-//   - ADDR_CRTA_OFFSET:  the byte offset, within the kernel's common-runtime-arg (CRTA) buffer, of the
-//                        word holding the scratchpad's allocated L1 base address. The framework fills
-//                        that word at program-compile time (the scratchpad is allocated then), and the
-//                        Scratchpad ctor reads it via get_common_arg_val.
-//
-// This indirection mirrors the tensor binding token (api/tensor/tensor_binding_token.h): it lets the
-// framework change what goes into the token later without disturbing any existing Metal 2.0 kernel
-// code. The token is intentionally NOC-free so it compiles on both compute (TRISC) and data-movement
-// builds.
-//
-template <uint32_t SIZE_BYTES, uint32_t ADDR_CRTA_OFFSET>
-struct ScratchpadBindingToken {
-    static constexpr uint32_t size_bytes = SIZE_BYTES;
-    static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
+    uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
+    uint32_t size_in_bytes_;  // static per-node size
 };
 
-}  // namespace scratchpad
-
 /**
- * @brief A private, node-local L1 scratch region for a kernel's working memory.
+ * @brief Kernel-side typed span over a Program-scope scratchpad.
  *
- * Scratchpad is the device-side accessor for a Metal 2.0 kernel scratchpad (see ScratchpadSpec on
- * the host). It hands a kernel typed, node-local read/write access to a private chunk of L1 — the
- * sanctioned replacement for abusing a dataflow buffer (DFB) as scratch. It works on both data
- * movement and compute (TRISC) kernels.
+ * A Scratchpad is the device-side counterpart to the host ScratchpadSpec: it provides indexed
+ * access to the scratchpad region reserved in per-node SRAM ("L1") for the duration of a Program.
  *
- * USAGE:
- *   // The kernel author declares the element type T of the scratch region.
- *   auto s = Scratchpad<uint32_t>(scratch::my_host_declared_accessor_name);  // Metal 2.0 ctor
- *   s[0] = 42;       // read or write
- *   auto n = s.size();  // number of T-elements that fit
+ * Construct one from the accessor your host code declared on the kernel's scratchpad binding:
+ * @code
+ *   // Host code declares the accessor name "my_scratchpad_name" for this kernel.
+ *   // In the kernel:
+ *   Scratchpad<int32_t> my_pad(scratch::my_scratchpad_name);
+ * @endcode
  *
- * The region is uninitialized; the kernel must write before it reads. Its base address is allocated
- * by the framework at program-compile time and delivered as an implicit common runtime arg; its
- * size is delivered as an implicit compile-time arg. Both are carried by the binding token, so the
- * kernel author never touches an offset or a raw pointer.
+ * The region is provided as raw, uninitialized memory, with no synchronization of read/write
+ * across threads. Avoiding undefined-behavior access is the user's responsibility; typical kinds
+ * of UB access here include:
+ * 1. Reading uninitialized data.
+ * 2. Data races across threads.
  *
- * @tparam T  Element type viewed over the scratch region.
+ * Indexed access via operator[] is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
+ *
+ * @tparam T Element type the region is viewed as.
+ * @see scratchpad_spec.hpp (host-side ScratchpadSpec)
  */
 template <typename T>
 class Scratchpad {
 public:
-    // Construct from a Metal 2.0 binding token. The base address is the token's CRTA word; the size
-    // is the token's compile-time SIZE_BYTES.
-    template <uint32_t SIZE_BYTES, uint32_t ADDR_CRTA_OFFSET>
-    explicit Scratchpad(scratchpad::ScratchpadBindingToken<SIZE_BYTES, ADDR_CRTA_OFFSET>) :
-        mem_(static_cast<uintptr_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))),
-        size_bytes_(SIZE_BYTES) {
-        // ADDR_CRTA_OFFSET is a byte offset host codegen produces as crta_word_index * sizeof(u32), so
-        // it is word-aligned by construction; the /sizeof(u32) conversion would silently truncate otherwise.
-        static_assert(
-            ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
-            "ScratchpadBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+    using element_type = T;
+    using value_type = std::remove_cv_t<T>;
+    using size_type = uint32_t;
+
+    // Use CoreLocalMem as pointer type as Scratchpad will always be in CoreLocal memory space (SRAM).
+    using pointer = CoreLocalMem<T>;
+    using const_pointer = CoreLocalMem<const T>;
+    using reference = T&;
+    using const_reference = const T&;
+
+    // Resolve a scratchpad from its binding token: read the per-node base L1 address from the CRTA
+    // slot at the token's crta offset; size is the static spec value.
+    [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept :
+        Scratchpad(pointer{get_common_arg_val<uint32_t>(accessor.crta_offset_)}, accessor.size_in_bytes_) {}
+
+    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
+        start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {
+        ASSERT(base_addr.get_address() % alignof(T) == 0);
+        ASSERT(size_in_bytes % sizeof(T) == 0);
     }
 
-    // Legacy constructor: from a raw node-local L1 base address (byte address) and the region's size
-    // in bytes. For hand-written / non-Metal-2.0 kernels.
-    explicit Scratchpad(uint32_t base_address, uint32_t size_bytes = 0) :
-        mem_(static_cast<uintptr_t>(base_address)), size_bytes_(size_bytes) {}
+    /** @brief Get the element at the given index
+     *
+     * The index is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
+     *
+     * @param index The index of the element to get
+     * @return Reference to the element at the given index
+     */
+    [[nodiscard]] reference operator[](uint32_t index) const {
+        auto location = start_addr_ + index;
+        ASSERT(location < sentinel_addr_);
+        return *location;
+    }
 
-    // Element access into the scratch region (read and write). The underlying L1 access is
-    // debug-sanitized by CoreLocalMem (an L1-address validity check); it is NOT bounded against the
-    // scratchpad's own size — staying within size()/size_bytes() is the caller's responsibility.
-    T& operator[](uint32_t index) const { return mem_[index]; }
+    /** @brief Get the size of this scratchpad in number of T elements
+     *
+     * @return Number of T-sized elements in this scratchpad.
+     */
+    [[nodiscard]] size_type size() const noexcept { return size_type{size_in_bytes() / sizeof(T)}; }
 
-    // Raw, directly-dereferenceable L1 pointer to the start of the scratch region.
-    tt_l1_ptr T* get_unsafe_ptr() const { return mem_.get_unsafe_ptr(); }
+    /** @brief Get the size of this scratchpad in number of bytes.
+     *
+     * Equals ScratchpadSpec::size_per_node from the host spec.
+     *
+     * @return size of the scratchpad in bytes.
+     */
+    [[nodiscard]] size_type size_in_bytes() const noexcept {
+        return size_type{sentinel_addr_.get_address() - start_addr_.get_address()};
+    }
 
-    // L1 base address of the scratch region.
-    uint32_t get_base_address() const { return static_cast<uint32_t>(mem_.get_address()); }
+    /** @brief Get the base address of the scratchpad.
+     *
+     * This is a facility to escape the index accessors while getting the base address directly.
+     * Indexed accessors should be preferred whenever possible as they have a bounds check via ASSERT (see
+     * api/debug/assert.h for when it's activated).
+     *
+     * @return the base address of the scratchpad
+     */
+    [[nodiscard]] pointer get_base_addr() const noexcept { return start_addr_; }
 
-    // Size of the scratch region, in bytes.
-    uint32_t size_bytes() const { return size_bytes_; }
-
-    // Number of T-elements the scratch region holds (size_bytes / sizeof(T)).
-    uint32_t size() const { return size_bytes_ / sizeof(T); }
-
-    // The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
-    // (pointer arithmetic, scoped_lock, comparisons, ...).
-    const CoreLocalMem<T>& local_mem() const { return mem_; }
+    // begin/end pair to enable range-based-for over the entire scratchpad region.
+    // This does not support standard-library algorithms that require a conforming iterator:
+    // `CoreLocalMem<T>` does not satisfy the named iterator requirements.
+    using iterator = pointer;
+    [[nodiscard]] iterator begin() const noexcept { return start_addr_; }
+    [[nodiscard]] iterator end() const noexcept { return sentinel_addr_; }
 
 private:
-    CoreLocalMem<T> mem_;
-    uint32_t size_bytes_;
+    // constexpr note:
+    // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
+    // construction/copy and a constexpr `get_address()`:
+    //   - Scratchpad(pointer, size_type)
+    //   - size(), size_in_bytes()
+    //   - get_base_addr()
+    //   - begin(), end()
+    // They are currently runtime-only because `CoreLocalMem<T>` does not provide constexpr support
+    // for those operations.
+
+    // Invariant:
+    // - `start_addr_` and `sentinel_addr_` are always aligned to the alignment of T.
+    // - `sentinel_addr_` - `start_addr_` is always a multiple of sizeof(T).
+    //
+    // Note:
+    // sentinel_addr_ could be omitted in class layout if we inject the size information as a template parameter.
+    pointer start_addr_, sentinel_addr_;
 };
