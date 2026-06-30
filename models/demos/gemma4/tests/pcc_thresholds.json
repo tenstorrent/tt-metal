@@ -122,7 +122,9 @@
       "test_prefill_trace_eager_hf_parity[blackhole-batch4-prefill_1024-1x4]": 0.99,
       "test_prefill_trace_eager_hf_parity[blackhole-batch32-prefill_1024-1x4]": 0.99,
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_2048-1x4]": 0.99,
-      "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_4096-1x4]": 0.99
+      "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_4096-1x4]": 0.99,
+      "test_lm_head[blackhole-1x4]": 0.999,
+      "test_lm_head_decode_batch32[blackhole-1x4]": 0.999
     },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
@@ -132,7 +134,13 @@
       "test_attention_prefill[blackhole-seq1024-global-1x8]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x8]": 0.97,
       "test_full_model[wormhole_b0-1x8]": 0.98,
-      "test_full_model[blackhole-1x8]": 0.97
+      "test_full_model[blackhole-1x8]": 0.97,
+      "test_lm_head[wormhole_b0-1x8]": 0.999,
+      "test_lm_head[blackhole-1x8]": 0.999,
+      "test_lm_head_decode_batch32[wormhole_b0-1x8]": 0.999,
+      "test_lm_head_decode_batch32[blackhole-1x8]": 0.999,
+      "test_sampling_log_probs_pcc[wormhole_b0-1x8]": 0.999,
+      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999
     }
   }
 }
