@@ -352,6 +352,139 @@ class _CompletionCheckConsumer:
             logger.warning(f"[completion-check] count short: got {got}, expected {self._expected_total}")
 
 
+class _InterleavedMigrationDriver:
+    """Test-only scheduler stand-in (PREFILL_MIGRATION_INTERLEAVED=1): consume the per-layer ack
+    counter channel and issue ONE KV migrate per fully-completed chunk, interleaved with ongoing
+    prefill — no post-loop bulk migrate. Driven on the request-loop thread (no native thread, no GIL
+    contention), so it is only safe in BOUNDED self-test mode where the loop yields between chunks.
+
+    The counter channel is payload-free, so 'which chunk' is derived from the dense, in-order
+    seq = request_id*num_layers + layer_idx: cursor // num_layers is the count of fully-completed
+    chunks. request_id -> (slot, pos) correlation (the scheduler's InFlightChunkFIFO) is recorded as
+    each chunk is dispatched. Single-rank: acks fire synchronously inside prefill(); pipeline: they
+    arrive async via the router and drain() polls the tail.
+
+    Single-rank requires PREFILL_ENABLE_LAYER_ACK=1 (or PREFILL_ENABLE_MIGRATION=1) so the runtime
+    actually injects the channel; pipeline always injects via the master router."""
+
+    POS_ALIGN = 32  # KV migration chunk granularity (blaze _align_up)
+
+    def __init__(
+        self,
+        ack_shm_name,
+        migration_endpoint,
+        *,
+        num_layers,
+        src_slot,
+        dst_slot,
+        endpoint_id,
+        wait_complete_ms,
+        router=None,
+    ):
+        self._acks = ttnn.InterProcessCounterChannel.connect(ack_shm_name, 30000)
+        self._mig = migration_endpoint
+        self._num_layers = num_layers
+        self._src, self._dst, self._ep = src_slot, dst_slot, endpoint_id
+        self._wait_ms = wait_complete_ms
+        self._inflight: dict = {}  # request_id -> (slot_id, actual_start, actual_end)
+        self._cursor = 0  # completions consumed so far (== next expected seq)
+        self._migrated = 0  # chunks already migrated
+        self._tokens: list = []  # outstanding migrate tokens (deferred wait_complete => overlap)
+        # Diagnostics only. _router (master LayerCompletionRouter, may be None) exposes .processed = the
+        # total acks the router has INJECTED into the channel; comparing it to our consumed _cursor tells
+        # us whether completions are even reaching the channel during the loop. _migrated_in_loop counts
+        # migrates issued WHILE prefill was running (the real interleave count) vs. at the tail drain.
+        self._router = router
+        self._migrated_in_loop = 0
+
+    def record_chunk(self, request_id, slot_id, actual_start, actual_end) -> None:
+        self._inflight[request_id] = (slot_id, actual_start, actual_end)
+
+    def pump(self, current_prefill_chunk=None) -> None:
+        """Non-blocking: consume injected acks, then migrate any chunk whose layers all completed.
+        ``current_prefill_chunk`` is the chunk the prefill loop is on RIGHT NOW (``None`` during the
+        tail drain, i.e. after the loop ended) — used only to log migrate-vs-prefill overlap."""
+        consumed = self._acks.try_consume_all()
+        self._cursor += consumed
+        complete = self._cursor // self._num_layers  # dense + in-order => fully-done chunk count
+        # Per-call diagnostic. The KEY question is whether `cursor`/`complete_chunks` ADVANCE during the
+        # loop (current_prefill_chunk set) or only at the tail drain. router_injected is what the master
+        # router has pushed into the channel so far: if injected climbs during the loop but consumed/
+        # cursor don't, the driver isn't keeping up; if injected itself stays flat until the tail, the
+        # completions aren't reaching the channel mid-loop (the chunk isn't "done" until the last stage).
+        # Log every loop call; during drain only log when acks actually arrived (avoid 2ms-poll spam).
+        if current_prefill_chunk is not None or consumed:
+            injected = self._router.processed if self._router is not None else -1
+            phase = f"prefill@chunk={current_prefill_chunk}" if current_prefill_chunk is not None else "tail-drain"
+            logger.debug(
+                f"[interleave-diag] pump({phase}): consumed={consumed} cursor={self._cursor} "
+                f"complete_chunks={complete} already_migrated={self._migrated} router_injected={injected} "
+                f"(num_layers={self._num_layers})"
+            )
+        while self._migrated < complete:
+            self._migrate_chunk(self._migrated, current_prefill_chunk)
+            self._migrated += 1
+
+    def _migrate_chunk(self, c, current_prefill_chunk=None) -> None:
+        slot, a_start, a_end = self._inflight.pop(c)
+        if slot != self._src:
+            return  # not the slot this loopback test migrates
+        pos_start = (a_start // self.POS_ALIGN) * self.POS_ALIGN
+        pos_end = ((a_end + self.POS_ALIGN - 1) // self.POS_ALIGN) * self.POS_ALIGN
+        if pos_end <= pos_start:
+            return  # all-pad chunk: nothing real to ship
+        # Incremental slice for THIS chunk only -> true interleave. layer range [0, num_layers): the
+        # worker routes each layer to its owning stage. Args mirror the bulk self-test migrate.
+        uuid = c + 1
+        tok = self._mig.migrate(uuid, self._ep, self._src, self._dst, 0, self._num_layers, pos_start, pos_end)
+        self._tokens.append(tok)
+        # Overlap evidence: the migrate is now running ASYNC on the worker (wait_complete is deferred to
+        # drain()), so the prefill loop keeps going while this copy is in flight. Compare this line's
+        # timestamp against the next "[interleave] prefilled chunk ..." line to see the overlap on the
+        # wall clock; the "copy(ies) in flight" count below is how many copies are running concurrently.
+        if current_prefill_chunk is None:
+            overlap = "TAIL (prefill loop already finished)"
+        else:
+            self._migrated_in_loop += 1
+            overlap = f"WHILE prefilling chunk {current_prefill_chunk} (prefill is {current_prefill_chunk - c} chunk(s) ahead)"
+        logger.info(
+            f"[interleave] MIGRATE issued uuid={uuid} chunk {c} slot{self._src}->slot{self._dst} "
+            f"pos[{pos_start},{pos_end}) {overlap}; {len(self._tokens)} copy(ies) in flight, none waited yet"
+        )
+
+    def drain(self, expected_chunks, poll_timeout_s=120.0) -> None:
+        """Tail: pipeline acks may still be in flight. Poll until all completions are consumed
+        (migrating as they land), then wait_complete every outstanding copy."""
+        target = expected_chunks * self._num_layers
+        deadline = time.perf_counter() + poll_timeout_s
+        while self._cursor < target:
+            self.pump(current_prefill_chunk=None)
+            if self._cursor >= target or time.perf_counter() >= deadline:
+                break
+            time.sleep(0.002)
+        self.pump(current_prefill_chunk=None)  # flush the final completed chunk
+        if self._cursor < target:
+            logger.warning(f"[interleave] drain timeout: {self._cursor}/{target} completions consumed")
+        # This is the ONLY place we block on completion. The split below is the headline interleave
+        # metric: migrated_in_loop is how many copies were issued WHILE prefill was still running (real
+        # overlap); migrated_at_tail is how many only became ready after the loop. All-tail => no overlap.
+        # If wait_complete returns near-instantly, the in-loop copies finished during prefill (good); if
+        # it takes ~as long as a bulk migrate, nothing actually overlapped.
+        tail = self._migrated - self._migrated_in_loop
+        logger.info(
+            f"[interleave] prefill loop finished; {self._migrated} migrate(s) total: "
+            f"{self._migrated_in_loop} issued DURING prefill (overlapped), {tail} issued at the TAIL; "
+            f"{len(self._tokens)} copy(ies) still in flight — now wait_complete-ing all (the only blocking wait)"
+        )
+        t_wait = time.perf_counter()
+        for tok in self._tokens:
+            self._mig.wait_complete(tok, self._wait_ms)
+        logger.success(
+            f"[interleave] {self._migrated} chunk migrate(s) complete ({self._migrated_in_loop} overlapped, "
+            f"{tail} tail); tail wait_complete took {(time.perf_counter() - t_wait) * 1e3:.1f} ms"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Loop
 # ---------------------------------------------------------------------------
@@ -525,7 +658,14 @@ def _drain_and_log_e2e(
 
 
 def run_request_loop(
-    runtime: TtPrefillRuntime, rank: int, num_ranks: int, *, h2d_service=None, d2d_in=None, d2d_out=None
+    runtime: TtPrefillRuntime,
+    rank: int,
+    num_ranks: int,
+    *,
+    h2d_service=None,
+    d2d_in=None,
+    d2d_out=None,
+    migration_driver=None,
 ) -> dict:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until SIGTERM. There is no
@@ -562,6 +702,15 @@ def run_request_loop(
         else:
             inp, meta = _d2d_recv(d2d_in)
         t = _compute_and_send(runtime, rank, c, inp, meta, d2d_out)
+        # Interleaved migration: register this chunk's correlation, then migrate any chunk whose layers
+        # have all acked (single-rank: chunk c's acks are visible the moment _compute_and_send returns).
+        if migration_driver is not None:
+            migration_driver.record_chunk(c, meta["slot_id"], meta["actual_start"], meta["actual_end"])
+            logger.info(
+                f"[interleave] prefilled chunk {c} (slot{meta['slot_id']} "
+                f"pos[{meta['actual_start']},{meta['actual_end']})); pumping migration driver"
+            )
+            migration_driver.pump(current_prefill_chunk=c)
         # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
         # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
         s = meta["slot_id"]
@@ -856,10 +1005,6 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         os.environ.get("PREFILL_ENABLE_LAYER_ACK", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")) == "1"
     )
 
-    enable_layer_ack = (
-        os.environ.get("PREFILL_ENABLE_LAYER_ACK", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")) == "1"
-    )
-
     def _unlink_stale_shm(name: str) -> None:
         # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
         path = f"/dev/shm/{name.lstrip('/')}"
@@ -967,6 +1112,33 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         if rank == master_rank and check_completions:
             completion_check = _CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
 
+    # Interleaved migration self-test: rank 0 stands in for the scheduler — consume the per-layer ack
+    # channel and migrate each chunk as its layers complete, overlapping later chunks' prefill (replaces
+    # the post-loop bulk migrate). Rank 0 only (it holds the migration client); other ranks just verify.
+    mig_driver = None
+    if _selftest and is_first_rank and os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1":
+        assert migration_endpoint is not None, "rank 0 must hold the migration client for interleaved migrate"
+        mig_driver = _InterleavedMigrationDriver(
+            ack_shm_name,
+            migration_endpoint,
+            num_layers=NUM_LAYERS,
+            src_slot=int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")),
+            dst_slot=int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")),
+            endpoint_id=int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1")),
+            wait_complete_ms=int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000")),
+            # Diagnostics: the master router (pipeline only; None in single-rank) exposes .processed so the
+            # driver can log injected-vs-consumed acks. router is None here in the single-rank path.
+            router=router,
+        )
+        logger.info(
+            "[interleave] migration mode = INTERLEAVED (PREFILL_MIGRATION_INTERLEAVED=1): rank 0 migrates "
+            "each chunk as its layers ack, overlapping later chunks' prefill; one blocking wait at drain"
+        )
+    elif _selftest and is_first_rank:
+        logger.info(
+            "[interleave] migration mode = BULK (single post-loop migrate); set PREFILL_MIGRATION_INTERLEAVED=1 "
+            "to interleave migrates with prefill"
+        )
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
@@ -975,22 +1147,31 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         # local dst KV slice equals its src slice (validate_migrations_pairwise). Env-gated so ALL ranks
         # take the same branch (the barrier below requires it); production serving is unaffected.
         real_end_per_slot = run_request_loop(
-            runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out
+            runtime,
+            rank,
+            num_ranks,
+            h2d_service=h2d_service,
+            d2d_in=d2d_in,
+            d2d_out=d2d_out,
+            migration_driver=mig_driver,
         )
 
         if _selftest:
             src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
             dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1"))
 
-            # PRECONDITION: every stage must have finished writing all its layers' KV before rank 0
-            # migrates. The bounded loop's tail barrier got all ranks through the last chunk; now flush
-            # THIS rank's device writes and barrier so rank 0 reads fully-written KV on every stage.
-            ttnn.synchronize_device(runtime.mesh_device)
-            if num_ranks > 1:
-                ttnn.distributed_context_barrier()
+            if mig_driver is None:
+                # ensure KV cache is written if not interleaving migration
+                ttnn.synchronize_device(runtime.mesh_device)
+                if num_ranks > 1:
+                    ttnn.distributed_context_barrier()
 
             # RANK 0 ONLY issues the migrate (it holds the MigrationLayerClient).
-            if is_first_rank:
+            if is_first_rank and mig_driver is not None:
+                # Interleaved: per-chunk migrates were already issued during the loop; drain the tail
+                # (consume any remaining acks + wait_complete the deferred copies).
+                mig_driver.drain(expected_chunks=NUM_CHUNKS)
+            elif is_first_rank:
                 assert migration_endpoint is not None, "rank 0 must hold the migration client for the self-test"
                 # Loopback target is THIS endpoint's own id (A->B loopback; no peer, no connect_to).
                 self_ep = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
