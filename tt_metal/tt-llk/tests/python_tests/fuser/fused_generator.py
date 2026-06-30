@@ -151,7 +151,7 @@ class FusedKernelGenerator:
             profiler_include += '#include "perf.h"\n'
 
         operands = self.config.operand_registry.generate_cpp(
-            self.config.global_config.dest_acc.value
+            self.config.global_config.is_32b_dest_en.value
         )
 
         combined = (

@@ -1,7 +1,7 @@
 # Same as fpu_reduce_block_max but the unpacker is configured at runtime
 # instead of compile time.
 
-dest_acc: true
+is_32b_dest_en: true
 
 operands:
   - name: "input_A"

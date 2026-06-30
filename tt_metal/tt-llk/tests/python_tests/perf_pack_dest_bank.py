@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, L1Accumulation, PerfRunType, Tilize
+from helpers.llk_params import Fp32DestMode, L1Accumulation, PerfRunType, Tilize
 from helpers.param_config import (
     input_output_formats,
     parametrize,
@@ -71,7 +71,7 @@ def get_valid_num_faces_datacopy(tilize):
             # DataFormat.Bfp8_b,  # Can be enabled if needed
         ]
     ),
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
     tilize=[Tilize.No],
@@ -83,7 +83,7 @@ def get_valid_num_faces_datacopy(tilize):
 def test_perf_pack_dest_bank(
     perf_report,
     formats,
-    dest_acc,
+    is_32b_dest_en,
     l1_acc,
     num_faces,
     tilize,
@@ -108,7 +108,7 @@ def test_perf_pack_dest_bank(
     unpack_to_dest = (
         False
         if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        else formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     configuration = PerfConfig(
@@ -140,7 +140,7 @@ def test_perf_pack_dest_bank(
             tile_count_res=tile_cnt,
             num_faces=num_faces,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         l1_acc=l1_acc,
         unpack_to_dest=unpack_to_dest,
     )

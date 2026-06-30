@@ -4,7 +4,7 @@
 import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     PerfRunType,
     Transpose,
 )
@@ -73,10 +73,8 @@ def test_perf_math_transpose(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=(
-            DestAccumulation.Yes
-            if formats.input_format.is_32_bit()
-            else DestAccumulation.No
+        is_32b_dest_en=(
+            Fp32DestMode.Yes if formats.input_format.is_32_bit() else Fp32DestMode.No
         ),
     )
 

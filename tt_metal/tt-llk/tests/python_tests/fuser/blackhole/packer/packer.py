@@ -62,7 +62,7 @@ class Packer(BasePacker):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         buffer = pack_node.output.cpp_name
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"
+        return f"_llk_pack_<{dest_sync}, {is_32b_dest_en}, ckernel::PackMode::Default>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"

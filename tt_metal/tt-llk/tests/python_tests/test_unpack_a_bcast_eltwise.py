@@ -6,7 +6,7 @@ import torch
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -35,7 +35,7 @@ from helpers.utils import passed_test
         ]
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     srca_reuse_count=[2, 4, 8],
     math_fidelity=[
         MathFidelity.LoFi,
@@ -49,7 +49,7 @@ from helpers.utils import passed_test
 def test_unp_bcast_sub_sdpa(
     formats,
     mathop,
-    dest_acc,
+    is_32b_dest_en,
     math_fidelity,
     input_dimensions,
     srca_reuse_count,
@@ -142,7 +142,7 @@ def test_unp_bcast_sub_sdpa(
             tile_count_B=reuse_factor,
             tile_count_res=reuse_factor,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

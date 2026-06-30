@@ -26,8 +26,8 @@ class ReduceBlockMaxUnpacker(Unpacker):
         block: "BlockData",
     ) -> str:
         ct_dim = block.block_tiles_x
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
+        return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {is_32b_dest_en}>();\n"
 
     def unpack(
         self,

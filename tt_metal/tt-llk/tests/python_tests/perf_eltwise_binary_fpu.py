@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
+    get_valid_32b_dest_modes,
     get_valid_math_fidelities,
 )
 from helpers.format_config import DataFormat
@@ -32,7 +32,7 @@ from helpers.test_variant_parameters import (
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(
         formats, mathop, PERF_RUN=True
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    is_32b_dest_en=lambda formats: get_valid_32b_dest_modes(formats),
 )
 def test_perf_eltwise_binary_fpu(
     perf_report,
@@ -40,7 +40,7 @@ def test_perf_eltwise_binary_fpu(
     mathop,
     tile_count,
     math_fidelity,
-    dest_acc,
+    is_32b_dest_en,
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
@@ -67,7 +67,7 @@ def test_perf_eltwise_binary_fpu(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)

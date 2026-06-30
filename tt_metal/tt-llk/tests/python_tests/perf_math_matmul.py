@@ -4,10 +4,10 @@
 from itertools import chain, product
 
 import pytest
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat, is_32b_dest_needed
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathFidelity,
     PerfRunType,
     StochasticRounding,
@@ -39,7 +39,7 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+DEST_ACC_MODES = [Fp32DestMode.No, Fp32DestMode.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
 MATH_FIDELITIES = [
@@ -107,7 +107,7 @@ def test_perf_math_matmul(
     num_faces_in1 = matmul_config.face_layout_config.num_faces_in1
     num_faces = matmul_config.face_layout_config.num_faces
 
-    if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
+    if is_32b_dest_needed(formats) and matmul_config.is_32b_dest_en == Fp32DestMode.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
     run_types = [
@@ -170,7 +170,7 @@ def test_perf_math_matmul(
             tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
             tile_count_res=matmul_config.tile_dimensions.output_tile_cnt,
         ),
-        dest_acc=matmul_config.dest_acc,
+        is_32b_dest_en=matmul_config.is_32b_dest_en,
     )
 
     configuration.run(perf_report)

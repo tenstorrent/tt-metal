@@ -14,7 +14,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BroadcastType,
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -42,13 +42,13 @@ from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 @skip_for_wormhole
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     math_fidelity=[MathFidelity.LoFi],
     input_dimensions=[[32, 32]],
 )
 def test_sdpa_reinits(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     math_fidelity,
     input_dimensions,
 ):
@@ -179,7 +179,7 @@ def test_sdpa_reinits(
             TILE_COUNT(output_tile_cnt),
         ],
         variant_stimuli=None,  # We'll write stimuli manually
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=False,
     )
 

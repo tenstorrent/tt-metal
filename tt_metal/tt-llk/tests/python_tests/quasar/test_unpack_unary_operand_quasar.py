@@ -14,8 +14,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     Transpose,
     UnpackerEngine,
@@ -64,17 +64,17 @@ def generate_unpack_unary_operand_combinations(
 
     Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
+    Returns: List of (format, is_32b_dest_en, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     combinations = []
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
+        fp32_dest_modes = (
+            (Fp32DestMode.Yes,)
             if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
+            else (Fp32DestMode.No, Fp32DestMode.Yes)
         )
         transpose_modes = (
             (Transpose.No,) if in_fmt.is_32_bit() else (Transpose.No, Transpose.Yes)
@@ -85,13 +85,13 @@ def generate_unpack_unary_operand_combinations(
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
 
-        for dest_acc in dest_acc_modes:
+        for is_32b_dest_en in fp32_dest_modes:
             if (
                 in_fmt != DataFormat.Float32
                 and fmt.output_format == DataFormat.Float32
-                and dest_acc == DestAccumulation.No
+                and is_32b_dest_en == Fp32DestMode.No
             ):
-                # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
+                # Skip if input format is not Float32 and output format is Float32 and is_32b_dest_en is No
                 # This combination is not supported in the Quasar Packer format conversions
                 continue
             for dest_sync in (DestSync.Half, DestSync.Full):
@@ -115,12 +115,14 @@ def generate_unpack_unary_operand_combinations(
                                 continue
                             tile_shape = construct_tile_shape(tile_dims)
                             for dimensions in generate_unary_input_dimensions(
-                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                                is_32b_dest_en,
+                                dest_sync=dest_sync,
+                                tile_shape=tile_shape,
                             ):
                                 combinations.append(
                                     (
                                         fmt,
-                                        dest_acc,
+                                        is_32b_dest_en,
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
@@ -150,21 +152,21 @@ ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinatio
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    formats_32b_dest_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
 )
 def test_unpack_unary_operand_quasar(
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    formats_32b_dest_sync_transpose_unpack_sel_dims,
     boot_mode=BootMode.DEFAULT,
 ):
     (
         formats,
-        dest_acc,
+        is_32b_dest_en,
         dest_sync_mode,
         transpose_en,
         unpacker_sel,
         input_dimensions,
         tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
+    ) = formats_32b_dest_sync_transpose_unpack_sel_dims[0]
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -258,9 +260,9 @@ def test_unpack_unary_operand_quasar(
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
         disable_format_inference=(formats.input_format.is_mx_format()),

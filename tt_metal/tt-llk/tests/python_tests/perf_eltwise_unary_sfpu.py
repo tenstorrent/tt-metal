@@ -6,8 +6,8 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
-    DestAccumulation,
     FastMode,
+    Fp32DestMode,
     MathOperation,
     PerfRunType,
     ReducePool,
@@ -68,10 +68,10 @@ _OPS_WITH_STABLE_SORT = {
 }
 
 
-def _get_dest_acc_modes(mathop):
+def _get_fp32_dest_modes(mathop):
     if mathop in _OPS_WITHOUT_DEST_ACC:
-        return [DestAccumulation.No]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+        return [Fp32DestMode.No]
+    return [Fp32DestMode.Yes, Fp32DestMode.No]
 
 
 def _get_fast_modes(mathop):
@@ -112,7 +112,7 @@ def _get_stable_sort_modes(mathop):
         MathOperation.TopKMerge,
         MathOperation.TopKRebuild,
     ],
-    dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
+    is_32b_dest_en=lambda mathop: _get_fp32_dest_modes(mathop),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
@@ -130,7 +130,7 @@ def test_perf_eltwise_unary_sfpu(
     formats,
     mathop,
     approx_mode,
-    dest_acc,
+    is_32b_dest_en,
     loop_factor,
     iterations,
     fast_mode,
@@ -142,10 +142,10 @@ def test_perf_eltwise_unary_sfpu(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    # If dest_acc is on, we unpack Float32 into 16-bit format in src registers
+    # If is_32b_dest_en is on, we unpack Float32 into 16-bit format in src registers
     # (later copied over in dest reg for SFPU op)
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No
     )
 
     configuration = PerfConfig(
@@ -183,7 +183,7 @@ def test_perf_eltwise_unary_sfpu(
             tile_count_res=tile_count_A,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)
@@ -195,13 +195,13 @@ def test_perf_eltwise_unary_sfpu(
         [DataFormat.Float32],
         same=True,
     ),
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
     mathop=[MathOperation.ReduceRow],
     reduce_pool=[ReducePool.Max],
     loop_factor=list(range(10, 201, 10)),
 )
 def test_perf_sfpu_reduce_row_max(
-    perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+    perf_report, formats, is_32b_dest_en, mathop, reduce_pool, loop_factor
 ):
     input_dimensions = [32, 32]
     tile_count = 1
@@ -232,7 +232,7 @@ def test_perf_sfpu_reduce_row_max(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=True,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         disable_format_inference=True,
         compile_time_formats=True,
     )

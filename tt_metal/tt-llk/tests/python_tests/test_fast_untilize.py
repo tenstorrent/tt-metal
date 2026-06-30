@@ -25,13 +25,13 @@ from fast_untilize_common import (
     FAST_UNTILIZE_TILE_C,
     FAST_UNTILIZE_TILE_FACE_ROWS,
     FAST_UNTILIZE_TILE_R,
-    fast_untilize_dest_acc_modes,
+    fast_untilize_32b_dest_modes,
     fast_untilize_formats,
 )
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, PerfRunType, format_dict
+from helpers.llk_params import DestSync, Fp32DestMode, PerfRunType, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -71,7 +71,7 @@ def make_fast_untilize_test_config(
     tile_cnt_A,
     src_B,
     tile_cnt_B,
-    dest_acc,
+    is_32b_dest_en,
     dest_sync,
     perf_run_type,
     tile_count_res=None,
@@ -102,13 +102,13 @@ def make_fast_untilize_test_config(
             tile_count_res=tile_count_res,
             sfpu=False,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         compile_time_formats=True,
     )
 
 
 def _run_fast_untilize_correctness(
-    formats, dest_acc, dimensions, dest_sync, stimulus_kind, allocate_src_b=True
+    formats, is_32b_dest_en, dimensions, dest_sync, stimulus_kind, allocate_src_b=True
 ):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
@@ -154,7 +154,7 @@ def _run_fast_untilize_correctness(
         tile_cnt_A,
         src_B,
         tile_cnt_B,
-        dest_acc,
+        is_32b_dest_en,
         dest_sync,
         PerfRunType.L1_TO_L1,
     )
@@ -204,21 +204,21 @@ def _run_fast_untilize_correctness(
 
 @parametrize(
     formats=fast_untilize_formats(),
-    dest_acc=fast_untilize_dest_acc_modes,
+    is_32b_dest_en=fast_untilize_32b_dest_modes,
     dimensions=FAST_UNTILIZE_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
     stimulus_kind=["row_id", "random"],
 )
-def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
+def test_fast_untilize(formats, is_32b_dest_en, dimensions, dest_sync, stimulus_kind):
     _run_fast_untilize_correctness(
-        formats, dest_acc, dimensions, dest_sync, stimulus_kind
+        formats, is_32b_dest_en, dimensions, dest_sync, stimulus_kind
     )
 
 
 def test_fast_untilize_wide_full_ct_dim_133_bf16():
     _run_fast_untilize_correctness(
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        DestAccumulation.No,
+        Fp32DestMode.No,
         (1, 133),
         DestSync.Half,
         "row_id",
@@ -229,7 +229,7 @@ def test_fast_untilize_wide_full_ct_dim_133_bf16():
 def test_fast_untilize_wide_full_ct_dim_256_bf16():
     _run_fast_untilize_correctness(
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        DestAccumulation.No,
+        Fp32DestMode.No,
         (1, 256),
         DestSync.Half,
         "row_id",
@@ -244,7 +244,7 @@ def test_fast_untilize_wide_full_ct_dim_256_bf16():
 def test_fast_untilize_wide_full_ct_dim_133_fp32():
     _run_fast_untilize_correctness(
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        DestAccumulation.Yes,
+        Fp32DestMode.Yes,
         (1, 133),
         DestSync.Half,
         "row_id",
@@ -259,7 +259,7 @@ def test_fast_untilize_wide_full_ct_dim_133_fp32():
 def test_fast_untilize_wide_full_ct_dim_137_fp32():
     _run_fast_untilize_correctness(
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        DestAccumulation.Yes,
+        Fp32DestMode.Yes,
         (1, 137),
         DestSync.Half,
         "row_id",
@@ -269,13 +269,13 @@ def test_fast_untilize_wide_full_ct_dim_137_fp32():
 
 @parametrize(
     formats=fast_untilize_formats(),
-    dest_acc=fast_untilize_dest_acc_modes,
+    is_32b_dest_en=fast_untilize_32b_dest_modes,
     dimensions=FAST_UNTILIZE_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
     perf_run_type=[PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE],
 )
 def test_fast_untilize_overflow_guard(
-    formats, dest_acc, dimensions, dest_sync, perf_run_type
+    formats, is_32b_dest_en, dimensions, dest_sync, perf_run_type
 ):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
@@ -305,7 +305,7 @@ def test_fast_untilize_overflow_guard(
         tile_cnt_A,
         src_B,
         tile_cnt_B,
-        dest_acc,
+        is_32b_dest_en,
         dest_sync,
         perf_run_type,
         tile_count_res=tile_count + guard_tiles,

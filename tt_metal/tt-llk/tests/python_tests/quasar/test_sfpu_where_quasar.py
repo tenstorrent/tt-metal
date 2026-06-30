@@ -7,7 +7,7 @@ from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import WhereGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
@@ -15,7 +15,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    generate_sfpu_format_dest_acc_combinations,
+    generate_sfpu_format_32b_dest_combinations,
     input_output_formats,
     parametrize,
 )
@@ -57,7 +57,7 @@ def _processed_face_mask(vector_mode: VectorMode, num_faces: int) -> torch.Tenso
     return mask
 
 
-def _get_valid_formats_dest_acc():
+def _get_valid_formats_32b_dest():
     formats = input_output_formats(
         [
             DataFormat.Float16,
@@ -66,10 +66,11 @@ def _get_valid_formats_dest_acc():
         ]
     )
     return [
-        (fmt, dest_acc)
-        for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats)
+        (fmt, is_32b_dest_en)
+        for fmt, is_32b_dest_en in generate_sfpu_format_32b_dest_combinations(formats)
         if not (
-            fmt.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes
+            fmt.input_format == DataFormat.Float16
+            and is_32b_dest_en == Fp32DestMode.Yes
         )
     ]
 
@@ -93,22 +94,22 @@ def _build_condition_for_test_case(
     return base.to(torch_format)
 
 
-def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
-    """UNPACK→DEST is selected only for 32-bit inputs with dest_acc=Yes."""
-    return fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+def _is_unpack_to_dest(fmt: FormatConfig, is_32b_dest_en: Fp32DestMode) -> bool:
+    """UNPACK→DEST is selected only for 32-bit inputs with is_32b_dest_en=Yes."""
+    return fmt.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=_get_valid_formats_dest_acc(),
-    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
-        formats_dest_acc[0]
+    formats_32b_dest=_get_valid_formats_32b_dest(),
+    implied_math_format=lambda formats_32b_dest: _get_valid_implied_math_formats(
+        formats_32b_dest[0]
     ),
     test_case=["mixed", "all_ones", "all_zeros"],
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(
-    formats_dest_acc, implied_math_format, test_case, vector_mode
+    formats_32b_dest, implied_math_format, test_case, vector_mode
 ):
     """
     Test ternary `where(condition, true_val, false_val) -> output` on Quasar.
@@ -124,7 +125,7 @@ def test_sfpu_where_quasar(
     modes; unprocessed faces are excluded from the golden assertion since
     Dest retains the producer-written data there.
     """
-    formats, dest_acc = formats_dest_acc
+    formats, is_32b_dest_en = formats_32b_dest
     input_dimensions = [32, 32]
     torch_format_in = format_dict[formats.input_format]
 
@@ -165,7 +166,7 @@ def test_sfpu_where_quasar(
     torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_tensor.to(torch_format_out)
 
-    unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
+    unpack_to_dest = _is_unpack_to_dest(formats, is_32b_dest_en)
     src_B_dummy = torch.zeros_like(condition)
 
     configuration = TestConfig(
@@ -199,7 +200,7 @@ def test_sfpu_where_quasar(
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result
@@ -217,13 +218,13 @@ def test_sfpu_where_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=_get_valid_formats_dest_acc()[:3],
-    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
-        formats_dest_acc[0]
+    formats_32b_dest=_get_valid_formats_32b_dest()[:3],
+    implied_math_format=lambda formats_32b_dest: _get_valid_implied_math_formats(
+        formats_32b_dest[0]
     ),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
-def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mode):
+def test_sfpu_where_mcw_quasar(formats_32b_dest, implied_math_format, vector_mode):
     """
     Deterministic where test — alternating 0/1 condition pattern with
     known true/false scalars (2 and 11) for easy debugging.
@@ -232,7 +233,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
     this fails but the stimulus-driven test passes, the problem is in
     stimulus generation rather than the kernel.
     """
-    formats, dest_acc = formats_dest_acc
+    formats, is_32b_dest_en = formats_32b_dest
     torch_format_in = format_dict[formats.input_format]
     input_dimensions = [32, 32]
     height, width = input_dimensions
@@ -252,7 +253,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
     torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_tensor.to(torch_format_out)
 
-    unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
+    unpack_to_dest = _is_unpack_to_dest(formats, is_32b_dest_en)
     src_B_dummy = torch.zeros_like(condition)
 
     configuration = TestConfig(
@@ -286,7 +287,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

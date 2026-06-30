@@ -4,8 +4,8 @@
 from typing import List
 
 import pytest
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.llk_params import DestAccumulation, MathFidelity, PerfRunType, Transpose
+from helpers.format_config import DataFormat, FormatConfig, is_32b_dest_needed
+from helpers.llk_params import Fp32DestMode, MathFidelity, PerfRunType, Transpose
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
@@ -30,15 +30,15 @@ KT_DIMS = [1, 2, 3, 4, 8, 32]
 
 def matmul_combos(
     formats: List[FormatConfig],
-    dest_acc: List[DestAccumulation],
+    is_32b_dest_en: List[Fp32DestMode],
 ):
-    def _dest_bank_max_tiles(format: FormatConfig, dest_acc: DestAccumulation):
-        if is_dest_acc_needed(format) or dest_acc == DestAccumulation.Yes:
+    def _dest_bank_max_tiles(format: FormatConfig, is_32b_dest_en: Fp32DestMode):
+        if is_32b_dest_needed(format) or is_32b_dest_en == Fp32DestMode.Yes:
             return 4
         return 8
 
     unique_max_tiles = set(
-        _dest_bank_max_tiles(fmt, acc) for fmt in formats for acc in dest_acc
+        _dest_bank_max_tiles(fmt, acc) for fmt in formats for acc in is_32b_dest_en
     )
     dimensions = {
         max_tiles: generate_matmul_dimension_combinations(max_tiles, kt_dims=KT_DIMS)
@@ -48,7 +48,7 @@ def matmul_combos(
     return [
         (format, accumulation, dims)
         for format in formats
-        for accumulation in dest_acc
+        for accumulation in is_32b_dest_en
         for dims in dimensions[_dest_bank_max_tiles(format, accumulation)]
     ]
 
@@ -64,7 +64,7 @@ def matmul_combos(
                 DataFormat.Bfp8_b,
             ]
         ),
-        dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+        is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     ),
     math_fidelity=[
         MathFidelity.LoFi,
@@ -79,9 +79,9 @@ def test_perf_matmul(
     math_fidelity,
 ):
 
-    formats, dest_acc, (matrix_a, matrix_b) = combos
+    formats, is_32b_dest_en, (matrix_a, matrix_b) = combos
 
-    if is_dest_acc_needed(formats) and dest_acc == DestAccumulation.No:
+    if is_32b_dest_needed(formats) and is_32b_dest_en == Fp32DestMode.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
     run_types = [
@@ -123,7 +123,7 @@ def test_perf_matmul(
             tile_count_B=variant_tile_count,
             tile_count_res=variant_tile_count,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)

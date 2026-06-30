@@ -115,9 +115,9 @@ class StimuliConfig:
         self.operand_res_tile_size = operand_res_tile_size
         self.twos_complement = twos_complement
 
-        # Hardware flags injected by TestConfig via set_use_srcs() / set_dest_acc()
+        # Hardware flags injected by TestConfig via set_use_srcs() / set_32b_dest()
         self.use_srcs = False
-        self._dest_acc_32b = False
+        self._is_32b_dest_en = False
 
         self._calculate_tile_sizes()
 
@@ -188,7 +188,7 @@ class StimuliConfig:
                 self.tile_dimensions,
                 format_tile_sizes,
                 use_srcs=self._operand_use_srcs("Res"),
-                dest_acc=self._dest_acc_32b,
+                is_32b_dest_en=self._is_32b_dest_en,
             )
 
     def set_use_srcs(self, unpack_to_srcs: bool):
@@ -196,11 +196,11 @@ class StimuliConfig:
         self.use_srcs = unpack_to_srcs
         self._calculate_tile_sizes()
 
-    def set_dest_acc(self, dest_acc):
+    def set_32b_dest(self, is_32b_dest_en):
         """Set 32-bit dest accumulation mode. Called by TestConfig."""
-        from .llk_params import DestAccumulation
+        from .llk_params import Fp32DestMode
 
-        self._dest_acc_32b = dest_acc == DestAccumulation.Yes
+        self._is_32b_dest_en = is_32b_dest_en == Fp32DestMode.Yes
         self._calculate_tile_sizes()
 
     def __str__(self) -> str:
@@ -228,7 +228,7 @@ class StimuliConfig:
             f"  write_full_tiles: {self.write_full_tiles}"
             f"  use_dense_tile_dimensions: {self.use_dense_tile_dimensions}"
             f"  use_srcs: {self.use_srcs}"
-            f"  dest_acc_32b: {self._dest_acc_32b}"
+            f"  is_32b_dest_en: {self._is_32b_dest_en}"
             f"  operand_res_tile_size: {self.operand_res_tile_size}"
             f"  buf_a_addr: 0x{self.buf_a_addr:08X}"
             f"  buf_b_addr: 0x{self.buf_b_addr:08X}"
@@ -676,7 +676,7 @@ class StimuliConfig:
             self.tile_dimensions,
             format_tile_sizes,
             use_srcs=use_srcs,
-            dest_acc=self._dest_acc_32b,
+            is_32b_dest_en=self._is_32b_dest_en,
         )
         read_bytes_cnt = tile_size_bytes * count
 
@@ -712,7 +712,7 @@ class StimuliConfig:
             self.face_r_dim,
             tile_stride_bytes=stride_bytes,
             use_srcs=use_srcs,
-            dest_acc=self._dest_acc_32b,
+            is_32b_dest_en=self._is_32b_dest_en,
             twos_complement=self.twos_complement,
         )
 

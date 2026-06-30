@@ -7,7 +7,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
-    DestAccumulation,
+    Fp32DestMode,
     MathOperation,
     PerfRunType,
     Transpose,
@@ -28,10 +28,10 @@ from helpers.test_variant_parameters import (
 )
 
 
-def get_dest_accum_modes(formats):
+def get_32b_dest_modes(formats):
     if formats.input_format.is_32_bit() and formats.input_format.is_integer():
-        return [DestAccumulation.No]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+        return [Fp32DestMode.No]
+    return [Fp32DestMode.Yes, Fp32DestMode.No]
 
 
 @pytest.mark.perf
@@ -56,9 +56,9 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
     ],
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
+    is_32b_dest_en=[
+        Fp32DestMode.Yes,
+        Fp32DestMode.No,
     ],
     loop_factor=[
         16,
@@ -75,13 +75,13 @@ def test_perf_eltwise_binary_sfpu_float(
     formats,
     mathop,
     approx_mode,
-    dest_acc,
+    is_32b_dest_en,
     loop_factor,
     iterations,
     input_dimensions,
 ):
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No
     )
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
@@ -121,7 +121,7 @@ def test_perf_eltwise_binary_sfpu_float(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)
@@ -143,7 +143,7 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
     ],
-    dest_acc=lambda formats: get_dest_accum_modes(formats),
+    is_32b_dest_en=lambda formats: get_32b_dest_modes(formats),
     loop_factor=[
         16,
     ],
@@ -159,13 +159,13 @@ def test_perf_eltwise_binary_sfpu_int(
     formats,
     mathop,
     approx_mode,
-    dest_acc,
+    is_32b_dest_en,
     loop_factor,
     iterations,
     input_dimensions,
 ):
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No
     )
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
@@ -205,7 +205,7 @@ def test_perf_eltwise_binary_sfpu_int(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)
@@ -228,7 +228,7 @@ def test_perf_eltwise_binary_sfpu_int(
     mathop=[
         MathOperation.SfpuAddTopRow,
     ],
-    dest_acc=lambda formats: get_dest_accum_modes(formats),
+    is_32b_dest_en=lambda formats: get_32b_dest_modes(formats),
     loop_factor=[
         16,
     ],
@@ -244,24 +244,25 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     formats,
     mathop,
     approx_mode,
-    dest_acc,
+    is_32b_dest_en,
     loop_factor,
     iterations,
     input_dimensions,
 ):
     chip_arch = get_chip_architecture()
 
-    # Skip DestAccumulation.No on Blackhole for SfpuAddTopRow
-    if chip_arch == ChipArchitecture.BLACKHOLE and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "DestAccumulation.No is not supported for SfpuAddTopRow on Blackhole"
-        )
+    # Skip Fp32DestMode.No on Blackhole for SfpuAddTopRow
+    if chip_arch == ChipArchitecture.BLACKHOLE and is_32b_dest_en == Fp32DestMode.No:
+        pytest.skip("Fp32DestMode.No is not supported for SfpuAddTopRow on Blackhole")
 
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
+    if (
+        formats.input_format == DataFormat.Float32
+        and is_32b_dest_en == Fp32DestMode.Yes
+    ):
+        pytest.skip("SfpuAddTopRow does not support Float32 with Fp32DestMode.Yes")
 
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No
     )
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
@@ -301,7 +302,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report)

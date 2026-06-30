@@ -16,7 +16,7 @@ import pytest
 from .counters import print_counters, read_counters
 from .device import BootMode
 from .format_config import FormatConfig
-from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
+from .llk_params import Fp32DestMode, L1Accumulation, PerfRunType
 from .logger import logger
 from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
 from .profiler import Profiler, ProfilerData
@@ -333,7 +333,7 @@ class PerfConfig(TestConfig):
         unpack_to_dest=False,
         unpack_to_srcs=False,
         disable_format_inference=False,
-        dest_acc=DestAccumulation.No,
+        is_32b_dest_en=Fp32DestMode.No,
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
@@ -367,7 +367,7 @@ class PerfConfig(TestConfig):
             unpack_to_dest,
             unpack_to_srcs,
             disable_format_inference,
-            dest_acc,
+            is_32b_dest_en,
             l1_acc,
             skip_build_header,
             compile_time_formats,
@@ -525,8 +525,8 @@ class PerfConfig(TestConfig):
             else []
         )
 
-        names += ["unpack_to_dest", "dest_acc"]
-        values += [self.unpack_to_dest, self.dest_acc]
+        names += ["unpack_to_dest", "is_32b_dest_en"]
+        values += [self.unpack_to_dest, self.is_32b_dest_en]
 
         for param in self.passed_templates + self.passed_runtimes:
             for name, value in PerfConfig._dataclass_name_and_values(param):

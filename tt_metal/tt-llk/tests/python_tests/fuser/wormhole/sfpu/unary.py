@@ -59,7 +59,7 @@ class UnarySfpu(Sfpu):
     ) -> torch.Tensor:
         format_input = config.sentinel.golden_math_format
         format_output = config.sentinel.golden_math_format
-        dest_acc = config.dest_acc
+        is_32b_dest_en = config.is_32b_dest_en
 
         generate_sfpu_golden = get_golden_generator(UnarySFPUGolden)
 
@@ -67,7 +67,7 @@ class UnarySfpu(Sfpu):
             self.operation,
             tensor,
             format_output,
-            dest_acc,
+            is_32b_dest_en,
             format_input,
             batch_dims,
             self.iterations,
@@ -84,13 +84,13 @@ class UnarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
             f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
+            f"test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {is_32b_dest_en}, {self.iterations}>();\n"
         )
 
     def calculate(
@@ -101,14 +101,14 @@ class UnarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
             f"test_utils::call_unary_sfpu_operation<"
-            f"{dest_sync}, {dest_acc}, "
-            f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
+            f"{dest_sync}, {is_32b_dest_en}, "
+            f"{op}, {approx_mode}, {is_32b_dest_en}, {self.iterations}"
             f">({self.dest_idx}, {config.sentinel.math_format}, {self.fill_const_value});\n"
         )
 

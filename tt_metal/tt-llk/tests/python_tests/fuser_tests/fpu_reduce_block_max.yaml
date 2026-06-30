@@ -1,6 +1,6 @@
 # Block max reduce. Source B is all ones as the identity scale.
 
-dest_acc: true
+is_32b_dest_en: true
 
 operands:
   - name: "input_A"

@@ -13,7 +13,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     PackerReluType,
@@ -1237,10 +1237,10 @@ class MatmulGolden(FidelityMasking):
         input_A_format: DataFormat = None,
         input_B_format: DataFormat = None,
         math_format: Optional[DataFormat] = None,
-        dest_acc: Optional[DestAccumulation] = None,
+        is_32b_dest_en: Optional[Fp32DestMode] = None,
     ):
         # Route MX outputs through the KT-chunked path that honors math_format
-        # and dest_acc. The default path does a single fp32-internal torch.matmul
+        # and is_32b_dest_en. The default path does a single fp32-internal torch.matmul
         # which can disagree with HW's apparent per-KT-tile rounding once results land
         # near MxInt2/MxInt4 quantization bin boundaries.
         if data_format.is_mx_format():
@@ -1255,7 +1255,7 @@ class MatmulGolden(FidelityMasking):
                 input_A_format,
                 input_B_format,
                 math_format,
-                dest_acc,
+                is_32b_dest_en,
             )
 
         if data_format.is_integer():
@@ -1386,7 +1386,7 @@ class MatmulGolden(FidelityMasking):
         input_A_format: DataFormat,
         input_B_format: DataFormat,
         math_format: Optional[DataFormat],
-        dest_acc: Optional[DestAccumulation],
+        is_32b_dest_en: Optional[Fp32DestMode],
     ):
         math_format = math_format or data_format
         result_format = math_format if data_format.is_mx_format() else data_format
@@ -1412,7 +1412,7 @@ class MatmulGolden(FidelityMasking):
         fidelity_iters = self._get_fidelity_iters(math_fidelity)
 
         math_torch_format = format_dict[math_format]
-        use_fp16_acc = dest_acc == DestAccumulation.No and math_format in (
+        use_fp16_acc = is_32b_dest_en == Fp32DestMode.No and math_format in (
             DataFormat.Float16,
             DataFormat.Float16_b,
         )
@@ -2162,14 +2162,14 @@ class UnarySFPUGolden:
             MathOperation.Typecast: self._typecast,
         }
         self.data_format = None
-        self.dest_acc = DestAccumulation.No
+        self.is_32b_dest_en = Fp32DestMode.No
 
     def __call__(
         self,
         operation,
         operand1,
         data_format,
-        dest_acc,
+        is_32b_dest_en,
         input_format,
         dimensions: tuple[int, int],
         iterations: int = None,
@@ -2179,7 +2179,7 @@ class UnarySFPUGolden:
         skip_tilize: bool = False,
     ):
         self.data_format = data_format
-        self.dest_acc = dest_acc
+        self.is_32b_dest_en = is_32b_dest_en
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -2198,16 +2198,19 @@ class UnarySFPUGolden:
 
         # determine the data format for dst
         if input_format.is_mx_format():
-            # MX in L1 always unpacks to Float16_b even if dest_acc=Yes.
+            # MX in L1 always unpacks to Float16_b even if is_32b_dest_en=Yes.
             dst_format = DataFormat.Float16_b
-        elif self.dest_acc == DestAccumulation.Yes:
+        elif self.is_32b_dest_en == Fp32DestMode.Yes:
             dst_format = DataFormat.Float32
         elif DataFormat.Float16 in (input_format, data_format):
             dst_format = DataFormat.Float16
         else:
             dst_format = DataFormat.Float16_b
 
-        if self.dest_acc == DestAccumulation.No and input_format == DataFormat.Float32:
+        if (
+            self.is_32b_dest_en == Fp32DestMode.No
+            and input_format == DataFormat.Float32
+        ):
             # dst in 16-bit mode and 32-bit input: truncation may occur when unpacked to dst
             if dst_format == DataFormat.Float16:
                 # truncate to float16
@@ -3022,7 +3025,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     def _xlogy(self, x, y):
         # Unable to model edge cases for Tensix behavior in golden.
         # Tensix shows inconsistent patterns in handling non-finite results for xlogy, depending on the input,
-        # data format (both input and output), and destination accumulation (dest_acc).
+        # data format (both input and output), and destination accumulation (is_32b_dest_en).
         # We need to work with the Tensix team to understand when and why certain results are returned,
         # what configuration dependencies exist, and how to handle them appropriately.
         # Without this understanding, discrepancies will occur between golden and Tensix results due to differing edge case handling.
@@ -3379,7 +3382,7 @@ class ReduceGapoolGolden(FidelityMasking):
         math_fidelity=MathFidelity.LoFi,
         tile_cnt=1,
         input_format=None,
-        dest_acc: Optional[DestAccumulation] = None,
+        is_32b_dest_en: Optional[Fp32DestMode] = None,
     ):
         # Quantize MX format inputs to match hardware behavior
         if input_format is not None and input_format.is_mx_format():
@@ -3392,10 +3395,10 @@ class ReduceGapoolGolden(FidelityMasking):
         # MX-output paths we preserve that precision through the gapool +
         # face-accumulation chain rather than collapsing inputs to the output
         # dtype (which would force fp16 → bf16 before any math).
-        # When dest_acc=Yes, HW accumulates in fp32 regardless of input —
+        # When is_32b_dest_en=Yes, HW accumulates in fp32 regardless of input —
         # so the inter-face / inter-fidelity accumulators must follow.
         out_is_mx = data_format.is_mx_format()
-        fp32_acc = dest_acc == DestAccumulation.Yes
+        fp32_acc = is_32b_dest_en == Fp32DestMode.Yes
         if out_is_mx and input_format is not None:
             compute_format = (
                 DataFormat.Float16_b if input_format.is_mx_format() else input_format
@@ -3487,7 +3490,7 @@ class ReduceGapoolGolden(FidelityMasking):
 
             a_faces = a_masked.view(num_faces, FACE_DIM, FACE_DIM)
             b_face = b_masked.view(1, FACE_DIM, FACE_DIM)
-            # When dest_acc=Yes HW dest is fp32; promote operands to fp32 so
+            # When is_32b_dest_en=Yes HW dest is fp32; promote operands to fp32 so
             # the per-iter dot product is not rounded to bf16/fp16 before
             # accumulating. Operand precision was already set by fidelity
             # masking; this only affects the matmul's internal rounding.

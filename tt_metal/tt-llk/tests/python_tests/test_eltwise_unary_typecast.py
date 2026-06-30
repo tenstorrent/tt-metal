@@ -27,7 +27,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
-    DestAccumulation,
+    Fp32DestMode,
     MathOperation,
     format_dict,
 )
@@ -116,7 +116,7 @@ def _preserve_fp32_precision(formats: InputOutputFormat) -> bool:
     """preserve_fp32_precision exactly as ttnn.typecast computes it.
 
     ttnn uses this single flag for two things: it forces fp32 dest acc (see
-    _production_dest_acc) and it selects UnpackToDestFp32 in the program
+    _production_32b_dest) and it selects UnpackToDestFp32 in the program
     factories, so the test reuses it for both.
     """
     in_fmt = formats.input_format
@@ -131,24 +131,24 @@ def _preserve_fp32_precision(formats: InputOutputFormat) -> bool:
     )
 
 
-def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
-    """Pick dest_acc the way ttnn.typecast does."""
+def _production_32b_dest(formats: InputOutputFormat) -> list[Fp32DestMode]:
+    """Pick is_32b_dest_en the way ttnn.typecast does."""
 
     in_fmt = formats.input_format
     out_fmt = formats.output_format
-    fp32_dest_acc_en = (
+    fp32_dest_en = (
         _preserve_fp32_precision(formats)
         or out_fmt in (DataFormat.UInt32, DataFormat.Int32, DataFormat.Float32)
         or in_fmt in (DataFormat.UInt32, DataFormat.Int32)
         or out_fmt == DataFormat.Fp8_e4m3
         or in_fmt == DataFormat.Fp8_e4m3
     )
-    return [DestAccumulation.Yes if fp32_dest_acc_en else DestAccumulation.No]
+    return [Fp32DestMode.Yes if fp32_dest_en else Fp32DestMode.No]
 
 
 @parametrize(
     formats=TYPECAST_PAIRS,
-    dest_acc=_production_dest_acc,
+    is_32b_dest_en=_production_32b_dest,
     approx_mode=[ApproximationMode.No],
     input_dimensions=[
         [32, 32]
@@ -156,7 +156,7 @@ def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
 )
 def test_eltwise_unary_typecast(
     formats: InputOutputFormat,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
 ):
@@ -209,7 +209,7 @@ def test_eltwise_unary_typecast(
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -243,7 +243,7 @@ def test_eltwise_unary_typecast(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=unpack_to_dest,
     )
 
@@ -252,15 +252,15 @@ def test_eltwise_unary_typecast(
     # The generic format inference models pack_src from the *input* (what the
     # unpacker writes to Dest). For a typecast the SFPU overwrites Dest with the
     # *output* value, so the packer must read the output's register
-    # representation, not the input's. In 16-bit Dest mode (dest_acc=No) the
+    # representation, not the input's. In 16-bit Dest mode (is_32b_dest_en=No) the
     # inferred pack_src would stay equal to the input format and the pack would
     # be rejected (e.g. UInt16 -> Float16_b is not a supported packer
     # conversion). Patch pack_src to the format the SFPU actually leaves in Dest:
     # block-float outputs are produced as Float16_b and compressed by the packer;
     # every other output is already in its packable register form. (For
-    # dest_acc=Yes the 32-bit gasket converts from Dest, and the inference
+    # is_32b_dest_en=Yes the 32-bit gasket converts from Dest, and the inference
     # already yields the output format, so no patch is needed there.)
-    if dest_acc == DestAccumulation.No:
+    if is_32b_dest_en == Fp32DestMode.No:
         pack_src = (
             DataFormat.Float16_b
             if _is_block_float(formats.output_format)

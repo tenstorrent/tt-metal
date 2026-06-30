@@ -2,7 +2,7 @@
 # and pack pipelines to reconfigure between every stage. Goes from Float16_b
 # through Bfp8_b to Float32.
 
-dest_acc: true
+is_32b_dest_en: true
 
 operands:
   - name: "input_A"

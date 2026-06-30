@@ -11,8 +11,8 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
@@ -597,20 +597,20 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     return SFPU_UNARY_FORMATS
 
 
-def quasar_unpack_to_dest(formats, dest_acc, is_typecast):
+def quasar_unpack_to_dest(formats, is_32b_dest_en, is_typecast):
     """Whether the input is written straight to Dest via UNPACR_DEST (vs the FPU SrcA→A2D datacopy).
 
     Typecast routes every 32-bit-Dest case (EITHER endpoint 32-bit) through unpack-to-Dest, because a
     narrow input cannot be FPU-datacopied into a 32-bit Dest (the int datacopy lands all-zeros). Other
-    unary ops only use unpack-to-Dest for a 32-bit input with dest_acc=Yes.
+    unary ops only use unpack-to-Dest for a 32-bit input with is_32b_dest_en=Yes.
     """
     if is_typecast:
         return formats.input_format.is_32_bit() or formats.output_format.is_32_bit()
-    return formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    return formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
 
 
 def _typecast_pack_src_format(
-    output_format: DataFormat, dest_acc: DestAccumulation
+    output_format: DataFormat, is_32b_dest_en: Fp32DestMode
 ) -> DataFormat:
     """Format the packer must read Dest in for a typecast op.
 
@@ -619,16 +619,16 @@ def _typecast_pack_src_format(
     dest format equals the unpacked format), which is wrong for a format-converting op: e.g.
     Int32->Float32 infers pack_src=Int32 and Float32->Int32 infers pack_src=Float32, both reading
     the SFPU result in the wrong format. This returns the Dest register form of the output:
-     - 32-bit Dest (dest_acc=Yes, a 32-bit endpoint): Int32 for an integer output, Float32
+     - 32-bit Dest (is_32b_dest_en=Yes, a 32-bit endpoint): Int32 for an integer output, Float32
        otherwise; the pack gasket then narrows (e.g. Float32->Float16_b, Int32->UInt8).
-     - 16-bit Dest (dest_acc=No, both endpoints <=16-bit): the output sits in Dest in its own format.
+     - 16-bit Dest (is_32b_dest_en=No, both endpoints <=16-bit): the output sits in Dest in its own format.
     """
     if output_format.is_integer():
         # Integer output: the packer reads the narrow int the SFPU stored, in its own format
         # (NOT a 32-bit container, even in a 32-bit Dest). UInt16 has no Quasar packer encoding,
         # so it is read as Int16 (non-negative values share the bit pattern -> golden matches).
         return DataFormat.Int16 if output_format == DataFormat.UInt16 else output_format
-    if dest_acc == DestAccumulation.Yes:
+    if is_32b_dest_en == Fp32DestMode.Yes:
         # Float output in a 32-bit Dest: the value sits as Float32; the pack gasket narrows it
         # to the final output (e.g. Float32 -> Float16_b).
         return DataFormat.Float32
@@ -638,13 +638,13 @@ def _typecast_pack_src_format(
 def generate_sfpu_unary_combinations():
     """
     Build the full unary-SFPU sweep across all ops: per op, a
-    formats × dest_acc × dest-sync × implied-math × {[32, 32], [64, 64]} matrix.
+    formats × is_32b_dest_en × dest-sync × implied-math × {[32, 32], [64, 64]} matrix.
 
     Every op runs the same matrix over its own format set (from formats_for_op).
-    32-bit inputs always pair with dest_acc=Yes; 16-bit inputs sweep both dest_acc
-    modes. Invalid format/dest_acc combinations are dropped via the shared filter.
+    32-bit inputs always pair with is_32b_dest_en=Yes; 16-bit inputs sweep both is_32b_dest_en
+    modes. Invalid format/is_32b_dest_en combinations are dropped via the shared filter.
 
-    Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
+    Returns: list of (mathop, fmt, is_32b_dest_en, dest_sync, implied_math_format,
     input_dimensions) tuples.
     """
     combinations = []
@@ -654,21 +654,23 @@ def generate_sfpu_unary_combinations():
 
             # Typecast's dest width is determined by the format pair, not swept: a 32-bit
             # endpoint (either side) forces a 32-bit dest, every other pair runs in 16-bit
-            # dest. Every other op sweeps both dest_acc modes for non-32-bit inputs.
+            # dest. Every other op sweeps both is_32b_dest_en modes for non-32-bit inputs.
             is_typecast = cfg.mathop == MathOperation.Typecast
-            dest_acc_modes = (
-                (DestAccumulation.Yes,)
+            fp32_dest_modes = (
+                (Fp32DestMode.Yes,)
                 if in_fmt.is_32_bit() or (is_typecast and fmt.output_format.is_32_bit())
                 else (
-                    (DestAccumulation.No,)
+                    (Fp32DestMode.No,)
                     if is_typecast
-                    else (DestAccumulation.No, DestAccumulation.Yes)
+                    else (Fp32DestMode.No, Fp32DestMode.Yes)
                 )
             )
-            for dest_acc in dest_acc_modes:
+            for is_32b_dest_en in fp32_dest_modes:
                 # Skip invalid format combinations for Quasar
                 if is_invalid_quasar_sfpu_format_combination(
-                    fmt, dest_acc, quasar_unpack_to_dest(fmt, dest_acc, is_typecast)
+                    fmt,
+                    is_32b_dest_en,
+                    quasar_unpack_to_dest(fmt, is_32b_dest_en, is_typecast),
                 ):
                     continue
 
@@ -682,7 +684,7 @@ def generate_sfpu_unary_combinations():
                                 (
                                     cfg.mathop,
                                     fmt,
-                                    dest_acc,
+                                    is_32b_dest_en,
                                     dest_sync,
                                     implied_math_format,
                                     input_dimensions,
@@ -694,10 +696,10 @@ def generate_sfpu_unary_combinations():
 
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    mathop_formats_32b_dest_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop_formats_32b_dest_sync_implied_math_input_dims,
 ):
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
@@ -706,9 +708,14 @@ def test_eltwise_unary_sfpu_quasar(
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
-    mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions = (
-        mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-    )
+    (
+        mathop,
+        formats,
+        is_32b_dest_en,
+        dest_sync,
+        implied_math_format,
+        input_dimensions,
+    ) = mathop_formats_32b_dest_sync_implied_math_input_dims[0]
 
     is_typecast = mathop == MathOperation.Typecast
 
@@ -745,7 +752,7 @@ def test_eltwise_unary_sfpu_quasar(
             mathop,
             src_A,
             formats.output_format,
-            dest_acc,
+            is_32b_dest_en,
             formats.input_format,
             input_dimensions,
         )
@@ -759,7 +766,7 @@ def test_eltwise_unary_sfpu_quasar(
         op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
         golden_tensor = torch.tensor(op_res, dtype=format_dict[formats.output_format])
 
-    unpack_to_dest = quasar_unpack_to_dest(formats, dest_acc, is_typecast)
+    unpack_to_dest = quasar_unpack_to_dest(formats, is_32b_dest_en, is_typecast)
     configuration = TestConfig(
         "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
         formats,
@@ -802,11 +809,13 @@ def test_eltwise_unary_sfpu_quasar(
             num_faces=num_faces,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     if is_typecast:
-        pack_src_for_output = _typecast_pack_src_format(formats.output_format, dest_acc)
+        pack_src_for_output = _typecast_pack_src_format(
+            formats.output_format, is_32b_dest_en
+        )
         for fc in configuration.formats_config:
             fc.pack_src = pack_src_for_output
             fc.pack_S_src = pack_src_for_output

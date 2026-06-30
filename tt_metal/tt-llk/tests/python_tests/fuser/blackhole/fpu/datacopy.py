@@ -58,7 +58,7 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         pack_mode = operation.bh_tilize.pack_mode_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
@@ -81,7 +81,7 @@ class DatacopyFpu(Fpu):
 
         return (
             f"    // Operation {stage}: Datacopy FPU\n"
-            f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}, {pack_mode}>(\n"
+            f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {is_32b_dest_en}, {broadcast_type}, {is_int_fpu_en}, {pack_mode}>(\n"
             f"        {num_faces}, {config.sentinel.math_format}\n"
             f"    );\n"
         )
@@ -94,14 +94,14 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
+        is_32b_dest_en = config.is_32b_dest_en.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
         num_faces = operation.tile_shape.total_num_faces()
 
         return (
-            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
+            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {is_32b_dest_en}, {broadcast_type}, {unpack_to_dest}>(\n"
             f"        {block.tile_id_block}, {config.sentinel.math_format}, {config.sentinel.math_format}, {num_faces}\n"
             f"    );\n"
         )

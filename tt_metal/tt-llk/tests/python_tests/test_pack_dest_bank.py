@@ -6,7 +6,7 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIMENSIONS
-from helpers.llk_params import DestAccumulation, L1Accumulation, Tilize, format_dict
+from helpers.llk_params import Fp32DestMode, L1Accumulation, Tilize, format_dict
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
     DestSync,
@@ -76,7 +76,7 @@ def get_valid_num_faces_datacopy(tilize):
             # DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
     tilize=[Tilize.No],
@@ -84,7 +84,7 @@ def get_valid_num_faces_datacopy(tilize):
     input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
 def test_pack_dest_bank(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+    formats, is_32b_dest_en, l1_acc, num_faces, tilize, dest_index, input_dimensions
 ):
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -100,12 +100,12 @@ def test_pack_dest_bank(
     unpack_to_dest = (
         False
         if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        else formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -142,7 +142,7 @@ def test_pack_dest_bank(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         l1_acc=l1_acc,
         unpack_to_dest=unpack_to_dest,
     )
@@ -186,14 +186,14 @@ def test_pack_dest_bank(
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
     tilize=[Tilize.No],
     dest_index=0,
 )
 def test_pack_dest_bank_two_blocked_packs_of_4(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index
+    formats, is_32b_dest_en, l1_acc, num_faces, tilize, dest_index
 ):
     if get_chip_architecture() != ChipArchitecture.WORMHOLE:
         pytest.skip("Wormhole-specific blocked pack regression")
@@ -210,7 +210,7 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
     golden_tensor = src_A.to(torch_format)
 
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     configuration = TestConfig(
@@ -239,7 +239,7 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         l1_acc=l1_acc,
         unpack_to_dest=unpack_to_dest,
     )

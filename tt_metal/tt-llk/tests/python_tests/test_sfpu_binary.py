@@ -15,7 +15,7 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, MathOperation, format_dict
+from helpers.llk_params import Fp32DestMode, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -59,30 +59,30 @@ from helpers.utils import passed_test
         # MathOperation.SfpuElwEq,
         # MathOperation.SfpuElwNe,
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
 )
 def test_sfpu_binary_float(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     bcast_dim,
 ):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    if formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No:
+        pytest.skip("Float32 inputs with is_32b_dest_en=No are not supported")
 
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     ):
         pytest.skip(
             "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
         )
 
     if bcast_dim == LlkBroadcastType.Row and (
-        dest_acc == DestAccumulation.Yes
+        is_32b_dest_en == Fp32DestMode.Yes
         or is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
+            formats.input_format, formats.output_format, is_32b_dest_en
         )
     ):
         pytest.skip(
@@ -91,7 +91,7 @@ def test_sfpu_binary_float(
 
     sfpu_binary(
         formats,
-        dest_acc,
+        is_32b_dest_en,
         mathop,
         broadcast_type=bcast_dim,
     )
@@ -112,16 +112,16 @@ def test_sfpu_binary_float(
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
     ],
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
 )
 def test_sfpu_binary_int(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
 ):
     sfpu_binary(
         formats,
-        dest_acc,
+        is_32b_dest_en,
         mathop,
     )
 
@@ -136,12 +136,12 @@ def test_sfpu_binary_int(
         same=True,
     ),
     mathop=[MathOperation.SfpuAddTopRow],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
 )
-def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+def test_sfpu_binary_add_top_row(formats, is_32b_dest_en, mathop):
+    if formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.No:
         pytest.skip(
-            "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
+            "32-bit integer formats require Fp32DestMode.Yes (HW cannot unpack into SrcA/SrcB)"
         )
 
     input_dimensions = [64, 32]
@@ -190,7 +190,7 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=formats.input_format.is_32_bit(),
         disable_format_inference=True,
         compile_time_formats=True,
@@ -211,7 +211,7 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
 
 def sfpu_binary(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     broadcast_type=None,
 ):
@@ -260,7 +260,7 @@ def sfpu_binary(
         formats.input_format in [DataFormat.Float16, DataFormat.Float32]
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):
-        dest_acc = DestAccumulation.Yes
+        is_32b_dest_en = Fp32DestMode.Yes
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
@@ -284,7 +284,7 @@ def sfpu_binary(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=formats.input_format.is_32_bit(),
         compile_time_formats=True,
     )
@@ -393,33 +393,33 @@ def _golden_sfpu_binary_bcast(
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
 )
 def test_sfpu_binary_bcast(
     formats,
     bcast_dim,
     mathop,
-    dest_acc,
+    is_32b_dest_en,
 ):
-    if dest_acc == DestAccumulation.No and formats.input_format == DataFormat.Float32:
-        pytest.skip(reason="Float32 inputs with dest_acc=No are not supported")
+    if is_32b_dest_en == Fp32DestMode.No and formats.input_format == DataFormat.Float32:
+        pytest.skip(reason="Float32 inputs with is_32b_dest_en=No are not supported")
 
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     ):
         pytest.skip(
             "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
         )
 
     # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
-    # dest_acc=Yes (32-bit dest), so silently upgrade the parametrized value.
+    # is_32b_dest_en=Yes (32-bit dest), so silently upgrade the parametrized value.
     if (
         formats.input_format in [DataFormat.Float16, DataFormat.Float32]
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):
-        dest_acc = DestAccumulation.Yes
+        is_32b_dest_en = Fp32DestMode.Yes
 
     input_dimensions = [32, 32]
 
@@ -441,10 +441,10 @@ def test_sfpu_binary_bcast(
         src_A, src_B, bcast_dim, _BCAST_BINARY_OPS[mathop], golden_format
     )
 
-    # Only FP32 inputs with dest_acc=Yes take the unpack-to-dest path; all
+    # Only FP32 inputs with is_32b_dest_en=Yes take the unpack-to-dest path; all
     # other float formats go through srcA + MATH datacopy into dest.
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     configuration = TestConfig(
@@ -466,7 +466,7 @@ def test_sfpu_binary_bcast(
             tile_count_B=tile_cnt_B,
             tile_count_res=1,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=unpack_to_dest,
     )
 

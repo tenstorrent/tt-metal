@@ -17,9 +17,9 @@ from .format_config import (
     InputOutputFormat,
 )
 from .golden_generators import TILE_DIMENSIONS
-from .llk_params import BlocksCalculationAlgorithm, DestAccumulation, DestSync
+from .llk_params import BlocksCalculationAlgorithm, DestSync, Fp32DestMode
 
-checked_formats_and_dest_acc = {}
+checked_formats_and_32b_dest = {}
 
 DEST_SYNC_TILE_LIMITS = {
     DestSync.Half: 8,
@@ -387,10 +387,10 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
 
 
 def is_invalid_quasar_sfpu_format_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation, unpack_to_dest: bool = False
+    fmt: FormatConfig, is_32b_dest_en: Fp32DestMode, unpack_to_dest: bool = False
 ) -> bool:
     """
-    Check if a Quasar SFPU (input_format, output_format, dest_acc) combination
+    Check if a Quasar SFPU (input_format, output_format, is_32b_dest_en) combination
     is unsupported by the hardware and should be skipped by the parametrize sweep.
 
     ``unpack_to_dest`` relaxes the sub-32-bit-integer-input guard: when the input is written
@@ -401,19 +401,19 @@ def is_invalid_quasar_sfpu_format_combination(
     in_fmt = fmt.input_format
     out_fmt = fmt.output_format
 
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
+    # Quasar packer does not support non-Float32 to Float32 conversion when is_32b_dest_en=No
     if (
         in_fmt != DataFormat.Float32
         and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     ):
         return True
 
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
+    # Quasar SFPU with Float32 input and Float16 output requires is_32b_dest_en=Yes
     if (
         in_fmt == DataFormat.Float32
         and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
     ):
         return True
 
@@ -424,49 +424,51 @@ def is_invalid_quasar_sfpu_format_combination(
     if (
         not unpack_to_dest
         and in_fmt in (DataFormat.Int16, DataFormat.UInt16)
-        and dest_acc == DestAccumulation.Yes
+        and is_32b_dest_en == Fp32DestMode.Yes
     ):
         return True
 
     return False
 
 
-def generate_sfpu_format_dest_acc_combinations(
+def generate_sfpu_format_32b_dest_combinations(
     formats_list: List[FormatConfig],
-) -> List[Tuple[FormatConfig, DestAccumulation]]:
+) -> List[Tuple[FormatConfig, Fp32DestMode]]:
     """
-    Generate (format, dest_acc) pairs for Quasar SFPU tests.
+    Generate (format, is_32b_dest_en) pairs for Quasar SFPU tests.
 
-    `dest_acc` modes are chosen based on the input format:
-    - 32-bit inputs: DestAccumulation.Yes only
-    - MX formats:    DestAccumulation.No only
+    `is_32b_dest_en` modes are chosen based on the input format:
+    - 32-bit inputs: Fp32DestMode.Yes only
+    - MX formats:    Fp32DestMode.No only
     - Otherwise:     both No and Yes
 
     Invalid Quasar combinations (see `is_invalid_quasar_sfpu_format_combination`)
     are filtered out.
     """
-    combinations: List[Tuple[FormatConfig, DestAccumulation]] = []
+    combinations: List[Tuple[FormatConfig, Fp32DestMode]] = []
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
         if in_fmt.is_32_bit():
-            dest_acc_modes = (DestAccumulation.Yes,)
+            fp32_dest_modes = (Fp32DestMode.Yes,)
         elif in_fmt.is_mx_format():
-            dest_acc_modes = (DestAccumulation.No,)
+            fp32_dest_modes = (Fp32DestMode.No,)
         else:
-            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+            fp32_dest_modes = (Fp32DestMode.No, Fp32DestMode.Yes)
 
-        for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+        for is_32b_dest_en in fp32_dest_modes:
+            if is_invalid_quasar_sfpu_format_combination(fmt, is_32b_dest_en):
                 continue
-            combinations.append((fmt, dest_acc))
+            combinations.append((fmt, is_32b_dest_en))
 
     return combinations
 
 
 def calculate_edgecase_dest_indices(
-    dest_acc: bool, result_tiles: int, dest_sync_modes: List[DestSync] = [DestSync.Half]
+    is_32b_dest_en: bool,
+    result_tiles: int,
+    dest_sync_modes: List[DestSync] = [DestSync.Half],
 ):
     """
     Generate the lowest and highest possible dest index depending on the DestSync mode and whether dest is 32bit or not.
@@ -477,7 +479,7 @@ def calculate_edgecase_dest_indices(
     3. When DestSync.Full:  max_dst_tiles=16 (if dest is 16bit) or max_dst_tiles=8 (if dest is 32bit)
 
     Args:
-        dest_acc: Dest 16/32 bit mode, has to match is_fp32_dest_acc_en from C++
+        is_32b_dest_en: Dest 16/32 bit mode, has to match is_32b_dest_en from C++
         result_tiles: Number of tiles in the result matrix
         dest_sync_modes: List of DestSync modes to generate indices for. If None, uses [DestSync.Half]
 
@@ -487,7 +489,7 @@ def calculate_edgecase_dest_indices(
 
     combinations = []
 
-    capacity_divisor = 2 if dest_acc else 1
+    capacity_divisor = 2 if is_32b_dest_en else 1
 
     for dest_sync in dest_sync_modes:
         base_tile_limit = DEST_SYNC_TILE_LIMITS[dest_sync]
@@ -508,15 +510,19 @@ def calculate_edgecase_dest_indices(
     return combinations
 
 
-def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) -> int:
-    capacity_divisor = 2 if dest_acc else 1
+def get_max_dst_index(
+    dest_sync: DestSync, is_32b_dest_en: bool, result_tiles: int
+) -> int:
+    capacity_divisor = 2 if is_32b_dest_en else 1
     max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
     return max(max_tiles - result_tiles, 0)
 
 
-def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
+def generate_unary_input_dimensions(
+    is_32b_dest_en, dest_sync=DestSync.Half, tile_shape=None
+):
     """Generate all possible input dimensions for unary operations.
-    These dimensions are determined by the number of tiles that can fit into dest, which is determined by dest_sync and dest_acc.
+    These dimensions are determined by the number of tiles that can fit into dest, which is determined by dest_sync and is_32b_dest_en.
     The generated input dimensions should ensure that all of the data fits into dest without any overflow when running unary operations.
 
     Key rules:
@@ -524,14 +530,14 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
     2. When DestSync.Full:  max_tiles_in_dest=16 (if dest is 16bit) or max_tiles_in_dest=8 (if dest is 32bit)
 
     Args:
-        dest_acc: Dest 16/32 bit mode
+        is_32b_dest_en: Dest 16/32 bit mode
         dest_sync: DestSync mode. Defaults to DestSync.Half
 
     Returns:
         List of input dimensions
     """
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    capacity_divisor = 2 if is_32b_dest_en == Fp32DestMode.Yes else 1
     max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
     if tile_shape is None:
@@ -549,7 +555,7 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
 
 def get_num_blocks_and_num_tiles_in_block(
     dest_sync: DestSync,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     formats: InputOutputFormat,
     input_dimensions: List[int],
     tile_dimensions: List[int] = None,
@@ -564,7 +570,7 @@ def get_num_blocks_and_num_tiles_in_block(
 
     Args:
         dest_sync: Destination synchronization mode (Half or Full) that determines register capacity.
-        dest_acc: Destination datum width extension mode. (16-bit or 32-bit) affecting available space.
+        is_32b_dest_en: Destination datum width extension mode. (16-bit or 32-bit) affecting available space.
         formats: Input and output data formats, which impact destination register capacity
         input_dimensions: Input matrix dimensions in elements [rows, cols]
         tile_dimensions: Tile dimensions in elements [rows, cols]. Defaults to [32, 32]
@@ -587,13 +593,13 @@ def get_num_blocks_and_num_tiles_in_block(
         tile_dimensions = TILE_DIMENSIONS
 
     is_outlier = is_format_combination_outlier(
-        formats.input_format, formats.output_format, dest_acc
+        formats.input_format, formats.output_format, is_32b_dest_en
     )
 
     capacity_divisor = (
         2
         if (
-            dest_acc == DestAccumulation.Yes
+            is_32b_dest_en == Fp32DestMode.Yes
             or formats.input_format.is_32_bit()
             or is_outlier
         )

@@ -5,7 +5,7 @@ import torch
 from conftest import skip_for_coverage
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     MathOperation,
     ReducePool,
     format_dict,
@@ -30,7 +30,7 @@ from helpers.utils import passed_test
         [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce
         same=True,
     ),
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
     input_dimensions=[
@@ -39,7 +39,7 @@ from helpers.utils import passed_test
 )
 def test_sfpu_reduce_sdpa(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     reduce_pool,
     input_dimensions,
@@ -88,7 +88,7 @@ def test_sfpu_reduce_sdpa(
             tile_count_res=tile_cnt_A,
         ),
         unpack_to_dest=False,  # Must be False since math kernel does A2D copy
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
     res_from_L1 = configuration.run().result
 

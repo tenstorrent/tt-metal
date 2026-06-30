@@ -5,7 +5,7 @@ import pytest
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -27,7 +27,7 @@ from helpers.test_variant_parameters import (
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
-    dest_acc=[DestAccumulation.No],
+    is_32b_dest_en=[Fp32DestMode.No],
     srca_reuse_count=[2, 4, 8],
     math_fidelity=[
         MathFidelity.LoFi,
@@ -42,7 +42,7 @@ def test_perf_col_tile_sdpa(
     perf_report,
     formats,
     mathop,
-    dest_acc,
+    is_32b_dest_en,
     math_fidelity,
     input_dimensions,
     srca_reuse_count,
@@ -75,7 +75,7 @@ def test_perf_col_tile_sdpa(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration.run(perf_report, run_count=10)

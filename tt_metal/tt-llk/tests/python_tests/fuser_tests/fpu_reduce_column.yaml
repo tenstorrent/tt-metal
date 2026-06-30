@@ -1,6 +1,6 @@
 # Column reduce that sums across rows with FP32 accumulation.
 
-dest_acc: true
+is_32b_dest_en: true
 
 operands:
   - name: "input_A"

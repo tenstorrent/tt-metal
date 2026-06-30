@@ -16,7 +16,7 @@ import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     L1Accumulation,
     format_dict,
     format_tile_sizes,
@@ -43,7 +43,7 @@ def _make_config(
     tile_dims,
     num_tiles,
     formats,
-    dest_acc,
+    is_32b_dest_en,
 ):
     """Build TestConfig for a given tile shape and tile count."""
     tile_r, tile_c = tile_dims
@@ -68,7 +68,7 @@ def _make_config(
     # Determine DEST capacity (SyncHalf: 8 tiles FP16, 4 tiles FP32)
     capacity_divisor = (
         2
-        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
+        if (is_32b_dest_en == Fp32DestMode.Yes or formats.input_format.is_32_bit())
         else 1
     )
     max_tiles_in_dest = 8 // capacity_divisor
@@ -117,7 +117,7 @@ def _make_config(
                 formats.output_format, list(tile_dims), format_tile_sizes
             ),
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     return configuration, golden_tensor, torch_format
@@ -134,7 +134,7 @@ def _make_config(
             DataFormat.Float16_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
         (2, 32),  # face_r_dim=2,  num_faces=2
@@ -148,12 +148,12 @@ def _make_config(
 )
 def test_pack_tiny_tile_block(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     tile_dims,
     num_tiles,
 ):
     configuration, golden_tensor, torch_format = _make_config(
-        tile_dims, num_tiles, formats, dest_acc
+        tile_dims, num_tiles, formats, is_32b_dest_en
     )
 
     res_from_L1 = configuration.run().result
@@ -177,7 +177,7 @@ def test_pack_tiny_tile_block(
             DataFormat.Float16_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
         (2, 32),  # face_r_dim=2,  num_faces=2
@@ -188,7 +188,7 @@ def test_pack_tiny_tile_block(
     ],
     num_tiles=[2, 4, 8],
 )
-def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
+def test_pack_tiny_tile_reconfig(formats, is_32b_dest_en, tile_dims, num_tiles):
     """Init pack for 32x32, then full re-init for tiny tiles, then multi-tile
     block-contiguous pack. Validates the transition between tile shapes."""
     tile_r, tile_c = tile_dims
@@ -210,7 +210,7 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
 
     capacity_divisor = (
         2
-        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
+        if (is_32b_dest_en == Fp32DestMode.Yes or formats.input_format.is_32_bit())
         else 1
     )
     max_tiles_in_dest = 8 // capacity_divisor
@@ -253,7 +253,7 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
                 formats.output_format, list(tile_dims), format_tile_sizes
             ),
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

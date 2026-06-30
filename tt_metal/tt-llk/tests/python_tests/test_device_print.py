@@ -9,7 +9,7 @@ from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, Tilize
+from helpers.llk_params import Fp32DestMode, Tilize
 from helpers.logger import strip_ansi
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -70,7 +70,7 @@ def test_device_print():
     configuration = TestConfig(
         "sources/device_print_test.cpp",
         formats,
-        dest_acc=DestAccumulation.Yes,
+        is_32b_dest_en=Fp32DestMode.Yes,
         requires_device_print=True,  # Required for this test to pass in CI.
     )
     outcome = configuration.run()
@@ -175,10 +175,8 @@ _TILE_TEST_FORMATS = (
 )
 def test_dprint_tile(formats):
     formats = formats[0]
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
+    is_32b_dest_en = (
+        Fp32DestMode.Yes if formats.input_format.is_32_bit() else Fp32DestMode.No
     )
     src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -199,7 +197,7 @@ def test_dprint_tile(formats):
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         requires_device_print=True,
     ).run()
     records = _records(outcome.device_print_lines)
@@ -239,13 +237,13 @@ def test_dprint_tile(formats):
 
 @parametrize(
     case=[
-        (DataFormat.Float16_b, DestAccumulation.Yes, False),
-        (DataFormat.Float16_b, DestAccumulation.No, False),
-        (DataFormat.Float16, DestAccumulation.No, False),
+        (DataFormat.Float16_b, Fp32DestMode.Yes, False),
+        (DataFormat.Float16_b, Fp32DestMode.No, False),
+        (DataFormat.Float16, Fp32DestMode.No, False),
     ],
 )
 def test_dprint_tensix(case):
-    in_format, dest_acc, unpack_to_dest = case[0]
+    in_format, is_32b_dest_en, unpack_to_dest = case[0]
 
     if get_chip_architecture() == ChipArchitecture.QUASAR:
         pytest.skip("dprint_tensix_dest_reg is unsupported on Quasar")
@@ -274,7 +272,7 @@ def test_dprint_tensix(case):
             tile_count_res=1,
             num_faces=4,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=unpack_to_dest,
         requires_device_print=True,
     ).run()

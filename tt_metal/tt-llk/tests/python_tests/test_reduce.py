@@ -7,12 +7,12 @@ import math
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat, is_32b_dest_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     ReduceDimension,
@@ -144,22 +144,22 @@ def test_reduce(
     # Float32 golden uses full FP32 accumulation; match that in HW whenever we
     # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
     # HiFi column/reduce-to-one cases can drift below PCC thresholds.
-    dest_acc = (
-        DestAccumulation.Yes
+    is_32b_dest_en = (
+        Fp32DestMode.Yes
         if (
             formats.input_format.is_32_bit()
-            or is_dest_acc_needed(formats)
+            or is_32b_dest_needed(formats)
             or (
                 formats.output_format == DataFormat.Float32
                 and not formats.input_format.is_32_bit()
             )
         )
-        else DestAccumulation.No
+        else Fp32DestMode.No
     )
 
     if (
         TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
-        and dest_acc == DestAccumulation.Yes
+        and is_32b_dest_en == Fp32DestMode.Yes
     ):
         pytest.skip("https://github.com/tenstorrent/tt-llk/issues/1568")
 
@@ -167,7 +167,7 @@ def test_reduce(
 
     _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -209,7 +209,7 @@ def test_reduce(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result
@@ -330,22 +330,22 @@ def test_reduce_bfp4_b(
     # Float32 golden uses full FP32 accumulation; match that in HW whenever we
     # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
     # HiFi column/reduce-to-one cases can drift below PCC thresholds.
-    dest_acc = (
-        DestAccumulation.Yes
+    is_32b_dest_en = (
+        Fp32DestMode.Yes
         if (
             formats.input_format.is_32_bit()
-            or is_dest_acc_needed(formats)
+            or is_32b_dest_needed(formats)
             or (
                 formats.output_format == DataFormat.Float32
                 and not formats.input_format.is_32_bit()
             )
         )
-        else DestAccumulation.No
+        else Fp32DestMode.No
     )
 
     if (
         TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
-        and dest_acc == DestAccumulation.Yes
+        and is_32b_dest_en == Fp32DestMode.Yes
     ):
         pytest.skip("https://github.com/tenstorrent/tt-llk/issues/1568")
 
@@ -353,7 +353,7 @@ def test_reduce_bfp4_b(
 
     _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -395,7 +395,7 @@ def test_reduce_bfp4_b(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     res_from_L1 = configuration.run().result

@@ -9,8 +9,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -40,12 +40,12 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
-def eltwise_dimensions_dest_sync(dest_acc_modes):
+def eltwise_dimensions_dest_sync(fp32_dest_modes):
     return [
-        (dest_sync, dims, dest_acc)
+        (dest_sync, dims, is_32b_dest_en)
         for dest_sync in (DestSync.Half, DestSync.Full)
-        for dest_acc in dest_acc_modes
-        for dims in generate_unary_input_dimensions(dest_acc, dest_sync)
+        for is_32b_dest_en in fp32_dest_modes
+        for dims in generate_unary_input_dimensions(is_32b_dest_en, dest_sync)
     ]
 
 
@@ -57,13 +57,13 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
 _TILE_SHAPE = construct_tile_shape()
 
 
-def valid_acc_to_dest(dest_sync_dims_dest_acc) -> list:
+def valid_acc_to_dest(dest_sync_dims_32b_dest) -> list:
     """Pick the acc_to_dest modes worth running for a given input size.
 
     acc_to_dest=True accumulates `get_num_tiles_per_accumulation(True)` result tiles into
     dest, so it only makes sense when the tile count is a non-zero multiple of that.
     """
-    _, input_dimensions, _ = dest_sync_dims_dest_acc
+    _, input_dimensions, _ = dest_sync_dims_32b_dest
     total_tiles = (
         input_dimensions[0] * input_dimensions[1]
     ) // _TILE_SHAPE.total_tile_size()
@@ -116,10 +116,10 @@ ELTWISE_FORMATS = input_output_formats(
         if not formats.input_format.is_mx_format()
         else [ImpliedMathFormat.Yes]
     ),
-    dest_sync_dims_dest_acc=lambda formats: (
-        eltwise_dimensions_dest_sync((DestAccumulation.Yes,))
+    dest_sync_dims_32b_dest=lambda formats: (
+        eltwise_dimensions_dest_sync((Fp32DestMode.Yes,))
         if formats.input_format == DataFormat.Int8
-        else eltwise_dimensions_dest_sync((DestAccumulation.No,))
+        else eltwise_dimensions_dest_sync((Fp32DestMode.No,))
     ),
     acc_to_dest=valid_acc_to_dest,
     num_faces=[4],
@@ -129,12 +129,12 @@ def test_eltwise_binary(
     mathop,
     math_fidelity,
     implied_math_format,
-    dest_sync_dims_dest_acc,
+    dest_sync_dims_32b_dest,
     acc_to_dest,
     num_faces,
     boot_mode=BootMode.DEFAULT,
 ):
-    dest_sync_mode, input_dimensions, dest_acc = dest_sync_dims_dest_acc
+    dest_sync_mode, input_dimensions, is_32b_dest_en = dest_sync_dims_32b_dest
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
@@ -199,9 +199,9 @@ def test_eltwise_binary(
         ),
         # Determine unpack_to_dest based on format and accumulation mode
         unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
         # This ensures Python-side format inference uses Float16_b for MX internal math

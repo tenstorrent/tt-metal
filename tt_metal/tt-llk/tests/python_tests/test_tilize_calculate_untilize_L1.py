@@ -5,7 +5,7 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.llk_params import (
-    DestAccumulation,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -34,7 +34,7 @@ from helpers.utils import passed_test
         same=True,
     ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     math_fidelity=[
         MathFidelity.LoFi,
         MathFidelity.HiFi2,
@@ -44,7 +44,7 @@ from helpers.utils import passed_test
 )
 def test_tilize_calculate_untilize_L1(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     math_fidelity,
 ):
@@ -81,7 +81,7 @@ def test_tilize_calculate_untilize_L1(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         L1_to_L1_iterations=2,
     )
 

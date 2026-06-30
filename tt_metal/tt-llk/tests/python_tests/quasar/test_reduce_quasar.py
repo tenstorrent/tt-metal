@@ -13,8 +13,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -81,7 +81,7 @@ def generate_pool_type_and_math_fidelity_combinations():
             DataFormat.MxInt2,
         ],
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
@@ -94,7 +94,7 @@ def generate_pool_type_and_math_fidelity_combinations():
 )
 def test_reduce_quasar(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     reduce_dim,
     pool_type_and_math_fidelity,
     dest_sync_mode,
@@ -106,7 +106,7 @@ def test_reduce_quasar(
     if (
         formats.input_format == DataFormat.MxInt8
         and formats.output_format == DataFormat.MxInt2
-        and dest_acc == DestAccumulation.No
+        and is_32b_dest_en == Fp32DestMode.No
         and reduce_dim == ReduceDimension.Column
         and pool_type == ReducePool.Sum
         and math_fidelity == MathFidelity.HiFi2
@@ -161,7 +161,7 @@ def test_reduce_quasar(
             math_fidelity,
             tile_cnt,
             input_format=formats.input_format,
-            dest_acc=dest_acc,
+            is_32b_dest_en=is_32b_dest_en,
         )
 
     mathop = mathop_mapping[reduce_dim]
@@ -192,9 +192,9 @@ def test_reduce_quasar(
             tile_count_res=tile_cnt,
         ),
         unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
         disable_format_inference=(
             implied_math_format == ImpliedMathFormat.Yes
@@ -255,7 +255,7 @@ _ARCH = get_chip_architecture()
             register_format_hint=register_format_hint,
         ),
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=MATH_FIDELITY_MODES,
@@ -264,7 +264,7 @@ _ARCH = get_chip_architecture()
 def test_reduce_quasar_mxfp4_2x_gapool(
     register_format_hint,
     formats,
-    dest_acc,
+    is_32b_dest_en,
     reduce_dim,
     pool_type,
     math_fidelity,
@@ -326,7 +326,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             tile_count_res=tile_cnt,
         ),
         unpack_to_dest=False,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         disable_format_inference=False,
     )
 

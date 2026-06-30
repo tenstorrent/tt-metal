@@ -12,8 +12,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -62,14 +62,14 @@ all_params = [
     {
         "testname": "unpack_tilize_sfpu_pack",
         "formats": fmt,
-        "dest_acc": dest_acc,
+        "is_32b_dest_en": is_32b_dest_en,
         "approx_mode": approx_mode,
         "unary_op": un_op,
         "dst_sync": dst_sync,
         "math_fidelity": fidelity,
     }
     for fmt in test_formats
-    for dest_acc in [DestAccumulation.Yes, DestAccumulation.No]
+    for is_32b_dest_en in [Fp32DestMode.Yes, Fp32DestMode.No]
     for approx_mode in [ApproximationMode.No, ApproximationMode.Yes]
     for un_op in unary_ops
     for dst_sync in [DestSync.Half, DestSync.Full]
@@ -83,7 +83,7 @@ all_params = [
 
 # Generate descriptive parameter IDs for test identification
 param_ids = [
-    f"un={p['unary_op'].name}|fmt={p['formats'].input_format.name}->{p['formats'].output_format.name}|acc={p['dest_acc'].name}|approx={p['approx_mode'].name}|sync={p['dst_sync'].name}|fid={p['math_fidelity'].name}"
+    f"un={p['unary_op'].name}|fmt={p['formats'].input_format.name}->{p['formats'].output_format.name}|acc={p['is_32b_dest_en'].name}|approx={p['approx_mode'].name}|sync={p['dst_sync'].name}|fid={p['math_fidelity'].name}"
     for p in all_params
 ]
 
@@ -114,7 +114,7 @@ def test_fused_tilize_sfpu_pack(config):
     # Extract test parameters
     formats = config["formats"]
     unary_op = config["unary_op"]
-    dest_acc = config["dest_acc"]
+    is_32b_dest_en = config["is_32b_dest_en"]
     approx_mode = config["approx_mode"]
     dst_sync = config["dst_sync"]
     math_fidelity = config["math_fidelity"]
@@ -173,7 +173,7 @@ def test_fused_tilize_sfpu_pack(config):
         unary_op,
         datacopy_result,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.output_format,
     )
 
@@ -188,7 +188,7 @@ def test_fused_tilize_sfpu_pack(config):
     test_config = {
         "testname": config["testname"],
         "formats": formats,
-        "dest_acc": dest_acc,
+        "is_32b_dest_en": is_32b_dest_en,
         "approx_mode": approx_mode,
         "unary_op": unary_op,  # SFPU operation
         "dst_sync": dst_sync,
@@ -237,5 +237,5 @@ def test_fused_tilize_sfpu_pack(config):
     assert passed_test(golden_tensor, res_tensor, formats.output_format), (
         f"Fused tilize->datacopy->sfpu({unary_op.name})->pack failed "
         f"for format {formats.input_format.name}->{formats.output_format.name}, "
-        f"dest_acc={dest_acc.name}, fidelity={math_fidelity.name}"
+        f"is_32b_dest_en={is_32b_dest_en.name}, fidelity={math_fidelity.name}"
     )

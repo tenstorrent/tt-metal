@@ -17,8 +17,8 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     FastMode,
+    Fp32DestMode,
     MathOperation,
     format_dict,
 )
@@ -135,7 +135,7 @@ FLOAT_TEST_PARAMS = list(
                 [ApproximationMode.No, ApproximationMode.Yes],
                 SUPPORTED_FAST_MODE_OPS,
                 [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
+                [Fp32DestMode.No, Fp32DestMode.Yes],
             )
         ),
         (
@@ -144,7 +144,7 @@ FLOAT_TEST_PARAMS = list(
                 FORMATS,
                 [ApproximationMode.No, ApproximationMode.Yes],
                 [op for op in ALL_MATHOPS if op not in SUPPORTED_FAST_MODE_OPS],
-                [DestAccumulation.No, DestAccumulation.Yes],
+                [Fp32DestMode.No, Fp32DestMode.Yes],
             )
         ),
     )
@@ -155,7 +155,7 @@ FLOAT_TEST_PARAMS = list(
 @skip_for_coverage
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
+    "formats,approx_mode,mathop,fast_mode,is_32b_dest_en",
     FLOAT_TEST_PARAMS,
 )
 @pytest.mark.parametrize(
@@ -167,7 +167,7 @@ def test_eltwise_unary_sfpu_float(
     approx_mode: ApproximationMode,
     mathop: MathOperation,
     fast_mode: FastMode,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     input_dimensions: list[int],
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
@@ -207,7 +207,7 @@ def test_eltwise_unary_sfpu_float(
         )
 
     if (
-        dest_acc == DestAccumulation.No
+        is_32b_dest_en == Fp32DestMode.No
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):
         if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
@@ -230,7 +230,7 @@ def test_eltwise_unary_sfpu_float(
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
-        dest_acc,
+        is_32b_dest_en,
         approx_mode,
         mathop,
         fast_mode,
@@ -247,7 +247,7 @@ FLOAT_TEST_PARAMS_BFP4_B = list(
                 [ApproximationMode.No, ApproximationMode.Yes],
                 [op for op in SUPPORTED_FAST_MODE_OPS if op in MATHOPS_INCLUDE_BFP4_B],
                 [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
+                [Fp32DestMode.No, Fp32DestMode.Yes],
             )
         ),
         (
@@ -260,7 +260,7 @@ FLOAT_TEST_PARAMS_BFP4_B = list(
                     for op in MATHOPS_INCLUDE_BFP4_B
                     if op not in SUPPORTED_FAST_MODE_OPS
                 ],
-                [DestAccumulation.No, DestAccumulation.Yes],
+                [Fp32DestMode.No, Fp32DestMode.Yes],
             )
         ),
     )
@@ -271,7 +271,7 @@ FLOAT_TEST_PARAMS_BFP4_B = list(
 @skip_for_coverage
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
+    "formats,approx_mode,mathop,fast_mode,is_32b_dest_en",
     FLOAT_TEST_PARAMS_BFP4_B,
 )
 @pytest.mark.parametrize(
@@ -283,7 +283,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
     approx_mode: ApproximationMode,
     mathop: MathOperation,
     fast_mode: FastMode,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     input_dimensions: list[int],
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
@@ -329,7 +329,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
         )
 
     if (
-        dest_acc == DestAccumulation.No
+        is_32b_dest_en == Fp32DestMode.No
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):
         if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
@@ -340,7 +340,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
-        dest_acc,
+        is_32b_dest_en,
         approx_mode,
         mathop,
         fast_mode,
@@ -356,7 +356,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
         MathOperation.Fill,
     ],
     fast_mode=[FastMode.No, FastMode.Yes],
-    dest_acc=[DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.Yes],
     input_dimensions=[[128, 256]],
 )
 def test_eltwise_unary_sfpu_int(
@@ -364,7 +364,7 @@ def test_eltwise_unary_sfpu_int(
     approx_mode: ApproximationMode,
     mathop: MathOperation,
     fast_mode: FastMode,
-    dest_acc: DestAccumulation,
+    is_32b_dest_en: Fp32DestMode,
     input_dimensions: list[int],
 ):
     if formats.input_format == DataFormat.Int32:
@@ -373,7 +373,7 @@ def test_eltwise_unary_sfpu_int(
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_int.cpp",
         formats,
-        dest_acc,
+        is_32b_dest_en,
         approx_mode,
         mathop,
         fast_mode,
@@ -384,7 +384,7 @@ def test_eltwise_unary_sfpu_int(
 def eltwise_unary_sfpu(
     test_name,
     formats: list[InputOutputFormat],
-    dest_acc,
+    is_32b_dest_en,
     approx_mode,
     mathop,
     fast_mode: FastMode,
@@ -405,14 +405,14 @@ def eltwise_unary_sfpu(
         mathop,
         src_A,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.input_format,
         input_dimensions,
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -444,10 +444,10 @@ def eltwise_unary_sfpu(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
-        # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
+        is_32b_dest_en=is_32b_dest_en,
+        # If is_32b_dest_en is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
         unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
         ),
     )
 
@@ -473,7 +473,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     torch.manual_seed(0)
     input_dimensions = [32, 32]
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    dest_acc = DestAccumulation.No
+    is_32b_dest_en = Fp32DestMode.No
 
     # Generate custom stimuli with range [-5, 0.7]
     num_elements = input_dimensions[0] * input_dimensions[1]
@@ -494,14 +494,14 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         MathOperation.Exp,
         src_A,
         formats.output_format,
-        dest_acc,
+        is_32b_dest_en,
         formats.input_format,
         input_dimensions,
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -533,7 +533,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=False,
     )
 

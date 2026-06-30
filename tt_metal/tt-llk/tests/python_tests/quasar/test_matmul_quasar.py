@@ -15,8 +15,8 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathFidelity,
     Transpose,
@@ -48,19 +48,19 @@ from helpers.utils import passed_test
 kt_dims = [1, 2, 4]
 
 
-def matmul_dimensions_dest_sync(dest_acc_modes):
+def matmul_dimensions_dest_sync(fp32_dest_modes):
     return [
         (
             [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
             [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-            dest_acc,
+            is_32b_dest_en,
             dest_sync,
         )
         for dest_sync in (DestSync.Half, DestSync.Full)
-        for dest_acc in dest_acc_modes
+        for is_32b_dest_en in fp32_dest_modes
         for max_tiles in (
             DEST_SYNC_TILE_LIMITS[dest_sync]
-            // (2 if dest_acc == DestAccumulation.Yes else 1),
+            // (2 if is_32b_dest_en == Fp32DestMode.Yes else 1),
         )
         for mt_dim in range(1, max_tiles + 1)
         for nt_dim in range(1, max_tiles // mt_dim + 1)
@@ -101,10 +101,10 @@ _ARCH = get_chip_architecture()
             MathFidelity.HiFi4,
         ]
     ),
-    dimensions_dest_acc_dest_sync=lambda format: (
-        matmul_dimensions_dest_sync((DestAccumulation.Yes,))
+    dimensions_32b_dest_dest_sync=lambda format: (
+        matmul_dimensions_dest_sync((Fp32DestMode.Yes,))
         if format.input_format == DataFormat.Int8
-        else matmul_dimensions_dest_sync((DestAccumulation.Yes, DestAccumulation.No))
+        else matmul_dimensions_dest_sync((Fp32DestMode.Yes, Fp32DestMode.No))
     ),
     implied_math_format=lambda format: (
         [ImpliedMathFormat.Yes]
@@ -125,7 +125,7 @@ _ARCH = get_chip_architecture()
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    dimensions_dest_acc_dest_sync,
+    dimensions_32b_dest_dest_sync,
     format,
     implied_math_format,
     register_format_hint,
@@ -141,8 +141,8 @@ def test_matmul(
         register_format_hint=register_format_hint,
     )
 
-    input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
-        dimensions_dest_acc_dest_sync
+    input_A_dimensions, input_B_dimensions, is_32b_dest_en, dest_sync_mode = (
+        dimensions_32b_dest_dest_sync
     )
 
     torch_format = format_dict[format.output_format]
@@ -213,7 +213,7 @@ def test_matmul(
         input_format=format.input_format,
         input_format_B=format.input_format_B,
         output_format=format.output_format,
-        is_fp32_dest_acc_en=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         num_iterations=1,
         unpacking_to_dest=False,
         # 2x register-format opt-in needs to flow through inference; only disable
@@ -237,7 +237,7 @@ def test_matmul(
         input_A_format=format.input_format,
         input_B_format=format.input_format,
         math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     num_faces = 4
@@ -272,7 +272,7 @@ def test_matmul(
             num_faces=num_faces,
         ),
         unpack_to_dest=False,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=BootMode.TRISC,
         # 2x register-format opt-in needs to flow through inference; only disable
         # for plain MX formats where there's nothing to infer.

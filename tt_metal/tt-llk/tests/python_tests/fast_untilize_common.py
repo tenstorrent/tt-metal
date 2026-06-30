@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, DestSync
+from helpers.llk_params import DestSync, Fp32DestMode
 from helpers.param_config import input_output_formats
 
 FAST_UNTILIZE_NUM_FACES = 4
@@ -33,7 +33,7 @@ def fast_untilize_formats():
     ]
 
 
-def fast_untilize_dest_acc_modes(formats):
+def fast_untilize_32b_dest_modes(formats):
     if formats.output_format == DataFormat.Float32:
-        return [DestAccumulation.Yes]
-    return [DestAccumulation.No, DestAccumulation.Yes]
+        return [Fp32DestMode.Yes]
+    return [Fp32DestMode.No, Fp32DestMode.Yes]

@@ -6,8 +6,8 @@ from typing import List
 import pytest
 import torch
 from helpers.constraints import (
+    get_valid_32b_dest_modes,
     get_valid_data_format_conversions,
-    get_valid_dest_accumulation_modes,
 )
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -17,8 +17,8 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -56,38 +56,38 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         formats_list: List of input/output format pairs
 
     Returns:
-        List of (format, dest_acc, dest_sync, input_dimensions, pool_type) tuples
+        List of (format, is_32b_dest_en, dest_sync, input_dimensions, pool_type) tuples
     """
 
-    def _requires_dest_acc_for_reduce(in_fmt, out_fmt):
+    def _requires_32b_dest_for_reduce(in_fmt, out_fmt):
         """Int8->Int8 and UInt8->UInt8 reduce ops need 32-bit dest.
         This is in addition to the base constraints which are true for every operation.
         """
         return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
 
-    # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
+    # Targeted dimensions per (dest_sync, is_32b_dest_en) that cover key corner cases:
     # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
     # and max-square (both loops at capacity).
     unpack_reduce_col_tilizeA_strided_dims = {
-        (DestSync.Half, DestAccumulation.No): [
+        (DestSync.Half, Fp32DestMode.No): [
             [32, 32],
             [32, 256],
             [256, 32],
             [64, 128],
         ],
-        (DestSync.Half, DestAccumulation.Yes): [
+        (DestSync.Half, Fp32DestMode.Yes): [
             [32, 32],
             [32, 128],
             [128, 32],
             [64, 64],
         ],
-        (DestSync.Full, DestAccumulation.No): [
+        (DestSync.Full, Fp32DestMode.No): [
             [32, 32],
             [32, 512],
             [512, 32],
             [128, 128],
         ],
-        (DestSync.Full, DestAccumulation.Yes): [
+        (DestSync.Full, Fp32DestMode.Yes): [
             [32, 32],
             [32, 256],
             [256, 32],
@@ -103,10 +103,10 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         # Unpack to dest is not supported for unpack tilize operands, so the input cannot be Int32
         if in_fmt == DataFormat.Int32:
             continue
-        for acc in get_valid_dest_accumulation_modes(fmt):
+        for acc in get_valid_32b_dest_modes(fmt):
             if (
-                _requires_dest_acc_for_reduce(in_fmt, out_fmt)
-                and acc == DestAccumulation.No
+                _requires_32b_dest_for_reduce(in_fmt, out_fmt)
+                and acc == Fp32DestMode.No
             ):
                 continue
             for dest_sync in (DestSync.Half, DestSync.Full):
@@ -146,14 +146,14 @@ ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
+    formats_32b_dest_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
+    formats_32b_dest_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
     boot_mode=BootMode.DEFAULT,
 ):
-    (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
-        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
+    (formats, is_32b_dest_en, dest_sync_mode, input_dimensions, pool_type) = (
+        formats_32b_dest_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
     )
 
     num_faces = 4
@@ -227,7 +227,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             num_faces=num_faces,
         ),
         unpack_to_dest=False,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
     )
 

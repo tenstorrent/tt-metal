@@ -10,8 +10,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -47,7 +47,7 @@ from helpers.utils import passed_test
             DataFormat.MxInt2,
         ],
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     dest_sync=[DestSync.Full, DestSync.Half],
     # MX formats require implied_math_format=Yes on Quasar (bypass format inference pipeline).
     implied_math_format=lambda formats: (
@@ -58,7 +58,7 @@ from helpers.utils import passed_test
 )
 def test_semaphore_sync_quasar(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     dest_sync,
     implied_math_format,
 ):
@@ -89,7 +89,7 @@ def test_semaphore_sync_quasar(
         math_fidelity,
         tile_cnt,
         input_format=formats.input_format,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
     )
 
     configuration = TestConfig(
@@ -118,9 +118,9 @@ def test_semaphore_sync_quasar(
             tile_count_res=tile_cnt,
         ),
         unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
         disable_format_inference=(
             implied_math_format == ImpliedMathFormat.Yes

@@ -7,8 +7,8 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import PackRowsGolden, get_golden_generator
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     format_dict,
 )
 from helpers.param_config import (
@@ -49,13 +49,13 @@ dimension_combinations = [
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    is_32b_dest_en=[Fp32DestMode.No, Fp32DestMode.Yes],
     num_rows_to_pack=[1, 16, 50, 64],
     dimensions=dimension_combinations,
 )
 def test_pack_rows(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     num_rows_to_pack,
     dimensions,
 ):
@@ -64,7 +64,7 @@ def test_pack_rows(
     try:
         num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
             DestSync.Half,
-            dest_acc,
+            is_32b_dest_en,
             formats,
             dimensions,
             [32, 32],  # tile_dimensions (pack_rows uses 32x32 tiles)
@@ -114,7 +114,7 @@ def test_pack_rows(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
 

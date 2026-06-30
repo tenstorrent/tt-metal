@@ -402,7 +402,7 @@ class OperationSchemaBase(BaseModel):
 
         return first
 
-    def to_fused_operation(self, operands, dest_acc=False):
+    def to_fused_operation(self, operands, is_32b_dest_en=False):
         tile_shape = self._resolve_output_tile_shape(operands)
 
         tile_r = tile_shape.total_row_dim()
@@ -417,7 +417,7 @@ class OperationSchemaBase(BaseModel):
 
         block_tiles = (block_r // tile_r) * (block_c // tile_c)
         dest_faces = 32 if self.dest_sync == DestSync.Half else 64
-        if dest_acc:
+        if is_32b_dest_en:
             dest_faces //= 2
         dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
 
@@ -426,7 +426,7 @@ class OperationSchemaBase(BaseModel):
                 f"Block size {self.block_size} requires {block_tiles} tiles "
                 f"({block_tiles * tile_shape.total_num_faces()} faces) but dest can hold "
                 f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
-                f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
+                f"dest_sync={self.dest_sync.name}, is_32b_dest_en={is_32b_dest_en}"
             )
 
         pack_nodes = [entry.to_node(operands) for entry in self.pack]

@@ -12,8 +12,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     UnpackerEngine,
     format_dict,
@@ -52,22 +52,22 @@ def generate_eltwise_unary_datacopy_combinations(
 
     Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, data_copy_type, input_dimensions, dest_sync, edgecase_dest_index, tile_dimensions) tuples
+    Returns: List of (format, is_32b_dest_en, data_copy_type, input_dimensions, dest_sync, edgecase_dest_index, tile_dimensions) tuples
     """
     combinations = []
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+        fp32_dest_modes = (Fp32DestMode.No, Fp32DestMode.Yes)
         dest_sync_modes = (DestSync.Half, DestSync.Full)
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
 
-        for dest_acc in dest_acc_modes:
+        for is_32b_dest_en in fp32_dest_modes:
             if (
                 in_fmt != DataFormat.Float32
                 and fmt.output_format == DataFormat.Float32
-                and dest_acc == DestAccumulation.No
+                and is_32b_dest_en == Fp32DestMode.No
             ):
                 continue
 
@@ -80,13 +80,13 @@ def generate_eltwise_unary_datacopy_combinations(
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
                         for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            is_32b_dest_en, dest_sync=dest_sync, tile_shape=tile_shape
                         ):
                             for (
                                 _,
                                 edgecase_dest_index,
                             ) in calculate_edgecase_dest_indices(
-                                True if dest_acc == DestAccumulation.Yes else False,
+                                True if is_32b_dest_en == Fp32DestMode.Yes else False,
                                 dimensions[0]
                                 // tile_dims[0]
                                 * dimensions[1]
@@ -96,7 +96,7 @@ def generate_eltwise_unary_datacopy_combinations(
                                 combinations.append(
                                     (
                                         fmt,
-                                        dest_acc,
+                                        is_32b_dest_en,
                                         data_copy_type,
                                         dimensions,
                                         dest_sync,
@@ -125,29 +125,29 @@ ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
+    formats_32b_dest_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
     # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
+    implied_math_format=lambda formats_32b_dest_data_copy_type_dims_dest_sync_dest_indices: (
         [ImpliedMathFormat.Yes]
-        if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[
+        if formats_32b_dest_data_copy_type_dims_dest_sync_dest_indices[
             0
         ].input_format.is_mx_format()
         else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
     ),
 )
 def test_eltwise_unary_datacopy_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    formats_32b_dest_data_copy_type_dims_dest_sync_dest_indices,
     implied_math_format,
 ):
     (
         formats,
-        dest_acc,
+        is_32b_dest_en,
         data_copy_type,
         input_dimensions,
         dest_sync_mode,
         dest_index,
         tile_dimensions,
-    ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
+    ) = formats_32b_dest_data_copy_type_dims_dest_sync_dest_indices
 
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
     if (
@@ -216,7 +216,7 @@ def test_eltwise_unary_datacopy_quasar(
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=False,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
         disable_format_inference=(
             implied_math_format == ImpliedMathFormat.Yes

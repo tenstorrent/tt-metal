@@ -11,9 +11,9 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
     EltwiseBinaryReuseDestType,
+    Fp32DestMode,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -82,7 +82,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
         try:
             num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
                 dest_sync_mode,
-                DestAccumulation.No,
+                Fp32DestMode.No,
                 formats,
                 out_dims,
                 (TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]),
@@ -179,7 +179,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     tile_dimensions_tuple = (tile_rows, tile_cols)
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync_mode,
-        DestAccumulation.No,
+        Fp32DestMode.No,
         formats,
         output_dimensions,
         tile_dimensions_tuple,
@@ -343,7 +343,7 @@ def test_eltwise_binary_reuse_dest_quasar(
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=False,
-        dest_acc=DestAccumulation.No,
+        is_32b_dest_en=Fp32DestMode.No,
         boot_mode=boot_mode,
         disable_format_inference=disable_format_inference,
     )

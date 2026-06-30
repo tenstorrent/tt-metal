@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
+    get_valid_32b_dest_modes,
 )
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -16,8 +16,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     Tilize,
     format_dict,
 )
@@ -88,7 +88,7 @@ def get_valid_num_faces_datacopy(tilize):
 
 def _run_unary_datacopy_test(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     num_faces,
     tilize,
     input_dimensions,
@@ -135,7 +135,7 @@ def _run_unary_datacopy_test(
     unpack_to_dest = (
         False
         if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        else formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
 
     blocks_calculation_algorithm = (
@@ -145,7 +145,7 @@ def _run_unary_datacopy_test(
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -177,7 +177,7 @@ def _run_unary_datacopy_test(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=unpack_to_dest,
     )
 
@@ -201,19 +201,21 @@ def _run_unary_datacopy_test(
             DataFormat.Fp8_e4m3,
         ]
     ),
-    dest_acc=get_valid_dest_accumulation_modes,
+    is_32b_dest_en=get_valid_32b_dest_modes,
     num_faces=get_valid_num_faces_datacopy,
     tilize=get_valid_tilize_datacopy,
     input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
 def test_unary_datacopy(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     num_faces,
     tilize,
     input_dimensions,
 ):
-    _run_unary_datacopy_test(formats, dest_acc, num_faces, tilize, input_dimensions)
+    _run_unary_datacopy_test(
+        formats, is_32b_dest_en, num_faces, tilize, input_dimensions
+    )
 
 
 @parametrize(
@@ -230,21 +232,21 @@ def test_unary_datacopy(
         if fmt.input_format in SUB_BYTE_BFP_FORMATS
         or fmt.output_format in SUB_BYTE_BFP_FORMATS
     ],
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    is_32b_dest_en=lambda formats: get_valid_32b_dest_modes(formats),
     num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
     tilize=Tilize.No,
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
 def test_unary_datacopy_sub_byte_bfp(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     num_faces,
     tilize,
     input_dimensions,
 ):
     _run_unary_datacopy_test(
         formats,
-        dest_acc,
+        is_32b_dest_en,
         num_faces,
         tilize,
         input_dimensions,

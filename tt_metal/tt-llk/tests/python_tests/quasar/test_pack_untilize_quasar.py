@@ -8,8 +8,8 @@ import torch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     ImpliedMathFormat,
     format_dict,
 )
@@ -42,7 +42,7 @@ def generate_pack_untilize_combinations(
     Args:
         formats_list: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, dest_sync, input_dimensions) tuples
+    Returns: List of (format, is_32b_dest_en, dest_sync, input_dimensions) tuples
     """
 
     def is_supported_format_conversion(in_fmt, out_fmt):
@@ -54,20 +54,20 @@ def generate_pack_untilize_combinations(
             return False
         return True
 
-    def get_dest_acc_modes(in_fmt):
+    def get_fp32_dest_modes(in_fmt):
         # Int16 requires 16bit mode dest register
         if in_fmt == DataFormat.Int16:
-            return (DestAccumulation.No,)
+            return (Fp32DestMode.No,)
         # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
         if in_fmt.is_32_bit():
-            return (DestAccumulation.Yes,)
-        return (DestAccumulation.No, DestAccumulation.Yes)
+            return (Fp32DestMode.Yes,)
+        return (Fp32DestMode.No, Fp32DestMode.Yes)
 
     dimensions_cache = {
-        (dest_acc, dest_sync): tuple(
-            generate_unary_input_dimensions(dest_acc, dest_sync)
+        (is_32b_dest_en, dest_sync): tuple(
+            generate_unary_input_dimensions(is_32b_dest_en, dest_sync)
         )
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for is_32b_dest_en in (Fp32DestMode.No, Fp32DestMode.Yes)
         for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
@@ -83,10 +83,10 @@ def generate_pack_untilize_combinations(
         if out_fmt.is_mx_format():
             continue
 
-        for dest_acc in get_dest_acc_modes(in_fmt):
+        for is_32b_dest_en in get_fp32_dest_modes(in_fmt):
             for dest_sync in dest_sync_modes:
-                for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
-                    combinations.append((fmt, dest_acc, dest_sync, dimensions))
+                for dimensions in dimensions_cache[(is_32b_dest_en, dest_sync)]:
+                    combinations.append((fmt, is_32b_dest_en, dest_sync, dimensions))
 
     return combinations
 
@@ -110,11 +110,11 @@ ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dimensions=ALL_PACK_UNTILIZE_COMBINATIONS,
+    formats_32b_dest_sync_dimensions=ALL_PACK_UNTILIZE_COMBINATIONS,
 )
-def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
-    (formats, dest_acc, dest_sync_mode, input_dimensions) = (
-        formats_dest_acc_sync_dimensions[0]
+def test_pack_untilize_quasar(formats_32b_dest_sync_dimensions):
+    (formats, is_32b_dest_en, dest_sync_mode, input_dimensions) = (
+        formats_32b_dest_sync_dimensions[0]
     )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -158,9 +158,9 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
             num_faces=num_faces,
         ),
         unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
         disable_format_inference=(
             formats.input_format.is_mx_format() or formats.output_format.is_mx_format()

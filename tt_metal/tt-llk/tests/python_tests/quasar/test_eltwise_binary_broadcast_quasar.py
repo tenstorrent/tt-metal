@@ -4,7 +4,7 @@
 import pytest
 import torch
 from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
+    get_valid_32b_dest_modes,
     get_valid_math_fidelities,
 )
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -58,7 +58,7 @@ FACE_ELEMS = 16 * 16
         ],
     )
     + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    is_32b_dest_en=lambda formats: get_valid_32b_dest_modes(formats),
     mathop=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
@@ -80,13 +80,13 @@ FACE_ELEMS = 16 * 16
         else [ImpliedMathFormat.Yes]
     ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
-        dest_acc, dest_sync_mode
+    input_dimensions=lambda is_32b_dest_en, dest_sync_mode: generate_unary_input_dimensions(
+        is_32b_dest_en, dest_sync_mode
     ),
 )
 def test_eltwise_binary_broadcast_quasar(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     mathop,
     broadcast_type,
     math_fidelity,
@@ -164,7 +164,7 @@ def test_eltwise_binary_broadcast_quasar(
             num_faces=4,
         ),
         unpack_to_dest=False,
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         boot_mode=boot_mode,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
         disable_format_inference=formats.input_format.is_mx_format(),

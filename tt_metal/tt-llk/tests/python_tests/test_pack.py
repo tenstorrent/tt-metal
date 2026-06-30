@@ -14,7 +14,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
+    get_valid_32b_dest_modes,
     get_valid_dest_indices,
 )
 from helpers.data_format_inference import infer_data_formats
@@ -27,8 +27,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
+    Fp32DestMode,
     PackerReluType,
     format_dict,
 )
@@ -64,7 +64,7 @@ from helpers.utils import passed_test
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    is_32b_dest_en=lambda formats: get_valid_32b_dest_modes(formats),
     input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
     relu_type=[
         PackerReluType.NoRelu,
@@ -73,13 +73,13 @@ from helpers.utils import passed_test
         PackerReluType.MaxThresholdRelu,
     ],
     dest_sync=[DestSync.Half, DestSync.Full],
-    dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
-        dest_sync, dest_acc, formats, input_dimensions
+    dest_index=lambda is_32b_dest_en, dest_sync, formats, input_dimensions: get_valid_dest_indices(
+        dest_sync, is_32b_dest_en, formats, input_dimensions
     ),
 )
 def test_pack(
     formats,
-    dest_acc,
+    is_32b_dest_en,
     input_dimensions,
     relu_type,
     dest_sync,
@@ -108,21 +108,21 @@ def test_pack(
     )
 
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        formats.input_format.is_32_bit() and is_32b_dest_en == Fp32DestMode.Yes
     )
     # To come as close as possible to actual hardware behavior, we infer data formats here
     # and use the inferred pack_src format for ReLU operations.
     data_formats = infer_data_formats(
         input_format=formats.input_format,
         output_format=formats.output_format,
-        is_fp32_dest_acc_en=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpacking_to_dest=unpack_to_dest,
     )
 
-    # This is a bug in infer_pack_in function for blackhole. Force Float32 intermediate for DestAccumulation.Yes
+    # This is a bug in infer_pack_in function for blackhole. Force Float32 intermediate for Fp32DestMode.Yes
     # TODO: fix infer_pack_in for blackhole.
     if (
-        dest_acc == DestAccumulation.Yes
+        is_32b_dest_en == Fp32DestMode.Yes
         and get_chip_architecture() == ChipArchitecture.BLACKHOLE
         and not formats.input_format.is_integer()
     ):
@@ -158,7 +158,7 @@ def test_pack(
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync,
-        dest_acc,
+        is_32b_dest_en,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -199,7 +199,7 @@ def test_pack(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        is_32b_dest_en=is_32b_dest_en,
         unpack_to_dest=unpack_to_dest,
     )
 
