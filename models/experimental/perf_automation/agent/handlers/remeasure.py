@@ -21,7 +21,11 @@ def _op_count(profile):
     return sum(int(b.get("count", 0)) for b in (profile.get("buckets") or []))
 
 
-def _comparable(baseline, iter_profile, tol=0.25, floor_ms=None, floor_margin=0.5):
+def _bucket_count(profile, bucket_id):
+    return sum(int(b.get("count", 0)) for b in (profile.get("buckets") or []) if b.get("id") == bucket_id)
+
+
+def _comparable(baseline, iter_profile, tol=0.25, floor_ms=None, floor_margin=0.5, tp_regime=False):
     """Is the iter profile a TRUSTWORTHY measurement (a complete capture of the same model), not a
     crashed/partial capture? Returns (ok, reason).
 
@@ -41,6 +45,8 @@ def _comparable(baseline, iter_profile, tol=0.25, floor_ms=None, floor_margin=0.
     if b_ops == 0:
         return True, None  # no baseline op count -> nothing to compare against
     i_ops = _op_count(iter_profile)
+    if tp_regime:
+        i_ops -= _bucket_count(iter_profile, "ccl")
     ratio = i_ops / b_ops
     if ratio > (1 + tol):
         return False, f"op_count_inflated: iter {i_ops} vs baseline {b_ops} ops ({ratio:.2f}x)"

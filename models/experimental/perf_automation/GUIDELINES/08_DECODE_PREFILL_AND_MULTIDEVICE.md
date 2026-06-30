@@ -331,3 +331,55 @@ trace (§11): a trace requires a constant shape, so bucket FIRST, then capture.
 **FORCE-TRY + SELF-VERIFY:** confirm the decode loop now runs at a **fixed** sequence length
 (constant shape) and that padding is masked so generated tokens match the un-bucketed run.
 PCC-gate it (output tokens must be identical); measured under the wall/throughput metric.
+
+---
+
+## 14. Tensor-parallel weight fracture — when the model does not fit on one chip {#tp-fracture}
+<!-- route
+op_class: matmul
+bound: dram
+lever_type: structural
+-->
+
+**Fires when:** the run is TP-regime (`--allow-tp` AND the model's weights do not fit on one chip)
+and a dense projection is still **memory-bound** after every single-chip lever. The optimizer reaches
+the `tp-fracture` rung. Fracture the weight across the **TP axis** and insert the matching CCL. Use
+the **smallest** TP that makes the model fit (the remaining chips become DP replicas).
+
+Column-fracture (split the output dim) → `all_gather`:
+```python
+w_shard = ttnn.as_tensor(W, dtype=..., layout=ttnn.TILE_LAYOUT, device=mesh,
+            mesh_mapper=ShardTensorToMesh(mesh, dim=-1))
+y_local = ttnn.linear(x, w_shard, program_config=...)
+y = ttnn.all_gather(y_local, dim=-1, cluster_axis=TP_AXIS, mesh_device=mesh, topology=...)
+```
+Row-fracture (split the contraction dim `K`) → `reduce_scatter` instead, with
+`ShardTensorToMesh(mesh, dim=0)` on the K dimension.
+
+**Constraints:** TP must divide `num_heads` (attention) / the fractured dim (MLP), stay tile-aligned
+(dim/TP a multiple of 32), and map to a mesh axis. Keep activations **sharded across consecutive
+layers** (see §15) so you do not re-gather every layer.
+
+**FORCE-TRY + SELF-VERIFY:** PCC-gate the distributed forward (the fracture + CCL must be
+mathematically identical to the single-device result); record `record_kernel_attempt(...,'tp-fracture',...)`.
+
+## 15. CCL optimization — make the cross-chip communication cheap {#ccl-knobs}
+<!-- route
+op_class: ccl
+lever_type: knob
+-->
+
+**Fires when:** TP added `all_gather` / `reduce_scatter` ops (the `ccl` bucket). These are NOT tuned
+by grid/dtype/kernel — they need communication-specific levers. In priority order:
+
+1. **Wire dtype** — communicate in `bfloat8_b` instead of `bfloat16` → half the bytes on the link
+   (PCC-gate it).
+2. **Compute↔comm overlap** — async / persistent CCL so the collective **hides behind** the next op's
+   compute instead of stalling. This is the highest-value lever; without it the link time is serial.
+3. **Topology / `cluster_axis`** — pick `ring`/`linear` per mesh, and communicate along the shortest
+   mesh axis.
+4. **Reduce CCL volume/count** — column vs row fracture changes what is gathered; keep activations
+   sharded across layers (cross-block handoff) to avoid re-gathering; fuse the gather into its consumer.
+
+**FORCE-TRY + SELF-VERIFY:** score the change against the eth-link roofline (`box_facts` eth bw) — a
+TP win requires the per-chip compute saved to beat the CCL time added. PCC-gate; record as a knob.
