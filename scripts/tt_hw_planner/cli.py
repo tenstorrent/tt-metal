@@ -11267,6 +11267,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument("--mesh", help="mesh shape like '2x2' for roofline calibration (needs --box)")
     popt.add_argument("--box", help="declared TT box for roofline calibration (e.g. p300c, T3K, Galaxy)")
     popt.add_argument("--metric", default="device_ms", help="device_ms | wall_ms | auto")
+    popt.add_argument(
+        "--tp-latency",
+        action="store_true",
+        dest="tp_latency",
+        help="opt-in: for a model that FITS on one chip, allow sweeping tensor-parallel degree up to cut "
+        "latency (spends DP throughput). Only under a latency metric. Off by default; never affects the "
+        "doesn't-fit case (that fractures automatically).",
+    )
     popt.add_argument("--max-iter", type=int, default=1000, dest="max_iter")
     popt.add_argument("--budget-usd", type=float, default=1_000_000_000.0, dest="budget_usd")
     popt.add_argument("-k", "--case", dest="case", help="pytest -k case id override (e.g. device_params0)")

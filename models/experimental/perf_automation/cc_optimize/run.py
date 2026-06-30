@@ -427,6 +427,141 @@ def catalog_push(repo_root: Path, remote: str, branch: str) -> None:
         print(f"  [catalog] push error (ignored): {str(exc)[-140:]}")
 
 
+_HF_ID_RE = __import__("re").compile(r"['\"]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)['\"]")
+
+
+def _hf_hub_root() -> Path:
+    return Path(os.environ.get("HF_HOME") or (Path.home() / ".cache" / "huggingface")) / "hub"
+
+
+def _is_cached_model_id(cand) -> bool:
+    if not cand or "/" not in str(cand):
+        return False
+    org, _, name = str(cand).partition("/")
+    return (_hf_hub_root() / f"models--{org}--{name}").is_dir()
+
+
+def _resolve_model_id(demo_dir, hint=None) -> str | None:
+    if _is_cached_model_id(hint):
+        return hint
+    try:
+        for p in Path(demo_dir).rglob("*.py"):
+            try:
+                txt = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            for cand in _HF_ID_RE.findall(txt):
+                if _is_cached_model_id(cand):
+                    return cand
+    except Exception:
+        return None
+    return None
+
+
+def _chip_count(devices) -> int:
+    d = (devices or "").strip().lower()
+    if d and d not in ("all", "single"):
+        return max(1, len([x for x in d.split(",") if x.strip()]))
+    if d == "single":
+        return 1
+    try:
+        import ttnn
+
+        return max(1, int(ttnn.GetNumAvailableDevices()))
+    except Exception:
+        return 1
+
+
+def _hf_snapshots(model_id: str) -> list:
+    org, _, name = model_id.partition("/")
+    snaps = _hf_hub_root() / f"models--{org}--{name}" / "snapshots"
+    try:
+        return sorted([d for d in snaps.iterdir() if d.is_dir()], key=lambda d: d.stat().st_mtime, reverse=True)
+    except Exception:
+        return []
+
+
+def _hf_cache_weight_bytes(model_id: str) -> int:
+    best = 0
+    for snap in _hf_snapshots(model_id):
+        total = 0
+        for p in snap.iterdir():
+            if p.suffix.lower() in (".safetensors", ".bin", ".pt", ".pth"):
+                try:
+                    total += os.path.getsize(os.path.realpath(p))
+                except OSError:
+                    pass
+        best = max(best, total)
+    return best
+
+
+def _hf_cache_dims(model_id: str) -> dict:
+    for snap in _hf_snapshots(model_id):
+        cfg = snap / "config.json"
+        if cfg.is_file():
+            try:
+                return json.loads(cfg.read_text())
+            except Exception:
+                continue
+    return {}
+
+
+def _model_weight_bytes(demo_dir, hint=None) -> int:
+    total = 0
+    try:
+        for p in Path(demo_dir).rglob("*"):
+            if p.suffix.lower() in (".safetensors", ".bin", ".pt", ".pth") and p.is_file():
+                total += p.stat().st_size
+    except Exception:
+        total = 0
+    if total:
+        return total
+    mid = _resolve_model_id(demo_dir, hint)
+    return _hf_cache_weight_bytes(mid) if mid else 0
+
+
+def _decide_parallelism_route(
+    demo_dir, manifest, repo_root=None, metric="device_ms", allow_tp_latency=False, devices="all", model_id_hint=None
+) -> None:
+    """Decide single-chip vs tensor-parallel from model size + detected hardware, print the route, and
+    (when the model does not fit on one chip) export TT_PERF_TP_REGIME=1 to the loop automatically.
+    Fully fail-safe: any missing input leaves the regime OFF, so a run is byte-identical to today
+    unless TP is positively selected."""
+    try:
+        import sys
+
+        _perf = str(Path(repo_root) / PERF_DIR) if repo_root else str(Path(__file__).resolve().parent.parent)
+        if _perf not in sys.path:
+            sys.path.insert(0, _perf)
+        from agent.environment import ARCH_FACTS
+        from agent.tp import decide_parallelism
+
+        env = manifest.get("env", {}) or {}
+        arch = (env.get("arch") or "").lower()
+        facts = ARCH_FACTS.get(arch, {})
+        cap = int(os.environ.get("TT_PERF_DRAM_CAPACITY_BYTES") or facts.get("dram_capacity_bytes") or 0)
+        chips = int(env.get("device_count") or env.get("mesh_chips") or env.get("num_devices") or 0) or _chip_count(
+            devices
+        )
+        weight_bytes = _model_weight_bytes(demo_dir, model_id_hint)
+        if not (cap and weight_bytes):
+            return
+        cfg = manifest.get("model_config") or {}
+        if not cfg.get("hidden_size"):
+            mid = _resolve_model_id(demo_dir, model_id_hint)
+            if mid:
+                cfg = {**_hf_cache_dims(mid), **cfg}
+        heads = int(cfg.get("num_attention_heads") or cfg.get("num_heads") or 1)
+        hidden = int(cfg.get("hidden_size") or cfg.get("d_model") or 1)
+        route = decide_parallelism(weight_bytes, cap, chips, heads, hidden, metric, allow_tp_latency)
+        print(f"  [optimize/cc] parallelism route: {route['route']} — {route['reason']}")
+        if route.get("tp_regime"):
+            os.environ["TT_PERF_TP_REGIME"] = "1"
+            print("  [optimize/cc] tensor-parallel regime ENABLED; propagated to loop")
+    except Exception as exc:  # never fail the run on the route decision
+        print(f"  [optimize/cc] parallelism route decision skipped ({exc})")
+
+
 def run_cc_optimize(
     demo_dir: Path,
     repo_root: Path,
@@ -440,6 +575,8 @@ def run_cc_optimize(
     sync_catalog: bool = False,
     catalog_remote: str = "origin",
     catalog_branch: str = "perf-catalog",
+    allow_tp_latency: bool = False,
+    model_id_hint=None,
 ) -> dict | None:
     """Top-level cc engine: discover pipeline(s), then optimize EVERY one to the gate's can_stop.
 
@@ -466,6 +603,7 @@ def run_cc_optimize(
         if _seq:
             os.environ["TT_PERF_SEQ_LEN"] = _seq
             print(f"  [optimize/cc] perf workload seq pinned to {_seq} (baseline shape-retry); propagated to loop")
+    _decide_parallelism_route(demo_dir, manifest, repo_root, metric, allow_tp_latency, devices, model_id_hint)
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
     pipes = pipelines_from_manifest(manifest, model_rel)
