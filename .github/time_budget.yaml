@@ -166,6 +166,9 @@ scaleout:
   health:
     wh_galaxy: 15
     bh_galaxy: 10
+  perf:
+    wh_llmbox_perf: 135 # 3 microbenchmark jobs × 45 min
+    bh_quietbox_2: 45
   sanity:
     wh_galaxy: 20
   e2e:
@@ -207,7 +210,9 @@ runtime:
     bh_loudbox: 25
   perf:
     wh_n300_civ2: 55
-    bh_p150_perf: 40
+    bh_p150_perf: 130 # dispatch perf (40) + microbenchmark DRAM/data movement (90)
+    wh_n300_perf: 90 # microbenchmark DRAM + data movement
+    bh_p150b_civ2_viommu: 45
 
 triage:
   smoke:
