@@ -176,11 +176,16 @@
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_generate_tp.py
+    # Only test that builds the full 64-layer model; on a cold tt_cache every
+    # layer is dequant+tilized (~14s/layer -> ~13min) before inference even
+    # starts, so it needs the same generous timeout as the attention test.
+    pytest --timeout 1200 models/demos/blackhole/qwen36/tests/test_generate_tp.py
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 30
+      # 45 (not 30) to fit a cold full-model load: the 4 tests above (~15min) +
+      # test_generate_tp's full 64-layer cold cache build (~13min) + inference.
+      timeout: 45
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
