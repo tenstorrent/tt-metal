@@ -14,9 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
-from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
-from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import calculate_average_recall
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import calculate_average_recall, grouped_gate_golden_act
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -50,10 +48,16 @@ TEST_PARAM_IDS = ["minimal", "just_over_one_tile", "four_tiles", "realistic"]
 ROUTING_CONFIGS = [
     (8, 256, 2, 4, 8, 0.5),  # DeepSeek grouped routing
     (1, 384, 1, 1, 8, 2.827),  # Kimi single expert group -> collapses to a plain top-k
+    (1, 256, 1, 1, 6, 1.5),  # DeepSeek-V4 Flash single-group top-k
+    (1, 384, 1, 1, 6, 2.5),  # DeepSeek-V4 Pro single-group top-k
 ]
-ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e"]
+ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv4pro-1g384e"]
+
+# Router affinity activation: sigmoid for DeepSeek-V3/Kimi, sqrtsoftplus for DeepSeek-V4.
+SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]
 
 
+@pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(
     "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale",
     ROUTING_CONFIGS,
@@ -73,6 +77,7 @@ def test_moe_grouped_topk(
     n_activated_experts,
     route_scale,
     padded_percent,
+    score_func,
 ):
     """Verify moe_grouped_topk matches the PyTorch golden reference using recall and PCC.
 
@@ -88,21 +93,19 @@ def test_moe_grouped_topk(
 
     epsilon = 1e-20
 
-    config = DeepseekV3Config(
-        hidden_size=64,
-        n_routed_experts=total_experts,
-        n_group=n_groups,
-        topk_group=topk_groups,
-        num_experts_per_tok=n_activated_experts,
-        routed_scaling_factor=route_scale,
-    )
-    gate = MoEGate(config, use_bitonic_sort=False)
-
     scores = generate_distinct_sigmoid_inputs((num_batches, batch_size, seq_len, total_experts), dtype=torch.float32)
     bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.float32)
 
-    ref_indices, ref_weights = gate.grouped_gate_golden(
-        scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
+    ref_indices, ref_weights = grouped_gate_golden_act(
+        scores,
+        bias,
+        route_scale,
+        epsilon,
+        n_groups,
+        summed_experts_per_group,
+        topk_groups,
+        n_activated_experts,
+        score_func,
     )
 
     # Right-padding: real tokens occupy the leading rows, padding the trailing rows.
@@ -132,6 +135,7 @@ def test_moe_grouped_topk(
         n_activated_experts=n_activated_experts,
         route_scale=route_scale,
         epsilon=epsilon,
+        score_func=score_func,
         padding_config=padding_config,
     )
 

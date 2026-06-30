@@ -16,15 +16,23 @@
 #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
 #include "api/compute/reduce.h"
 #include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
 namespace blocks {
-void sigmoid(uint32_t cb_in_scores_id, uint32_t cb_sigmoid_scores_id, uint32_t width_tiles) {
+// Router affinity activations applied to the raw gate logits.
+constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
+constexpr uint32_t SCORE_FUNC_SQRTSOFTPLUS = 1;  // DeepSeek-V4: sqrt(softplus(x))
+
+// Applies the selected router affinity activation to each logits tile. The output CB (historically
+// "sigmoid" scores) holds the unbiased activated scores that the writer later gathers for the weights.
+template <uint32_t score_func>
+void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id, uint32_t width_tiles) {
     CircularBuffer cb_in_scores(cb_in_scores_id);
-    CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
-    // Perform sigmoid on scores
+    CircularBuffer cb_activated_scores(cb_activated_scores_id);
     // Reconfigure pack/unpack for float32 after topk operations used UInt16
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_scores.wait_front(1);
@@ -33,18 +41,27 @@ void sigmoid(uint32_t cb_in_scores_id, uint32_t cb_sigmoid_scores_id, uint32_t w
         // copy tile from scores cb to destination register 0
         copy_tile_to_dst_init_short(cb_in_scores_id);
         copy_tile(cb_in_scores_id, 0, 0);
-        // perform sigmoid on tile
-        sigmoid_tile_init();
-        sigmoid_tile(0);
+        if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+            // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
+            constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
+            constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
+            softplus_tile_init();
+            softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
+            sqrt_tile_init();
+            sqrt_tile(0);
+        } else {
+            sigmoid_tile_init();
+            sigmoid_tile(0);
+        }
         tile_regs_commit();
         cb_in_scores.pop_front(1);
 
-        cb_sigmoid_scores.reserve_back(1);
+        cb_activated_scores.reserve_back(1);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_sigmoid_scores_id);
-        pack_tile(0, cb_sigmoid_scores_id);
+        pack_reconfig_data_format(cb_activated_scores_id);
+        pack_tile(0, cb_activated_scores_id);
         tile_regs_release();
-        cb_sigmoid_scores.push_back(1);
+        cb_activated_scores.push_back(1);
     }
 }
 
@@ -439,6 +456,7 @@ void kernel_main() {
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
     constexpr uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
     constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
+    constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
 
     constexpr uint32_t end_phase = log_group_size - 1;
 
@@ -447,9 +465,9 @@ void kernel_main() {
     binary_op_init_common(cb_in_scores, cb_in_bias, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        blocks::sigmoid(cb_in_scores, cb_sigmoid_scores, width_tiles);
+        blocks::apply_score_func<score_func>(cb_in_scores, cb_sigmoid_scores, width_tiles);
 
-        // Perform add bias on sigmoid scores
+        // Perform add bias on activated scores
         blocks::add_bias(cb_sigmoid_scores, cb_in_bias, cb_biased_scores, width_tiles);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
 

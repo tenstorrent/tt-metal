@@ -14,6 +14,57 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
+def score_activation(logits: torch.Tensor, score_func: str) -> torch.Tensor:
+    """Router affinity activation matching the moe_grouped_topk ``score_func`` option.
+
+    "sigmoid" for DeepSeek-V3 / Kimi, "sqrtsoftplus" (== sqrt(softplus(x)), beta=1, threshold=20)
+    for DeepSeek-V4.
+    """
+    if score_func == "sigmoid":
+        return torch.sigmoid(logits)
+    if score_func == "sqrtsoftplus":
+        return torch.sqrt(torch.nn.functional.softplus(logits))
+    raise ValueError(f"Unsupported score_func '{score_func}'")
+
+
+def grouped_gate_golden_act(
+    logits,
+    bias,
+    route_scale,
+    epsilon,
+    n_groups,
+    summed_experts_per_group,
+    topk_groups,
+    n_activated_experts,
+    score_func="sigmoid",
+):
+    """Activation-parametrized port of MoEGate.grouped_gate_golden.
+
+    Identical to the DeepSeek-V3 reference grouped gate (same top-k ordering convention as the
+    moe_grouped_topk device op) except the router affinity activation is selectable. With
+    ``n_groups == 1`` it collapses to a plain top-k, matching the single-group device path used by
+    Kimi and DeepSeek-V4. Returns ``(top_k_indices, scaled_weights)``.
+    """
+    scores = score_activation(logits, score_func)
+    biased_scores = scores + bias
+
+    grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
+    top_p_experts_scores, _ = torch.topk(grouped_scores, summed_experts_per_group, dim=-1, sorted=True)
+    summed_scores = top_p_experts_scores.sum(dim=-1, keepdim=False)
+
+    _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1, sorted=True)
+    group_mask = torch.ones(grouped_scores.shape[:-1], dtype=torch.bool, device=scores.device)
+    group_mask.scatter_(-1, top_k_groups_indices, False)
+    masked_grouped_scores = grouped_scores.masked_fill(group_mask.unsqueeze(-1), float("-inf"))
+    masked_scores = masked_grouped_scores.reshape(scores.shape)
+
+    _, top_k_experts_indices = torch.topk(masked_scores, n_activated_experts, dim=-1, sorted=True)
+    chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
+    normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
+    scaled_scores = normalized_scores * route_scale
+    return top_k_experts_indices, scaled_scores
+
+
 def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts: torch.Tensor) -> float:
     """Calculate average recall of predicted expert selections vs reference."""
     recall = 0
