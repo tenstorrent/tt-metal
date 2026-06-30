@@ -39,7 +39,7 @@ on:
         required: false
         type: string
         default: sanity
-        description: "Time-budget workflow key passed to verify_time_budget.py (e.g. smoke for merge-gate, sanity for APC/post-commit)."
+        description: "Time-budget workflow key passed to verify_time_budget.py (e.g. merge_gate for merge-gate, sanity for APC/post-commit)."
       ref:
         required: false
         type: string
@@ -62,7 +62,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ${{ inputs.test-category == 'smoke' && './tests/pipeline_reorg/ttnn_smoke_merge_gate_tests.yaml' || './tests/pipeline_reorg/ttnn-tests.yaml' }}
+      TESTS_YAML_PATH: ${{ inputs.test-category == 'merge_gate' && './tests/pipeline_reorg/ttnn_merge_gate_tests.yaml' || './tests/pipeline_reorg/ttnn-tests.yaml' }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -99,7 +99,7 @@ jobs:
         id: filter-matrix
         run: |
           matrix='${{ steps.build-matrix.outputs.matrix }}'
-          if [[ "${{ inputs.test-category }}" == "smoke" ]]; then
+          if [[ "${{ inputs.test-category }}" == "merge_gate" ]]; then
             filtered="$matrix"
           else
             merge_gate="${{ inputs.merge-gate-call }}"

@@ -11,7 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
-#include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (rows_for_groups / cols_for_bands)
+#include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
 #include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
 
 namespace ttnn::operations::experimental::indexer_score {
@@ -358,15 +358,14 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     const uint64_t num_mul_adds =
         2ull * valid_tiles * Hi * B * static_cast<uint64_t>(tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH) * D;
 
-    // Cores used: the banded schedule's rows_for_groups x cols_for_bands rectangle (shares the factory's
-    // mapping, so this equals tracy's CORE COUNT).
+    // Cores used: the banded schedule's (group_rows x row_blocks) x cols rectangle, via the same helper the
+    // factory uses (block-split included), so this equals tracy's CORE COUNT.
     const uint32_t QC = attrs.program_config.q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t KC = attrs.program_config.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC); shared with the factory
     const auto grid = q.device()->compute_with_storage_grid_size();
-    const uint64_t num_cores =
-        static_cast<uint64_t>(rows_for_groups(group_count, grid.y)) * cols_for_bands(band_count, grid.x);
+    const uint64_t num_cores = banded_core_count(group_count, band_count, grid.x, grid.y);
 
     // Blackhole matmul peak: 4096 mul-adds/cycle/core at LoFi, scaled by the fidelity multiplier.
     const auto math_fidelity = std::get<0>(ttnn::get_compute_kernel_config_args(arch, attrs.compute_kernel_config));

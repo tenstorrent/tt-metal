@@ -25,6 +25,7 @@ struct DeviceStorage;
 
 namespace distributed {
 class MeshDevice;
+class MeshBuffer;
 }
 
 /**
@@ -62,8 +63,10 @@ public:
     static MeshTensor allocate_on_device(
         distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
 
-    // Internal Constructor for transition.
-    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
+    /**
+     * Construct a MeshTensor that takes ownership of an already-allocated MeshBuffer.
+     */
+    static MeshTensor from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
 
     /**
      * Release ownership of the underlying device memory.
@@ -178,6 +181,10 @@ public:
     const MeshTensorImpl& impl() const;
 
 private:
+    // Internal constructor for transition. Use the from_buffer factory or allocate_on_device
+    // to build a MeshTensor.
+    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
+
     // TODO(#43693): Remove once DeviceStorage no longer keeps a shared_ptr<MeshBuffer>
     // in its DeallocatedTombStone state.
     // DeviceStorage is the sole caller — it uses mesh_buffer_invariant_breaking() to

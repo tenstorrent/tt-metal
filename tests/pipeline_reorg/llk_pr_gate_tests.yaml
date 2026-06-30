@@ -1,5 +1,8 @@
-# LLK smoke — PR-gate python_tests (no coverage, markers not perf and not nightly and not quasar).
-# PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs. ci-quiet log mode is hard-coded.
+# LLK PR-gate python_tests matrix.
+#
+# Merge-gate gtest coverage lives in llk_merge_gate_tests.yaml.
+# PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs.
+# For max allowed timeout refer to .github/time_budget.yaml (llk -> pr_gate).
 
 - name: llk_smoke_wormhole
   team: llk
@@ -14,7 +17,7 @@
   skus:
     wh_n150_civ2:
       timeout: 40
-  owner_id: U07J3K6KS1K
+  owner_id: U07J3K6KS1K # LLK team
 
 - name: llk_smoke_blackhole
   team: llk
@@ -29,4 +32,4 @@
   skus:
     bh_p150b_civ2:
       timeout: 40
-  owner_id: U07J3K6KS1K
+  owner_id: U07J3K6KS1K # LLK team
