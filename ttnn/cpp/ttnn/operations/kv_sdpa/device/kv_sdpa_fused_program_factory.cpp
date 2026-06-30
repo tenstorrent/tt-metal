@@ -42,8 +42,13 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t NKH = ks[1];
     const uint32_t DHt = qs[3] / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = DHt;
-    const uint32_t Kt = ks[2] / tt::constants::TILE_HEIGHT;
     const uint32_t group = NQH / NKH;
+    // Total KV = optional resident prefix (past_k/past_v) followed by the new/suffix K/V. The reader
+    // reads both ranges, so the caller need not pre-concatenate.
+    const bool has_past = ta.past_k.has_value();
+    const uint32_t prefix_Kt = has_past ? (ta.past_k->padded_shape()[2] / tt::constants::TILE_HEIGHT) : 0;
+    const uint32_t suffix_Kt = ks[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t Kt = prefix_Kt + suffix_Kt;
 
     // KV chunk size: largest small divisor of Kt (matches prod's k_chunk≈96 -> 3 tiles for Kt=33).
     uint32_t Sk_chunk_t = 1;
@@ -95,10 +100,18 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     constexpr uint32_t identity_scalar_packed = 0x3F803F80u;
 
     // ---- Reader ----
-    KernelDescriptor::CompileTimeArgs reader_cta = {NQH, DHt, Kt, Sk_chunk_t, k_num_chunks};
+    // Suffix-relative geometry: prefix_Kt tiles come from past_k/past_v, the rest (suffix_Kt) from k/v.
+    KernelDescriptor::CompileTimeArgs reader_cta = {
+        NQH, DHt, Kt, Sk_chunk_t, k_num_chunks, prefix_Kt, (uint32_t)has_past};
     TensorAccessorArgs(*ta.q.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.k.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.v.buffer()).append_to(reader_cta);
+    // Always append the prefix accessors so the reader's compile-time offsets are valid; when there is
+    // no real past they alias k/v (placeholders) and the reader never reads them (has_past gates use).
+    Buffer* pk_buf = has_past ? ta.past_k->buffer() : ta.k.buffer();
+    Buffer* pv_buf = has_past ? ta.past_v->buffer() : ta.v.buffer();
+    TensorAccessorArgs(*pk_buf).append_to(reader_cta);
+    TensorAccessorArgs(*pv_buf).append_to(reader_cta);
     KernelDescriptor reader{};
     reader.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/reader_fused.cpp";
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -141,7 +154,8 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
 
     for (uint32_t h = 0; h < NQH; ++h) {
         const uint32_t kv_head = h / group;
-        reader.emplace_runtime_args(core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head});
+        reader.emplace_runtime_args(
+            core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf});
         writer.emplace_runtime_args(core_vec[h], {out.buffer(), h});
     }
     desc.kernels.push_back(std::move(reader));

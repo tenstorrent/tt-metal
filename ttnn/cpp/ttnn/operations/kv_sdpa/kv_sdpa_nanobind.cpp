@@ -34,6 +34,8 @@ void bind_kv_sdpa_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("attn_mask") = nb::none(),
         nb::arg("scale") = nb::none(),
+        nb::arg("past_k") = nb::none(),
+        nb::arg("past_v") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }
 

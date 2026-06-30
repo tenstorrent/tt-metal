@@ -32,11 +32,16 @@ struct KvSdpaDeviceOperation {
 
     struct tensor_args_t {
         const Tensor& q;
-        const Tensor& k;
-        const Tensor& v;
+        const Tensor& k;  // new/suffix K  [1, NKH, Skv, DH]
+        const Tensor& v;  // new/suffix V
         // Optional attention mask. NOTE: this op implements non-causal full attention and treats the
         // mask as a no-op; it is accepted only for call-site compatibility.
         std::optional<Tensor> mask;
+        // Optional resident prefix K/V [1, NKH, prefix, DH]. When provided, attention is over the
+        // concatenation [past_k ; k] / [past_v ; v] -- read as two ranges in the reader, so the caller
+        // does NOT pre-concatenate (saves the ttnn.concat ops + the [prefix+suffix] materialization).
+        std::optional<Tensor> past_k;
+        std::optional<Tensor> past_v;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -65,5 +70,7 @@ ttnn::operations::kv_sdpa::KvSdpaDeviceOperation::tensor_return_value_t kv_sdpa(
     const Tensor& v,
     std::optional<Tensor> mask,
     uint32_t scale_bits,
+    std::optional<Tensor> past_k,
+    std::optional<Tensor> past_v,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 }  // namespace ttnn::prim

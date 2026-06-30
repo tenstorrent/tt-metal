@@ -33,6 +33,20 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
     TT_FATAL(qs[3] == ks[3] && qs[3] == vs[3], "kv_sdpa: head_dim must match across q/k/v");
     TT_FATAL(qs[3] % TILE_WIDTH == 0, "kv_sdpa: head_dim ({}) must be tile-aligned", qs[3]);
     TT_FATAL(ks[2] % TILE_HEIGHT == 0 && ks[2] == vs[2], "kv_sdpa: kv length must be tile-aligned and match k/v");
+    if (ta.past_k.has_value()) {
+        TT_FATAL(ta.past_v.has_value(), "kv_sdpa: past_k and past_v must be provided together");
+        const auto& pks = ta.past_k->padded_shape();
+        const auto& pvs = ta.past_v->padded_shape();
+        TT_FATAL(
+            ta.past_k->layout() == Layout::TILE && ta.past_v->layout() == Layout::TILE,
+            "kv_sdpa: past_k/past_v must be TILE layout");
+        TT_FATAL(pks.rank() == 4 && pvs.rank() == 4, "kv_sdpa: past_k/past_v must be rank-4");
+        TT_FATAL(pks[1] == NKH && pvs[1] == NKH, "kv_sdpa: past_k/past_v NKH must match k/v");
+        TT_FATAL(pks[3] == qs[3] && pvs[3] == qs[3], "kv_sdpa: past_k/past_v head_dim must match");
+        TT_FATAL(
+            pks[2] % TILE_HEIGHT == 0 && pks[2] == pvs[2], "kv_sdpa: prefix length must be tile-aligned and match");
+        TT_FATAL(ta.past_k->dtype() == ta.k.dtype(), "kv_sdpa: past_k/k dtype must match (shared reader CB)");
+    }
 }
 
 KvSdpaDeviceOperation::spec_return_value_t KvSdpaDeviceOperation::compute_output_specs(
@@ -61,10 +75,13 @@ ttnn::operations::kv_sdpa::KvSdpaDeviceOperation::tensor_return_value_t kv_sdpa(
     const Tensor& v,
     std::optional<Tensor> mask,
     uint32_t scale_bits,
+    std::optional<Tensor> past_k,
+    std::optional<Tensor> past_v,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using Op = ttnn::operations::kv_sdpa::KvSdpaDeviceOperation;
     auto attrs = Op::operation_attributes_t{.scale_bits = scale_bits, .compute_kernel_config = compute_kernel_config};
-    auto args = Op::tensor_args_t{.q = q, .k = k, .v = v, .mask = std::move(mask)};
+    auto args = Op::tensor_args_t{
+        .q = q, .k = k, .v = v, .mask = std::move(mask), .past_k = std::move(past_k), .past_v = std::move(past_v)};
     return ttnn::device_operation::launch<Op>(attrs, args);
 }
 }  // namespace ttnn::prim

@@ -18,12 +18,17 @@ namespace ttnn {
 //
 // Q: [1, NQH, 32, DH]; K/V: [1, NKH, KV, DH] with NKH dividing NQH. Output: [1, NQH, 32, DH].
 // `attn_mask` is accepted for call-site compatibility but treated as a no-op (non-causal full attention).
+// `past_k`/`past_v` (optional resident prefix K/V [1, NKH, prefix, DH]): when given, attention is over
+// the concatenation [past_k ; k] / [past_v ; v], read as two ranges in the reader so the caller need
+// not pre-concatenate. past_k/past_v must share k/v's dtype, NKH, and head_dim.
 Tensor kv_sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
     const std::optional<Tensor>& attn_mask = std::nullopt,
     std::optional<float> scale = std::nullopt,
+    const std::optional<Tensor>& past_k = std::nullopt,
+    const std::optional<Tensor>& past_v = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn

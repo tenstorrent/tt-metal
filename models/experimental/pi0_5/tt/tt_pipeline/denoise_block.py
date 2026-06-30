@@ -96,6 +96,10 @@ def _denoise_sdpa_pcfg(q_seq, kv_seq, grid_x, grid_y):
 # matmul_decode branch (Sankar Manoj matmul_decode op + alnah005 decode_all wiring).
 DECODE_ALL = False
 
+# When True (default), the decode_all expert SDPA folds the resident prefix-KV into kv_sdpa's reader
+# (two-range read) instead of pre-concatenating prefix+suffix -- eliminates the two per-layer KV concats.
+_KV_FOLD = True
+
 # decode_all: the adaRMS norm emits its result block-sharded; each projection matmul_decode reshards
 # it internally (reshard_input=True), so the norm skips its trailing sharded_to_interleaved and there
 # is no interleaved intermediate between the norm and the projections.
@@ -218,13 +222,6 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         )
         ttnn.deallocate(qkv)
 
-        if past_key_value is not None:
-            past_k, past_v = past_key_value
-            k = ttnn.concat([past_k, k], dim=2, memory_config=_L1)
-            v = ttnn.concat([past_v, v], dim=2, memory_config=_L1)
-        new_cache = (k, v) if use_cache else None
-
-        kv_seq = k.shape[-2]
         # decode_all default: route the small-query MQA expert SDPA through ttnn.kv_sdpa -- a specialized
         # fused-flash op (reuses the production transformer-SDPA sdpa_standard online-softmax, specialized
         # for Sq == 1 tile / single KV head / non-causal), ~17% faster per denoise layer at PCC ~0.9999.
@@ -233,24 +230,38 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         _use_kv_sdpa = (
             DECODE_ALL and hasattr(ttnn, "kv_sdpa") and int(q.shape[-2]) == 32 and int(self.num_kv_heads) == 1
         )
-        if _use_kv_sdpa:
-            attn_out = ttnn.kv_sdpa(q, k, v, attn_mask=attention_mask, scale=self.scale)
+        # When not caching, kv_sdpa reads the resident prefix-KV (past_k/past_v) + the new suffix K/V as
+        # two ranges in its reader, so we skip the two ttnn.concat ops (and the [prefix+suffix] tensor).
+        _kv_fold = _KV_FOLD and _use_kv_sdpa and (past_key_value is not None) and (not use_cache)
+        if _kv_fold:
+            past_k, past_v = past_key_value
+            attn_out = ttnn.kv_sdpa(q, k, v, attn_mask=attention_mask, scale=self.scale, past_k=past_k, past_v=past_v)
+            new_cache = None
         else:
-            _sdpa_kwargs = {"memory_config": _L1}
-            _sdpa_cores = min(_g.x, self.num_heads * ((q.shape[-2] + 31) // 32))
-            _spc = _denoise_sdpa_pcfg(q.shape[-2], kv_seq, _sdpa_cores, 1)
-            if _spc is not None:
-                _sdpa_kwargs["program_config"] = _spc
-            attn_out = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=attention_mask,
-                is_causal=False,
-                scale=self.scale,
-                compute_kernel_config=get_sdpa_compute_kernel_config(),
-                **_sdpa_kwargs,
-            )
+            if past_key_value is not None:
+                past_k, past_v = past_key_value
+                k = ttnn.concat([past_k, k], dim=2, memory_config=_L1)
+                v = ttnn.concat([past_v, v], dim=2, memory_config=_L1)
+            new_cache = (k, v) if use_cache else None
+            if _use_kv_sdpa:
+                attn_out = ttnn.kv_sdpa(q, k, v, attn_mask=attention_mask, scale=self.scale)
+            else:
+                kv_seq = k.shape[-2]
+                _sdpa_kwargs = {"memory_config": _L1}
+                _sdpa_cores = min(_g.x, self.num_heads * ((q.shape[-2] + 31) // 32))
+                _spc = _denoise_sdpa_pcfg(q.shape[-2], kv_seq, _sdpa_cores, 1)
+                if _spc is not None:
+                    _sdpa_kwargs["program_config"] = _spc
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=attention_mask,
+                    is_causal=False,
+                    scale=self.scale,
+                    compute_kernel_config=get_sdpa_compute_kernel_config(),
+                    **_sdpa_kwargs,
+                )
         ttnn.deallocate(q)
 
         # Fused concat-heads + O-projection (custom op wrapping the tuned 1D-mcast matmul): attn_out
