@@ -891,6 +891,21 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
+        // sentinel kernel to flush the last program's RT profiler record
+        if (realtime_profiler_) {
+            for (uint32_t cq_id = 0; cq_id < mesh_command_queues_.size(); cq_id++) {
+                Program sentinel = CreateProgram();
+                CreateKernelFromString(
+                    sentinel,
+                    "void kernel_main() {}",
+                    CoreCoord{0, 0},
+                    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+                MeshWorkload sentinel_workload;
+                sentinel_workload.add_program(MeshCoordinateRange(view_->shape()), std::move(sentinel));
+                EnqueueMeshWorkload(this->mesh_command_queue(cq_id), sentinel_workload, true);
+            }
+        }
+
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
             ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
