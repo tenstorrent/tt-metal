@@ -177,6 +177,44 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
     )
 
 
+def sharded_decode_matmul(x, weight, compute_cfg, decode_progcfg, act_shard_cfg, prefill_progcfg_fn, prefill_k):
+    """Matmul against a DRAM-WIDTH_SHARDED weight, branching on the M dim.
+
+    Decode (M <= one tile = TILE_SIZE rows, i.e. B<=32 users): width-shard the activation
+    into L1, run the DRAM-sharded matmul kernel (reads the M=1 weight at near-peak DRAM
+    bandwidth — the win for weight-read-bound decode), then convert the output back to
+    DRAM-interleaved. Prefill (M > one tile): a regular 2D matmul over the same sharded
+    weight (compute-bound, so DRAM-sharding gives nothing). Mirrors mlp.Qwen36MLP._forward_tp
+    exactly. Returns a DRAM-interleaved tensor — identical layout to a plain ttnn.linear —
+    so downstream reshape/slice is unchanged.
+
+    Gate on x.shape[-2] (the real M/seq dim: 32 in decode, seq_len in prefill), NOT x.shape[1]
+    (the Z dim, which is 1 in both modes).
+    """
+    seq = x.shape[-2]
+    if seq <= TILE_SIZE:
+        # Reshard the activation to L1 width-sharded for the DRAM-sharded matmul. If x is ALREADY
+        # in that layout (the decode hidden often is), to_memory_config returns x aliased — so only
+        # deallocate when we actually made a copy, else we'd free x out from under a later reuse
+        # (e.g. GDN's separate `ab` projection reads the same x after qkvz).
+        already_sharded = x.memory_config() == act_shard_cfg
+        x_sh = x if already_sharded else ttnn.to_memory_config(x, act_shard_cfg)
+        out = ttnn.linear(
+            x_sh,
+            weight,
+            compute_kernel_config=compute_cfg,
+            program_config=decode_progcfg,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        if not already_sharded:
+            ttnn.deallocate(x_sh)
+        return ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+    pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
+    return ttnn.linear(
+        x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
 def replicate(torch_tensor, mesh, cache_path, dtype=ttnn.bfloat16):
     """Small tensor (norms, biases) -> replicated on every device."""
     if torch_tensor.dim() == 1:
