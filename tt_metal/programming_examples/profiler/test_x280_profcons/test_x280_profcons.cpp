@@ -223,6 +223,8 @@ int main(int argc, char** argv) {
     int socktest = 0;                        // --socktest: X280 pushes pages through a real D2H socket; measure BW
     uint64_t sock_npages = 200000;           // --npages: pages for the socktest bench (64 B each)
     uint64_t sock_batch = 16;                // --batch: pages pushed per notify (amortizes reserve+notify)
+    int sock_zones = 0;                      // --sockzones: push device-zone pages + emit them to Tracy
+    int realzones = 0;                       // --realzones: real workload -> profzone pairs -> socket -> Tracy
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -259,6 +261,14 @@ int main(int argc, char** argv) {
             sock_npages = std::stoull(next());
         } else if (a == "--batch") {
             sock_batch = std::stoull(next());
+        } else if (a == "--sockzones") {
+            socktest = 1;
+            sock_zones = 1;
+            if (sock_npages == 200000) {
+                sock_npages = 2000;  // fewer for the zone demo
+            }
+        } else if (a == "--realzones") {
+            realzones = 1;
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -356,6 +366,7 @@ int main(int argc, char** argv) {
         pack<uint64_t>(params, 0x10, (uint64_t)pc.y);
         pack<uint64_t>(params, 0x18, sock_npages);
         pack<uint64_t>(params, 0x20, sock_batch);
+        pack<uint64_t>(params, 0x28, (uint64_t)sock_zones);  // 0=raw BW pages, 1=device-zone pages
         x280.write_block(params, MBOX_PARAMS);
         x280.write_block(zres, MBOX_RESULTS);
 
@@ -365,16 +376,34 @@ int main(int argc, char** argv) {
             mesh, sender, 4096u, D2HSocket::ExternalConfigBuffer{.address = cfg_addr, .sender_is_l2cpu = true});
         sock.set_page_size(64);
 
+#if defined(TRACY_ENABLE)
+        static const tracy::RiscType kRisc[NRISC] = {
+            tracy::RiscType::BRISC,
+            tracy::RiscType::NCRISC,
+            tracy::RiscType::TRISC_0,
+            tracy::RiscType::TRISC_1,
+            tracy::RiscType::TRISC_2};
+        std::map<std::pair<uint32_t, uint32_t>, TracyTTCtx> ctxs;  // one Tracy context per (core_x,core_y)
+        if (sock_zones) {
+            printf("[sockzones] waiting up to 30s for tracy-capture to connect...\n");
+            std::fflush(stdout);
+            for (int w = 0; w < 600 && !tracy::GetProfiler().IsConnected(); w++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+        }
+#endif
+
         x280.set_reset_vectors(LIM_BASE);
         x280.set_pll(pll);
         x280.release_reset();
         printf(
-            "[socktest] X280 pushing %llu x 64B pages (batch=%llu) through D2H socket; host draining...\n",
+            "[socktest] X280 pushing %llu pages (batch=%llu, zones=%d) through D2H socket; host draining...\n",
             (unsigned long long)sock_npages,
-            (unsigned long long)sock_batch);
+            (unsigned long long)sock_batch,
+            sock_zones);
 
-        std::vector<uint32_t> buf(64 * 64 / sizeof(uint32_t));  // up to one FIFO (64 pages)
-        uint64_t pages_read = 0;
+        std::vector<uint32_t> buf(64 * 64 / sizeof(uint32_t));  // up to one FIFO (64 pages, 16 u32 each)
+        uint64_t pages_read = 0, zones_emitted = 0;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
         bool done = false;
         while (std::chrono::steady_clock::now() < deadline) {
@@ -385,6 +414,39 @@ int main(int argc, char** argv) {
                 }
                 sock.read(buf.data(), avail);
                 pages_read += avail;
+#if defined(TRACY_ENABLE)
+                if (sock_zones) {
+                    for (uint32_t j = 0; j < avail; j++) {
+                        uint32_t* pg = buf.data() + j * 16;  // 64 B page = 16 u32
+                        uint64_t st = ((uint64_t)pg[0] << 32) | pg[1];
+                        uint64_t en = ((uint64_t)pg[2] << 32) | pg[3];
+                        uint32_t cx = pg[4], cy = pg[5], risc = pg[6] % NRISC, tid = pg[7];
+                        auto key = std::make_pair(cx, cy);
+                        auto it = ctxs.find(key);
+                        if (it == ctxs.end()) {
+                            TracyTTCtx ctx = TracyTTContext();
+                            TracyTTContextPopulate(ctx, 0, 0.0, 1.0);  // synthetic ts already in ns (freq 1.0)
+                            it = ctxs.emplace(key, ctx).first;
+                        }
+                        tracy::TTDeviceMarker m;
+                        m.chip_id = (uint64_t)device_id;
+                        m.core_x = cx;
+                        m.core_y = cy;
+                        m.risc = kRisc[risc];
+                        m.runtime_host_id = 0;
+                        m.marker_name = "x280_socket_zone_" + std::to_string(tid);
+                        m.file = "x280_socket";
+                        m.line = 0;
+                        m.timestamp = st;
+                        m.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
+                        TracyTTPushStartMarker(it->second, m);
+                        m.timestamp = en;
+                        m.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
+                        TracyTTPushEndMarker(it->second, m);
+                        zones_emitted++;
+                    }
+                }
+#endif
             }
             if (x280.lim_rd_u64(MBOX_RESULTS + 0x18) == SOCK_DONE && pages_read >= sock_npages) {
                 done = true;
@@ -396,11 +458,20 @@ int main(int argc, char** argv) {
         double mbps = cyc ? (double)fw_bytes / 1e6 / ((double)cyc / ((double)pll * 1e6)) : 0.0;
         x280.assert_reset();  // clean halt
         printf(
-            "[socktest] done=%d pages_read=%llu fw_bytes=%llu cycles=%llu\n",
+            "[socktest] done=%d pages_read=%llu fw_bytes=%llu cycles=%llu zones=%llu\n",
             done,
             (unsigned long long)pages_read,
             (unsigned long long)fw_bytes,
-            (unsigned long long)cyc);
+            (unsigned long long)cyc,
+            (unsigned long long)zones_emitted);
+        if (sock_zones) {
+            printf(
+                "[sockzones] emitted %llu device zones to Tracy; draining to capture...\n",
+                (unsigned long long)zones_emitted);
+            std::fflush(stdout);
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            return done ? 0 : 1;  // normal return so TracyClient flushes (use TRACY_NO_EXIT=1)
+        }
         printf(
             "[socktest] D2H-SOCKET PUSH BW: %.0f MB/s  (64B pages, per-page notify; vs raw-relay ~1.2 GB/s)\n", mbps);
         std::fflush(stdout);
@@ -461,6 +532,139 @@ int main(int argc, char** argv) {
             cluster.write_sysmem(&z, sizeof(z), data_off + region + h * 64, device_id, 0);
         }
     }  // footer slots
+
+#if defined(TRACY_ENABLE)
+    if (realzones) {
+        // STEP 3 real markers: run a SMALL profiled workload (markers fit the rings, so it
+        // completes with no concurrent drainer), then boot profzone to drain+pair the rings
+        // on-device and push complete zones through a D2H socket; host emits them to Tracy.
+        using tt::tt_metal::distributed::D2HSocket;
+        using tt::tt_metal::distributed::MeshCoordinate;
+        using tt::tt_metal::distributed::MeshCoreCoord;
+        const uint32_t cfg_addr = 0x08019000u;
+        const uint64_t ZDONE = 0x20E50FFEE1ULL;
+        uint32_t zloop = (loop > 100) ? 30u : (uint32_t)loop;  // keep markers < 512-word ring
+        {
+            Program program = CreateProgram();
+            CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
+            std::map<std::string, std::string> defs = {
+                {"LOOP_COUNT", std::to_string(zloop)}, {"LOOP_SIZE", std::to_string(200)}};
+            CreateKernel(
+                program,
+                "tests/tt_metal/tools/profiler/kernels/full_buffer.cpp",
+                all_cores,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defs});
+            CreateKernel(
+                program,
+                "tests/tt_metal/tools/profiler/kernels/full_buffer.cpp",
+                all_cores,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = defs});
+            CreateKernel(
+                program,
+                "tests/tt_metal/tools/profiler/kernels/full_buffer_compute.cpp",
+                all_cores,
+                ComputeConfig{.compile_args = {}, .defines = defs});
+            distributed::MeshWorkload wl;
+            wl.add_program(distributed::MeshCoordinateRange(mesh->shape()), std::move(program));
+            printf("[realzones] launching workload (loop=%u, fits rings) ...\n", zloop);
+            distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), wl, /*blocking=*/true);
+            printf("[realzones] workload done; real markers in the rings.\n");
+        }
+        printf("[realzones] waiting up to 30s for tracy-capture...\n");
+        std::fflush(stdout);
+        for (int w = 0; w < 600 && !tracy::GetProfiler().IsConnected(); w++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        X280 zx(cluster, device_id, l2cpu);
+        zx.assert_reset();
+        auto zbin = read_file("tools/x280_bm/build/profzone.bin");
+        zx.load_lim(zbin);
+        zx.write_block(coords, MBOX_COORDS);
+        std::vector<uint8_t> zp(64, 0), zr(64, 0);
+        pack<uint64_t>(zp, 0x00, (uint64_t)cfg_addr);
+        pack<uint64_t>(zp, 0x08, (uint64_t)pc.x);
+        pack<uint64_t>(zp, 0x10, (uint64_t)pc.y);
+        pack<uint64_t>(zp, 0x18, prof_l1);
+        pack<uint64_t>(zp, 0x20, (uint64_t)num_cores);
+        zx.write_block(zp, MBOX_PARAMS);
+        zx.write_block(zr, MBOX_RESULTS);
+        CoreCoord l2phys = l2cpu_tile(l2cpu);
+        MeshCoreCoord sender{MeshCoordinate(0, 0), l2phys};
+        D2HSocket sock(
+            mesh, sender, 4096u, D2HSocket::ExternalConfigBuffer{.address = cfg_addr, .sender_is_l2cpu = true});
+        sock.set_page_size(64);
+        zx.set_reset_vectors(LIM_BASE);
+        zx.set_pll(pll);
+        zx.release_reset();
+        printf("[realzones] profzone draining+pairing rings -> pushing zones through the socket...\n");
+        static const tracy::RiscType kRisc[NRISC] = {
+            tracy::RiscType::BRISC,
+            tracy::RiscType::NCRISC,
+            tracy::RiscType::TRISC_0,
+            tracy::RiscType::TRISC_1,
+            tracy::RiscType::TRISC_2};
+        std::map<std::pair<uint32_t, uint32_t>, TracyTTCtx> ctxs;
+        std::vector<uint32_t> buf(64 * 16);
+        uint64_t zones = 0;
+        bool zdone = false;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+        while (std::chrono::steady_clock::now() < deadline) {
+            uint32_t avail = sock.pages_available();
+            if (avail > 0) {
+                if (avail > 64) {
+                    avail = 64;
+                }
+                sock.read(buf.data(), avail);
+                for (uint32_t j = 0; j < avail; j++) {
+                    uint32_t* pgp = buf.data() + j * 16;
+                    uint64_t st = ((uint64_t)pgp[0] << 32) | pgp[1];
+                    uint64_t en = ((uint64_t)pgp[2] << 32) | pgp[3];
+                    uint32_t cx = pgp[4], cy = pgp[5], risc = pgp[6] % NRISC, tid = pgp[7];
+                    auto key = std::make_pair(cx, cy);
+                    auto it = ctxs.find(key);
+                    if (it == ctxs.end()) {
+                        TracyTTCtx ctx = TracyTTContext();
+                        TracyTTContextPopulate(ctx, 0, 0.0, dev_ghz);  // device cycles -> ns @ dev_ghz
+                        it = ctxs.emplace(key, ctx).first;
+                    }
+                    tracy::TTDeviceMarker m;
+                    m.chip_id = (uint64_t)device_id;
+                    m.core_x = cx;
+                    m.core_y = cy;
+                    m.risc = kRisc[risc];
+                    m.runtime_host_id = 0;
+                    m.marker_name = "x280_kzone_" + std::to_string(tid);
+                    m.file = "x280_kernel";
+                    m.line = 0;
+                    m.timestamp = st;
+                    m.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
+                    TracyTTPushStartMarker(it->second, m);
+                    m.timestamp = en;
+                    m.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
+                    TracyTTPushEndMarker(it->second, m);
+                    zones++;
+                }
+            }
+            bool fwdone = zx.lim_rd_u64(MBOX_RESULTS + 0x18) == ZDONE;
+            if (fwdone && avail == 0 && zones >= zx.lim_rd_u64(MBOX_RESULTS + 0x00)) {
+                zdone = true;
+                break;
+            }
+        }
+        uint64_t total = zx.lim_rd_u64(MBOX_RESULTS + 0x00);
+        zx.assert_reset();
+        printf(
+            "[realzones] profzone paired %llu zones; host emitted %llu to Tracy (done=%d).\n",
+            (unsigned long long)total,
+            (unsigned long long)zones,
+            zdone);
+        std::fflush(stdout);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        return zdone ? 0 : 1;
+    }
+#endif
 
     // --- boot the consumer FIRST (so it is draining before any producer runs) ---
     X280 x280(cluster, device_id, l2cpu);

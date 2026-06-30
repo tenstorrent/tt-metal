@@ -194,6 +194,16 @@ $(BUILD)/profsock.bin: $(BUILD)/profsock.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "profsock.bin: $$(wc -c < $@) bytes"
 
+$(BUILD)/profzone.o: src/profzone.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/profzone.elf: $(BUILD)/entry.o $(BUILD)/profzone.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/profzone.o
+
+$(BUILD)/profzone.bin: $(BUILD)/profzone.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "profzone.bin: $$(wc -c < $@) bytes"
+
 $(BUILD):
 	mkdir -p $@
 

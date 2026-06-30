@@ -28,6 +28,7 @@
 #define P_PCIE_Y (MBOX_PARAMS + 0x10)
 #define P_NPAGES (MBOX_PARAMS + 0x18)
 #define P_BATCH (MBOX_PARAMS + 0x20) /* pages to push per single notify (amortizes reserve+notify) */
+#define P_ZONEMODE (MBOX_PARAMS + 0x28) /* !=0: each page is a synthetic device-zone (see zones in Tracy) */
 #define RES(o) (MBOX_RESULTS + (o))
 #define RES_DONE 0x18
 #define DONE_MAGIC 0x5005C0FFEEULL
@@ -97,6 +98,7 @@ int main(uint64_t hartid) {
     uint64_t bsent_off = bsent_addr & (NOC_2M_WINDOW_STRIDE - 1ULL);
 
     uint32_t batch = (uint32_t)r64(P_BATCH);
+    uint64_t zonemode = r64(P_ZONEMODE);
     if (batch == 0) {
         batch = 1;
     }
@@ -117,8 +119,28 @@ int main(uint64_t hartid) {
             }
         }
         for (uint32_t k = 0; k < b; k++) {
-            vwr64(wbase + fifo_off + write_ptr); /* page write (64 B) to host FIFO */
-            write_ptr += PAGE;                   /* advance write_ptr (wrap) + bytes_sent */
+            uint64_t p = wbase + fifo_off + write_ptr;
+            if (zonemode) {
+                /* synthetic device-zone page: [0,1]=start_ts(hi,lo) [2,3]=end_ts(hi,lo)
+                 * [4]=core_x [5]=core_y [6]=risc [7]=timer_id. Spread zones across a few
+                 * cores/riscs and forward in time so they render as distinct Tracy zones. */
+                uint64_t pg = i + k;
+                uint32_t risc = (uint32_t)(pg % 5);
+                uint32_t cx = 1u + (uint32_t)((pg / 5) % 8);
+                uint64_t st = pg * 1000ULL + (uint64_t)risc * 100ULL;
+                uint64_t en = st + 400ULL;
+                w32(p + 0, (uint32_t)(st >> 32));
+                w32(p + 4, (uint32_t)st);
+                w32(p + 8, (uint32_t)(en >> 32));
+                w32(p + 12, (uint32_t)en);
+                w32(p + 16, cx);
+                w32(p + 20, 1u);
+                w32(p + 24, risc);
+                w32(p + 28, (uint32_t)(pg & 0xFF));
+            } else {
+                vwr64(p); /* raw 64 B page (BW bench) */
+            }
+            write_ptr += PAGE; /* advance write_ptr (wrap) + bytes_sent */
             if (write_ptr >= fifo_total) {
                 write_ptr -= fifo_total;
             }
