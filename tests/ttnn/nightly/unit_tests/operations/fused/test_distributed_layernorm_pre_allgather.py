@@ -697,7 +697,7 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
         tt_memory_config=dram_memcfg,
     )
 
-    with pytest.raises(RuntimeError):  # allow-pytest.raises: unchanged from main
+    with pytest.raises(RuntimeError):
         if op_name == "layer_norm_pre_all_gather":
             ttnn.layer_norm_pre_all_gather(
                 tt_inp, residual_input_tensor=tt_res, dtype=ttnn.bfloat16, memory_config=dram_memcfg
