@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Persistent warm dev harness for LTX audio decode (Step 0).
 
 ONE process: build the audio_only pipeline once (pays the ~317s one-time device-side
