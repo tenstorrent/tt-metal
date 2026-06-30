@@ -83,3 +83,22 @@ def test_prod_dims(input_shape, dims, npu_dtype, device):
     logger.info(f"Output pcc={output_pcc}")
 
     assert passing
+
+
+@pytest.mark.parametrize("npu_dtype", (ttnn.bfloat8_b, ttnn.bfloat4_b), ids=["bfloat8_b", "bfloat4_b"])
+@pytest.mark.parametrize("dim", (0, 1, 2, 3))
+def test_prod_dims_block_float(dim, npu_dtype, device):
+    # Block-float (bfp8_b/bfp4_b) dim reductions via ttnn.prod(x, dim=...) are upcast to FLOAT32
+    # internally and return FLOAT32. Use a mostly-ones input with a few 2.0s: every value is exactly
+    # representable in block-float and the product stays a small, exact power of two.
+    torch.manual_seed(2023)
+    torch_input = torch.ones([2, 3, TILE_HEIGHT, TILE_WIDTH * 2], dtype=torch.float32)
+    torch_input.view(-1)[::13][:8] = 2.0
+
+    tt_input = ttnn.from_torch(torch_input, dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.prod(tt_input, dim=dim)
+    assert tt_output.dtype == ttnn.float32, f"expected FLOAT32 result, got {tt_output.dtype}"
+
+    out = ttnn.to_torch(tt_output)
+    ref = torch.prod(torch_input, dim=dim)
+    assert torch.allclose(out, ref, atol=1e-2), f"dim={dim} {npu_dtype}: expected {ref}, got {out}"

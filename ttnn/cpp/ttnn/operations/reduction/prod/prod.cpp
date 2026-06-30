@@ -6,6 +6,7 @@
 #include "device/prod_op_all.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -109,6 +110,15 @@ Tensor prod_impl(
         return result;
     }
 
+    // Block-float (bfp8_b/bfp4_b) tiles can't seed the per-dim reduction's identity (1.0) tile, and
+    // permuting them reshuffles elements across shared-exponent groups (lossy, esp. for bfp4_b). So
+    // upcast to FLOAT32 up front — before any permute — and return FLOAT32, consistent with the
+    // full-product (prod_all) path.
+    const Tensor dim_input = (input_a_padded.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+                              input_a_padded.dtype() == tt::tt_metal::DataType::BFLOAT4_B)
+                                 ? ttnn::typecast(input_a_padded, tt::tt_metal::DataType::FLOAT32)
+                                 : input_a_padded;
+
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {
         // Bring dim into range [0, old_rank - 1]
@@ -129,7 +139,7 @@ Tensor prod_impl(
 
         // Tensor with target reduction dim at third last position
         ttnn::Tensor permuted =
-            permute_required ? ttnn::permute(input_a_padded, post_permute_dims, output_mem_config) : input_a_padded;
+            permute_required ? ttnn::permute(dim_input, post_permute_dims, output_mem_config) : dim_input;
 
         // Now squeeze to 4D and do the 4D prod.
         // Dim0 grows to include the rest of the dimensions, and our "third last" dim moves into dim1, which is our 4D
@@ -156,7 +166,7 @@ Tensor prod_impl(
     }
     // 4D or lower dimension Tensors
     // For lower dimension Tensors, we need to unsqueeze to 4D
-    auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a_padded);
+    auto input_tensor_4d = ttnn::unsqueeze_to_4D(dim_input);
 
     // Update the dim because we unsqueezed input to 4d
     // If dim is negative, counting from the back is not impacted by the unsqueeze
