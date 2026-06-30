@@ -921,31 +921,28 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
             ttnn.deallocate(cos_for_rope)
             ttnn.deallocate(sin_for_rope)
 
-        if past_key_value is not None:
+        # Expert SDPA is always the specialized fused-flash ttnn.kv_sdpa (the same op the L1 decode_all
+        # path uses — see tt_pipeline/denoise_block.py). It honors attn_mask (additive bf16 mask over the
+        # full folded KV) and, when prefix-KV is present and we are NOT caching, folds past_k/past_v into
+        # its reader as two ranges so the two ttnn.concat ops are skipped. The op requires the small-query
+        # MQA shape: Sq == 1 tile (== 32, already asserted above) and a single KV head.
+        assert int(q_rope.shape[-2]) == 32, f"kv_sdpa requires Sq == 32 (1 tile); got {int(q_rope.shape[-2])}"
+        assert int(self.num_kv_heads) == 1, f"kv_sdpa requires num_kv_heads == 1 (MQA); got {self.num_kv_heads}"
+        if past_key_value is not None and not use_cache:
+            # Fold path: kv_sdpa reads past_k/past_v + suffix k/v as two KV ranges — no pre-concat.
             past_k, past_v = past_key_value
-            k_rope = ttnn.concat([past_k, k_rope], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-            v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        new_cache = (k_rope, v) if use_cache else None
-
-        kv_seq_len = k_rope.shape[2]
-        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, kv_seq_len)
-        sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.grid_size,
-            q_chunk_size=q_chunk,
-            k_chunk_size=k_chunk,
-            exp_approx_mode=get_sdpa_exp_approx_mode(kv_seq_len),
-        )
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            q_rope,
-            k_rope,
-            v,
-            attn_mask=attention_mask,
-            is_causal=False,
-            scale=self.scale,
-            program_config=sdpa_cfg,
-            compute_kernel_config=self.compute_kernel_config_sdpa,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+            attn_output = ttnn.kv_sdpa(
+                q_rope, k_rope, v, attn_mask=attention_mask, scale=self.scale, past_k=past_k, past_v=past_v
+            )
+            new_cache = None
+        else:
+            # use_cache (or no prefix): materialize the full KV so new_cache holds [prefix ; suffix].
+            if past_key_value is not None:
+                past_k, past_v = past_key_value
+                k_rope = ttnn.concat([past_k, k_rope], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+                v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            new_cache = (k_rope, v) if use_cache else None
+            attn_output = ttnn.kv_sdpa(q_rope, k_rope, v, attn_mask=attention_mask, scale=self.scale)
 
         # Fused concat-heads + O-projection in ONE dispatch (bf16 out so it can feed the bf16 fused
         # addcmul gated residual). Uses the tuned 1D-mcast O-matmul program config.

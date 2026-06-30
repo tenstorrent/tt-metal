@@ -25,7 +25,7 @@ void bind_kv_sdpa_operation(nb::module_& mod) {
         loop, specialized to this shape.
 
         Q: [1, NQH, 32, DH]; K/V: [1, NKH, KV, DH] with NKH dividing NQH. Output: [1, NQH, 32, DH].
-        attn_mask is accepted for call-site compatibility but treated as a no-op.
+        attn_mask (optional, [1,1,Sq,KV] bf16 additive mask over the full folded KV) is applied when provided; omit it for the fast unmasked path.
         )doc",
         &ttnn::kv_sdpa,
         nb::arg("q"),

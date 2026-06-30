@@ -16,6 +16,7 @@ void kernel_main() {
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(4);
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(5);
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(6);
+    constexpr bool use_provided_mask = get_compile_time_arg_val(7) == 1;
 
     constexpr uint32_t Sq_chunk_t = 1;
     constexpr uint32_t vDHt = DHt;
@@ -56,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     mm_init(cb_q_in, cb_k_in, cb_out);
-    LightweightMaskContext lw_mask;  // unused (non-causal, no provided mask)
+    LightweightMaskContext lw_mask;  // unused (non-causal; provided-mask path uses add_block_inplace, not lw)
 
     sdpa_standard<
         cb_qk_im,
@@ -68,7 +69,7 @@ void kernel_main() {
         vDHt,
         /*use_attention_sink=*/false,
         /*is_causal=*/false,
-        /*use_provided_mask=*/false,
+        use_provided_mask,
         /*use_padded_mask=*/false,
         /*is_chunked=*/false,
         scale_fp32,

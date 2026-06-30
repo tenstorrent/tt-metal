@@ -34,8 +34,9 @@ struct KvSdpaDeviceOperation {
         const Tensor& q;
         const Tensor& k;  // new/suffix K  [1, NKH, Skv, DH]
         const Tensor& v;  // new/suffix V
-        // Optional attention mask. NOTE: this op implements non-causal full attention and treats the
-        // mask as a no-op; it is accepted only for call-site compatibility.
+        // Optional attention mask: additive bf16 mask [1, 1, Sq, KV] over the full folded KV
+        // ([prefix ; suffix]; column-tile g aligned to KV-tile g). Applied when provided
+        // (use_provided_mask compile path); omit (None) for the fast unmasked non-causal path.
         std::optional<Tensor> mask;
         // Optional resident prefix K/V [1, NKH, prefix, DH]. When provided, attention is over the
         // concatenation [past_k ; k] / [past_v ; v] -- read as two ranges in the reader, so the caller

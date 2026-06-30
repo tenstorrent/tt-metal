@@ -47,6 +47,18 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
             pks[2] % TILE_HEIGHT == 0 && pks[2] == pvs[2], "kv_sdpa: prefix length must be tile-aligned and match");
         TT_FATAL(ta.past_k->dtype() == ta.k.dtype(), "kv_sdpa: past_k/k dtype must match (shared reader CB)");
     }
+    if (ta.mask.has_value()) {
+        const auto& ms = ta.mask->padded_shape();
+        const uint32_t prefix = ta.past_k.has_value() ? ta.past_k->padded_shape()[2] : 0;
+        const uint32_t kv_total = prefix + ks[2];
+        TT_FATAL(ta.mask->layout() == Layout::TILE, "kv_sdpa: attn_mask must be TILE layout");
+        TT_FATAL(ms.rank() == 4, "kv_sdpa: attn_mask must be rank-4 [1, 1, Sq, KV]");
+        // Mask is broadcast across Q heads (dim 1) and shares the single Sq tile-row; its KV (last)
+        // dim must cover the full folded [prefix ; suffix] KV so column-tile g aligns with KV-tile g.
+        TT_FATAL(ms[2] == TILE_HEIGHT, "kv_sdpa: attn_mask Sq must be one tile ({}); got {}", TILE_HEIGHT, ms[2]);
+        TT_FATAL(ms[3] == kv_total, "kv_sdpa: attn_mask KV ({}) must equal prefix+suffix KV ({})", ms[3], kv_total);
+        TT_FATAL(ms[3] % TILE_WIDTH == 0, "kv_sdpa: attn_mask KV ({}) must be tile-aligned", ms[3]);
+    }
 }
 
 KvSdpaDeviceOperation::spec_return_value_t KvSdpaDeviceOperation::compute_output_specs(

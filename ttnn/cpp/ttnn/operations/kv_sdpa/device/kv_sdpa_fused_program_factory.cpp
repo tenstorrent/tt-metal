@@ -49,6 +49,7 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t prefix_Kt = has_past ? (ta.past_k->padded_shape()[2] / tt::constants::TILE_HEIGHT) : 0;
     const uint32_t suffix_Kt = ks[2] / tt::constants::TILE_HEIGHT;
     const uint32_t Kt = prefix_Kt + suffix_Kt;
+    const bool use_provided_mask = ta.mask.has_value();
 
     // KV chunk size: largest small divisor of Kt (matches prod's k_chunk≈96 -> 3 tiles for Kt=33).
     uint32_t Sk_chunk_t = 1;
@@ -84,6 +85,11 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     add_cb(C::c_0, q_chunk_tiles, qdf, q_ts, qtile);                 // cb_q_in
     add_cb(C::c_1, k_chunk_tiles * 2, kdf, k_ts, ktile);             // cb_k_in (double-buffered)
     add_cb(C::c_2, v_chunk_tiles * 2, vdf, v_ts, vtile);             // cb_v_in
+    if (use_provided_mask) {
+        // cb_mask_in: bf16, Sk_chunk_t tiles/chunk (Sq_chunk_t==1), double-buffered. bf16 so the
+        // compute's add_block_inplace(cb_qk_im, cb_mask_in) adds the mask to the bf16 QK scores.
+        add_cb(C::c_3, Sk_chunk_t * 2, bf16, bf16_ts, qtile);  // cb_mask_in
+    }
     add_cb(C::c_5, 1, bf16, bf16_ts, qtile);                         // cb_identity_scale_in
     add_cb(C::c_7, 1, bf16, bf16_ts, qtile);                         // cb_col_identity
     add_cb(C::c_24, Sq_chunk_t * Sk_chunk_t, bf16, bf16_ts, qtile);  // cb_qk_im
@@ -102,7 +108,7 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // ---- Reader ----
     // Suffix-relative geometry: prefix_Kt tiles come from past_k/past_v, the rest (suffix_Kt) from k/v.
     KernelDescriptor::CompileTimeArgs reader_cta = {
-        NQH, DHt, Kt, Sk_chunk_t, k_num_chunks, prefix_Kt, (uint32_t)has_past};
+        NQH, DHt, Kt, Sk_chunk_t, k_num_chunks, prefix_Kt, (uint32_t)has_past, (uint32_t)use_provided_mask};
     TensorAccessorArgs(*ta.q.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.k.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.v.buffer()).append_to(reader_cta);
@@ -112,6 +118,10 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     Buffer* pv_buf = has_past ? ta.past_v->buffer() : ta.v.buffer();
     TensorAccessorArgs(*pk_buf).append_to(reader_cta);
     TensorAccessorArgs(*pv_buf).append_to(reader_cta);
+    // Mask accessor (always appended so compile-time offsets are valid; aliases q when no mask, never
+    // read in that case because use_provided_mask gates all mask reads).
+    Buffer* mask_buf = use_provided_mask ? ta.mask->buffer() : ta.q.buffer();
+    TensorAccessorArgs(*mask_buf).append_to(reader_cta);
     KernelDescriptor reader{};
     reader.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/reader_fused.cpp";
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -136,7 +146,15 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     compute.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/compute/flash_fused.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
-    compute.compile_time_args = {Sk_chunk_t, DHt, Kt, k_num_chunks, attrs.scale_bits, qk_subblock_w, out_subblock_w};
+    compute.compile_time_args = {
+        Sk_chunk_t,
+        DHt,
+        Kt,
+        k_num_chunks,
+        attrs.scale_bits,
+        qk_subblock_w,
+        out_subblock_w,
+        (uint32_t)use_provided_mask};
     // Granularity defines compute_common.hpp requires (loop-unroll factors; must divide their counts).
     // For Sq_chunk_t==1: stats/reduce over 1 -> 1; sub_exp/mul_bcast over Sk_chunk_t; dht over DHt.
     compute.defines = {
@@ -155,7 +173,7 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     for (uint32_t h = 0; h < NQH; ++h) {
         const uint32_t kv_head = h / group;
         reader.emplace_runtime_args(
-            core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf});
+            core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf, mask_buf});
         writer.emplace_runtime_args(core_vec[h], {out.buffer(), h});
     }
     desc.kernels.push_back(std::move(reader));
