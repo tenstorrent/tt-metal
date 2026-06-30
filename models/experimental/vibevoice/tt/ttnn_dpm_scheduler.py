@@ -295,6 +295,7 @@ def sample_speech_latents(
     initial_latent: ttnn.Tensor,
     cfg_scale: float = 1.3,
     num_steps: int = 10,
+    head_runner=None,
 ) -> ttnn.Tensor:
     """Run the DPM multistep loop using TT diffusion head.
 
@@ -308,10 +309,18 @@ def sample_speech_latents(
         initial_latent:   [1, 1, 1, latent_size] initial noise
         cfg_scale:        classifier-free guidance scale
         num_steps:        number of denoising steps
+        head_runner:      optional callable (noisy_images, timesteps, condition) -> eps,
+                          drop-in for the head forward.  Used to ttnn-trace the head
+                          (fixed B=2 shape, replayed every step); defaults to the eager
+                          ``diffusion_head``.  The per-step scheduler.step stays host-side
+                          (its coefficients are per-step Python floats that would bake into
+                          a trace), so only the head forward is replaced.
 
     Returns:
         final denoised latent [1, 1, 1, latent_size]
     """
+    if head_runner is None:
+        head_runner = diffusion_head
     scheduler.set_timesteps(num_steps)
 
     sample = initial_latent
@@ -334,7 +343,7 @@ def sample_speech_latents(
         )
 
         # Run diffusion head on CFG batch
-        eps_combined = diffusion_head(sample_expanded, t_tensor, cond_combined)
+        eps_combined = head_runner(sample_expanded, t_tensor, cond_combined)
 
         # Split CFG outputs
         eps_uncond = ttnn.slice(eps_combined, [0, 0, 0, 0], [1, 1, 1, eps_combined.shape[-1]])
