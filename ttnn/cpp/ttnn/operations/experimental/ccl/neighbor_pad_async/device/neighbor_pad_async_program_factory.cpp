@@ -663,14 +663,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             for (uint32_t i = 0; i < num_local_cores; ++i) {
                 const uint32_t units_for_core = base + (i < rem ? 1u : 0u);
                 const uint32_t a_count = a_base + (i < a_rem ? 1u : 0u);
-                if (units_for_core == 0 && a_count == 0) {
-                    continue;
-                }
 
                 const CoreCoord& logical_core = local_cores[i];
-                local_copy_core_coords.push_back(logical_core);
 
-                // Per-core unique args: work distribution for Phase B (copy) and Phase A (zero-fill)
+                // Always set runtime args for every core the kernel is deployed on.
+                // Cores with 0 work will read rows_count=0 and skip the loop safely.
                 SetRuntimeArgs(program, local_reader_kernel_id, {logical_core}, {unit_offset, units_for_core});
                 SetRuntimeArgs(
                     program,
@@ -678,6 +675,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     {logical_core},
                     {unit_offset, units_for_core, a_offset, a_count});
 
+                if (units_for_core == 0 && a_count == 0) {
+                    continue;
+                }
+
+                local_copy_core_coords.push_back(logical_core);
                 unit_offset += units_for_core;
                 a_offset += a_count;
             }
