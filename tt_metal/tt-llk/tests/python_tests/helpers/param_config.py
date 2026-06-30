@@ -387,11 +387,16 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
 
 
 def is_invalid_quasar_sfpu_format_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
+    fmt: FormatConfig, dest_acc: DestAccumulation, unpack_to_dest: bool = False
 ) -> bool:
     """
     Check if a Quasar SFPU (input_format, output_format, dest_acc) combination
     is unsupported by the hardware and should be skipped by the parametrize sweep.
+
+    ``unpack_to_dest`` relaxes the sub-32-bit-integer-input guard: when the input is written
+    straight to a 32-bit Dest via UNPACR_DEST the narrow datum lands fine (the all-zeros failure
+    is specific to the FPU datacopy path), so the guard only fires when not unpacking to Dest.
+    Mirrors the ``not unpacking_to_dest`` gate in data_format_inference.
     """
     in_fmt = fmt.input_format
     out_fmt = fmt.output_format
@@ -409,6 +414,17 @@ def is_invalid_quasar_sfpu_format_combination(
         in_fmt == DataFormat.Float32
         and out_fmt == DataFormat.Float16
         and dest_acc == DestAccumulation.No
+    ):
+        return True
+
+    # Sub-32-bit integer input cannot use a 32-bit dest through the FPU datacopy: the packer input
+    # format must stay at the narrow width (UInt16 collapses to Int16). Mirrors the
+    # data_format_inference guard, which only rejects this on the non-unpack-to-Dest path — so a
+    # 32-bit-Dest case that unpacks straight to Dest is exempt.
+    if (
+        not unpack_to_dest
+        and in_fmt in (DataFormat.Int16, DataFormat.UInt16)
+        and dest_acc == DestAccumulation.Yes
     ):
         return True
 

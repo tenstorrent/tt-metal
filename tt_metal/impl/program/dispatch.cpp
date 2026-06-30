@@ -380,8 +380,9 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
+                                                        .get_device_build_env(device->build_id())
+                                                        .build_key());
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {
@@ -2983,17 +2984,29 @@ void reset_worker_dispatch_state_on_device(
 }
 
 void set_num_worker_sems_on_dispatch(
-    IDevice* /*device*/, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
-    // Not needed for regular dispatch kernel
-    if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
-        return;
-    }
+    IDevice* /*device*/,
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint32_t num_worker_sems,
+    tt::stl::Span<const uint32_t> workers_per_sub_device) {
+    TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+    TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_num_worker_sems();
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        calculator.add_dispatch_set_num_worker_sems();
+    }
+    calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_SUBORDINATE);
+    } else {
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_MASTER);
+    }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);

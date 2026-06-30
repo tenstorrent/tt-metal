@@ -139,7 +139,13 @@ class Gemma4Generator(Generator):
             for m in self.model:
                 m._prefill_trace_mode = False
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device,
+        greedy_only: bool = False,
+    ):
         warmup_gemma4_model_prefill(
             self,
             kv_cache,

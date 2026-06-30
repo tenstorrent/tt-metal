@@ -4,6 +4,7 @@
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
@@ -25,11 +26,65 @@ class _Gemma4VllmOptimizations:
         return ttnn.bfloat16
 
 
-def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, model_path):
+def _gemma4_prefill_trace_unsafe(model, bounded_sliding_kv_cache) -> bool:
+    """True when the hybrid bridge feeds *non-uniform* per-layer page tables
+    to the paged ops, which makes the vLLM prefill device trace unsafe.
+
+    Prefill-trace capture (the gemma4 warmup sweep / direct
+    ``prefill_forward_text`` callers) runs *before* the per-layer routing
+    that :meth:`Gemma4ForCausalLM.prefill_forward` applies at runtime, so it
+    binds the traced paged ops to the single full page_table shared by every
+    layer. That only matches runtime when every layer truly uses that one
+    table. It diverges — and the captured trace then addresses the wrong KV
+    slots, corrupting prefill output — whenever:
+
+      * bounded sliding is on and the model has ``sliding_attention`` layers
+        (:meth:`_pad_sliding_page_tables_for_bounded` widens only the sliding
+        layers, so their table no longer matches the full layers'), or
+      * the model kv-shares layers (``kv_shared_layer_map`` re-points a shared
+        layer's table at its source's).
+
+    Decode is unaffected: decode warmup goes through ``decode_forward``, which
+    sets up the per-layer routing before capture — so disabling *only* the
+    prefill trace keeps the throughput-critical decode path traced. Models
+    without sliding layers (or with bounded sliding off and no kv-share) keep
+    their prefill trace, so the gate is structural and self-scoping rather
+    than a hard-coded model list.
+    """
+    if getattr(model, "kv_shared_layer_map", None):
+        return True
+    # ``Gemma4Model`` stores the *text* config directly as ``hf_config`` and
+    # reads ``self.hf_config.layer_types`` in forward, so look there first;
+    # only fall back to a nested ``text_config`` if the top level lacks the
+    # field (some unified/multimodal configs nest it).
+    hf_config = getattr(model, "hf_config", None)
+    layer_types = getattr(hf_config, "layer_types", None)
+    if layer_types is None:
+        text_config = getattr(hf_config, "text_config", None)
+        layer_types = getattr(text_config, "layer_types", None)
+    layer_types = list(layer_types or [])
+    has_sliding = "sliding_attention" in layer_types
+    has_full = "full_attention" in layer_types
+    # Mixed sliding + full layers ⇒ vLLM's hybrid kv-cache manager builds
+    # multiple kv-cache groups and HMA tensor-sharing packs layers from
+    # different groups into one physical KV buffer, indexed by *distinct*
+    # per-layer page tables (different block IDs into the shared buffer). The
+    # prefill-trace warmup captures a single broadcast table for every layer,
+    # so shared layers collide on the same slots and corrupt the KV cache on
+    # replay — independent of bounded sliding. Bounded sliding adds further
+    # per-layer width divergence (sliding tables padded to the window) on top.
+    if has_sliding and has_full:
+        return True
+    if bounded_sliding_kv_cache and has_sliding:
+        return True
+    return False
+
+
+def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, model_path, prefill_trace_enabled=True):
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_prefill_chunk_size = max_seq_len
-    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=True)
+    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=prefill_trace_enabled)
     model_args.optimizations = _Gemma4VllmOptimizations()
     model_args.mesh_device = mesh_device
     model_args._gemma4_model_path = model_path
@@ -54,18 +109,59 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
     }
 
+    # Gemma4 keeps vLLM's hybrid kv-cache groups DISABLED.
+    #
+    # With the hybrid path on, ``get_kv_cache_spec`` emits ``SlidingWindowSpec``
+    # for the 40 sliding layers and ``FullAttentionSpec`` for the 8 full layers,
+    # which vLLM places into 6 kv_cache_groups. vLLM then splits the total block
+    # pool evenly across those groups and reports per-group capacity, so a single
+    # request can only be admitted up to ``num_blocks // num_groups`` tokens
+    # (~23K on a P300x2 12B build) — the full-attention group, which needs the
+    # entire sequence, is starved by the even split. Requests longer than that
+    # ceiling sit unschedulable in ``Waiting`` even though the device has plenty
+    # of KV DRAM. Additionally, ``SlidingWindowSpec.max_memory_usage_bytes`` is
+    # coupled to ``max_num_batched_tokens``, which (since the TT backend has no
+    # chunked prefill) equals ``max_model_len`` and over-charges the sliding
+    # groups at full length anyway.
+    #
+    # Emitting ``FullAttentionSpec`` for *every* layer (see
+    # ``get_kv_cache_spec`` below) collapses them into a single
+    # ``UniformTypeKVCacheSpecs`` group, so the whole block pool backs each
+    # request and the full ``max_model_len`` becomes admissible (verified up to
+    # ~100K ISL). This mirrors the Gemma3 / GPT-OSS single-pool path. It does
+    # require the legacy unbounded sliding KV path on the device (bounded sliding
+    # assumes a windowed ``SlidingWindowSpec``), so ``bounded_sliding_kv_cache``
+    # defaults off below.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Mirrors the env-var check in :meth:`initialize_vllm_model` so the
-        # forward-side padding logic doesn't need to re-read the environment
-        # on every step. Defaults to on; flip ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0``
-        # to fall back to the legacy unbounded path through the paged ops.
-        self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
+        # Mirrors the env-var check in :meth:`initialize_vllm_model`. With hybrid
+        # kv-cache groups disabled all layers use ``FullAttentionSpec`` and the
+        # device must allocate/read full-length KV, so bounded sliding defaults
+        # OFF. Set ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=1`` only alongside the
+        # hybrid ``SlidingWindowSpec`` path.
+        self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "0") != "0"
 
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device,
+        greedy_only: bool = False,
+    ):
+        # Mirror the runtime gate (``can_enable_trace`` was already forced off
+        # in ``_patch_model_args``): warm up prefill *eagerly* — compiled, no
+        # trace capture — when the hybrid per-layer page tables diverge from
+        # the single broadcast table this warmup path would otherwise capture.
+        # Without this the sweep would try to capture a corrupting prefill
+        # trace; with it, the else-branch of ``warmup_gemma4_model_prefill``
+        # runs the eager prefill warmup instead.
+        if enable_trace and _gemma4_prefill_trace_unsafe(self.model[0], self._bounded_sliding_kv_cache):
+            enable_trace = False
         warmup_gemma4_model_prefill(
             self,
             kv_cache,
@@ -313,7 +409,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         between groups is the spec — block_size stays uniform.
         """
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
-        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+        from vllm.v1.kv_cache_interface import FullAttentionSpec
 
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -355,12 +451,20 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
                         f"layer_types[{i}] is 'sliding_attention' but "
                         f"hf_config.sliding_window is None on {cls.__name__}"
                     )
-                spec_per_layer[name] = SlidingWindowSpec(
+                # Hybrid kv-cache groups are disabled
+                # (``_HYBRID_KV_CACHE_GROUPS_ENABLED = False``): emit
+                # ``FullAttentionSpec`` for sliding layers too, keeping their
+                # own (sliding) num_kv_heads/head_size. vLLM then merges all
+                # same-type specs into one ``UniformTypeKVCacheSpecs`` group, so
+                # the full block pool backs every request instead of being split
+                # across 6 groups and capped at ~23K tokens. The device runs the
+                # legacy unbounded sliding path (bounded sliding defaults off),
+                # which matches this full-length allocation.
+                spec_per_layer[name] = FullAttentionSpec(
                     block_size=block_size,
                     num_kv_heads=sliding_kv_heads_per_dev,
                     head_size=sliding_head_dim,
                     dtype=dtype,
-                    sliding_window=sliding_window,
                 )
             elif lt == "full_attention":
                 spec_per_layer[name] = FullAttentionSpec(
@@ -394,16 +498,14 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         model_path = hf_config._name_or_path
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
-        # Opt into the bounded sliding-window KV cache path on sliding layers.
-        # vLLM's hybrid manager already produces SlidingWindowSpec-shaped page
-        # tables for sliding layers; the flag makes Gemma4Attention pass
-        # ``cache_position_modulo=sliding_window`` to the three paged ops so
-        # they correctly address the bounded physical pool. Default-off in
-        # ``create_tt_model``; flipped on here because the bridge is the
-        # path that actually receives bounded buffers from vLLM. Env-var
-        # override ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0`` lets the legacy
-        # unbounded path back in if a regression appears.
-        bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
+        # Bounded sliding-window KV cache defaults OFF, consistent with hybrid
+        # kv-cache groups being disabled: ``get_kv_cache_spec`` emits
+        # ``FullAttentionSpec`` for every layer, so vLLM hands full-length
+        # (non-windowed) page tables and the device must allocate/read the full
+        # pool. The bounded path (``cache_position_modulo=sliding_window``) is
+        # only correct alongside the hybrid ``SlidingWindowSpec`` layout; set
+        # ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=1`` to re-enable it in that mode.
+        bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "0") != "0"
 
         model_args = []
         model = []
@@ -422,12 +524,23 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
                 model_path=model_path,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             )
+            prefill_trace_unsafe = _gemma4_prefill_trace_unsafe(model_i, bounded_sliding_kv_cache)
+            if prefill_trace_unsafe:
+                logger.info(
+                    "Gemma4 vLLM: disabling prefill device trace for {} — hybrid "
+                    "per-layer page tables (bounded sliding / kv-share) diverge from "
+                    "the single broadcast table captured at prefill-trace warmup, which "
+                    "would corrupt prefill KV on replay. Prefill runs eager; decode "
+                    "trace is unaffected.",
+                    model_path,
+                )
             _patch_model_args(
                 model_args_i,
                 submesh,
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
                 model_path=model_path,
+                prefill_trace_enabled=not prefill_trace_unsafe,
             )
             # The shared TT vLLM cache allocator reads ``model.args.optimizations``;
             # mirror the text-transformer wrappers by exposing model_args here.

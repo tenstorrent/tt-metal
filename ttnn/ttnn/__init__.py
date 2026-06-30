@@ -209,6 +209,16 @@ from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
 )
 
+from ttnn._ttnn.d2h_stream_service import (
+    D2HStreamService,
+)
+
+from ttnn._ttnn.d2d_stream_service import (
+    D2DStreamService,
+    D2DStreamServiceSender,
+    D2DStreamServiceReceiver,
+)
+
 from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
 )
@@ -370,7 +380,6 @@ tile_size = ttnn._ttnn.tensor.tile_size
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
-import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
@@ -430,7 +439,7 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode
+from ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div
 sub = ttnn.subtract
@@ -546,6 +555,8 @@ experimental.disaggregation = disaggregation
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
+
+IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
 

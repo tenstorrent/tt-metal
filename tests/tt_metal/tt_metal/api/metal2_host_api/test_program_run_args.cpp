@@ -130,6 +130,29 @@ inline ProgramSpec MakeSpecWithBothKernelRTAs(
     return spec;
 }
 
+inline ProgramSpec MakeSpecWithAliasedDfbs(uint32_t es_a, uint32_t ne_a, uint32_t es_b, uint32_t ne_b) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    DataflowBufferSpec dfb_a = MakeMinimalDFB("dfb_a", es_a, ne_a);
+    dfb_a.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    DataflowBufferSpec dfb_b = MakeMinimalDFB("dfb_b", es_b, ne_b);
+    dfb_b.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+
+    // Replace the single dfb_0 bindings: each kernel binds both aliased DFBs.
+    spec.kernels[0].dfb_bindings = {
+        ProducerOf(DFBSpecName{"dfb_a"}, "input_dfb_a"),
+        ProducerOf(DFBSpecName{"dfb_b"}, "input_dfb_b"),
+    };
+    spec.kernels[1].dfb_bindings = {
+        ConsumerOf(DFBSpecName{"dfb_a"}, "input_dfb_a"),
+        ConsumerOf(DFBSpecName{"dfb_b"}, "input_dfb_b"),
+    };
+    return spec;
+}
+
 // Helper to create ProgramRunArgs for a single kernel
 inline ProgramRunArgs::KernelRunArgs MakeKernelRunArgs(
     KernelSpecName kernel,
@@ -299,44 +322,194 @@ TEST_F(ProgramRunArgsTestQuasar, MissingNodeRTAsFails) {
             ::testing::HasSubstr("Kernel 'dm_kernel' is missing vararg runtime args for node")));
 }
 
-// TODO: Replace when feature is implemented
-TEST_F(ProgramRunArgsTestQuasar, DFBSizeOverrideFails) {
+// First-launch override: entry_size only (per-TC base/limit recompute; capacity unchanged).
+TEST_F(ProgramRunArgsTestQuasar, DFBEntrySizeOverrideSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 2048});
 
-    // Add DFB run params with size override (not implemented)
-    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{
-        .dfb = DFBSpecName{"dfb_0"},
-        .entry_size = 2048,  // Override - not implemented!
-    });
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 
-    EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB size overrides are not yet implemented")));
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 2048u);
+    EXPECT_EQ(dfb->config.num_entries, 2u);  // unchanged
+    EXPECT_EQ(dfb->capacity, 2u);            // capacity = num_entries / max(prod,cons)
+    EXPECT_EQ(dfb->stride_in_entries, 1u);
 }
 
-// TODO: Replace when feature is implemented
-TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideFails) {
+// First-launch override: num_entries only (changes capacity).
+TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
 
-    // Add DFB run params with num_entries override (not implemented)
-    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{
-        .dfb = DFBSpecName{"dfb_0"},
-        .num_entries = 4,  // Override - not implemented!
-    });
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 1024u);  // unchanged
+    EXPECT_EQ(dfb->config.num_entries, 4u);
+    EXPECT_EQ(dfb->capacity, 4u);
+    EXPECT_EQ(dfb->stride_in_entries, 1u);
+}
+
+// First-launch override: both entry_size and num_entries.
+TEST_F(ProgramRunArgsTestQuasar, DFBBothOverridesSucceed) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 512, .num_entries = 8});
+
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 512u);
+    EXPECT_EQ(dfb->config.num_entries, 8u);
+    EXPECT_EQ(dfb->capacity, 8u);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBEntrySizeOverrideZeroFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 0});
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB size overrides are not yet implemented")));
+            ::testing::HasSubstr("entry_size must be set to a non-zero value")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideZeroFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 0});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("num_entries must be set to a non-zero value")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBSizeOverrideUnknownNameFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"does_not_exist"}, .entry_size = 2048});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Unknown DFB spec name")));
+}
+
+// Isolated change on the primary: entry_size and num_entries traded so total_size is unchanged.
+TEST_F(ProgramRunArgsTestQuasar, AliasIsolatedResizeSucceeds) {
+    NodeCoord node{0, 0};
+    // dfb_a = 512*8 = 4096, dfb_b = 1024*4 = 4096 (equal totals).
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    ASSERT_TRUE(a->alias_primary_id.has_value() || !a->alias_secondary_ids.empty()) << "dfb_a not aliased";
+    const uint32_t total_before = a->total_size();
+    const uint32_t b_es_before = b->config.entry_size;
+    const uint32_t b_ne_before = b->config.num_entries;
+
+    // 512*8 -> 256*16: total_size stays 4096.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .entry_size = 256, .num_entries = 16});
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    EXPECT_EQ(a->config.entry_size, 256u);
+    EXPECT_EQ(a->config.num_entries, 16u);
+    EXPECT_EQ(a->total_size(), total_before);  // unchanged -> isolated
+    // The other alias is untouched.
+    EXPECT_EQ(b->config.entry_size, b_es_before);
+    EXPECT_EQ(b->config.num_entries, b_ne_before);
+}
+
+// Isolated change on the secondary alias.
+TEST_F(ProgramRunArgsTestQuasar, AliasSecondaryIsolatedResizeSucceeds) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    const uint32_t total_before = b->total_size();
+
+    // 1024*4 -> 2048*2: total_size stays 4096.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .entry_size = 2048, .num_entries = 2});
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    EXPECT_EQ(b->config.entry_size, 2048u);
+    EXPECT_EQ(b->config.num_entries, 2u);
+    EXPECT_EQ(b->total_size(), total_before);  // unchanged -> isolated
+}
+
+// Agreed group resize: BOTH members overridden to the same new total size.
+TEST_F(ProgramRunArgsTestQuasar, AliasGroupAgreedResizeSucceeds) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+
+    // 4096 -> 8192 for both, via different views (512*16 and 1024*8).
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .entry_size = 512, .num_entries = 16});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .entry_size = 1024, .num_entries = 8});
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    EXPECT_EQ(a->total_size(), 8192u);
+    EXPECT_EQ(b->total_size(), 8192u);
+    EXPECT_EQ(a->config.num_entries, 16u);
+    EXPECT_EQ(b->config.num_entries, 8u);
+}
+
+// Total-size change on one alias without overriding the rest of the group -> rejected.
+TEST_F(ProgramRunArgsTestQuasar, AliasPartialGroupResizeFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // dfb_a 4096 -> 8192 (total changes) but dfb_b is left out of the batch.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .num_entries = 16});
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("was not overridden")));
+}
+
+// Group members overridden to DIFFERENT new total sizes -> rejected.
+TEST_F(ProgramRunArgsTestQuasar, AliasGroupDisagreeResizeFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // dfb_a -> 8192, dfb_b -> 16384: both change total_size but disagree.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .num_entries = 16});  // 512*16 = 8192
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .num_entries = 16});  // 1024*16 = 16384
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
 }
 
 // ============================================================================
@@ -1269,6 +1442,100 @@ TEST_F(ProgramRunArgsTestGen1, SetRunArgsSucceeds_PerNodeAndCommonRTAs) {
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
+// SetProgramRunArgs serializes named per-node RTAs by *scattering* each supplied value to its
+// declaration slot (schema name->slot index), not by walking the schema and looking each name up.
+// This test pins that behavior at the value level — which the NO_THROW tests above do not:
+//   - supplied OUT OF declaration order, values must still land at their declared slot;
+//   - a second SetProgramRunArgs (the in-place fast path that writes into the already-allocated
+//     buffer) must overwrite every slot correctly.
+// Together these cover both the scatter (slot placement) and the first-vs-subsequent buffer paths.
+TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarationSlots) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b", "c"};  // declaration slots 0,1,2
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // First call (allocates the buffer). Supply c,a,b out of order on purpose.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"c", 30}, {"a", 10}, {"b", 20}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params);
+
+    const auto dm_kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    {
+        const auto* rta = dm_kernel->runtime_args_data(node).data();
+        ASSERT_GE(dm_kernel->runtime_args_data(node).size(), 3u);
+        EXPECT_EQ(rta[0], 10u) << "'a' must land at declaration slot 0 regardless of supplied order";
+        EXPECT_EQ(rta[1], 20u) << "'b' must land at declaration slot 1";
+        EXPECT_EQ(rta[2], 30u) << "'c' must land at declaration slot 2";
+    }
+
+    // Second call hits the in-place subsequent fast path. New values, again out of order.
+    ProgramRunArgs params2;
+    params2.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"b", 201}, {"c", 301}, {"a", 101}}}},
+    });
+    params2.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params2);
+    {
+        const auto* rta = dm_kernel->runtime_args_data(node).data();
+        EXPECT_EQ(rta[0], 101u) << "re-Set must overwrite slot 0 in place";
+        EXPECT_EQ(rta[1], 201u) << "re-Set must overwrite slot 1 in place";
+        EXPECT_EQ(rta[2], 301u) << "re-Set must overwrite slot 2 in place";
+    }
+}
+
+// Fast-path coverage for the COMBINED named+vararg per-node layout [named_0,named_1, vararg_0..2].
+// The fast path (subsequent Set) patches the named section (scattered by slot, supplied out of
+// order) and the positional vararg section (written at offset num_named_rtas) independently and in
+// place. Pins that the vararg section lands AFTER the named section and that a re-Set overwrites
+// both correctly — distinct from the named-only test above, and the layout most likely to regress
+// if the fast/first-call split mishandles the named-vs-vararg offset.
+TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPlusVarargs_FastPathLayout) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b"};  // declaration slots 0,1
+    spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto make = [&](uint32_t a, uint32_t b, std::vector<uint32_t> varargs) {
+        ProgramRunArgs p;
+        p.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"dm_kernel"},
+            .runtime_arg_values = {{node, {{"b", b}, {"a", a}}}},  // supplied out of declaration order
+            .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, std::move(varargs)}}},
+        });
+        p.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+        return p;
+    };
+
+    SetProgramRunArgs(program, make(10, 20, {100, 200, 300}));  // first call: allocates the buffer
+    const auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
+    {
+        const auto& rta = dm->runtime_args_data(node);
+        ASSERT_GE(rta.size(), 5u);
+        EXPECT_EQ(rta.data()[0], 10u) << "named 'a' at slot 0";
+        EXPECT_EQ(rta.data()[1], 20u) << "named 'b' at slot 1";
+        EXPECT_EQ(rta.data()[2], 100u) << "vararg 0 follows the named section";
+        EXPECT_EQ(rta.data()[3], 200u);
+        EXPECT_EQ(rta.data()[4], 300u);
+    }
+
+    SetProgramRunArgs(program, make(11, 21, {101, 201, 301}));  // fast path: in-place patch
+    {
+        const auto* rta = dm->runtime_args_data(node).data();
+        EXPECT_EQ(rta[0], 11u) << "fast path overwrites named slot 0";
+        EXPECT_EQ(rta[1], 21u);
+        EXPECT_EQ(rta[2], 101u) << "fast path overwrites vararg section after named";
+        EXPECT_EQ(rta[3], 201u);
+        EXPECT_EQ(rta[4], 301u);
+    }
+}
+
 TEST_F(ProgramRunArgsTestGen1, WrongRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
@@ -1568,12 +1835,9 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
 }
 
 TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTensor) {
-    // TEMPORARILY SKIPPED: this test binds the shared tensor to the compute kernel (kernels[1]),
-    // which ValidateProgramSpec now rejects until compute-path tensor bindings are supported (a day
-    // or two out). The host-side patching it exercises is unaffected by that gap; re-enable this test
-    // when the temporary compute-kernel tensor-binding guard in ValidateProgramSpec is removed.
-    GTEST_SKIP() << "Compute-kernel tensor bindings are temporarily rejected by ValidateProgramSpec.";
-
+    // Binds the shared tensor to both a DM kernel and the compute kernel (kernels[1]) — now legal,
+    // since a compute kernel constructs a LocalTensorAccessor from the binding token. Exercises the
+    // host-side address patching reaching every kernel bound to the same tensor.
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("shared_tensor");

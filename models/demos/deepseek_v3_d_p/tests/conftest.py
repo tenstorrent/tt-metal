@@ -10,6 +10,7 @@ Automatically downloads weights from HuggingFace if not available locally.
 
 import json
 import os
+import shutil
 from functools import lru_cache
 from pathlib import Path
 
@@ -186,8 +187,20 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             ignore_patterns=["*.safetensors"],  # Don't download weight files
         )
 
-        logger.success(f"✓ Config files downloaded to: {model_dir}")
-        return Path(model_dir)
+        # The HF cache stores files as symlinks into blobs/ (content-hash names). With
+        # trust_remote_code=True, transformers resolves the remote module to its blob realpath
+        # and then looks for its relative-import siblings (e.g. tool_declaration_ts.py) by name in
+        # that same dir, which fails in blobs/. Copy into a flat dir of real files so relative
+        # imports resolve by name.
+        flat_dir = (
+            cache_dir
+            / "flat_config"
+            / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
+        )
+        shutil.copytree(model_dir, flat_dir, symlinks=False, dirs_exist_ok=True)
+
+        logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
+        return flat_dir
 
     except Exception as e:
         logger.error(f"Failed to download {variant.hf_repo_id} config: {e}")
@@ -759,3 +772,44 @@ def infinitebench_prompt(request):
         data = json.load(f)
 
     return data["subset"], data["prompt"]
+
+
+def pytest_collection_finish(session):
+    """Optional CI guardrail: warn (do NOT fail) when the number of selected
+    deepseek_v3_d_p tests differs from EXPECT_NUM_TESTS.
+
+    Inert unless EXPECT_NUM_TESTS is set, so it has zero effect on normal runs.
+    Intended for pipeline commands whose ``-k`` filter must resolve to a known
+    count — e.g. topology-gated tests that can silently collect 0 on the wrong
+    mesh. Emits a GitHub Actions ``::warning::`` annotation but never changes the
+    exit code, so the job still passes."""
+    expected_raw = os.getenv("EXPECT_NUM_TESTS")
+    if not expected_raw:
+        return
+    try:
+        expected = int(expected_raw)
+    except ValueError:
+        print(f"::warning title=Test count check::EXPECT_NUM_TESTS={expected_raw!r} is not an integer; skipping check")
+        return
+    actual = len(session.items)
+    if actual == expected:
+        return
+    invocation = " ".join(session.config.invocation_params.args)
+    msg = f"expected {expected} test(s) to be collected but got {actual} (pytest {invocation})"
+    annotation = f"::warning title=Unexpected test count::{msg}"
+
+    # The annotation must reach the step's live log stream for GitHub to parse it,
+    # so emit it with pytest's output capture suspended (a plain print() here can be
+    # swallowed by capturing and never appear in the runner log).
+    capman = session.config.pluginmanager.get_plugin("capturemanager")
+    if capman is not None:
+        with capman.global_and_fixture_disabled():
+            print(annotation, flush=True)
+    else:
+        print(annotation, flush=True)
+
+    # Also surface it on the GitHub job-summary page when available.
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a") as fh:
+            fh.write(f"⚠️ **Unexpected test count** — {msg}\n")

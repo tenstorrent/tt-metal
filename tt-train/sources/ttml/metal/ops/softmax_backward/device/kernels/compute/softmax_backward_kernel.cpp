@@ -4,6 +4,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
@@ -66,10 +67,8 @@ ALWI void mul_accumulate_row_to_dst(
 // scalar in `sum_cb_id` via one matmul with the ones tile.
 ALWI void reduce_partial_to_scalar(uint32_t partial_cb_id, uint32_t ones_cb_id, uint32_t sum_cb_id) {
     tile_regs_acquire();
-#if defined(FP32_DEST_ACC_EN)
-    ckernel::reconfig_data_format(partial_cb_id, ones_cb_id);
-#endif
-    mm_init(partial_cb_id, ones_cb_id, sum_cb_id, /*transpose*/ 0);
+    ckernel::reconfig_data_format(ones_cb_id, partial_cb_id);
+    matmul_init(partial_cb_id, ones_cb_id, /*transpose*/ 0);
 
     cb_wait_front(partial_cb_id, ONE_TILE);
     matmul_tiles(partial_cb_id, ones_cb_id, 0, 0, DST_REG_ID);

@@ -1,119 +1,13 @@
-# This file defines the test matrix for LLK unit tests.
+# L2 nightly LLK unit test matrix — full gtest suite under slow dispatch.
 #
-# Each entry represents a parallel job with the following keys:
-#   name: The display name for the job in GitHub Actions.
-#   cmd: The exact command to run. For sd entries the impl prepends
-#        TT_METAL_SLOW_DISPATCH_MODE=1 at invocation time; do not bake it
-#        into the cmd.
-#   skus: A mapping of SKU names to their configuration.
-#     Each SKU entry contains:
-#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
-#   team: The team that owns the test budget.
-#   arch: Architecture string (wormhole_b0 or blackhole).
-#   dispatch_mode: "fd" for fast dispatch, "sd" for slow dispatch. The impl sets
-#                  TT_METAL_SLOW_DISPATCH_MODE=1 when dispatch_mode == "sd".
-#   gtest_shard_total / gtest_shard_index: Optional sharding via GTEST_TOTAL_SHARDS
-#                  and GTEST_SHARD_INDEX env vars.
-#   l2_only: Optional bool. When true, only callers passing l2-only=true
-#            (i.e. the tt metal L2 pipeline) will pick up this entry.
-#            Merge-gate skips it.
+# Merge-gate coverage lives in tests/pipeline_reorg/llk_merge_gate_tests.yaml.
 #
-# For max allowed timeout refer to .github/time_budget.yaml
+# Each entry: name, cmd, skus, team, arch, dispatch_mode.
+# For sd entries the impl prepends TT_METAL_SLOW_DISPATCH_MODE=1 at invocation time.
+#
+# For max allowed timeout refer to .github/time_budget.yaml (llk / unit).
 
-# --- Merge-gate + nightly: FD shards (full LLK gtest suite) ---
-- name: LLK FD wormhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
-  skus:
-    wh_n150_civ2:
-      timeout: 25
-  team: llk
-  arch: wormhole_b0
-  dispatch_mode: fd
-  gtest_shard_total: 4
-  gtest_shard_index: 0
-
-- name: LLK FD wormhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
-  skus:
-    wh_n150_civ2:
-      timeout: 25
-  team: llk
-  arch: wormhole_b0
-  dispatch_mode: fd
-  gtest_shard_total: 4
-  gtest_shard_index: 1
-
-- name: LLK FD wormhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
-  skus:
-    wh_n150_civ2:
-      timeout: 25
-  team: llk
-  arch: wormhole_b0
-  dispatch_mode: fd
-  gtest_shard_total: 4
-  gtest_shard_index: 2
-
-- name: LLK FD wormhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
-  skus:
-    wh_n150_civ2:
-      timeout: 25
-  team: llk
-  arch: wormhole_b0
-  dispatch_mode: fd
-  gtest_shard_total: 4
-  gtest_shard_index: 3
-
-- name: LLK FD blackhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 15
-    bh_p150b_civ2_viommu_prio:
-      timeout: 15
-  team: llk
-  arch: blackhole
-  dispatch_mode: fd
-  gtest_shard_total: 2
-  gtest_shard_index: 0
-
-- name: LLK FD blackhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 15
-    bh_p150b_civ2_viommu_prio:
-      timeout: 15
-  team: llk
-  arch: blackhole
-  dispatch_mode: fd
-  gtest_shard_total: 2
-  gtest_shard_index: 1
-
-# --- Merge-gate + nightly: SD-only / Quasar slice ---
-- name: LLK SD wormhole (Quasar slice)
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
-  skus:
-    wh_n150_civ2:
-      timeout: 40
-  team: llk
-  arch: wormhole_b0
-  dispatch_mode: sd
-
-- name: LLK SD blackhole (Quasar slice)
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 40
-    bh_p150b_civ2_viommu_prio:
-      timeout: 40
-  team: llk
-  arch: blackhole
-  dispatch_mode: sd
-
-# --- Nightly-only: full LLK gtest suite under SD on every supported SKU ---
-# Re-validates everything the FD shards cover plus FD-only fixtures, but in
+# Re-validates everything the merge-gate FD shards cover plus FD-only fixtures, but in
 # slow dispatch. Tracking issue for the one exclusion: #45483.
 - name: LLK SD wormhole (full suite, nightly)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-MeshDeviceFixture.Top32RmDevPipelineCompletes'
@@ -125,16 +19,14 @@
   team: llk
   arch: wormhole_b0
   dispatch_mode: sd
-  l2_only: true
 
 - name: LLK SD blackhole (full suite, nightly)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-MeshDeviceFixture.Top32RmDevPipelineCompletes'
   skus:
-    bh_p150:
+    bh_p150b_civ2_viommu:
       timeout: 40
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 40
   team: llk
   arch: blackhole
   dispatch_mode: sd
-  l2_only: true

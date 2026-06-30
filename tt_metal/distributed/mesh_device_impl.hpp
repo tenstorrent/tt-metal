@@ -73,7 +73,7 @@ struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
 class RealtimeProfilerManager;
-class DramCorePrefetcherManager;
+class TensorPrefetcherManager;
 
 namespace multihost {
 class DistributedContext;
@@ -168,10 +168,10 @@ private:
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
 
-    // Owns the DRAM-core (DRISC) prefetcher subsystem. Lazily constructed on first call
-    // to experimental::StartDramCorePrefetcher; torn down in close_impl() before the
+    // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
+    // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
     // rest of the mesh shutdown so any in-flight kernel completes against live resources.
-    std::unique_ptr<DramCorePrefetcherManager> dram_core_prefetcher_;
+    std::unique_ptr<TensorPrefetcherManager> tensor_prefetcher_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -311,10 +311,10 @@ public:
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
 
-    // Lazily-constructed DRAM-core (DRISC) prefetcher subsystem. The first call materializes
+    // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
     // the manager bound to this mesh device; subsequent calls return the same instance.
-    // experimental::StartDramCorePrefetcher / StopDramCorePrefetcher delegate here.
-    DramCorePrefetcherManager& dram_core_prefetcher(MeshDevice* mesh_device);
+    // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
+    TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
 
     // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
     // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
@@ -328,7 +328,7 @@ public:
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
     // pair lets two DRISC cores share a bank's receiver set. Indices are derived
     // per-bank from the SOC descriptor (they are not fixed across banks). Used by both
-    // the DRAM-sender GCB factory and the DramCorePrefetcherManager so their sender
+    // the DRAM-sender GCB factory and the TensorPrefetcherManager so their sender
     // cores always agree.
     std::vector<CoreCoord> dram_sender_logical_cores(uint32_t bank_id) const;
 

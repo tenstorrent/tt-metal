@@ -66,7 +66,7 @@ VARIANTS = {
         # /mnt/models/moonshotai/Kimi-K2.6-dequantized dir name).
         hf_model_default="models/demos/deepseek_v3_d_p/reference/kimi_k2_6",
         ttnn_cache_default="/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill",
-        default_gate_mode="HOST_ALL",  # Kimi (1 expert group) is validated only with the host gate
+        default_gate_mode="DEVICE_FP32",  # Kimi (1 expert group)
         # vllm-traced golden: metadata.json + kv_cache live under a single run-hash subdir, and the
         # per-layer KV is row-sharded into layer_N/rows_*.safetensors. resolve_trace_dir descends to
         # the subdir; kv_cache_pcc_check reassembles the shards.
@@ -116,10 +116,26 @@ def load_hf_config(variant: RunnerVariant):
 # ---------------------------------------------------------------------------
 # Device / weight-cache / H2D-service setup
 # ---------------------------------------------------------------------------
-def open_mesh_device(mesh_shape: tuple, model_cfg: type) -> ttnn.MeshDevice:
-    """Configure fabric (1D for sp<=8, else 2D) and open the mesh device."""
+def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0) -> ttnn.MeshDevice:
+    """Configure fabric and open the mesh device.
+
+    Default fabric is 1D for sp<=8, else 2D. PREFILL_FABRIC_MODE (1d|2d) overrides
+    this: the D2D-socket pipeline needs 2D even at sp=8 because a MeshSocket routes
+    over 2D fabric, and set_fabric_config is one global config for the whole run.
+
+    `l1_small_size` > 0 carves an L1_SMALL region (needed when an op routes its
+    semaphores there, e.g. the Kimi MoE routing all-gather with use_l1_small_for_semaphores)."""
     sp = mesh_shape[0]
-    fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+    fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
+    if fabric_mode == "2d":
+        fabric_config = ttnn.FabricConfig.FABRIC_2D
+    elif fabric_mode == "1d":
+        fabric_config = ttnn.FabricConfig.FABRIC_1D
+    elif fabric_mode:
+        raise ValueError(f"PREFILL_FABRIC_MODE must be '1d' or '2d', got {fabric_mode!r}")
+    else:
+        fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+    logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
     fabric_router_config = create_fabric_router_config(
         max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
@@ -134,7 +150,7 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type) -> ttnn.MeshDevice:
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size)
 
 
 def resolve_weight_cache_path(variant: RunnerVariant, mesh_shape: tuple) -> Optional[Path]:
@@ -193,15 +209,15 @@ def build_h2d_service(
     global_spec = make_global_spec(mesh_shape, chunk_size)
     mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
     # worker_cores set so the service-core kernel multicasts a data-ready inc
-    # after each transfer; h2d_socket_sync() waits on that on-device, which
+    # after each transfer; inbound_socket_service_sync() waits on that on-device, which
     # avoids the host-side barrier() round-trip per iteration.
     # metadata_size_bytes set so the producer can ship per-iter control bytes
     # (slot_id, actual_start, actual_end) inline with the token push.
     service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
         global_spec=global_spec,
-        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom
-        scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
+        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom (0 would auto-size)
+        max_socket_page_size_bytes=per_chip_bytes,  # cap socket page at one tensor page (0 = auto/coalesced)
         mapper=mapper,
         worker_cores=worker_cores,
         metadata_size_bytes=metadata_size_bytes,
@@ -242,6 +258,18 @@ def prepare_prefill_input_tensor(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(sp_axis, None)),
+    )
+
+
+def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+    """Global spec of the inter-rank hidden state carried over the D2D pipeline socket:
+    [1, 1, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across SP
+    rows, emb across TP cols) to match the embedding output layout the downstream model consumes."""
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
     )
 
 
@@ -442,7 +470,7 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int):
     return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
 
 
-def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None) -> float:
+def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0) -> float:
     """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
     and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace. Returns the
     min per-layer PCC and asserts (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is
@@ -451,6 +479,10 @@ def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None) ->
     `trace_dir` defaults to the resolved PREFILL_TRACE_DIR env (caller passes the variant's
     prefill_trace_default). The golden is loaded format-agnostically (DeepSeek single-file or Kimi vllm
     row-shards) via _load_golden_kv_post.
+
+    `first_layer_idx` offsets the golden layer index for a pipeline-parallel rank: the device cache
+    holds this rank's `num_layers` slice at local indices, but the golden trace is indexed by global
+    layer, so golden layer = first_layer_idx + local_idx. Defaults to 0 for single-rank.
 
     Env:
       PREFILL_STANDALONE_CHUNKED_PCC          min per-layer KV-cache PCC threshold (default 0.88)
@@ -487,13 +519,14 @@ def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None) ->
     min_pcc = 1.0
     failures = []
     for i in range(num_layers):
-        # user-major slot layout: cache batch index = slot_id * num_layers + layer_idx
+        # user-major slot layout: cache batch index = slot_id * num_layers + local_layer_idx
         batch_idx = slot_id * num_layers + i
+        global_layer = first_layer_idx + i  # golden trace is indexed by global layer
         nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
         nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
         dev_cache = nat[:total_len]
 
-        g_post = _load_golden_kv_post(trace_dir, i, total_len)
+        g_post = _load_golden_kv_post(trace_dir, global_layer, total_len)
         # nope (kv_lora) compares directly; the RoPE (pe) slice uses the Meta-interleaved basis while
         # the golden stores the HF half-split, so re-interleave the golden before comparing.
         _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
@@ -503,7 +536,10 @@ def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None) ->
         _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
         layer_pcc = min(pcc_nope, pcc_pe)
         min_pcc = min(min_pcc, layer_pcc)
-        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f} -> {layer_pcc:.6f}")
+        logger.info(
+            f"  cache layer local={i} global={global_layer} PCC: "
+            f"nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f} -> {layer_pcc:.6f}"
+        )
         if layer_pcc < threshold:
             failures.append((i, layer_pcc))
 

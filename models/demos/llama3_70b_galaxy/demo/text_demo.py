@@ -27,6 +27,7 @@ from models.common.utility_functions import (
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -783,7 +784,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 216580672,
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy",
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
@@ -1655,12 +1656,30 @@ def test_demo_text(
             profiler,
             1,  # grab the second repeat batch of prefill
             "inference_prefill",
-            f"ttft_e2e_{galaxy_type}",
-            round(avg_time_to_first_token * 1000, 2),
-        )  # average TTFT in ms
+            "time_to_token",
+            avg_time_to_first_token,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            repeat_batches - 1,  # use the last batch iteration (the one with an end timestamp)
+            "inference_decode",
+            "tokens/s",
+            decode_tok_s,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            repeat_batches - 1,
+            "inference_decode",
+            "tokens/s/user",
+            decode_tok_s_user,
+        )
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_text_demo_prefill",
-            ml_model_name="llama70b-tg",
+            run_type="demo_perf",
+            ml_model_name=model_args.base_model_name,
+            ml_model_type="llm",
+            batch_size=batch_size,
+            input_sequence_length=len(input_prompts[0]),
+            output_sequence_length=num_tokens_generated_decode[0],
         )
