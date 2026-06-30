@@ -226,6 +226,19 @@ class TTVibeVoiceGenerator:
         # reused every AR step — avoids a full-vocab host alloc + H2D upload per step).
         self._token_mask_tt: Optional[ttnn.Tensor] = None
 
+        # Optional ttnn trace of the post-diffusion block (opt-in via VV_TRACE_POSTDIFF=1,
+        # set by demo_ttnn.py --trace).  Per speech segment: 1 eager frame allocates the
+        # streaming caches at fixed addresses, the next frame is captured, the rest replay
+        # with a single dispatch.  Invalidated + re-captured on each segment reset.
+        # NOTE: not yet bit-exact vs eager (~0.985 PCC) — the in-place streaming-cache
+        # update has a write-after-read that trace replay does not order. For eval only.
+        self._trace_postdiff = os.environ.get("VV_TRACE_POSTDIFF", "0") == "1"
+        self._pd_tid = None
+        self._pd_lat_in: Optional[ttnn.Tensor] = None
+        self._pd_fused_out: Optional[ttnn.Tensor] = None
+        self._pd_audio_out: Optional[ttnn.Tensor] = None
+        self._pd_eager_frames = 0
+
     def _token_label(self, token_id: int) -> str:
         labels = {
             self.speech_start_id: "speech_start",
@@ -515,13 +528,21 @@ class TTVibeVoiceGenerator:
         return fused_tt, audio_chunk.reshape(-1)
 
     def _post_diffusion_embeds_tt(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """On-device streaming decode/encode/fusion."""
+        """On-device streaming decode/encode/fusion (eager, or ttnn-traced when enabled)."""
+        if not self._trace_postdiff:
+            return self._run_post_pipeline(speech_latent)
+        return self._post_diffusion_embeds_tt_traced(speech_latent)
+
+    def _run_post_pipeline(self, latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The post-diffusion op graph: inverse-norm → acoustic decode → semantic encode
+        → connectors → fused embed.  Reads ``latent`` for both the decode and acoustic
+        connector (so a single persistent input tensor suffices under trace)."""
         scale = self.speech_scaling_factor or 1.0
         bias = self.speech_bias_factor or 0.0
 
         # Inverse-normalise the current latent frame to the acoustic VAE space, fully on device (no host round-trip).
         # scale/bias are Python floats, so this is scaled = latent * (1/scale) - bias.
-        lat_f32 = ttnn.typecast(speech_latent, ttnn.float32)
+        lat_f32 = ttnn.typecast(latent, ttnn.float32)
         scaled_f32 = ttnn.subtract(
             ttnn.mul(lat_f32, 1.0 / scale, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             bias,
@@ -541,10 +562,49 @@ class TTVibeVoiceGenerator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        acoustic_embed = self.acoustic_conn(speech_latent)
+        acoustic_embed = self.acoustic_conn(latent)
         semantic_embed = self.semantic_conn(semantic_last_tt)
         fused = ttnn.add(acoustic_embed, semantic_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return fused, audio_chunk
+
+    def _post_diffusion_embeds_tt_traced(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Trace/replay the post-diffusion block.  Per segment: frame 0 runs eager (so the
+        streaming caches are allocated at fixed addresses — a cache ``ttnn.zeros`` captured
+        inside the trace would re-zero on every replay); frame 1 is captured; frames 2+ replay."""
+        dev = self.device
+        # Persistent input latent (fixed address) the captured graph reads each frame.
+        if self._pd_lat_in is None:
+            self._pd_lat_in = ttnn.zeros(
+                list(speech_latent.shape),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        ttnn.copy(input_a=speech_latent, input_b=self._pd_lat_in)
+
+        if self._pd_tid is None:
+            if self._pd_eager_frames == 0:
+                self._pd_eager_frames = 1
+                return self._run_post_pipeline(self._pd_lat_in)
+            self._pd_tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._pd_fused_out, self._pd_audio_out = self._run_post_pipeline(self._pd_lat_in)
+            ttnn.end_trace_capture(dev, self._pd_tid, cq_id=0)
+            _vv_debug("post_diffusion: trace captured")
+            return self._pd_fused_out, self._pd_audio_out
+        # Replay: reads _pd_lat_in, advances the streaming caches, writes _pd_*_out in place.
+        # Both outputs are consumed within this AR iteration (fused → LM step; audio → host)
+        # before the next replay overwrites them.
+        ttnn.execute_trace(dev, self._pd_tid, cq_id=0, blocking=False)
+        return self._pd_fused_out, self._pd_audio_out
+
+    def _reset_postdiff_trace(self) -> None:
+        """Invalidate the post-diffusion trace at a segment boundary (the streaming caches
+        are about to be reset/reallocated, so the captured addresses go stale)."""
+        if self._pd_tid is not None:
+            ttnn.release_trace(self.device, self._pd_tid)
+        self._pd_tid = None
+        self._pd_eager_frames = 0
 
     def _reset_neg_cache(self, kv_cache_neg: KVCache):
         """Negative prefill: single speech_start token."""
@@ -784,6 +844,7 @@ class TTVibeVoiceGenerator:
                 neg_prev_diffusion_token = None
                 self.acoustic_tok.reset_decode_cache()
                 self.semantic_tok.reset_cache()
+                self._reset_postdiff_trace()  # caches realloc → captured trace is stale
                 if self.ref_inference is not None:
                     self._reset_ref_tokenizer_caches()
 
