@@ -14,6 +14,7 @@ fmt=BF16/FP16/FP32 — see the "HOW TO ADD A TEST" comment above CASES. Run a
 single op with:  pytest test_sfpu_plot.py -k <Op> -s
 """
 
+import math
 import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -41,6 +42,7 @@ from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
+from helpers.stimuli_generator.strategies.structured import _enumerate_representable
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -1277,6 +1279,7 @@ class Case:
     fmt: InputOutputFormat = BF16
     expect_pass: bool = True
     name: Optional[str] = None
+    approx_mode: ApproximationMode = ApproximationMode.No
     # Advanced overrides — defaults are derived from `fmt`.
     dest_acc: Optional[DestAccumulation] = None
     unpack_to_dest: Optional[bool] = None
@@ -1313,9 +1316,58 @@ CASES = [
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.uniform(intervals=[(-10.0, -0.01), (0.01, 10.0)]),
     ),
+    # exhaustive demo: every bf16 value in [0.01, 10] (auto-sized to whole tiles).
+    # Unlike the sampled cases above it can't miss a worst-case input, e.g. 1/1.0.
+    Case(
+        op=MathOperation.Reciprocal,
+        spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0),
+        name="Reciprocal-bf16-exhaustive",
+    ),
+    # same exhaustive sweep but on the approximate (LUT-only) SFPU path, which is
+    # where the larger ULP errors live (e.g. the Tensix-reported 1/1.0 case).
+    Case(
+        op=MathOperation.Reciprocal,
+        spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0),
+        approx_mode=ApproximationMode.Yes,
+        name="Reciprocal-bf16-approx-exhaustive",
+    ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
 ]
+
+
+# One 32x32 tile = 1024 elements; the dest register holds at most 8 tiles.
+_TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+_MAX_DEST_TILES = 8
+
+
+def _ulp_sweep_dims(
+    stimuli_format: DataFormat,
+    low: float,
+    high: float,
+    max_tiles: int = _MAX_DEST_TILES,
+) -> List[int]:
+    """Count how many bf16/fp16 values exist in [low, high], then return
+    input_dimensions ([rows, cols]) with enough 32x32 tiles to hold them all,
+    capped at max_tiles."""
+    n = int(_enumerate_representable(stimuli_format, low, high).numel())
+    tiles = max(1, math.ceil(n / _TILE_ELEMENTS))
+    if tiles > max_tiles:
+        logger.warning(
+            "[ulp_sweep] [{}, {}] has {} {} values ({} tiles), but dest holds only "
+            "{} tiles ({} slots) — sweep will CLIP to the {} smallest values and "
+            "miss the rest. Narrow the range to keep it exhaustive.",
+            low,
+            high,
+            n,
+            stimuli_format.name,
+            tiles,
+            max_tiles,
+            max_tiles * _TILE_ELEMENTS,
+            max_tiles * _TILE_ELEMENTS,
+        )
+        tiles = max_tiles
+    return [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * tiles]
 
 
 def run_case(case: Case) -> bool:
@@ -1338,7 +1390,14 @@ def run_case(case: Case) -> bool:
     if unpack_to_dest is None:
         unpack_to_dest = is_fp32
 
-    input_dimensions = case.input_dimensions or [32, 32]
+    if case.input_dimensions is not None:
+        input_dimensions = case.input_dimensions
+    elif case.spec.distribution == DistributionKind.ULP_SWEEP:
+        input_dimensions = _ulp_sweep_dims(
+            formats.input_format, case.spec.low, case.spec.high
+        )
+    else:
+        input_dimensions = [32, 32]
     mathop = case.op
     spec = case.spec
     plot_path = f"_plot_output/sfpu_{case.test_id}.png"
@@ -1375,7 +1434,7 @@ def run_case(case: Case) -> bool:
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(case.approx_mode),
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(case.clamp_negative),
             MATH_OP(mathop=mathop),
