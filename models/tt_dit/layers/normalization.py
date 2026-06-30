@@ -5,26 +5,12 @@
 from __future__ import annotations
 
 import math
-import os
-from typing import ClassVar
 
 import torch
 
 import ttnn
 
 from .module import Module, Parameter
-
-# Env-var switch to use the fused wan_fused_distributed_rmsnorm device op
-# instead of the composite (pre_allgather + AG + post_allgather) chain.
-# Set WAN_USE_FUSED_RMSNORM=1 to enable.
-_USE_FUSED_RMSNORM = os.getenv("WAN_USE_FUSED_RMSNORM") == "1"
-
-# Same switch for DistributedLayerNorm: route through the fused Welford LayerNorm
-# device op (wan_fused_distributed_rmsnorm with norm_type=LAYERNORM) instead of the
-# composite dit_layernorm_{pre,post}_allgather chain. Set WAN_USE_FUSED_LAYERNORM=1.
-# The fused path covers the adaLN case (dynamic weight/bias, batch=1, no static
-# affine); other cases transparently fall back to the composite chain.
-_USE_FUSED_LAYERNORM = os.getenv("WAN_USE_FUSED_LAYERNORM") == "1"
 
 
 class RMSNorm(Module):
@@ -278,64 +264,34 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
-        if _USE_FUSED_RMSNORM:
-            persistent_output_buffer = self._ensure_fused_stats_buffer(
-                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
-            )
-            return ttnn.experimental.wan_fused_distributed_rmsnorm(
-                x,
-                self.mesh_axis,
-                self.mesh_device,
-                self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-                topology=self.ccl_manager.topology,
-                persistent_output_buffer=persistent_output_buffer,
-                epsilon=self.norm_eps,
-                num_heads_per_device=num_heads_per_device,
-                weight=self.weight.data if self.weight is not None else None,
-                compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-                num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
-                transformation_mat=trans_mat,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-                dtype=dtype,
-                use_device_op=True,
-            )
-
-        stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-            x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
-        )
-
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-            stats = self.ccl_manager.all_gather_persistent_buffer(
-                stats,
-                dim=len(x.shape) - 1,
-                mesh_axis=self.mesh_axis,
-            )
-
-        x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
+        # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
+        # normalize, with optional fused RoPE / per-head norm).
+        return ttnn.experimental.wan_fused_distributed_rmsnorm(
             x,
-            stats,
+            self.mesh_axis,
+            self.mesh_device,
+            self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+            topology=self.ccl_manager.topology,
+            persistent_output_buffer=self._ensure_fused_stats_buffer(
+                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            ),
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
             weight=self.weight.data if self.weight is not None else None,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             transformation_mat=trans_mat,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
+            use_device_op=True,
         )
-        return x
 
 
 class DistributedLayerNorm(Module):
     """
     Implements LayerNorm on an activation sharded on the reduction dimension.
     """
-
-    # Shared dictionary to store reciprocal tensors
-    # Key: (device id, width_per_device)
-    # Value: recip_tensor
-    _recip_tensors: ClassVar[dict[tuple[int, int], ttnn.Tensor]] = {}
 
     def __init__(
         self,
@@ -368,38 +324,25 @@ class DistributedLayerNorm(Module):
         )
 
         n = self.TILE_SIZE * self.mesh_width
-        shape = [embedding_dim // n, n]
-
         assert embedding_dim % n == 0, "embedding_dim must be divisible by tile size times mesh width"
 
+        # Static affine weight/bias are TILE [1, embedding_dim] sharded on the reduction axis —
+        # the broadcast layout the fused wan_fused_distributed_rmsnorm op consumes (per-device
+        # [1, H/mesh_width]). adaLN passes dynamic weight/bias at forward instead.
         self.weight = (
-            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(
+                total_shape=[1, embedding_dim], layout=ttnn.TILE_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device
+            )
             if self.norm_elementwise_affine
             else None
         )
         self.bias = (
-            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(
+                total_shape=[1, embedding_dim], layout=ttnn.TILE_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device
+            )
             if self.use_bias
             else None
         )
-
-        # Create or reuse reciprocal tensor for Welford algorithm used in dit_layernorm_pre_allgather
-        # Width per device is embedding_dim / mesh_width
-        width_per_device = embedding_dim // self.mesh_width
-
-        # `ttnn.MeshDevice.id()` returns a unique identifier generated by
-        # `generate_unique_mesh_id()`.
-        key = (mesh_device.id(), width_per_device)
-
-        # Check if we already have a recip_tensor for this width_per_device
-        if key not in self._recip_tensors:
-            grid = mesh_device.compute_with_storage_grid_size()
-            core_range_set = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-            )
-            self._recip_tensors[key] = ttnn.create_layer_norm_reciprocals(mesh_device, core_range_set, width_per_device)
-
-        self.recip_tensor = self._recip_tensors[key]
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
@@ -407,24 +350,17 @@ class DistributedLayerNorm(Module):
         assert (weight is not None) == self.norm_elementwise_affine
         assert (bias is not None) == self.use_bias
 
+        # TILE [1, embedding_dim] sharded on the reduction axis (matches DistributedRMSNorm).
         if self.norm_elementwise_affine:
-            state["weight"] = (
-                weight.reshape(self.mesh_width, -1, self.TILE_SIZE)
-                .permute(1, 0, 2)
-                .reshape(-1, self.TILE_SIZE * self.mesh_width)
-            )
+            state["weight"] = weight.reshape(1, self.embedding_dim)
 
         if self.use_bias:
-            state["bias"] = (
-                bias.reshape(self.mesh_width, -1, self.TILE_SIZE)
-                .permute(1, 0, 2)
-                .reshape(-1, self.TILE_SIZE * self.mesh_width)
-            )
+            state["bias"] = bias.reshape(1, self.embedding_dim)
 
     def _ensure_fused_ln_recip(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Lazy-allocate the row-major fp32 reciprocal LUT the fused op consumes.
 
-        Distinct from self.recip_tensor (HEIGHT_SHARDED L1, the composite Welford op's
+        The fused op's reader NoC-reads (HEIGHT_SHARDED L1 was the composite Welford op's
         layout): the fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device]
         DRAM tensor [1/1..1/width] (replicated per device). Cached per device+width.
         """
@@ -476,20 +412,6 @@ class DistributedLayerNorm(Module):
         entry["idx"] = (entry["idx"] + 1) % len(bufs)
         return buf
 
-    def _fused_ln_supported(self, x: ttnn.Tensor, dynamic_weight, weight) -> bool:
-        """The fused op requires a [1,1,N,H] input (batch==1, single channel). adaLN
-        (dynamic weight/bias) and no-affine map cleanly; static ROW_MAJOR affine and
-        batch>1 fall back to the composite chain. (Wide-shard block-major POST is now
-        correct for any width — ISSUE 3A fixed by the welford warm-row accumulator reset
-        — so there is no longer a width gate.)"""
-        if len(x.shape) != 4 or x.shape[0] != 1 or x.shape[1] != 1:
-            return False
-        # Static affine uses the ROW_MAJOR [dim//n, n] weight the composite expects, not
-        # the [1,H] TILE the fused op wants. Only adaLN/no-affine go fused.
-        if dynamic_weight is None and weight is not None:
-            return False
-        return True
-
     def forward(
         self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None, dtype=None
     ) -> ttnn.Tensor:
@@ -500,75 +422,31 @@ class DistributedLayerNorm(Module):
             assert (
                 not self.norm_elementwise_affine
             ), "Module must not have weight and bias parameters when dynamic_weight and dynamic_bias are provided"
-
             weight = dynamic_weight
             bias = dynamic_bias
         else:
             weight = self.weight.data if self.weight is not None else None
             bias = self.bias.data if self.bias is not None else None
 
-        if _USE_FUSED_LAYERNORM and self._fused_ln_supported(x, dynamic_weight, weight):
-            persistent_output_buffer = self._ensure_fused_ln_stats_buffer(x)
-            # The fused op fuses the affine in-op but only accepts BF16 weight/bias (its
-            # reader reads 2 B face-rows). adaLN modulation (1+scale)/shift is kept FP32 by
-            # the model (only `gate` is cast to bf16) for accuracy, and the composite chain
-            # preserves it. If we cast weight/bias to bf16 the block PCC drops measurably
-            # (99.995% -> 99.87% on Wan2.2). So:
-            #   - bf16 weight/bias  -> fuse the affine in-op (fast path).
-            #   - fp32 weight/bias  -> run the fused op as a PURE normalize (fp32 out; the
-            #     expensive welford PRE + ring AG + merge stay fused) and apply the affine
-            #     externally in fp32, preserving the modulation precision the composite keeps.
-            affine_is_bf16 = weight is None or weight.dtype == ttnn.bfloat16
-            out = ttnn.experimental.wan_fused_distributed_rmsnorm(
-                x,
-                self.mesh_axis,
-                self.mesh_device,
-                self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-                topology=self.ccl_manager.topology,
-                persistent_output_buffer=persistent_output_buffer,
-                epsilon=self.norm_eps,
-                weight=weight if affine_is_bf16 else None,
-                bias=bias if affine_is_bf16 else None,
-                compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-                num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
-                dtype=dtype if affine_is_bf16 else ttnn.float32,
-                use_device_op=True,
-                norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
-                reciprocals=self._ensure_fused_ln_recip(x),
-            )
-            if affine_is_bf16:
-                return out
-            # External fp32 affine: out = normed * weight + bias, weight/bias broadcast over
-            # the token (N) dim. ttnn binary broadcasting needs matching rank, so lift the
-            # [.., H] modulation to [1, 1, 1, H].
-            h = weight.shape[-1]
-            w4 = ttnn.reshape(weight, [1, 1, 1, h])
-            b4 = ttnn.reshape(bias, [1, 1, 1, h])
-            out = ttnn.add(ttnn.mul(out, w4), b4)
-            return out if dtype == ttnn.float32 else ttnn.typecast(out, dtype or ttnn.bfloat16)
-
-        stats = ttnn.experimental.dit_layernorm_pre_allgather(
+        # Fused Welford LayerNorm device op. weight/bias (static or adaLN, bf16 or fp32) are
+        # consumed natively in-op — fp32 affine keeps the modulation precision adaLN needs.
+        return ttnn.experimental.wan_fused_distributed_rmsnorm(
             x,
-            self.recip_tensor,
-            compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-        )
-
-        stats = self.ccl_manager.all_gather_persistent_buffer(
-            stats,
-            dim=len(x.shape) - 1,
-            mesh_axis=self.mesh_axis,
-        )
-
-        x = ttnn.experimental.dit_layernorm_post_allgather(
-            x,
-            stats,
+            self.mesh_axis,
+            self.mesh_device,
+            self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+            topology=self.ccl_manager.topology,
+            persistent_output_buffer=self._ensure_fused_ln_stats_buffer(x),
+            epsilon=self.norm_eps,
             weight=weight,
             bias=bias,
-            epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             dtype=dtype,
+            use_device_op=True,
+            norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
+            reciprocals=self._ensure_fused_ln_recip(x),
         )
-        return x
 
 
 """
