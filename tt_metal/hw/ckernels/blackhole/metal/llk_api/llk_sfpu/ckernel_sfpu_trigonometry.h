@@ -476,7 +476,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
     sfpi::vInt i = m;
 
-    sfpi::vFloat r, f, c1;
+    sfpi::vFloat r, f;
 
     if constexpr (!is_fp32_dest_acc_en) {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
@@ -485,8 +485,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
         r = r * f + 0.168174848f;
         i += 125;
         r = r * f + sfpi::vConstFloatPrgm2;
-        c1 = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(sfpi::vConst1) - 613);  // 0x3f7ffd9b = 0.999963462f
-        r = r * f + c1;
+        r = r * f + 0.999963462f;
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
