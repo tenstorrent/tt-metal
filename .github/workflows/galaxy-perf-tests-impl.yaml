@@ -131,22 +131,6 @@ jobs:
             -v ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
           install_wheel: true
           run_args: |
-            if [ "${{ matrix.test-group.team }}" == "train" ]; then
-              # Create .pth files the same way as create_venv.sh script
-              SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
-              if [[ -z "$SITE_PACKAGES" ]]; then
-                echo "ERROR: Could not determine site-packages from ttnn. Is the wheel installed?"
-                exit 1
-              fi
-              TTML_SRC_DIR="$TT_METAL_RUNTIME_ROOT/tt-train/sources/ttml"
-              TTML_BUILD_DIR="$TT_METAL_RUNTIME_ROOT/build/tt-train/sources/ttml"
-              echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
-              echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
-              # Install minimal dependencies for processing metrics
-              uv pip list
-              uv pip install "gitpython==3.1.47" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
-            fi
-
             ${{ matrix.test-group.cmd }}
       - name: Check if benchmark data directory exists
         id: check-benchmark-data-directory
