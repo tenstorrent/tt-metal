@@ -10,16 +10,22 @@ Baseline verified: built actual `origin/main` and measured — legacy transpose 
 transpose 71.5µs, both match the "main" column (70.5µs) within ~3µs cross-build noise. The baseline is
 genuinely unoptimized.
 
-## Single device (1-chip)
+## Single device (1-chip) — REAL dispatch (n150), true absolute host µs
 | op | main | spec+opts | Δ | spec = % of main |
 |----|----:|----:|----:|----:|
-| slice | 108.5 | 132.9 | +24.4 | 123% |
-| transpose | 70.5 | 91.4 | +20.9 | 130% |
-| tilize | 71.9 | 90.8 | +18.9 | 126% |
-| fold | 66.5 | 84.7 | +18.2 | 127% |
-| untilize | 70.7 | 85.9 | +15.2 | 121% |
-| reshard | 75.0 | 89.9 | +14.9 | 120% |
-| i2s | 72.9 | 86.8 | +13.9 | 119% |
+| tilize | 21.8 | 45.5 | +23.7 | 209% |
+| transpose | 19.9 | 40.3 | +20.4 | 202% |
+| fold | 19.2 | 35.8 | +16.6 | 187% |
+| untilize | 19.4 | 35.9 | +16.5 | 185% |
+| i2s | 21.0 | 35.6 | +14.6 | 170% |
+| reshard | 22.6 | 37.3 | +14.7 | 165% |
+| slice | 41.2 | 64.8 | +23.6 | 157% |
+
+Single chip: spec is **~1.6-2.1x main** (a ~constant +14-24µs on a ~20-40µs op).
+(NOTE: these are REAL-dispatch absolutes. The earlier NO_DISPATCH 1-chip numbers showed only ~120-130%
+because graph-capture adds a ~50µs pedestal to BOTH columns — it cancels in the Δ but pads the ratio
+denominator, deflating the %. The Δ is identical either way; the real single-chip slowdown is ~2x.)
+
 
 ## Multi device (32-chip, ttsim) — main = actual `origin/main` build
 | op | main | spec+opts | Δ | spec = % of main |
@@ -38,7 +44,7 @@ main build vs 175.0 on the spec build → ~2µs cross-build offset on top of the
 
 ## Conclusion
 The fully-optimized spec factory adds a **~constant +14–24µs** of host dispatch over current main.
-- Single chip: **+14–24µs (~119–130% of main)**.
+- Single chip: **+14–24µs = ~1.6–2.1x main** (real dispatch; the constant tax is a big % on a small op).
 - 32-chip: **+16–32µs but only ~108–115%** — the constant tax is amortized over the per-device command
   write that dominates multi-chip host time, so the relative cost shrinks as the mesh grows.
 
