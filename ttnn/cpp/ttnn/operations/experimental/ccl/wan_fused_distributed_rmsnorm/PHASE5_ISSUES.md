@@ -203,3 +203,15 @@ FIX PRIORITIES: (A) the block-major-POST/force_recip_stream wide-shard path (tok
 determinism) is the real blocker — gate it off or fix the streaming POST token addressing; (B) the
 narrow-shard ~0.66%-std variance noise is minor (the 0.013% regressor) and lives in the fused 2-stat
 fabric AG. Fused RMS (1-stat) is unaffected and ships.
+
+### ISSUE 3A — MITIGATED at model level (kernel fix still open)
+DistributedLayerNorm (`models/tt_dit/layers/normalization.py`) now gates the fused LN OFF for wide
+per-device shards via `_FUSED_LN_MAX_RESIDENT_TILE_COLS = 40`: if width_per_device//32 > 40 the
+module falls back to the composite Welford chain (correct at any width). 40 tiles = WAN TP=4, the
+widest config proven clean on the resident POST path; everything wider (FLUX tp2=48, LTX tp2=64,
+WAN tp2=80, all tp1) takes the broken block-major/streaming POST path and is excluded. Validated:
+test_layernorm_fused_vs_composite_diff[wan_tp2] now fused==composite (pcc 100%, 0 degenerate rows,
+deterministic); [wan_tp4] unchanged (still fused, 99.987%); test_layernorm_module_corr 5/5 pass.
+The underlying block-major POST kernel race (token collapse + non-determinism) is NOT fixed — it
+stays open (the model just never exercises it now). Fix it to re-enable fused LN on wide low-TP
+shards.
