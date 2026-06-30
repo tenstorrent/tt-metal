@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tt-metalium/work_split.hpp"
 
-namespace ttnn::operations::matmul_decode {
+namespace ttnn::operations::experimental::matmul_decode {
 
 namespace {
 
@@ -182,15 +182,15 @@ MatmulDecodeDeviceOperation::tensor_return_value_t MatmulDecodeDeviceOperation::
     return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
 }
 
-}  // namespace ttnn::operations::matmul_decode
+}  // namespace ttnn::operations::experimental::matmul_decode
 
 namespace ttnn::prim {
-ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_value_t matmul_decode(
+ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_value_t matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
     std::optional<const DataType> dtype) {
-    using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
+    using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
     // last logical dim is no longer N; recover N from the shard spec in that case.

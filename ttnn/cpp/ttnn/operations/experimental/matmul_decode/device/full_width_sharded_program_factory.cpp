@@ -13,7 +13,7 @@
 #include <optional>
 #include <vector>
 
-namespace ttnn::operations::matmul_decode {
+namespace ttnn::operations::experimental::matmul_decode {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -296,7 +296,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
 
         KernelDescriptor reader_kernel_desc;
         reader_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp";
+            "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp";
         reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
@@ -387,7 +387,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         inA_K_tiles_per_core);
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/compute/compute_full_width_sharded.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/compute_full_width_sharded.cpp";
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = output_core_range_set;
     compute_kernel_desc.compile_time_args = {
@@ -405,4 +405,4 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     return desc;
 }
 
-}  // namespace ttnn::operations::matmul_decode
+}  // namespace ttnn::operations::experimental::matmul_decode
