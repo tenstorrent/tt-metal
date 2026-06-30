@@ -14,10 +14,13 @@ namespace ttnn::experimental::prim {
 using namespace tt::constants;
 
 namespace {
-// Reuse the proven, unchanged rotary_embedding multi-tile kernels (rotate_half / GPT-J convention).
+// Reuse the proven, unchanged rotary_embedding multi-tile compute/writer (rotate_half / GPT-J
+// convention). The q/k reader is specialized for this op (Ht == 1, num_rows == 1): functionally
+// identical to the generic interleaved reader, but batches all tile reads behind a single NoC barrier
+// instead of one barrier per tile (the generic per-tile serialization is this op's dominant cost).
 constexpr const char* kRopeReader =
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
-    "reader_rotary_embedding_interleaved_start_id.cpp";
+    "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_rope/device/kernels/dataflow/"
+    "reader_create_qkv_heads_rope.cpp";
 constexpr const char* kRopeWriter =
     "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
     "writer_rotary_embedding_interleaved_start_id.cpp";
