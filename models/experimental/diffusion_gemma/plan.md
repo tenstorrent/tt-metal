@@ -60,7 +60,7 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 
 | # | Step | Acceptance | Risk |
 |---|---|---|---|
-| R0.1 | **Build real `DiffusionGemma4Model` on (1,4) mesh** from DG ckpt: load 11 shards → `remap_state_dict` → backbone_state (gemma4-keyed) + self_cond_state; build at `max_seq_len≈512, num_layers=30, create_kv_cache=True`, experts **TP-sharded** (column/row parallel per #47487). | Builds without OOM; log per-chip DRAM via `ttnn.get_memory_view`. | expert-shard config; tied embedding (262144×2816 ~1.5 GB); 52 GB across 4 chips per budget doc |
+| R0.1 | ✅ **Build real `DiffusionGemma4Model` on (1,4) mesh** from DG ckpt: load 11 shards → `remap_state_dict` → backbone_state (gemma4-keyed) + self_cond_state; build at `max_seq_len≈512, num_layers=30, create_kv_cache=True`, experts **TP-sharded** (column/row parallel per #47487). | Passed on QB2 2026-06-30: full 30 layers build-only, no OOM, per-chip DRAM post-build **13.236 GiB used / 18.631 GiB free / 31.867 GiB total**. Demo now logs baseline/post-build DRAM via `ttnn.get_memory_view`. | done |
 | R0.2 | **Prefill a short prompt (causal)** via chat template (~32 tok) → write 30-layer prompt KV (`prefill_prompt_tokens` / `collect_prompt_kv_by_layer`). | Prefill runs; KV populated. **Bonus: real-ckpt prompt-logits PCC vs HF** (the #47461 exit that was never met on DG weights). | prefill chunking at short ctx is trivial; mainly a build/glue check |
 | R0.3 | **Build denoise logits adapter from the real ckpt** (`make_generation_logits_fn_builder_from_checkpoint_state(..., prompt_len)`), then call `adapter(canvas_tokens, step=0)` once. | Returns `[1,1,256,vocab]` logits **without OOM** — critical-path step 4, the unmeasured "real-size denoise step fits" (full-canvas logits + 262k soft-embed matmul + 30-layer `[P+C]` KV concat). | **highest fit risk**; soft-embed `[256,262144]@[262144,2816]` matmul + 30× KV concat L1/DRAM |
 | R0.4 | **Run ONE denoise block** (`denoise_and_commit_block`) with released `DiffusionConfig()` (cap steps), seeded host canvas init + injected reference Gumbel noise. | Block completes, commits 256 tokens, decodes to text (garbage allowed). | step-schedule cost; intra-block early-stop still host-side |
@@ -747,6 +747,12 @@ Legend: ✅ done · 🚧 in progress · ⛔ blocked on environment · ⬜ not st
 Tick 86 advanced the real-checkpoint tiny generated-token demo:
 `text_demo --checkpoint /home/zni/dg_models/diffusiongemma-26B-A4B-it --local-files-only --mesh P150x4 --num-layers 1 --max-seq-len 512 --canvas-length 32 --max-denoising-steps 1 --max-new-tokens 1`.
 Two prefill blockers were fixed: Gemma4 prefill RoPE outputs are restored to their logical sequence length so K/V lengths stay consistent, and DiffusionGemma prompt prefill pads device input tokens to a 32-token tile while preserving the real prompt length for block positions. Host validation passed (`test_prefill_prompt_tokens_embeds_and_writes_kv`), and the QB2 smoke now reaches denoise adapter construction. The next blocker is non-32-aligned prompt KV extraction: `read_prompt_kv_cache_slice(prompt_len=18)` rejects non-tile-aligned bounds.
+
+### Session 2026-06-30 — #47464 R0.1 full-26B build fit
+
+R0.1 passed on QB2 with the real DiffusionGemma 26B-A4B checkpoint:
+`text_demo --checkpoint /home/zni/dg_models/diffusiongemma-26B-A4B-it --local-files-only --mesh P150x4 --max-seq-len 512 --build-only`.
+The full 30-layer model loaded through layer 29, initialized on-device sampling for vocab 262144, and closed the mesh cleanly. DRAM logging now records `ttnn.get_memory_view` before and after build; the measured per-chip budget was baseline **0.000 GiB used / 31.867 GiB total**, post-build **13.236 GiB used / 18.631 GiB free / 31.867 GiB total**. Next R0 step: short-prompt causal prefill through all 30 layers (R0.2).
 
 ### Code review — 2026-06-26 (multi-agent review of the 2026-06-25 branch)
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import os
 
+from loguru import logger
+
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.checkpoint import (
     build_tt_model_from_checkpoint_inputs,
@@ -65,6 +67,21 @@ def _close_mesh_device(mesh_device) -> None:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+def _log_mesh_dram(mesh_device, label: str) -> None:
+    import ttnn
+
+    ttnn.synchronize_device(mesh_device)
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    gib = 2**30
+    used = view.num_banks * view.total_bytes_allocated_per_bank / gib
+    free = view.num_banks * view.total_bytes_free_per_bank / gib
+    total = view.num_banks * view.total_bytes_per_bank / gib
+    logger.info(
+        f"[{label}] per-chip DRAM: used={used:.3f} GiB free={free:.3f} GiB "
+        f"usable_total={total:.3f} GiB banks={view.num_banks}"
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DiffusionGemma text generation on a TT mesh.")
     parser.add_argument(
@@ -120,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
 
     mesh_device = _open_mesh_device(args.mesh)
     try:
+        _log_mesh_dram(mesh_device, "baseline")
         checkpoint_model_inputs = build_tt_model_from_checkpoint_inputs(
             mesh_device,
             checkpoint_inputs,
@@ -128,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
             num_layers=args.num_layers,
             bounded_sliding_kv_cache=args.bounded_sliding_kv_cache,
         )
+        _log_mesh_dram(mesh_device, "post-build")
         if args.build_only:
             return 0
         config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=args.max_denoising_steps)
