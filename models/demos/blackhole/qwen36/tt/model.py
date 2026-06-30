@@ -6,6 +6,7 @@ Assembly: tok_embeddings -> 32 x Qwen36DecoderLayer -> RMSNorm -> LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import math
+import os
 
 import torch
 from loguru import logger
@@ -113,6 +114,40 @@ class Qwen36Model:
         )
 
         self.vocab_size = args.vocab_size
+
+        # MTP (Multi-Token Prediction) drafter — loaded when QWEN36_SPEC_DECODE=1.
+        # weight_mapping now passes mtp.* keys through; collect them separately.
+        self.mtp = None
+        if os.environ.get("QWEN36_SPEC_DECODE") == "1":
+            mtp_keys = {k: v for k, v in state_dict.items() if k.startswith("mtp.")}
+            if mtp_keys:
+                from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTPTTModule
+
+                # Embed wrapper: calls backbone embd (TP-sharded) + all-gathers to full dim.
+                def _mtp_embed_fn(tok_tt):
+                    tok_2d = ttnn.reshape(tok_tt, (1, 1))
+                    e = self.embd(tok_2d)  # [1, 1, dim_frac] sharded
+                    if self.num_devices > 1:
+                        e = ttnn.all_gather(
+                            e,
+                            dim=2,
+                            num_links=1,
+                            cluster_axis=1,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    return ttnn.reshape(e, (1, 1, 1, e.shape[-1]))  # [1,1,1,dim]
+
+                self.mtp = Qwen36MTPTTModule(
+                    mesh_device=mesh_device,
+                    args=args,
+                    state_dict=state_dict,
+                    lm_head_weight=self.lm_head_weight,
+                    embed_module=_mtp_embed_fn,
+                    tensor_cache_path=tensor_cache_path,
+                    max_seq_len=args.max_seq_len,
+                )
+                logger.info("Qwen36MTPTTModule loaded for speculative decoding")
+
         self._paged_kv_caches = None
         self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
         self._deltanet_external_states = None  # list of (recurrent, conv) tuples, set by allocate_kv_caches
@@ -162,14 +197,31 @@ class Qwen36Model:
         cache_path = args.weight_cache_path()
         return cls(device, args, state_dict, tensor_cache_path=cache_path)
 
-    def prefill_tp(self, token_ids, valid_len=None):
-        """Tensor-parallel full-model prefill (num_devices>1). Stateless: runs the
-        whole sequence from scratch through the fractured-residual TP layers and
-        returns the next-token logits at position valid_len-1.
+    def prefill_tp(
+        self,
+        token_ids,
+        valid_len=None,
+        return_hidden=False,
+        return_all_logits=False,
+        page_table=None,
+        chunk_start_idx=0,
+    ):
+        """Tensor-parallel full-model prefill (num_devices>1).
 
-        token_ids: torch [1, T] (pad T to a multiple of 128 for the GDN chunk
-        kernel; right-padding does not affect the causal logit at valid_len-1).
-        Returns ttnn logits [1, 1, 1, vocab_size] (host).
+        token_ids: torch [1, T].
+        valid_len: real sequence length (default T); positions [valid_len..T-1] are padding.
+        return_hidden: if True, also return the pre-norm hidden at position valid_len-1 as
+          CPU float32 [1, 1, dim]. Used by the MTP spec-decode drafter.
+        return_all_logits: if True, return logits at ALL T positions as [T, vocab] instead of
+          the single [vocab] at valid_len-1. Used by spec-decode batched verify.
+        page_table: torch int32 [1, num_blocks] — paged KV page table. When provided, layers
+          route to forward_prefill_paged (same paged cache as traced decode).
+        chunk_start_idx: start token index for the chunk page table slice (default 0).
+
+        Returns:
+          default:            torch [vocab_size]
+          return_hidden:      (torch [vocab_size], torch [1,1,dim])
+          return_all_logits:  (torch [T, vocab_size], torch [1,1,dim])
         """
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_prefill
 
@@ -187,13 +239,83 @@ class Qwen36Model:
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
         cos, sin = rot_mats_prefill(self.device, self.args.rope_head_dim, T, self.args.rope_theta)
 
-        for layer in self.layers:
-            x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
+        page_table_tt = None
+        chunk_pt_tt = None
+        chunk_start_idx_tensor = None
+        if page_table is not None:
+            block_size = get_block_size(self._paged_kv_caches)
+            blk0 = chunk_start_idx // block_size
+            n_blocks = (valid_len + block_size - 1) // block_size
+            chunk_pt = page_table[:, blk0 : blk0 + n_blocks].contiguous()
+            page_table_tt = ttnn.from_torch(
+                page_table,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            chunk_pt_tt = ttnn.from_torch(
+                chunk_pt,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            # Use the flex path (device-tensor chunk_start_idx) so qk_chunk=64 is fixed
+            # regardless of chunk_start_idx alignment. Without this, qk_chunk = lowest
+            # power-of-2 bit of chunk_start_idx, which can be < TILE_SIZE=32.
+            chunk_start_idx_tensor = ttnn.from_torch(
+                torch.tensor([chunk_start_idx], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
 
-        # Select the last real position (valid_len-1) via a one-hot matmul BEFORE the norm. A bare
-        # slice `x[:, :, valid_len-1, :]` of the full [1,1,T,dim] tensor returns a GARBAGE logit at
-        # long T (>=~49k) — a non-tile-aligned single-row slice of a very long tensor. The one-hot
-        # matmul mirrors the robust _masked_bucket_logits_tp path (and norms only the selected row).
+        for layer in self.layers:
+            x = layer.forward(
+                x,
+                cos=cos,
+                sin=sin,
+                mode="prefill",
+                chunk_size=128,
+                valid_len=valid_len,
+                page_table=page_table_tt,
+                chunk_page_table=chunk_pt_tt,
+                chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+            )
+
+        if page_table_tt is not None:
+            ttnn.deallocate(page_table_tt)
+            ttnn.deallocate(chunk_pt_tt)
+            ttnn.deallocate(chunk_start_idx_tensor)
+
+        if return_all_logits:
+            # Spec-decode batched verify: norm + lm_head on ALL T positions in one pass.
+            # T is small (K+1 <= 5), so this is cheap relative to the 64-layer forward.
+            x_all = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            # Extract last-position hidden as a device tensor [1,1,1,dim_frac] for MTP chaining.
+            # Use a one-hot matmul (same as the default path) to slice without CPU round-trip.
+            sel = torch.zeros(1, 1, 1, T, dtype=torch.float32)
+            sel[0, 0, 0, valid_len - 1] = 1.0
+            sel_tt = ttnn.from_torch(
+                sel,
+                dtype=x_all.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            h_last = ttnn.matmul(sel_tt, x_all)  # [1,1,1,dim_frac] sharded
+            ttnn.deallocate(sel_tt)
+            x_all = self.norm(x_all, mode=Mode.PREFILL)
+            logits_all = ttnn.linear(x_all, self.lm_head_weight)
+            lt = ttnn.to_torch(logits_all, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            # lt shape: [n_devices, 1, T, vocab] or [1, 1, T, vocab] — take first replica.
+            all_logits = lt[0].reshape(T, -1)[:, : self.vocab_size].float()[:valid_len]
+            return all_logits, h_last  # h_last: device tensor [1,1,1,dim_frac]
+
+        # Default: select only position valid_len-1 via one-hot matmul (avoids misaligned slice).
         sel = torch.zeros(1, 1, 1, T, dtype=torch.float32)
         sel[0, 0, 0, valid_len - 1] = 1.0
         sel_tt = ttnn.from_torch(
@@ -206,11 +328,18 @@ class Qwen36Model:
         x_last = ttnn.matmul(sel_tt, x)  # [1,1,1,dim_frac]
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
-        x_last = self.norm(x_last, mode=Mode.PREFILL)  # DistributedNorm on the single selected row
-        logits = ttnn.linear(x_last, self.lm_head_weight)  # replicated lm_head → full vocab (same on all devices)
-        # Logits are replicated across the mesh; take one replica → torch [vocab_size].
+
+        # For return_hidden: keep x_last on device (sharded [1,1,1,dim_frac]) so the
+        # MTP TTNN drafter can all-gather it once per chain() call without a CPU round-trip.
+        h_last = x_last if return_hidden else None
+
+        x_last = self.norm(x_last, mode=Mode.PREFILL)
+        logits = ttnn.linear(x_last, self.lm_head_weight)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
-        return lt[0].reshape(-1)[: self.vocab_size]
+        logits_1d = lt[0].reshape(-1)[: self.vocab_size]
+        if return_hidden:
+            return logits_1d, h_last  # h_last: device tensor [1,1,1,dim_frac]
+        return logits_1d
 
     def reset_tp(self):
         """Reset every TP layer's KV cache / GDN recurrent+conv state for a new sequence."""

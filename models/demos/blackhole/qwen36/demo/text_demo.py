@@ -30,13 +30,12 @@ from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import determine_device_name
 
 # Multi-device (TP) is selected via MESH_DEVICE. The 27B (default) runs on a P150x4
 # (1,4) Blackhole mesh; the 9B can run on a single P150 (1,1) via MESH_DEVICE=P150.
 # On a single device the model runs its validated single-device path, on a multi-device
 # mesh it needs FABRIC_1D for the TP collectives (see tp_common notes).
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
 # needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated
@@ -569,8 +568,9 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     trace_id = None
     tt_logits = None
+    _use_spec_decode = os.environ.get("QWEN36_SPEC_DECODE") == "1" and getattr(model, "mtp", None) is not None
     profiler.start("compile_decode")
-    if not eager:
+    if not eager and not _use_spec_decode:
         gdn_snap = _snapshot_gdn()  # exact post-prefill GDN state
         # Compile the decode programs (eager) then capture a throwaway trace; both advance GDN
         # state, so restore the snapshot afterward.
@@ -580,6 +580,43 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(gdn_snap)
     profiler.end("compile_decode")
+
+    # ---- Speculative decode via built-in MTP drafter (QWEN36_SPEC_DECODE=1) ----
+    # Uses batched verify: one K+1-token prefill per speculation round instead of K+1
+    # separate decode steps.  GDN correction pass handles the recurrent-state mismatch
+    # when j < K tokens are accepted.  The traced decode path below is skipped.
+    if _use_spec_decode:
+        from models.demos.blackhole.qwen36.demo.spec_decode import speculative_decode_loop
+
+        if trace_id is not None:
+            ttnn.release_trace(mesh, trace_id)
+        _spec_K = int(os.environ.get("QWEN36_SPEC_K", "3"))
+        profiler.start("inference_decode")
+        generated, spec_perf = speculative_decode_loop(
+            model,
+            model.mtp,
+            mesh,
+            nxt=nxt,
+            pos=T,
+            max_tokens=max_generated_tokens,
+            K=_spec_K,
+            temperature=_temp,
+            page_table=page_table,
+            warmup_tokens=token_ids[0, :T].tolist(),
+        )
+        profiler.end("inference_decode")
+        profiler.end("run")
+        logger.info(
+            f"[TP spec] acceptance={spec_perf['spec_acceptance_rate']:.2f} "
+            f"avg_accepted={spec_perf['spec_avg_accepted_per_iter']:.2f}/iter "
+            f"tok/s={spec_perf['decode_tok_s']:.1f}"
+        )
+        return generated, {
+            "ttft_s": ttft,
+            "decode_tok_s": spec_perf["decode_tok_s"],
+            "spec": spec_perf,
+            "profiler": profiler,
+        }
 
     pos = T
     decode_times = []
@@ -788,7 +825,6 @@ def _save_tp_benchmark(perf, model, seqlen, prompt_len, num_generated):
         run_type="demo",
         ml_model_name=model.args.base_model_name,
         ml_model_type="llm",
-        device_name=determine_device_name(model.mesh_device),
         num_layers=model.args.n_layers,
         batch_size=1,
         input_sequence_length=seqlen,
