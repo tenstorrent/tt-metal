@@ -120,8 +120,10 @@ class TtMiniMaxMoE(LightweightModule):
         self.gate = TtMoEGatePrefill(
             gate_config,
             mesh_device,
-            weight=gate_weights["weight"],
-            bias=gate_weights["e_score_correction_bias"],
+            # .get(): an empty gate_weights dict means cache-only loading -> weight/bias=None makes
+            # TtMoEGatePrefill load the tilized gate weight + bias straight from its cache.
+            weight=gate_weights.get("weight"),
+            bias=gate_weights.get("e_score_correction_bias"),
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
