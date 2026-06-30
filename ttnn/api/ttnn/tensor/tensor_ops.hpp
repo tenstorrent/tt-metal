@@ -14,8 +14,12 @@ namespace tt::tt_metal::distributed {
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
-namespace tt::tt_metal {
+namespace ttnn {
 class Tensor;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using Tensor = ttnn::Tensor;
 class MemoryConfig;
 class TensorSpec;
 

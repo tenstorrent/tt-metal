@@ -13,7 +13,15 @@
 // Exports symbols
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
+
+// `Tensor` comes from tensor.hpp; alias the remaining helper types so the
+// signatures below read cleanly.
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::NOC;
 
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
@@ -75,6 +83,17 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
     uint32_t address_offset = 0,
     uint32_t total_size = 0,
     const std::optional<CoreRangeSet>& core_ranges = std::nullopt);
+
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat re-exports while call sites migrate to ttnn::.
+using ttnn::as_optional_mesh_tensor;
+using ttnn::cb_descriptor_from_sharded_tensor;
+using ttnn::get_optimal_worker_cores_for_sharded_tensor;
+using ttnn::is_cpu_tensor;
+using ttnn::is_device_tensor;
 
 /**
  * @brief Get the L1 byte address of a CB descriptor.

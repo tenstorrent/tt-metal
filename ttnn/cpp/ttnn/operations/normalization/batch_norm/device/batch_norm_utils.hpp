@@ -7,8 +7,12 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <optional>
 
-namespace tt::tt_metal {
+namespace ttnn {
 class Tensor;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using Tensor = ttnn::Tensor;
 };
 
 namespace ttnn::operations::normalization::batch_norm::utils {

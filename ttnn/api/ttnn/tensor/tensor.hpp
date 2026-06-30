@@ -25,12 +25,33 @@
 
 #include <tt_stl/optional_reference.hpp>
 
-namespace tt::tt_metal {
-
-namespace distributed {
+namespace tt::tt_metal::distributed {
 class MeshDevice;
 class MeshCommandQueue;
-}  // namespace distributed
+}  // namespace tt::tt_metal::distributed
+
+namespace ttnn {
+
+// `Tensor` is defined here; bring the tt::tt_metal types it references into scope so the
+// class body reads cleanly.
+using tt::tt_metal::Buffer;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::DataType;
+using tt::tt_metal::DeviceStorage;
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::HostStorage;
+using tt::tt_metal::HostTensor;
+using tt::tt_metal::Layout;
+using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::MemoryPin;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::NdShardSpec;
+using tt::tt_metal::ShardSpec;
+using tt::tt_metal::StorageType;
+using tt::tt_metal::TensorAttributes;
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
+using tt::tt_metal::Tile;
 
 class Tensor {
 public:
@@ -82,7 +103,7 @@ public:
     [[nodiscard]] static Tensor from_span(
         ttsl::Span<const T> buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
@@ -125,7 +146,7 @@ public:
     [[nodiscard]] static Tensor from_vector(
         const std::vector<T>& buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
         return from_span(ttsl::Span<const T>(buffer), spec, device, cq_id, pad_value);
@@ -137,7 +158,7 @@ public:
     [[nodiscard]] static Tensor from_vector(
         std::vector<T>&& buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
@@ -150,7 +171,7 @@ public:
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
-        distributed::MeshDevice* mesh_device,
+        tt::tt_metal::distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
@@ -242,11 +263,11 @@ public:
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    const distributed::MeshBuffer& mesh_buffer() const;
+    const tt::tt_metal::distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
-    distributed::MeshDevice* device() const;
+    tt::tt_metal::distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
 
@@ -267,7 +288,7 @@ private:
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
+    std::optional<tt::tt_metal::distributed::MeshDevice*> mesh_device_ = std::nullopt;
 
     void deallocate_impl(bool force);
 };
@@ -276,11 +297,13 @@ Tensor set_tensor_id(const Tensor& tensor);
 
 std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
-}  // namespace tt::tt_metal
-
-namespace ttnn {
-
-using Tensor = tt::tt_metal::Tensor;
-using TensorSpec = tt::tt_metal::TensorSpec;
-
 }  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
+using Tensor = ttnn::Tensor;
+using ttnn::operator<<;
+using ttnn::set_tensor_id;
+
+}  // namespace tt::tt_metal

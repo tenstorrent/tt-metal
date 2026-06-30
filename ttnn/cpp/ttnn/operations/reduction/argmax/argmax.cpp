@@ -159,7 +159,7 @@ static Tensor zero_volume_argmax(
     // here because the tensor is 0-volume (i.e., it has no elements).
     auto host_buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor_spec);
     Tensor host_tensor(std::move(host_buffer), output_shape, tensor_spec.data_type(), tensor_spec.layout());
-    copy_to_device(host_tensor, preallocated_tensor);
+    tt::tt_metal::copy_to_device(host_tensor, preallocated_tensor);
 
     return preallocated_tensor;
 }
@@ -231,7 +231,7 @@ Tensor argmax(
             preallocated_spec.physical_shape().height() * preallocated_spec.physical_shape().width(), 0);
         Tensor host_indices(
             tt::tt_metal::HostBuffer(std::move(result_vec)), input_shape, DataType::UINT32, preallocated_spec.layout());
-        copy_to_device(host_indices, preallocated_tensor);
+        tt::tt_metal::copy_to_device(host_indices, preallocated_tensor);
 
         return preallocated_tensor;
     }

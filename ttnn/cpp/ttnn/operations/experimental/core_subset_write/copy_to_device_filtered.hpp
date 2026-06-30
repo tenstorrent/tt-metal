@@ -7,9 +7,13 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/types.hpp"
 
+namespace ttnn {
+class Tensor;
+}  // namespace ttnn
+
 namespace tt::tt_metal {
 class CoreRangeSet;
-class Tensor;
+using Tensor = ttnn::Tensor;
 }
 
 namespace ttnn::experimental::core_subset_write {

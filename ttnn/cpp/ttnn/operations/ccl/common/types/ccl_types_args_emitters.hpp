@@ -9,8 +9,12 @@
 #include <vector>
 #include <string>
 
-namespace tt::tt_metal {
+namespace ttnn {
 class Tensor;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using Tensor = ttnn::Tensor;
 struct ShardSpec;
 
 class IDevice;

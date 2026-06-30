@@ -10,7 +10,8 @@
 
 #include <tracy/Tracy.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
+using namespace tt::tt_metal;
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
@@ -19,7 +20,9 @@ bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == St
 ttsl::optional_reference<const MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt) {
     if (opt.has_value()) {
         TT_FATAL(
-            is_device_tensor(*opt), "as_optional_mesh_tensor: expected device tensor, got {}", opt->storage_type());
+            ttnn::is_device_tensor(*opt),
+            "as_optional_mesh_tensor: expected device tensor, got {}",
+            opt->storage_type());
         return {opt->mesh_tensor()};
     }
     return std::nullopt;
@@ -85,4 +88,4 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor&
     return ordered_worker_cores_with_data;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn
