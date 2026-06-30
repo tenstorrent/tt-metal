@@ -132,6 +132,42 @@ class TPAttention:
             self.args.dim,
         )
 
+    def _make_heads(self, qg, kp, vp, S):
+        """Prefill create-heads. Returns (q, gate, k, v): q/gate [1,NH,S,HD], k/v [1,NKV,S,HD].
+
+        Split the gate out of qg by hand (no analog in the fused op — q_proj packs [Q,gate] per
+        head), then one fused nlp_create_qkv_heads for q + (k,v) (Q-only `input` plus a
+        concatenated `input_kv`) — replacing 5 reshape/slice/transpose ops with one purpose-built
+        kernel. The gate keeps its own transpose."""
+        NH, NKV, HD = self.NH, self.NKV, self.HD
+        # split [q;gate] per head, keep the gate as [1,NH,S,HD] for the post-SDPA mul.
+        qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
+        q_part, gate_part = ttnn.chunk(qg, 2, dim=-1)  # each [1,S,NH,HD]
+        ttnn.deallocate(qg)
+        gate = ttnn.transpose(gate_part, 1, 2)  # [1,NH,S,HD]
+        ttnn.deallocate(gate_part)
+        q_flat = ttnn.reshape(q_part, (1, 1, S, NH * HD))
+        ttnn.deallocate(q_part)
+        kv = ttnn.concat([kp, vp], dim=-1)  # [1,1,S,2*NKV*HD] = [k_heads, v_heads]
+        ttnn.deallocate(kp)
+        ttnn.deallocate(vp)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q_flat,
+            kv,
+            num_heads=NH,
+            num_kv_heads=NKV,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q_flat)
+        ttnn.deallocate(kv)
+        return q, gate, k, v
+
+    def _concat_heads(self, gated):
+        """Prefill concat-heads: [1,NH,S,HD] -> [1,1,S,NH*HD] via the fused nlp_concat_heads
+        kernel (replaces the post-SDPA transpose+reshape; gate is already applied)."""
+        return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     def reset_state(self):
         def z():
             return ttnn.from_torch(
@@ -155,15 +191,7 @@ class TPAttention:
         kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
         vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
 
-        # [1,1,S,NH*HD*2] -> [1,S,NH,2*HD] -> split -> [1,NH,S,HD]
-        qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
-        q = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, 0), (1, S, NH, HD)), 1, 2)
-        gate = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, HD), (1, S, NH, 2 * HD)), 1, 2)
-        ttnn.deallocate(qg)
-        k = ttnn.transpose(ttnn.reshape(kp, (1, S, NKV, HD)), 1, 2)
-        ttnn.deallocate(kp)
-        v = ttnn.transpose(ttnn.reshape(vp, (1, S, NKV, HD)), 1, 2)
-        ttnn.deallocate(vp)
+        q, gate, k, v = self._make_heads(qg, kp, vp, S)
 
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
@@ -205,9 +233,7 @@ class TPAttention:
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate))  # [1,NH,S,HD]
         ttnn.deallocate(attn)
         ttnn.deallocate(gate)
-        # [1,NH,S,HD] -> [1,S,NH,HD] -> [1,1,S,NH*HD]
-        gated = ttnn.transpose(gated, 1, 2)
-        gated = ttnn.reshape(gated, (1, 1, S, NH * HD))
+        gated = self._concat_heads(gated)
         partial = ttnn.linear(
             gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -379,14 +405,7 @@ class TPAttention:
         kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
         vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
 
-        qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
-        q = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, 0), (1, S, NH, HD)), 1, 2)
-        gate = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, HD), (1, S, NH, 2 * HD)), 1, 2)
-        ttnn.deallocate(qg)
-        k = ttnn.transpose(ttnn.reshape(kp, (1, S, NKV, HD)), 1, 2)
-        ttnn.deallocate(kp)
-        v = ttnn.transpose(ttnn.reshape(vp, (1, S, NKV, HD)), 1, 2)
-        ttnn.deallocate(vp)
+        q, gate, k, v = self._make_heads(qg, kp, vp, S)
 
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
@@ -488,8 +507,7 @@ class TPAttention:
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate))
         ttnn.deallocate(attn)
         ttnn.deallocate(gate)
-        gated = ttnn.transpose(gated, 1, 2)
-        gated = ttnn.reshape(gated, (1, 1, S, NH * HD))
+        gated = self._concat_heads(gated)
         partial = ttnn.linear(
             gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
