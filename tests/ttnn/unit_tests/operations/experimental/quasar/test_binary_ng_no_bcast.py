@@ -21,8 +21,8 @@ simulator (8x4).
 Run on Wormhole:
     pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 
-Run on the Quasar simulator (fp32 and lhs-activation cases auto-skip — see _run; the bf16 SFPU multiply
-and divide and the rest of the FPU/SFPU matrix run):
+Run on the Quasar simulator (only fp32 add/sub auto-skip — no SFPU float-add primitive on Quasar, see
+_run; everything else runs: the full bf16 FPU/SFPU matrix incl. lhs/rhs activations, plus fp32 mul/div):
     TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
         TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
@@ -309,16 +309,19 @@ def test_no_bcast_lhs_activation(device, op_name, layout):
     _run(device, op_name, mem_config, ttnn.bfloat16, shape, lhs_relu=True, post_relu=True)
 
 
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("layout", ["interleaved", "height"])
-def test_no_bcast_sfpu_divide(device, layout):
-    # SFPU compute kernel (double-DST stride) via divide, on interleaved and sharded.
+def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
+    # SFPU compute kernel (double-DST stride) via divide, on interleaved and sharded. Unlike fp32
+    # add/sub (no SFPU float-add primitive on Quasar), fp32 divide routes SFPU and IS supported, so
+    # both bf16 and fp32 are exercised here.
     if layout == "interleaved":
         mem_config = ttnn.DRAM_MEMORY_CONFIG
         shape = _INTERLEAVED_SHAPE
     else:
         mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
         shape = _HEIGHT_SHAPE
-    _run(device, "divide", mem_config, ttnn.bfloat16, shape, pcc=0.99)
+    _run(device, "divide", mem_config, dtype_tt, shape, pcc=0.99)
 
 
 # (a_mem, b_mem, out_mem) permutations beyond the uniform III / SSS already covered by
