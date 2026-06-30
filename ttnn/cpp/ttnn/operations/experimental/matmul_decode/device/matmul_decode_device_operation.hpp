@@ -18,11 +18,10 @@ namespace ttnn::operations::experimental::matmul_decode {
 // -----------------------------------------------------------------------------
 // MatmulDecodeDeviceOperation
 //
-// TEMPLATE / SKELETON ONLY -- this is intentionally NOT a functional matmul.
-// It mirrors the structure of the example device operation
-// (ttnn/cpp/ttnn/operations/examples/example) so it can be fleshed out into a
-// real decode-optimized matmul. Fill in the program factories with the actual
-// reader / compute / writer kernels and runtime args to make it functional.
+// Decode-optimized matmul C = A @ B for L1 width-sharded operands. A ([M, K]) is
+// width(K)-sharded and gathered onto every core; B is width-sharded. Dispatches to
+// one of two program factories (see FullWidthSharded / PartialWidthSharded below)
+// based on the partial_width_sharded attribute.
 // -----------------------------------------------------------------------------
 struct MatmulDecodeDeviceOperation {
     // Non-tensor configuration for the operation.
@@ -32,9 +31,8 @@ struct MatmulDecodeDeviceOperation {
         int K;
         MemoryConfig output_mem_config;
         std::optional<DataType> output_dtype;
-        // When true, force the partial width-sharded program factory (B sharded along
-        // both K and N with a cross-core K-reduction). When false, the factory is chosen
-        // automatically from the input layouts.
+        // Selects the program factory: true -> PartialWidthSharded (B sharded along both
+        // K and N with a cross-core K-reduction); false -> FullWidthSharded (B width(N)-sharded).
         bool partial_width_sharded = false;
     };
 

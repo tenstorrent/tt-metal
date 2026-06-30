@@ -26,8 +26,9 @@ using namespace tt::tt_metal;
 // row-major index `c` owns B block (k_idx = c / N_blocks, n_idx = c % N_blocks).
 //
 // Pipeline (per core):
-//   1. Reader (reused reader_full_width_sharded): gather the *entire* A matrix onto
-//      every core via multicast, and publish this core's resident B block.
+//   1. Reader (reader_partial_width_sharded, same two-hub gather as the full-width path):
+//      gather the *entire* A matrix onto every core via multicast, and publish this
+//      core's resident B block.
 //   2. Compute (phase 1): matmul this core's K-slice of A with its B block to produce
 //      a *partial* [M, Nc] product.
 //   3. Writer: NoC-write the partial into slot `k_idx` of the reduce CB on the base
