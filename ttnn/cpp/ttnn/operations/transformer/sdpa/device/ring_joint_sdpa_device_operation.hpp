@@ -42,6 +42,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -59,6 +60,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    std::optional<uint32_t> latent_v_head_dim = std::nullopt);
+    std::optional<uint32_t> latent_v_head_dim = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt);
 
 }  // namespace ttnn::prim
