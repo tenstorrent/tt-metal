@@ -50,6 +50,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "dynamic_load": False,
         "topology": ttnn.Topology.Ring,
         "is_fsdp": True,
+        "vae_t_chunk_size": None,  # full temporal dimension: all blocking entries hit the exact table, giving a stable cache hash
     },
 }
 

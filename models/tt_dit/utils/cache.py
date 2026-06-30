@@ -118,7 +118,10 @@ def load_model(
 
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
-        tt_model.save(cache_dir)
+        try:
+            tt_model.save(cache_dir)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Could not write cache to '{cache_dir}': {e}")
 
 
 def model_cache_dir(
