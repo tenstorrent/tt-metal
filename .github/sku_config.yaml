@@ -158,11 +158,13 @@ skus:
       - P300-viommu
       - pipeline-yyz2-lfc
     weights-cache-mode: lfc
+
   bh_p300_viommu:
     runs_on:
       - pipeline-yyz2-lfc
       - P300-viommu
       - in-service
+    weights-cache-mode: lfc
 
   bh_loudbox_civ2_viommu:
     runs_on:
