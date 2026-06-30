@@ -44,8 +44,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
     uint64_t worker_mcast_addr = 0;
-    volatile tt_l1_ptr uint32_t* write_ack_ptr = nullptr;
-    uint32_t last_write_ack = 0;
     if constexpr (worker_sync_enabled) {
         worker_mcast_addr = get_noc_multicast_addr(
             worker_mcast_noc_x_start,
@@ -53,8 +51,9 @@ void kernel_main() {
             worker_mcast_noc_x_end,
             worker_mcast_noc_y_end,
             transfer_done_sem_addr);
-        write_ack_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_ack_counter_addr);
     }
+    volatile tt_l1_ptr uint32_t* write_ack_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_ack_counter_addr);
+    uint32_t last_write_ack = 0;
 
     bool terminated = false;
     while (!terminated) {
@@ -64,18 +63,23 @@ void kernel_main() {
             // wrapper exists), so Semaphore::inc_multicast cannot target it.
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
             noc.async_atomic_barrier();
+        }
 
-            while (true) {
-                invalidate_l1_cache();
-                const uint32_t cur = *write_ack_ptr;
-                if ((cur - last_write_ack) == num_workers) {
-                    last_write_ack = cur;
-                    break;
-                }
-                if (termination_semaphore[0] == 1) {
-                    terminated = true;
-                    break;
-                }
+        // Always wait for write_ack before reading DRAM. When worker_sync is enabled, workers
+        // ack via the write_ack_counter after producing backing-tensor data. When worker_sync
+        // is disabled (host-only path), the host increments write_ack_counter via
+        // notify_backing_ready(). In both cases this gates one transfer per ack, preventing the
+        // reader from free-running and producing data the host hasn't requested yet.
+        while (true) {
+            invalidate_l1_cache();
+            const uint32_t cur = *write_ack_ptr;
+            if ((cur - last_write_ack) == num_workers) {
+                last_write_ack = cur;
+                break;
+            }
+            if (termination_semaphore[0] == 1) {
+                terminated = true;
+                break;
             }
         }
         if (terminated) {

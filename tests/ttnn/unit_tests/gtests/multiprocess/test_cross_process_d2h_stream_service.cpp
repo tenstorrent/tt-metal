@@ -215,9 +215,9 @@ void run_owner(
     service.export_descriptor(service_id);
 
     g_cross_rank_world->barrier();
-    std::vector<std::byte> discard(service.payload_size_bytes());
-    service.read_from_tensor(discard);
-    service.barrier();
+    // Host-only cross-process D2H has one consumer: the connector rank. The owner
+    // only releases the initial transfer so the connector can discard it.
+    service.notify_backing_ready();
     g_cross_rank_world->barrier();
 
     auto mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
@@ -287,12 +287,9 @@ void run_owner_sharded(
     service.export_descriptor(service_id);
 
     g_cross_rank_world->barrier();
-    auto drain_mapper =
-        ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
-    auto drain_host = ttnn::distributed::distribute_tensor(
-        Tensor::from_vector<uint32_t>(std::vector<uint32_t>(cs.global_shape.volume(), 0), global_spec), *drain_mapper);
-    service.read_from_tensor(drain_host);
-    service.barrier();
+    // Host-only cross-process D2H has one consumer: the connector rank. The owner
+    // only releases the initial transfer so the connector can discard it.
+    service.notify_backing_ready();
     g_cross_rank_world->barrier();
 
     auto mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
