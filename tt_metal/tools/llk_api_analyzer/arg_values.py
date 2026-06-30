@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Recover compile-time-constant values of runtime arguments from DWARF.
 
 At ``-O3`` the compiler rarely emits ``DW_AT_const_value`` on an inlined

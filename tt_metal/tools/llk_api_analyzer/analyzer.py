@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Top-level orchestration: turn a run directory into a :class:`RunAnalysis`.
 
 Ties together discovery (find compute kernels), DWARF loading, per-thread

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Data model for the LLK API analysis results.
 
 The model is a small set of plain dataclasses with ``to_dict`` methods so the

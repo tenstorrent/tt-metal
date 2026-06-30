@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Run a model/test command and capture its compiled kernels for analysis.
 
 The most reliable way to know exactly which kernels a run produced is to control

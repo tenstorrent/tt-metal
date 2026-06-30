@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Discovery of compiled compute-kernel ELFs from a tt-metal run.
 
 A TTNN/metal run writes JIT-compiled kernels under

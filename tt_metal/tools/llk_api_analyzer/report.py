@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Rendering of analysis results as JSON or a human-readable text report."""
 
 from __future__ import annotations
