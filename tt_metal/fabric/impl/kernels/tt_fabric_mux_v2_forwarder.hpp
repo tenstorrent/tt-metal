@@ -107,11 +107,10 @@ template <bool DrainMode>
 inline bool service_channels(
     ForwarderContext& context,
     ForwarderSharedTridRingPublisher& shared_trid_ring,
+    uint32_t& cached_downstream_free_slots,
     uint8_t noc,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection) {
     bool any_pending_channel = false;
-    bool downstream_slot_state_initialized = false;
-    uint32_t cached_downstream_free_slots = 0;
 
     for (uint32_t channel_idx = 0; channel_idx < ct_args::num_channels; ++channel_idx) {
         auto& channel = context.channels[channel_idx];
@@ -121,11 +120,6 @@ inline bool service_channels(
         }
 
         any_pending_channel = true;
-        if (!downstream_slot_state_initialized) {
-            cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
-            downstream_slot_state_initialized = true;
-        }
-
         try_forward_channel_packet<DrainMode>(
             channel_idx, channel, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection);
     }
@@ -134,7 +128,6 @@ inline bool service_channels(
 }
 
 inline void run_forwarder(ForwarderContext& context) {
-    auto termination_signal_ptr = get_termination_signal_ptr();
     auto forwarder_ready_sem_ptr = get_forwarder_ready_sem_ptr();
     auto manager_init_done_sem_ptr = get_manager_init_done_sem_ptr();
     auto shared_control_ptr = get_shared_control_ptr();
@@ -152,14 +145,14 @@ inline void run_forwarder(ForwarderContext& context) {
     shared_trid_ring.initialize();
     fabric_connection.setup_stateful_send_cmd_bufs</*posted=*/false>(noc);
     const uint8_t data_noc_cmd_buf = fabric_connection.get_stateful_send_data_noc_cmd_buf();
+    uint32_t cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
 
-    while (!tt::tt_fabric::got_immediate_termination_signal<true>(termination_signal_ptr) &&
-           shared_control_ptr->drain_initiated == 0) {
+    while (shared_control_ptr->drain_initiated == 0) {
         for (uint32_t service_pass = 0;
              service_pass < kForwarderServiceBurstSize && shared_control_ptr->drain_initiated == 0;
              ++service_pass) {
-            // invalidate_l1_cache();
-            if (!service_channels<false>(context, shared_trid_ring, noc, fabric_connection)) {
+            if (!service_channels<false>(
+                    context, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection)) {
                 break;
             }
         }
@@ -167,10 +160,8 @@ inline void run_forwarder(ForwarderContext& context) {
 
     shared_control_ptr->forwarder_stop_tracking = 1;
     noc_clear_packet_tag(noc, data_noc_cmd_buf);
-    while (!tt::tt_fabric::got_immediate_termination_signal<true>(termination_signal_ptr)) {
-        // invalidate_l1_cache();
-
-        if (!service_channels<true>(context, shared_trid_ring, noc, fabric_connection)) {
+    while (true) {
+        if (!service_channels<true>(context, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection)) {
             break;
         }
     }
