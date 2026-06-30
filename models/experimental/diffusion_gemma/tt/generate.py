@@ -46,6 +46,11 @@ class DeviceTextGeneration(NamedTuple):
     text: list[str]
 
 
+class PromptPrefill(NamedTuple):
+    prompt_len: int
+    cache_len: int
+
+
 def _deallocate_decode_inputs(device_inputs) -> None:
     for value in device_inputs:
         if value is not None and hasattr(value, "deallocate"):
@@ -87,6 +92,23 @@ def _validate_position_span(start_pos: int, length: int, *, name: str) -> None:
         return
     if start_pos + length - 1 > torch.iinfo(torch.int32).max:
         raise ValueError(f"{name} span must fit int32 device positions")
+
+
+def _validate_prefill_result(result, *, raw_prompt_len: int) -> PromptPrefill:
+    if isinstance(result, PromptPrefill):
+        prompt_len = result.prompt_len
+        cache_len = result.cache_len
+    else:
+        prompt_len = result
+        cache_len = result
+
+    _validate_position_span(prompt_len, 1, name="prefill prompt_len")
+    _validate_position_span(cache_len, 1, name="prefill cache_len")
+    if prompt_len != raw_prompt_len:
+        raise ValueError("prefill prompt_len must match prompt_tokens length")
+    if cache_len < prompt_len:
+        raise ValueError("prefill cache_len must cover prompt_len")
+    return PromptPrefill(prompt_len=int(prompt_len), cache_len=int(cache_len))
 
 
 def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
@@ -205,13 +227,21 @@ def _pad_prompt_tokens_for_prefill(prompt_tokens: torch.Tensor, *, multiple: int
     return torch.cat([prompt_tokens, padding], dim=1)
 
 
-def prefill_prompt_tokens(tt_model, prompt_tokens: torch.Tensor, *, page_table=None, page_tables_per_layer=None) -> int:
-    """Write prompt token K/V into the frozen cache and return prompt length."""
+def prefill_prompt_tokens(
+    tt_model, prompt_tokens: torch.Tensor, *, page_table=None, page_tables_per_layer=None
+) -> PromptPrefill:
+    """Write prompt token K/V into the frozen cache.
+
+    The Gemma4 prefill path pads device tokens to tile multiples before writing
+    K/V. Denoise must read that same aligned frozen-prefix span, while host text
+    I/O keeps the natural prompt length.
+    """
     _validate_prompt_tokens(prompt_tokens)
     if prompt_tokens.shape[0] != 1:
         raise NotImplementedError("prefill_prompt_tokens currently supports batch=1")
     prompt_len = prompt_tokens.shape[1]
     prefill_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
+    cache_len = prefill_tokens.shape[1]
     prompt_embeds = embed_host_tokens(tt_model, prefill_tokens)
     logits = tt_model(
         prompt_embeds,
@@ -222,7 +252,7 @@ def prefill_prompt_tokens(tt_model, prompt_tokens: torch.Tensor, *, page_table=N
         page_tables_per_layer=page_tables_per_layer,
     )
     logits.deallocate(True)
-    return prompt_len
+    return PromptPrefill(prompt_len=prompt_len, cache_len=cache_len)
 
 
 def _resolve_generation_logits_fn(
@@ -763,22 +793,20 @@ def generate_from_prompt_tokens(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
-    _validate_position_span(prompt_len, 1, name="prefill prompt_len")
-    if prompt_len != prompt_tokens.shape[1]:
-        raise ValueError("prefill prompt_len must match prompt_tokens length")
+    prefill = _validate_prefill_result(prompt_len, raw_prompt_len=prompt_tokens.shape[1])
     logits_fn = _resolve_generation_logits_fn(
         tt_model,
         logits_fn,
         logits_fn_builder,
         prompt_tokens=prompt_tokens,
-        prompt_len=prompt_len,
+        prompt_len=prefill.cache_len,
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
     return blocks_fn(
         tt_model,
         logits_fn,
-        prompt_len=prompt_len,
+        prompt_len=prefill.cache_len,
         num_blocks=num_blocks,
         config=config,
         init_canvas_fn=init_canvas_fn,
@@ -804,8 +832,8 @@ def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGenerati
     _validate_position_span(generation.next_pos, 1, name="generation.next_pos")
     if prompt_tokens.shape[0] != generation.generated.shape[0]:
         raise ValueError("prompt_tokens and generation.generated batch sizes must match")
-    if prompt_tokens.shape[1] != generation.prompt_len:
-        raise ValueError("prompt_tokens length must match generation.prompt_len")
+    if prompt_tokens.shape[1] > generation.prompt_len:
+        raise ValueError("prompt_tokens length must not exceed generation.prompt_len")
     expected_next_pos = generation.prompt_len + generation.generated.shape[1]
     if generation.next_pos != expected_next_pos:
         raise ValueError("generation.next_pos must equal generation.prompt_len + generated length")

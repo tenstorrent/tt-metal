@@ -9,6 +9,7 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 from models.experimental.diffusion_gemma.tt import generate as G
 from models.experimental.diffusion_gemma.tt.generate import (
     GeneratedBlock,
+    PromptPrefill,
     commit_canvas_tokens,
     decode_generation,
     denoise_and_commit_block,
@@ -597,6 +598,46 @@ def test_generate_from_prompt_tokens_can_build_logits_after_prefill():
     assert calls[2][0:3] == ("blocks", "model", "built-logits")
 
 
+def test_generate_from_prompt_tokens_threads_aligned_prefill_cache_len():
+    calls = []
+    prompt_tokens = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[7, 8]], dtype=torch.long),
+        prompt_len=32,
+        next_pos=34,
+        trajectories=[],
+    )
+
+    def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
+        calls.append(("prefill", tt_model, tokens.clone(), page_table, page_tables_per_layer))
+        return PromptPrefill(prompt_len=tokens.shape[1], cache_len=32)
+
+    def fake_builder(tt_model, **kwargs):
+        calls.append(("builder", tt_model, kwargs))
+        return "built-logits"
+
+    def fake_blocks(tt_model, logits_fn, **kwargs):
+        calls.append(("blocks", tt_model, logits_fn, kwargs))
+        return generation
+
+    out = generate_from_prompt_tokens(
+        "model",
+        None,
+        prompt_tokens,
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=2),
+        init_canvas_fn="init",
+        logits_fn_builder=fake_builder,
+        prefill_fn=fake_prefill,
+        blocks_fn=fake_blocks,
+    )
+
+    assert out is generation
+    assert calls[1][2]["prompt_len"] == 32
+    assert calls[2][3]["prompt_len"] == 32
+    assert torch.equal(generation_sequences(prompt_tokens, out), torch.tensor([[1, 2, 3, 4, 5, 7, 8]]))
+
+
 def test_generate_from_prompt_tokens_rejects_prefill_prompt_len_mismatch_before_blocks():
     prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
 
@@ -612,6 +653,25 @@ def test_generate_from_prompt_tokens_rejects_prefill_prompt_len_mismatch_before_
             config=DiffusionConfig(canvas_length=2),
             init_canvas_fn="init",
             prefill_fn=lambda *args, **kwargs: 3,
+            blocks_fn=fail_blocks,
+        )
+
+
+def test_generate_from_prompt_tokens_rejects_prefill_cache_len_shorter_than_prompt():
+    prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+
+    def fail_blocks(*args, **kwargs):
+        raise AssertionError("blocks should not run for a bad prefill length")
+
+    with pytest.raises(ValueError, match="cache_len"):
+        generate_from_prompt_tokens(
+            "model",
+            "logits",
+            prompt_tokens,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            prefill_fn=lambda *args, **kwargs: PromptPrefill(prompt_len=4, cache_len=3),
             blocks_fn=fail_blocks,
         )
 
@@ -2062,6 +2122,18 @@ def test_generation_sequences_allows_empty_generated_continuation():
     assert torch.equal(generation_sequences(prompt_tokens, generation), prompt_tokens)
 
 
+def test_generation_sequences_allows_aligned_cache_prompt_len():
+    prompt_tokens = torch.tensor([[1, 2, 3]])
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=32,
+        next_pos=34,
+        trajectories=[],
+    )
+
+    assert torch.equal(generation_sequences(prompt_tokens, generation), torch.tensor([[1, 2, 3, 4, 5]]))
+
+
 @pytest.mark.parametrize(
     ("prompt_tokens", "message"),
     [
@@ -2105,12 +2177,12 @@ def test_generation_sequences_rejects_invalid_generated_token_ids(generated, mes
 def test_generation_sequences_rejects_prompt_len_mismatch():
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
-        prompt_len=4,
-        next_pos=6,
+        prompt_len=2,
+        next_pos=4,
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match="generation.prompt_len"):
+    with pytest.raises(ValueError, match="prompt_tokens length"):
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
@@ -2510,7 +2582,7 @@ def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
 
     out = prefill_prompt_tokens(_FakeModel(), prompt_tokens, page_tables_per_layer=["pages"])
 
-    assert out == 3
+    assert out == PromptPrefill(prompt_len=3, cache_len=32)
     assert calls["embed_tokens"].deallocated is True
     assert calls["reshape"][1] == (1, 1, 32, 16)
     hidden_states, kwargs = calls["model"]
