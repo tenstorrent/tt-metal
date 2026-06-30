@@ -11,11 +11,18 @@
 
 # Example:
 metal_infra:
-  smoke: # intended category for PR gate and merge gate
-    CPU: 0
-    N150: 0
-    N300: 0
-    wh_llmbox: 0
+  pr_gate:
+    wh_n150_civ2: 0
+    wh_n300_civ2: 0
+    wh_llmbox_civ2: 0
+    bh_p150b_civ2_viommu: 0
+    bh_p150b_civ2: 0
+  merge_gate:
+    wh_n150_civ2: 0
+    wh_n300_civ2: 0
+    wh_llmbox_civ2: 0
+    bh_p150b_civ2_viommu: 0
+    bh_p150b_civ2: 0
   sanity: # APC and BHPC will be renamed to sanity
     CPU: 0
     N150: 0
@@ -64,7 +71,9 @@ metal_infra:
 # Current time budgets are based on sums of existing tests.
 # No official decision has been made yet for division of budgets per team.
 ttnn:
-  smoke:
+  pr_gate:
+    wh_n150_civ2: 15
+  merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 55
     wh_llmbox_civ2_viommu: 15
@@ -123,7 +132,7 @@ ttnn:
     wh_galaxy: 120
 
 train:
-  smoke:
+  merge_gate:
     wh_n150_civ2: 20
   unit:
     wh_n150_civ2: 90
@@ -151,7 +160,7 @@ shield:
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
-  smoke:
+  merge_gate:
     cpu_medium: 10
     cpu_medium_prio: 10
     wh_n300_civ2: 10
@@ -182,7 +191,9 @@ scaleout:
     bh_quietbox_2: 80
 
 runtime:
-  smoke:
+  pr_gate:
+    wh_n150_civ2: 15
+  merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
     wh_llmbox_civ2_viommu: 15
@@ -210,7 +221,7 @@ runtime:
     bh_p150_perf: 40
 
 triage:
-  smoke:
+  merge_gate:
     wh_n150_civ2: 11
     bh_p150b_civ2_viommu_prio: 11
     bh_p150b_civ2_viommu: 11
@@ -220,6 +231,9 @@ triage:
     bh_p150b_civ2_viommu: 16
 
 llk:
+  pr_gate:
+    wh_n150_civ2: 40
+    bh_p150b_civ2: 40
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
@@ -233,14 +247,14 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
-  smoke:
+  merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2: 160
     bh_p150b_civ2_viommu: 70
     bh_p150b_civ2_viommu_prio: 70
 
 models:
-  smoke:
+  merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
     wh_galaxy_perf: 10

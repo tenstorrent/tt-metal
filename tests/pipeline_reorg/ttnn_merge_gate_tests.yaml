@@ -1,4 +1,4 @@
-# TTNN merge-gate smoke matrix (subset of former ttnn-tests.yaml merge_gate entries).
+# TTNN merge-gate matrix (subset of former ttnn-tests.yaml merge_gate entries).
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 

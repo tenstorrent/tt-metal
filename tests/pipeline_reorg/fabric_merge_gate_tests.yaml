@@ -1,7 +1,7 @@
-# Fabric N300 merge-gate smoke matrix.
+# Fabric N300 merge-gate matrix.
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, arch, owner_id.
-# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> smoke).
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> merge_gate).
 
 - name: fabric unit tests
   cmd: ./tests/scripts/run_cpp_fabric_tests.sh
