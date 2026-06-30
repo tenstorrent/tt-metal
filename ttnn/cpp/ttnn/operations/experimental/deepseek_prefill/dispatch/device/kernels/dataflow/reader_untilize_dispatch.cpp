@@ -317,7 +317,20 @@ void kernel_main() {
             noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
             noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
         }
+#ifdef FP8_SCALED
+        // Scales ride the tile path too: the payload is tiled, but the per-token scale rows are
+        // ROW_MAJOR and read by token_idx parallel to indices/weights. Reserve/push read_batch_size
+        // slots (not batch_count) so the shared writer's wait_front/pop_front(read_batch_size) matches.
+        cb_reserve_back(cb_scales_id, read_batch_size);
+        uint32_t scales_base = get_write_ptr(cb_scales_id);
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, scales_addr_gen, scales_base + t * aligned_scales_page_size);
+        }
+#endif
         noc_async_read_barrier();
+#ifdef FP8_SCALED
+        cb_push_back(cb_scales_id, read_batch_size);
+#endif
 #endif
 
         // 4. Build per-batch route plan into c_14.

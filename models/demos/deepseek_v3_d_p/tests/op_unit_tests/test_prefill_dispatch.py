@@ -148,6 +148,11 @@ def run_dispatch(
     if input_layout == ttnn.ROW_MAJOR_LAYOUT and fp8_input != fp8_output:
         pytest.skip("row_major dispatch requires input dtype == output dtype")
 
+    # The bf16+scaled combo only exists to exercise scales on the tile path; the row-major scaled
+    # path is covered by fp8+scaled (fp8 is ROW_MAJOR-only).
+    if fp8_scaled_input and not fp8_input and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bf16+scaled only exercises the tile path; fp8+scaled covers row-major")
+
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
     if (is_ci_env or is_ci_v2_env) and not run_pcc_check and input_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("ROW_MAJOR perf coverage does not run in CI")
@@ -509,17 +514,19 @@ def dispatch_shape_params():
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
-# input_dtype folds the fp8-scaled flavor into the input axis: bf16, plain fp8, and fp8 + per-token
-# fp32 scales dispatched in the metadata tail. There is no bf16+scaled combo — scales only apply to
-# fp8 input — so it lives here rather than as a separate axis that would need skipping for bf16.
+# input_dtype folds the fp8-scaled flavor into the input axis: bf16, plain fp8, fp8 + per-token
+# fp32 scales (row-major byte-copy path), and bf16 + scales (tile path). fp8 is ROW_MAJOR-only, so
+# the tile path's scaled coverage rides a bf16 payload — the scale tail is byte-copied into the
+# metadata identically regardless of payload layout/dtype, which is what this combo exercises.
 @pytest.mark.parametrize(
     "input_dtype, fp8_scaled_input",
     [
         (ttnn.bfloat16, False),
         (ttnn.fp8_e4m3, False),
         (ttnn.fp8_e4m3, True),
+        (ttnn.bfloat16, True),
     ],
-    ids=["bf16_in", "fp8_in", "fp8_scaled_in"],
+    ids=["bf16_in", "fp8_in", "fp8_scaled_in", "bf16_scaled_in"],
 )
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])

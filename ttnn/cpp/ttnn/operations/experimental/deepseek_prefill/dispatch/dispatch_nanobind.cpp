@@ -74,8 +74,8 @@ void bind_dispatch(nb::module_& mod) {
                 (process the full token range).
             scales_tensor (ttnn.Tensor, optional): Per-token fp8 scales (FLOAT32, ROW_MAJOR,
                 shape (1, seq_len_per_chip, emb_dim/128) per device) produced by
-                per_token_cast_to_fp8 alongside the fp8 input. When provided (fp8 ROW_MAJOR
-                input only), each token's scales are copied into the metadata tail so the
+                per_token_cast_to_fp8 alongside the input. When provided (with either ROW_MAJOR
+                or TILE input), each token's scales are copied into the metadata tail so the
                 routed buffer can be dequantized downstream. Requires metadata_len ==
                 5 + emb_dim/128. Defaults to None. Blackhole-only.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
@@ -92,10 +92,12 @@ void bind_dispatch(nb::module_& mod) {
                 (DataType::FP8_E4M3). Blackhole-only (not supported on Wormhole_B0). With
                 TILE input the packer converts any input dtype; with ROW_MAJOR input (a byte
                 copy) fp8 output requires fp8 input. Defaults to False.
-            fp8_scaled_input (bool, optional): Enable the fp8-scaled-input path. When True, the
-                input must be fp8 (FP8_E4M3) ROW_MAJOR and scales_tensor must be provided; each
-                token's fp32 per-128-block scales are copied into the metadata tail (fields 5..),
-                requiring metadata_len == 5 + emb_dim/128. Blackhole-only. Defaults to False.
+            fp8_scaled_input (bool, optional): Enable the fp8-scaled-input path. When True,
+                scales_tensor must be provided and each token's fp32 per-128-block scales are
+                copied into the metadata tail (fields 5..), requiring metadata_len ==
+                5 + emb_dim/128. Works with both ROW_MAJOR and TILE input; ROW_MAJOR input must
+                be fp8 (FP8_E4M3) since that payload path is a byte copy. Blackhole-only.
+                Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
                 sender on the tile-layout path.
 

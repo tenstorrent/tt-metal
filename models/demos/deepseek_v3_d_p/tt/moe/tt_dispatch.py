@@ -235,9 +235,9 @@ class TtDispatchModule(LightweightModule):
                 padded tokens. None means process the full token range.
             scales: Optional per-token fp8 scales (FLOAT32, ROW_MAJOR, shape
                 (1, seq_len_per_chip, emb_dim/128)) produced by per_token_cast_to_fp8 alongside
-                the fp8 input x. When provided, each token's scales are copied into the metadata
-                tail (fields 5..) so the routed buffer can be dequantized downstream. Requires
-                metadata_len == 5 + emb_dim/128 and fp8 ROW_MAJOR input. None for the bf16 path.
+                x. When provided, each token's scales are copied into the metadata tail (fields
+                5..) so the routed buffer can be dequantized downstream. Requires metadata_len ==
+                5 + emb_dim/128. Works with ROW_MAJOR (fp8) or TILE input. None for the bf16 path.
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.

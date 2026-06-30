@@ -95,10 +95,12 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
             padding_config.logical_shape()[-1]);
     }
 
-    // fp8-scaled-input path: the input is fp8 and each token carries its per-128-block fp32 scales
-    // (FLOAT32 ROW_MAJOR, last dim emb_dim/128). Those scales are copied into the metadata tail
-    // (fields 5..metadata_len-1), so metadata_len must reserve exactly those fields. Only valid on
-    // the fp8 row-major (byte-copy) path. The flag and the scales tensor must be supplied together.
+    // fp8-scaled-input path: each token carries its per-128-block fp32 scales (FLOAT32 ROW_MAJOR,
+    // last dim emb_dim/128). Those scales are copied into the metadata tail (fields 5..metadata_len-1),
+    // so metadata_len must reserve exactly those fields. Scales ride the metadata regardless of the
+    // activation's input layout: the row-major payload path is a byte copy so it still requires fp8
+    // input, while the tile path untilizes/packs the payload independently of the scales and accepts
+    // its normal input. The flag and the scales tensor must be supplied together.
     if (operation_attributes.fp8_scaled_input) {
         TT_FATAL(
             tensor_args.scales_tensor.has_value(),
@@ -106,11 +108,12 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         const auto& scales = tensor_args.scales_tensor.value();
         TT_FATAL(scales.layout() == tt::tt_metal::Layout::ROW_MAJOR, "scales tensor must be ROW_MAJOR layout");
         TT_FATAL(scales.dtype() == DataType::FLOAT32, "scales tensor must be FLOAT32, got {}", scales.dtype());
-        TT_FATAL(
-            tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+        if (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+            TT_FATAL(
                 tensor_args.input_tensor.dtype() == DataType::FP8_E4M3,
-            "fp8_scaled_input requires a fp8 (FP8_E4M3) ROW_MAJOR input (the per_token_cast_to_fp8 "
-            "compression path)");
+                "fp8_scaled_input with ROW_MAJOR input requires FP8_E4M3 (the per_token_cast_to_fp8 "
+                "compression path); the byte-copy payload path cannot repack");
+        }
         const uint32_t num_scales = scales.logical_shape()[-1];
         TT_FATAL(
             operation_attributes.metadata_len == 5 + num_scales,
