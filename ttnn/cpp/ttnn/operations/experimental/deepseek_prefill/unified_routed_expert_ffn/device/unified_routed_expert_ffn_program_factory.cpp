@@ -9,7 +9,10 @@
 #include <map>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -88,41 +91,37 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         GRID_Y,
         grid_size.x,
         grid_size.y);
-    const uint32_t chunk_M_tiles = op.chunk_M_tiles;
-    const uint32_t per_core_M = chunk_M_tiles / GRID_Y;
+    // chunk_M_tiles (op attribute) is the REQUESTED upper bound on the M chunk;
+    // the adaptive L1-budget search below may shrink the effective per_core_M /
+    // chunk_M_tiles (and in0_block_w_gu) to fit the device's per-core L1.
+    const uint32_t chunk_M_tiles_req = op.chunk_M_tiles;
+    const uint32_t per_core_M_max = chunk_M_tiles_req / GRID_Y;
     TT_FATAL(
-        per_core_M * GRID_Y == chunk_M_tiles,
-        "chunk_M_tiles ({}) must be divisible by GRID_Y ({})",
-        chunk_M_tiles,
+        per_core_M_max * GRID_Y == chunk_M_tiles_req && per_core_M_max >= 1,
+        "chunk_M_tiles ({}) must be a positive multiple of GRID_Y ({})",
+        chunk_M_tiles_req,
         GRID_Y);
     // M_tiles_full is NOT required to divide chunk_M_tiles. The kernel runs
     // ceil(M_tiles_full / chunk_M_tiles) chunks; the reader zero-fills L1
     // rows past min(count_tiles, M_tiles_full) in the last chunk; the writer
     // skips OOB writes for output rows >= M_tiles_full. Avoids the host-side
     // pad/slice round-trip in the composite for non-aligned M.
-    const uint32_t num_chunks = (M_tiles_full + chunk_M_tiles - 1) / chunk_M_tiles;
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
-    // With 11x8 = 88 cores, per_core_N_gu (= 6) and per_core_N_d (= 21) leave
-    // ~250KB of headroom per core vs an 8x8 layout. Use it to double
-    // in0_block_w_gu, halving the gate / up K-loop iteration count.
-    const uint32_t in0_block_w_gu = 16;
+    (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
+
+    // down-matmul K-block width (= gate N per-core slice). Independent of the
+    // adaptive levers below.
     const uint32_t in0_block_w_d = per_core_N_gu;
-    TT_FATAL(
-        K_gate_tiles % in0_block_w_gu == 0,
-        "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
-        K_gate_tiles,
-        in0_block_w_gu);
     TT_FATAL(
         K_down_tiles_padded % in0_block_w_d == 0,
         "K_down_tiles_padded ({}) must be divisible by in0_block_w_d ({})",
         K_down_tiles_padded,
         in0_block_w_d);
-    (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
     // Subblock dims. DST tile-register file is 16 tiles wide; fp32_dest_acc_en
     // halves usable capacity (fp32 accumulator occupies two tile slots). With
@@ -151,25 +150,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     }
     const uint32_t d_out_subblock_w = d_sub_w;
 
-    // Phase-level numbers.
-    const uint32_t gu_in0_num_subblocks = per_core_M / gu_out_subblock_h;
-    const uint32_t gu_in1_num_subblocks = per_core_N_gu / gu_out_subblock_w;
-    const uint32_t gu_in0_block_num_tiles = per_core_M * in0_block_w_gu;
-    const uint32_t gu_in0_subblock_num_tiles = gu_out_subblock_h * in0_block_w_gu;
-    const uint32_t gu_in1_block_num_tiles = in0_block_w_gu * per_core_N_gu;
-    const uint32_t gu_in1_block_w = per_core_N_gu;
-    const uint32_t gu_num_blocks = K_gate_tiles / in0_block_w_gu;
-    const uint32_t gu_out_block_num_tiles = per_core_M * per_core_N_gu;
-
-    const uint32_t d_in0_num_subblocks = per_core_M / d_out_subblock_h;
-    const uint32_t d_in1_num_subblocks = per_core_N_d / d_out_subblock_w;
-    const uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
-    const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
-    const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
-    const uint32_t d_in1_block_w = per_core_N_d;
-    const uint32_t d_num_blocks = K_down_tiles_padded / in0_block_w_d;
-    const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
-
     // -------------------------- data formats / tile sizes -----------------
     const tt::DataFormat x_df = tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype());
     const tt::DataFormat gate_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_proj.dtype());
@@ -194,6 +174,108 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t intermed_tile_size = tt::tile_size(intermed_df);
     const uint32_t partials_gu_tile_size = tt::tile_size(partials_gu_df);
     const uint32_t partials_d_tile_size = tt::tile_size(partials_d_df);
+
+    // ---------------------- adaptive L1-budget sizing ---------------------
+    // Per-core CB footprint scales with per_core_M (= chunk_M_tiles / GRID_Y)
+    // and in0_block_w_gu (the gate/up K-block width). A fixed chunk_M_tiles=64
+    // / in0_block_w_gu=16 fit the DeepSeek-V3 / MiniMax-M2.7 dims with headroom
+    // but overflow L1 on larger models (MiniMax-M3: emb 6144 / hidden 3072, 2x
+    // both axes). Instead of hard-coding per shape, pick the largest
+    // (per_core_M, in0_block_w_gu) that fits the real device L1 budget:
+    //   1. keep per_core_M as large as possible — fewer M chunks => fewer full
+    //      weight re-reads, the dominant DRAM cost;
+    //   2. then the largest in0_block_w_gu (divisor of K_gate_tiles, capped at
+    //      16) that fits — wider gate/up K-blocks pipeline DRAM I/O better.
+    // This mirrors the CB allocations in the "circular buffers" section below;
+    // keep the two in sync.
+    const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
+        uint64_t total = 0;
+        total += static_cast<uint64_t>(M * w_gu * 2) * x_tile_size;                               // cb_in0_x
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
+        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;        // cb_in1_down
+        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;                   // cb_gate_intermed
+        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;                   // cb_activated
+        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;                // cb_mm_partials_gu
+        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;                // cb_mm_partials_up
+        total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;                  // cb_mm_partials_d
+        total += static_cast<uint64_t>(d_out_subblock_h * d_out_subblock_w * 2) * out_tile_size;  // cb_out
+        total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;               // cb_in0_down_full
+        return total;
+    };
+
+    // Real per-core L1 available for CBs (total minus the firmware/kernel
+    // reserved base), with a margin for the small UInt32 scratch CBs
+    // (counts/idx/start, allocated below) and per-CB allocation alignment.
+    auto* l1_device = t.x.device();
+    constexpr uint32_t L1_SCRATCH_MARGIN = 48 * 1024;
+    const uint32_t l1_reserved = l1_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(
+        l1_device->l1_size_per_core() > l1_reserved + L1_SCRATCH_MARGIN,
+        "unexpected L1 geometry: l1_size_per_core ({}) <= reserved base ({}) + margin ({})",
+        l1_device->l1_size_per_core(),
+        l1_reserved,
+        L1_SCRATCH_MARGIN);
+    const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
+
+    // in0_block_w_gu candidates: divisors of K_gate_tiles, capped at 16 (the
+    // matmul DRAM-burst sweet spot), largest first.
+    std::vector<uint32_t> w_gu_candidates;
+    for (uint32_t w = std::min<uint32_t>(16u, K_gate_tiles); w >= 1; --w) {
+        if (K_gate_tiles % w == 0) {
+            w_gu_candidates.push_back(w);
+        }
+    }
+    TT_FATAL(!w_gu_candidates.empty(), "K_gate_tiles ({}) has no valid in0_block_w_gu", K_gate_tiles);
+
+    uint32_t per_core_M = 0;
+    uint32_t in0_block_w_gu = 0;
+    for (uint32_t M = per_core_M_max; M >= 1; --M) {
+        for (const uint32_t w : w_gu_candidates) {
+            if (cb_footprint_bytes(M, w) <= l1_budget) {
+                per_core_M = M;
+                in0_block_w_gu = w;
+                break;
+            }
+        }
+        if (per_core_M != 0) {
+            break;
+        }
+    }
+    TT_FATAL(
+        per_core_M != 0,
+        "unified_routed_expert_ffn: per-core CBs do not fit in L1 even at the smallest config "
+        "(per_core_M=1, in0_block_w_gu={}): need {} B but only {} B available "
+        "(emb={}, hidden={}, grid {}x{}). Reduce model dims.",
+        w_gu_candidates.back(),
+        cb_footprint_bytes(1, w_gu_candidates.back()),
+        l1_budget,
+        N_down_tiles_full * TILE,
+        N_gate_tiles_full * TILE,
+        GRID_X,
+        GRID_Y);
+
+    const uint32_t chunk_M_tiles = per_core_M * GRID_Y;
+    const uint32_t num_chunks = (M_tiles_full + chunk_M_tiles - 1) / chunk_M_tiles;
+
+    // Phase-level numbers.
+    const uint32_t gu_in0_num_subblocks = per_core_M / gu_out_subblock_h;
+    const uint32_t gu_in1_num_subblocks = per_core_N_gu / gu_out_subblock_w;
+    const uint32_t gu_in0_block_num_tiles = per_core_M * in0_block_w_gu;
+    const uint32_t gu_in0_subblock_num_tiles = gu_out_subblock_h * in0_block_w_gu;
+    const uint32_t gu_in1_block_num_tiles = in0_block_w_gu * per_core_N_gu;
+    const uint32_t gu_in1_block_w = per_core_N_gu;
+    const uint32_t gu_num_blocks = K_gate_tiles / in0_block_w_gu;
+    const uint32_t gu_out_block_num_tiles = per_core_M * per_core_N_gu;
+
+    const uint32_t d_in0_num_subblocks = per_core_M / d_out_subblock_h;
+    const uint32_t d_in1_num_subblocks = per_core_N_d / d_out_subblock_w;
+    const uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
+    const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
+    const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
+    const uint32_t d_in1_block_w = per_core_N_d;
+    const uint32_t d_num_blocks = K_down_tiles_padded / in0_block_w_d;
+    const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
     const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});

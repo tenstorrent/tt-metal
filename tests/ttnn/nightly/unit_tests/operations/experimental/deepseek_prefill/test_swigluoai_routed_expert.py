@@ -148,6 +148,29 @@ def test_swigluoai_routed_expert(mesh_device, device_params, num_tokens):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
+@pytest.mark.parametrize("num_tokens", [128, 1024], ids=["t128", "t1k"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_swigluoai_routed_expert_m3_shapes(mesh_device, device_params, num_tokens):
+    """MiniMax-M3 real MoE dims (emb 6144 / hidden 3072 — 2x M2.7 on both axes).
+
+    Regression for the adaptive L1-budget sizing: at these dims the previous fixed
+    chunk_M_tiles=64 / in0_block_w_gu=16 CB layout overflows Blackhole L1. The program
+    factory now shrinks in0_block_w_gu / per_core_M to fit; this asserts the op builds
+    (no L1 overflow) AND stays numerically correct at M3 shapes. Dims from
+    models/demos/minimax_m3/configs/MiniMax-M3/config.json (hidden_size / intermediate_size).
+    """
+    run_swigluoai_routed_expert(
+        mesh_device,
+        num_tokens=num_tokens,
+        emb_dim=6144,
+        hidden_dim=3072,
+        activation=ttnn.RoutedExpertActivation.SwiGluOai,
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
