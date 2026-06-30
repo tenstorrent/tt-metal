@@ -43,7 +43,7 @@ def test_non_4D_channel_bcast(device, shapes):
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64, 1, 0])
 def test_add_1D_tensor_and_scalar(device, scalar, size):
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((size,), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor + scalar

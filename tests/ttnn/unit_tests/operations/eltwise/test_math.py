@@ -33,7 +33,7 @@ def run_math_unary_test(
     [0, 1). Callers override ``ulp`` when the kernel has a larger expected error, or set
     ``pcc_check=True`` with an op-specific ``pcc`` when ULP is not the appropriate tolerance.
     """
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     if "digamma" in str(ttnn_function):

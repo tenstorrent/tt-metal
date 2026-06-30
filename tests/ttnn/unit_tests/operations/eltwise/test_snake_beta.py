@@ -162,7 +162,7 @@ def test_snake_beta_pi_boundary(device):
 )
 def test_snake_beta_output_tensor(device, x_shape, ab_shape):
     """Preallocated output_tensor= path; verifies the result aliases the caller's tensor."""
-    torch.manual_seed(42)
+    torch.manual_seed(0)
     x = torch.randn(x_shape, dtype=torch.bfloat16)
     a = _sample_uniform(ab_shape, *_AB_RANGE_ALPHA, dtype=torch.bfloat16)
     b = _sample_uniform(ab_shape, *_AB_RANGE_BETA, dtype=torch.bfloat16)
