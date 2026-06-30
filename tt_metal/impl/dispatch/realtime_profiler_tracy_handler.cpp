@@ -269,6 +269,58 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
 #endif
 }
 
+void RealtimeProfilerTracyHandler::PushDeviceZone(
+    [[maybe_unused]] uint32_t chip_id,
+    [[maybe_unused]] uint32_t core_x,
+    [[maybe_unused]] uint32_t core_y,
+    [[maybe_unused]] uint32_t risc,
+    [[maybe_unused]] uint64_t start_timestamp,
+    [[maybe_unused]] uint64_t end_timestamp,
+    [[maybe_unused]] uint32_t timer_id) {
+#if defined(TRACY_ENABLE)
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
+    if (end_timestamp < start_timestamp) {
+        return;  // X280 paired a stray end before its start (e.g. ring wrap) — drop it
+    }
+    TracyTTCtx ctx = GetContext(chip_id);
+    if (!ctx) {
+        return;
+    }
+
+    // Kernel-zone markers drained off the per-RISC SPSC rings by the X280 and paired on-device.
+    // They share the device clock domain (the X280 only relays the cores' timestamps), so the
+    // per-chip context's calibration applies directly. core_x/core_y/risc come from the page so
+    // Tracy groups them on the correct device lane.
+    static constexpr tracy::RiscType kRisc[5] = {
+        tracy::RiscType::BRISC,
+        tracy::RiscType::NCRISC,
+        tracy::RiscType::TRISC_0,
+        tracy::RiscType::TRISC_1,
+        tracy::RiscType::TRISC_2};
+
+    tracy::TTDeviceMarker start_marker;
+    start_marker.chip_id = chip_id;
+    start_marker.core_x = core_x;
+    start_marker.core_y = core_y;
+    start_marker.risc = kRisc[risc % 5];
+    start_marker.timestamp = start_timestamp;
+    start_marker.runtime_host_id = timer_id;
+    start_marker.marker_name = fmt::format("Zone_{}", timer_id);
+    start_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
+    start_marker.file = "kernel_profiler";
+    start_marker.line = 0;
+
+    tracy::TTDeviceMarker end_marker = start_marker;
+    end_marker.timestamp = end_timestamp;
+    end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
+
+    TracyTTPushStartMarker(ctx, start_marker);
+    TracyTTPushEndMarker(ctx, end_marker);
+#endif
+}
+
 void RealtimeProfilerTracyHandler::CalibrateDevice(
     [[maybe_unused]] uint32_t chip_id,
     [[maybe_unused]] int64_t host_time,

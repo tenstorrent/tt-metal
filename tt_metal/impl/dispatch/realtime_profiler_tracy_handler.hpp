@@ -37,6 +37,18 @@ public:
     // Used to verify host-device clock sync accuracy in the Tracy GUI.
     void PushSyncCheckMarker(uint32_t chip_id, uint64_t device_timestamp, double frequency);
 
+    // Push a kernel-zone start/end pair drained off the per-RISC SPSC rings by the X280 and
+    // paired on-device. core_x/core_y/risc identify the originating Tensix core lane; timestamps
+    // are in the device clock domain (same as program zones).
+    void PushDeviceZone(
+        uint32_t chip_id,
+        uint32_t core_x,
+        uint32_t core_y,
+        uint32_t risc,
+        uint64_t start_timestamp,
+        uint64_t end_timestamp,
+        uint32_t timer_id);
+
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
 

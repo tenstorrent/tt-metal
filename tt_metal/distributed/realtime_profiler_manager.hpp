@@ -24,6 +24,10 @@ class IDevice;
 class Program;
 class RealtimeProfilerTracyHandler;
 
+namespace profiler {
+class X280Driver;
+}
+
 namespace distributed {
 
 class D2HSocket;
@@ -88,6 +92,14 @@ private:
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
         std::unique_ptr<D2HSocket> socket;
+        // Optional X280 (L2CPU) kernel-zone drainer: a SECOND D2H socket whose sender is the X280.
+        // The X280 drains the per-RISC SPSC zone rings (HalL1MemAddrType::PROFILER), pairs
+        // start/end markers per (core,risc) on-device, and pushes complete device-zone pages. The
+        // receiver polls this alongside `socket`. Null when no X280 / not eligible / fw not built.
+        std::unique_ptr<D2HSocket> x280_socket;
+        std::unique_ptr<profiler::X280Driver> x280_driver;
+        uint64_t x280_params_addr = 0;  // MBOX_PARAMS in the X280 LIM (for the P_STOP write at shutdown)
+        bool x280_active = false;
         // Owns the BRISC+NCRISC realtime-profiler program so its kernels remain alive for
         // the lifetime of the manager. If this goes out of scope while the kernels are
         // still running, downstream tooling (e.g. tt-inspector) loses the kernel metadata.

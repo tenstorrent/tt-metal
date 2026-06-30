@@ -39,6 +39,7 @@
 #include <impl/context/metal_context.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
+#include "tools/profiler/x280_driver.hpp"  // shared X280 boot driver (also used by RealtimeProfilerManager)
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <tt-metalium/mesh_coord.hpp>
@@ -598,6 +599,7 @@ int main(int argc, char** argv) {
         zx.set_reset_vectors(LIM_BASE);
         zx.set_pll(pll);
         zx.release_reset();
+        zx.lim_wr_u64(MBOX_PARAMS + 0x28, 1);  // P_STOP: rings are static post-workload -> drain then exit
         printf("[realzones] profzone draining+pairing rings -> pushing zones through the socket...\n");
         static const tracy::RiscType kRisc[NRISC] = {
             tracy::RiscType::BRISC,

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,6 +54,8 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
+#include "jit_build/build_env_manager.hpp"
+#include "tools/profiler/x280_driver.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -317,6 +320,10 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     mesh_coord(std::move(o.mesh_coord)),
     realtime_profiler_core(o.realtime_profiler_core),
     socket(std::move(o.socket)),
+    x280_socket(std::move(o.x280_socket)),
+    x280_driver(std::move(o.x280_driver)),
+    x280_params_addr(o.x280_params_addr),
+    x280_active(o.x280_active),
     realtime_profiler_program(std::move(o.realtime_profiler_program)),
     core_l1(o.core_l1),
     first_timestamp(o.first_timestamp),
@@ -610,6 +617,115 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 config_buffer_addr);
         }
 
+        // --- Optional: boot the X280 (L2CPU) kernel-zone drainer on this device ---
+        // The X280 is the sole consumer of the per-RISC SPSC zone rings; without it a profiler
+        // run can deadlock once a ring fills. It drains those rings, PAIRS start/end markers per
+        // (core,risc) on-device, and pushes complete device-zone pages through its OWN D2H socket,
+        // which the receiver polls alongside the program-record socket. Best-effort: any failure
+        // leaves x280_active=false and the device runs without kernel-zone capture.
+        try {
+            auto& x280_cluster = MetalContext::instance(context_id_).get_cluster();
+            const auto& soc = x280_cluster.get_soc_desc(device_id);
+            std::string x280_fw = BuildEnvManager::get_instance(context_id_).get_x280_firmware_path(device_id);
+            if (x280_cluster.arch() == tt::ARCH::BLACKHOLE &&
+                !soc.get_cores(CoreType::L2CPU, CoordSystem::NOC0).empty() && !x280_fw.empty()) {
+                constexpr int kL2CpuIndex = 0;  // tile (8,3) — proven single-chip path
+                constexpr int kX280PllMhz = 1000;
+                constexpr uint32_t kX280ConfigAddr = 0x08019000u;  // X280 LIM: above STAGECTL, below STAGE_BASE
+                constexpr uint64_t kX280MboxParams = 0x08011000ull;
+                constexpr uint64_t kX280MboxResults = 0x08011040ull;
+                constexpr uint64_t kX280MboxCoords = 0x08011200ull;
+                constexpr uint32_t kX280Fifo = 4096;
+                constexpr uint32_t kX280PageSize = 64;
+
+                std::ifstream f(x280_fw, std::ios::binary);
+                std::vector<uint8_t> bin((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+                while (bin.size() % 4 != 0) {
+                    bin.push_back(0);
+                }
+                TT_FATAL(!bin.empty(), "X280 drainer firmware {} is empty", x280_fw);
+
+                const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+                CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+                const uint32_t gx = static_cast<uint32_t>(grid.x), gy = static_cast<uint32_t>(grid.y);
+                const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
+
+                // Virtual coords of every logical worker core (what the X280's NOC addresses), and
+                // pre-zero each core's SPSC control vector so head/tail start clean.
+                std::vector<uint8_t> coord_buf(num_cores * 8, 0);
+                std::vector<uint8_t> zero_ctrl(profiler::X280_PROF_CTRL_WORDS * 4, 0);
+                for (uint32_t ly = 0; ly < gy; ly++) {
+                    for (uint32_t lx = 0; lx < gx; lx++) {
+                        uint32_t idx = ly * gx + lx;
+                        CoreCoord v = x280_cluster.get_virtual_coordinate_from_logical_coordinates(
+                            device_id, CoreCoord{lx, ly}, CoreType::WORKER);
+                        uint32_t vx = static_cast<uint32_t>(v.x), vy = static_cast<uint32_t>(v.y);
+                        std::memcpy(coord_buf.data() + idx * 8 + 0, &vx, 4);
+                        std::memcpy(coord_buf.data() + idx * 8 + 4, &vy, 4);
+                        x280_cluster.write_core(
+                            zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, v), prof_l1);
+                    }
+                }
+
+                // PCIe tile (TRANSLATED) the X280 writes its socket pages through.
+                const auto pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
+                TT_FATAL(!pcie_cores.empty(), "X280 drainer: no PCIe core on device {}", device_id);
+                const auto pc = pcie_cores.front();
+
+                dev_state.x280_driver =
+                    std::make_unique<profiler::X280Driver>(x280_cluster, static_cast<int>(device_id), kL2CpuIndex);
+                auto& zx = *dev_state.x280_driver;
+                zx.assert_reset();
+                zx.load_lim(bin);
+                zx.write_block(coord_buf.data(), (uint32_t)coord_buf.size(), kX280MboxCoords);
+
+                // The socket's sender is the X280 L2CPU; its sender_socket_md lands in the X280 LIM.
+                const CoreCoord l2phys = profiler::x280_l2cpu_tile(kL2CpuIndex);
+                dev_state.x280_socket = std::make_unique<D2HSocket>(
+                    mesh_device,
+                    MeshCoreCoord{coord, l2phys},
+                    kX280Fifo,
+                    D2HSocket::ExternalConfigBuffer{.address = kX280ConfigAddr, .sender_is_l2cpu = true});
+                dev_state.x280_socket->set_page_size(kX280PageSize);
+
+                std::vector<uint8_t> params(64, 0), results(64, 0);
+                auto pk = [&](size_t off, uint64_t val) { std::memcpy(params.data() + off, &val, 8); };
+                pk(0x00, kX280ConfigAddr);
+                pk(0x08, static_cast<uint64_t>(pc.x));
+                pk(0x10, static_cast<uint64_t>(pc.y));
+                pk(0x18, prof_l1);
+                pk(0x20, num_cores);
+                pk(0x28, 0);  // P_STOP = 0: run continuously until shutdown
+                zx.write_block(params.data(), (uint32_t)params.size(), kX280MboxParams);
+                zx.write_block(results.data(), (uint32_t)results.size(), kX280MboxResults);
+                dev_state.x280_params_addr = kX280MboxParams;
+
+                zx.set_reset_vectors(profiler::X280_LIM_BASE);
+                zx.set_pll(kX280PllMhz);
+                zx.release_reset();
+                dev_state.x280_active = true;
+                log_info(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: booted X280 kernel-zone drainer (l2cpu {}, {} cores, "
+                    "prof_l1=0x{:x}, pcie=({},{}))",
+                    device_id,
+                    kL2CpuIndex,
+                    num_cores,
+                    prof_l1,
+                    pc.x,
+                    pc.y);
+            }
+        } catch (const std::exception& e) {
+            dev_state.x280_active = false;
+            dev_state.x280_socket.reset();
+            dev_state.x280_driver.reset();
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: X280 kernel-zone drainer boot failed ({}); continuing without it.",
+                device_id,
+                e.what());
+        }
+
         MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
     }
@@ -788,6 +904,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     receiver_thread_ = std::thread([this]() {
         tracy::SetThreadName("RealtimeProfiler");
         uint64_t pages_received = 0;
+        uint64_t x280_pages = 0;
 
         log_debug(tt::LogMetal, "[Real-time profiler] Receiver thread started for {} devices", devices_.size());
 
@@ -843,6 +960,27 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             return true;
         };
 
+        // Process one X280 device-zone page (64 B): [0,1]=start_ts(hi,lo) [2,3]=end_ts(hi,lo)
+        // [4]=core_x [5]=core_y [6]=risc [7]=timer_id. Paired on-device by the X280, so each page
+        // is a complete kernel zone -> emit straight to Tracy on the originating core's lane.
+        std::vector<uint32_t> x280_page_buf(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
+        auto process_x280_page = [&](DeviceState& dev_state) -> bool {
+            if (!dev_state.x280_active || !dev_state.x280_socket) {
+                return false;
+            }
+            if (dev_state.x280_socket->pages_available() == 0) {
+                return false;
+            }
+            dev_state.x280_socket->read(x280_page_buf.data(), 1);
+            const uint32_t* p = x280_page_buf.data();
+            uint64_t start_ts = (static_cast<uint64_t>(p[0]) << 32) | p[1];
+            uint64_t end_ts = (static_cast<uint64_t>(p[2]) << 32) | p[3];
+            tracy_handler_->PushDeviceZone(dev_state.chip_id, p[4], p[5], p[6], start_ts, end_ts, p[7]);
+            pages_received++;
+            x280_pages++;
+            return true;
+        };
+
         while (!stop_.load()) {
             if (pause_requested_.load(std::memory_order_acquire)) {
                 paused_.store(true, std::memory_order_release);
@@ -861,6 +999,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             for (auto& dev_state : devices_) {
                 try {
                     if (process_one_page(dev_state)) {
+                        any_data = true;
+                    }
+                    if (process_x280_page(dev_state)) {
                         any_data = true;
                     }
                 } catch (const std::exception& e) {
@@ -896,6 +1037,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                             any_data = true;
                             drain_pages++;
                         }
+                        if (process_x280_page(dev_state)) {
+                            any_data = true;
+                            drain_pages++;
+                        }
                     } catch (const std::exception& e) {
                         log_warning(
                             tt::LogMetal,
@@ -912,11 +1057,13 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 }
             }
 
-            log_debug(
+            log_info(
                 tt::LogMetal,
-                "[Real-time profiler] Receiver thread stopped after {} pages ({} drained during shutdown)",
+                "[Real-time profiler] Receiver thread stopped after {} pages ({} drained during shutdown); "
+                "{} were X280 kernel-zone pages",
                 pages_received,
-                drain_pages);
+                drain_pages,
+                x280_pages);
         }
     });
 }
@@ -927,6 +1074,19 @@ void RealtimeProfilerManager::shutdown() {
     // Re-write ring_buffer->terminate as a safety net (dispatch_s already set it via the
     // profiler core's TERMINATE), then give the push kernel time to deliver the last PCIe page.
     for (auto& dev_state : devices_) {
+        // Tell the X280 drainer to finish its current drain pass and exit its loop, so the
+        // receiver's shutdown drain catches the last device-zone pages.
+        if (dev_state.x280_active && dev_state.x280_driver) {
+            try {
+                dev_state.x280_driver->lim_wr_u64(dev_state.x280_params_addr + 0x28, 1);  // P_STOP
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to stop X280 on device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+            }
+        }
         if (dev_state.core_l1.ring_buffer != 0 && dev_state.device) {
             const uint32_t terminate_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, terminate);
             std::vector<uint32_t> terminate_flag = {1};
@@ -953,6 +1113,21 @@ void RealtimeProfilerManager::shutdown() {
     if (receiver_thread_.joinable()) {
         stop_.store(true);
         receiver_thread_.join();
+    }
+
+    // Park each X280 in reset now that its socket has been drained.
+    for (auto& dev_state : devices_) {
+        if (dev_state.x280_active && dev_state.x280_driver) {
+            try {
+                dev_state.x280_driver->assert_reset();
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to reset X280 on device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+            }
+        }
     }
 
     tracy_handler_.reset();
