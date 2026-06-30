@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -265,27 +266,32 @@ void kernel_main() {
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core) {
+                        DeviceZoneScopedN("WAIT-UP");
                         k_block =
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
-                    read_in0_block_sync<M_block_tiles, K_block_tiles>(
-                        in0_reader,
-                        in0_shape,
-                        in0_start_address,
-                        in0_tile_size,
+                    {
+                        DeviceZoneScopedN("READ-DRAM-ACT");
+                        read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                            in0_reader,
+                            in0_shape,
+                            in0_start_address,
+                            in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
-                        in3_reader,
-                        fused_op_receiver.local_k_start,
-                        fused_op_receiver.local_k_end,
-                        fused_op_receiver.input_tensor_Wt,
+                            in3_reader,
+                            fused_op_receiver.local_k_start,
+                            fused_op_receiver.local_k_end,
+                            fused_op_receiver.input_tensor_Wt,
 #endif
-                        m_tile,
-                        m_tile_end,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles);
+                            m_tile,
+                            m_tile_end,
+                            k_block * K_block_tiles,
+                            (k_block + 1) * K_block_tiles);
+                    }
                 } else {
                     // Get from previous device
+                    DeviceZoneScopedN("WAIT-UP");
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
@@ -296,9 +302,13 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                    {
+                        DeviceZoneScopedN("WAIT-DN");
+                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                    }
 
+                    DeviceZoneScopedN("SEND-DN");
                     uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
                     /**

@@ -274,6 +274,8 @@ void matmul_blocks(
     const uint32_t subblock_w) {
     uint32_t in0_index_offset = 0;
 
+    DeviceZoneScopedN("MATMUL");
+
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
         uint32_t in1_index_offset = 0;
         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
@@ -397,8 +399,14 @@ void kernel_main() {
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
+                {
+                    DeviceZoneScopedN("WAIT-ACT");
+                    cb_wait_front(in0_cb, in0_block_num_tiles);
+                }
+                {
+                    DeviceZoneScopedN("WAIT-WGT");
+                    cb_wait_front(in1_cb, in1_block_num_tiles);
+                }
 
                 matmul_blocks(
                     in0_cb,
