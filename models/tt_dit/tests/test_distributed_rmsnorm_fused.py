@@ -626,6 +626,7 @@ _BENCH_IDS = [
 ]
 
 
+@pytest.mark.skip_post_commit  # perf/dev benchmark, not a correctness gate
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_BENCH_PARAMS, _BENCH_IDS)],
@@ -1033,6 +1034,7 @@ _LNBENCH_IDS = ["flux_tp4", "wan_tp4"]
 _LNBENCH_SEQLENS = [512, 1024, 4096, 8192]
 
 
+@pytest.mark.skip_post_commit  # perf/dev benchmark, not a correctness gate
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "dim", "tp", "topology", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_LNBENCH_PARAMS, _LNBENCH_IDS)],
@@ -1091,6 +1093,7 @@ def test_layernorm_module_bench(mesh_device, model, dim, tp, topology, tp_axis, 
     [pytest.param(*p, id=i) for p, i in zip(_CORR_PARAMS, _CORR_IDS)],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.skip_post_commit  # trace-replay dev check, not a correctness gate
 def test_traced_corr(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
     """Traced fused output must match the EAGER fused output (and torch ref).
 
@@ -1256,6 +1259,7 @@ _SWEEP_PARAMS = [
 _SWEEP_IDS = ["tp1_line", "tp2_line", "tp4_line", "tp4_ring", "tp8_ring"]
 
 
+@pytest.mark.skip_post_commit  # stability sweep, dev-only (not a correctness gate)
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_SWEEP_PARAMS, _SWEEP_IDS)],

@@ -47,7 +47,7 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    bool use_device_op = false,
+    bool use_device_op = true,
     WanFusedNormType norm_type = WanFusedNormType::RMS,
     // Optional Welford reciprocal LUT (LAYERNORM only): row-major fp32 [.., reduce_width]
     // == [1/1..1/H_local], replicated per device. Read by the writer at kernel start so
