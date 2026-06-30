@@ -397,6 +397,7 @@ def denoise_attention(
         v_old.deallocate(True)
 
     tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
+    tt_sdpa.deallocate(True)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
     return tt_out

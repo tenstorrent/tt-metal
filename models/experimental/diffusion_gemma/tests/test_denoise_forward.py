@@ -240,6 +240,38 @@ def test_chunked_norm_forward_uses_sharded_scaleless_norm(monkeypatch):
     assert calls == [([1, 1, 96, 2816], 1e-6, 32)]
 
 
+def test_denoise_hidden_forward_deallocates_final_norm_input(monkeypatch):
+    prompt = _FakeTensor([1, 1, 32, 16])
+    canvas = _FakeTensor([1, 1, 256, 16])
+    layer_hidden = _FakeTensor([1, 1, 256, 16])
+    final_hidden = _FakeTensor([1, 1, 256, 16])
+    model = _FakeModel(num_layers=1)
+    model.norm = SimpleNamespace()
+
+    def fake_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
+        assert tt_model is model
+        assert layer_idx == 0
+        assert hidden_states is canvas
+        assert prompt_source is prompt
+        assert attn_mask is None
+        assert q_rope_offset == 32
+        return layer_hidden
+
+    def fake_chunked_norm(norm, hidden_states):
+        assert norm is model.norm
+        assert hidden_states is layer_hidden
+        return final_hidden
+
+    monkeypatch.setattr(DF, "_denoise_layer_forward", fake_layer_forward)
+    monkeypatch.setattr(DF, "_chunked_norm_forward", fake_chunked_norm)
+    monkeypatch.setattr(DF, "_build_denoise_attn_mask_for_layer", lambda *args, **kwargs: None)
+
+    out = DF.denoise_hidden_forward(model, prompt_hidden_by_layer=[prompt], canvas_hidden=canvas)
+
+    assert out is final_hidden
+    assert layer_hidden.deallocated is True
+
+
 def test_denoise_router_forward_uses_chunked_norm(monkeypatch):
     calls = []
 

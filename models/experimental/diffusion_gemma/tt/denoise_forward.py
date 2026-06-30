@@ -326,7 +326,9 @@ def denoise_hidden_forward(
             q_rope_offset,
         )
         _deallocate_optional_tensor(attn_mask)
-    return _chunked_norm_forward(tt_model.norm, hidden_states)
+    final_hidden = _chunked_norm_forward(tt_model.norm, hidden_states)
+    hidden_states.deallocate(True)
+    return final_hidden
 
 
 def denoise_logits_forward(
