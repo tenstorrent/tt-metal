@@ -73,6 +73,11 @@ STEPS = int(os.environ.get("HY_STEPS", "8"))
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
 SEED = int(os.environ.get("HY_SEED", "0"))
+# Image side in pixels; grid = IMAGE_SIZE / 16 (vae_downsample_factor), and the
+# backbone seq_len = text + grid^2. Raise this to scale seq_len toward the config's
+# max_position_embeddings (the run asserts the cap). Default 1024 -> 64x64 grid.
+# When set, overrides the recaption-resolved size. The VAE is rebuilt for the grid.
+IMAGE_SIZE = int(os.environ["HY_IMAGE_SIZE"]) if os.environ.get("HY_IMAGE_SIZE") else None
 SCALING = 0.562679178327931
 OUT_PNG = os.environ.get("HY_OUT", "/home/iguser/Christy/tt-metal/hy_t2i.png")
 
@@ -117,6 +122,7 @@ def _cfg():
         MIXED=c.get("use_mixed_mlp_moe", True),
         QKN=c.get("use_qk_norm", True),
         EPS=c.get("rms_norm_eps", 1e-5),
+        MAX_SEQ=int(c["max_position_embeddings"]),
     )
 
 
@@ -265,6 +271,9 @@ def main():
     if RECAPTION:
         cot_text, image_size = _run_recaption(c, tok, proc, wte, PROMPT, generator)
         print(f"[demo] recaption cot_text:\n{cot_text}\n[demo] resolved image_size={image_size}")
+    if IMAGE_SIZE is not None:  # explicit HY_IMAGE_SIZE overrides the resolved size
+        image_size = IMAGE_SIZE
+        print(f"[demo] HY_IMAGE_SIZE override -> image_size={image_size}")
 
     # 1) tokenize -> input_ids (cond row 0, uncond row 1) + contiguous image span.
     #    cot_text (when present) is injected as the assistant turn before the gen block.
@@ -273,7 +282,8 @@ def main():
     S = bundle.seq_len
     span = bundle.rope_image_info[0][0][0]
     grid = bundle.rope_image_info[0][0][1]  # (64, 64)
-    print(f"[demo] seq_len={S} image_span={span} grid={grid}")
+    print(f"[demo] seq_len={S} image_span={span} grid={grid}  (max_position_embeddings={c['MAX_SEQ']})")
+    assert S <= c["MAX_SEQ"], f"seq_len {S} (image_size {image_size}) exceeds max_position_embeddings {c['MAX_SEQ']}"
 
     # 2) text embeddings (host wte lookup — exact) for cond/uncond rows.
     emb = torch.nn.functional.embedding(ids, wte)  # [2, S, H]
@@ -379,10 +389,11 @@ def main():
             vae_mesh,
             latent,
             scaling_factor=SCALING,
+            grid_hw=grid,  # rebuild the VAE for the actual latent grid (1024 -> 64x64)
             ccl_manager=vae_ccl,
             h_mesh_axis=0,
             w_mesh_axis=1,
-        )  # [1, 3, 1024, 1024] in [0,1]
+        )  # [1, 3, grid*16, grid*16] in [0,1]
     finally:
         ttnn.close_mesh_device(vae_mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

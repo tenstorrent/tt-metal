@@ -215,6 +215,10 @@ class ConvInTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        t: int = LATENT_T,
+        h: int = LATENT_H,
+        w: int = LATENT_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -229,9 +233,9 @@ class ConvInTTNN(Module):
             padding=1,
             mesh_device=mesh_device,
             dtype=dtype,
-            t=LATENT_T,
-            h=LATENT_H,
-            w=LATENT_W,
+            t=t,
+            h=h,
+            w=w,
         )
         init_conv_in_weights(self)
 
@@ -325,17 +329,21 @@ class AttnBlockTTNN(Module):
         channels: int,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        t: int = LATENT_T,
+        h: int = LATENT_H,
+        w: int = LATENT_W,
     ) -> None:
         super().__init__()
         self.channels = channels
         self.mesh_device = mesh_device
         self.dtype = dtype
-        self.spatial = LATENT_H * LATENT_W
+        self.spatial = h * w
 
         self.norm = GroupNorm3D(
             num_channels=channels,
             num_groups=NUM_GROUPS,
-            input_nhw=LATENT_T * LATENT_H * LATENT_W,
+            input_nhw=t * h * w,
             num_batches=1,
             eps=GN_EPS,
             mesh_device=mesh_device,
@@ -344,9 +352,9 @@ class AttnBlockTTNN(Module):
         conv_kwargs = dict(
             mesh_device=mesh_device,
             dtype=dtype,
-            t=LATENT_T,
-            h=LATENT_H,
-            w=LATENT_W,
+            t=t,
+            h=h,
+            w=w,
         )
         self.q = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)
         self.k = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)
@@ -418,14 +426,18 @@ class MidBlockTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        t: int = LATENT_T,
+        h: int = LATENT_H,
+        w: int = LATENT_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
 
-        self.block_1 = ResnetBlockTTNN(1024, 1024, mesh_device, dtype=dtype)
-        self.attn_1 = AttnBlockTTNN(1024, mesh_device, dtype=dtype)
-        self.block_2 = ResnetBlockTTNN(1024, 1024, mesh_device, dtype=dtype)
+        self.block_1 = ResnetBlockTTNN(1024, 1024, mesh_device, dtype=dtype, t=t, h=h, w=w)
+        self.attn_1 = AttnBlockTTNN(1024, mesh_device, dtype=dtype, t=t, h=h, w=w)
+        self.block_2 = ResnetBlockTTNN(1024, 1024, mesh_device, dtype=dtype, t=t, h=h, w=w)
         init_mid_block_weights(self)
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
@@ -619,11 +631,15 @@ class DecoderTailTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        latent_t: int = LATENT_T,
+        latent_h: int = LATENT_H,
+        latent_w: int = LATENT_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
-        tail_t, tail_h, tail_w, tail_c = decoder_tail_shape()
+        tail_t, tail_h, tail_w, tail_c = decoder_tail_shape(latent_t, latent_h, latent_w)
 
         self.norm_out = NormOutTTNN(tail_c, mesh_device, dtype=dtype, t=tail_t, h=tail_h, w=tail_w)
         self.conv_out = ConvOutTTNN(
@@ -643,11 +659,20 @@ class DecoderUpTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        latent_t: int = LATENT_T,
+        latent_h: int = LATENT_H,
+        latent_w: int = LATENT_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
-        self.up_blocks = ModuleList([UpBlockTTNN(spec, mesh_device, dtype=dtype) for spec in decoder_up_level_specs()])
+        self.up_blocks = ModuleList(
+            [
+                UpBlockTTNN(spec, mesh_device, dtype=dtype)
+                for spec in decoder_up_level_specs(latent_t, latent_h, latent_w)
+            ]
+        )
         init_decoder_up_weights(self)
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
@@ -677,20 +702,33 @@ class VAEDecoderUpTailTTNN(Module):
 
 
 class VAEDecoderTTNN(Module):
-    """Full VAE decoder: conv_in -> mid -> up -> tail on replicated mesh."""
+    """Full VAE decoder: conv_in -> mid -> up -> tail on replicated mesh.
+
+    ``latent_h``/``latent_w`` size the decoder for a non-default latent grid (the
+    constants are 64x64 -> 1024x1024). Larger grids let the diffusion latent (whose
+    side is the image-token grid) decode to a larger image, at the cost of more
+    DRAM (conv im2col / attention scale with spatial size)."""
 
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        latent_t: int = LATENT_T,
+        latent_h: int = LATENT_H,
+        latent_w: int = LATENT_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
-        self.conv_in = ConvInTTNN(mesh_device, dtype=dtype)
-        self.mid = MidBlockTTNN(mesh_device, dtype=dtype)
-        self.decoder_up = DecoderUpTTNN(mesh_device, dtype=dtype)
-        self.decoder_tail = DecoderTailTTNN(mesh_device, dtype=dtype)
+        self.conv_in = ConvInTTNN(mesh_device, dtype=dtype, t=latent_t, h=latent_h, w=latent_w)
+        self.mid = MidBlockTTNN(mesh_device, dtype=dtype, t=latent_t, h=latent_h, w=latent_w)
+        self.decoder_up = DecoderUpTTNN(
+            mesh_device, dtype=dtype, latent_t=latent_t, latent_h=latent_h, latent_w=latent_w
+        )
+        self.decoder_tail = DecoderTailTTNN(
+            mesh_device, dtype=dtype, latent_t=latent_t, latent_h=latent_h, latent_w=latent_w
+        )
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         """BTHWC device tensor in -> BTHWC device tensor out."""
