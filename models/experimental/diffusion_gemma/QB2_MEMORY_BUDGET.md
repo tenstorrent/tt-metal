@@ -111,7 +111,7 @@ MESH_DEVICE=P150x4 HF_MODEL=<12B path> \
 ```
 
 > ⚠️ This box has a known **erisc teardown re-hang** (active-eth core 29-25) after a
-> device run (DEVICE_LOOP.md). Minimize CreateDevice churn (`use_module_device` / one
+> device run (`plan.md`, Part II). Minimize CreateDevice churn (`use_module_device` / one
 > session) and `tt-smi -r` between runs. Local board fw is 19.9.0 (ahead of
 > tt-metal's tested 19.5.0); treat the hang as an env quirk.
 

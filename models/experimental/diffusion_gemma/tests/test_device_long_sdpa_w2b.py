@@ -3,7 +3,7 @@
 
 """W2b long-prompt non-causal SDPA spikes (#47462).
 
-This is the S1/S2 harness from ``DEVICE_LOOP_W2B.md``: canvas queries
+This is the S1/S2 harness from ``plan.md`` Appendix A (W2b): canvas queries
 ``[1, H, 256, DH]`` attend bidirectionally to a long ``[1, Hkv, Sk, DH]``
 prefix+canvas K/V rectangle. S1 runs the target maskless non-causal path; S2
 keeps an explicit all-zero mask as the A/B control.

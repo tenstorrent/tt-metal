@@ -9,7 +9,7 @@ block-autoregressive multi-canvas *generation procedure* — bidirectional canva
 attention, a three-phase KV-cache state machine, entropy-budget acceptance
 sampling, and self-conditioning.
 
-See ``plan.md`` for the implementation plan and ``AGENTS.md`` for working
-context. ``DEVICE_LOOP.md`` (Part II) tracks what is implemented vs
-blocked-on-environment.
+See ``plan.md`` for the implementation plan, spec, and status (Part III tracks
+what is implemented vs blocked-on-environment) and ``AGENTS.md`` for working
+context.
 """
