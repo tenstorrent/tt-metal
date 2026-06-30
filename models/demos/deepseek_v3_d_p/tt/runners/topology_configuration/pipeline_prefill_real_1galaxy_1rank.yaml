@@ -16,7 +16,7 @@
 #     --tcp-interface ens5f0np0 \
 #     --rank-binding models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_real_1galaxy_1rank.yaml \
 #     --mpi-args "--host bh-glx-d03u02:1 --map-by slot --bind-to none --tag-output --allow-run-as-root" \
-#     python3 -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner
+#     python3 -m models.demos.common.prefill.runners.prefill_runner
 
 rank_bindings:
   - rank: 0

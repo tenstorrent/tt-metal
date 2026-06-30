@@ -4,8 +4,8 @@
 
 """External producer for the H2D-streamed prefill_runner.
 
-Pairs with `prefill_runner.py` running in `PREFILL_H2D_EXTERNAL_PRODUCER=1`
-mode. The runner constructs an `H2DStreamService`, calls
+Pairs with `prefill_runner.py` running in request mode (the default — i.e. NOT
+PREFILL_STANDALONE). The runner constructs an `H2DStreamService`, calls
 `export_descriptor(service_id)` to drop a flatbuffer at
 `/dev/shm/tt_h2d_stream_service_<service_id>.bin`, then loops on
 `inbound_socket_service_sync` (blocks on `data_ready_sem`).
@@ -22,7 +22,7 @@ This producer:
 
 Env vars:
   PREFILL_H2D_SERVICE_ID       — must match runner's value (default: "ds_prefill")
-  PREFILL_MODEL_VARIANT        — selects the variant's prefill_trace_default (default: deepseek_v3_d_p)
+  PREFILL_MODEL                — selects the model adapter's prefill_trace_default (default: deepseek_v3_d_p)
   PREFILL_TRACE_DIR   — golden trace dir (overrides the variant default; must match the runner)
   PREFILL_STANDALONE_NCHUNKS   — chunks to push (default 11 -> 56320 tokens)
   PREFILL_NUM_USERS            — cache user slots (default 2); the requested slot wraps mod this
@@ -32,14 +32,14 @@ Env vars:
   PREFILL_SP / PREFILL_TP / PREFILL_MAX_SEQ_LEN / PREFILL_CHUNK_SIZE
     — must match the runner so token packing produces the same byte layout.
 
-Usage (two terminals):
-    # terminal A — runner (creates service + exports descriptor + waits):
-    PREFILL_STANDALONE=1 PREFILL_H2D_EXTERNAL_PRODUCER=1 \
-      python -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner
+Usage (two terminals; PREFILL_H2D_SERVICE_ID must match between them):
+    # terminal A — runner in request mode (creates service + exports descriptor + serves):
+    PREFILL_H2D_SERVICE_ID=ds_prefill \
+      python -m models.demos.common.prefill.runners.prefill_runner
 
     # terminal B — producer (pushes tokens):
-    PREFILL_STANDALONE_ITERS=1 \
-      python -m models.demos.deepseek_v3_d_p.tt.runners.prefill_h2d_producer
+    PREFILL_H2D_SERVICE_ID=ds_prefill PREFILL_STANDALONE_ITERS=1 \
+      python -m models.demos.common.prefill.runners.prefill_h2d_producer
 """
 
 import os
@@ -51,9 +51,11 @@ from loguru import logger
 
 import ttnn
 
-# runner_utils is migration-free (no _migration pull), so importing the variant + trace helpers here
-# does not violate this producer's "don't import the runner module" constraint.
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import get_variant, load_trace_token_ids, resolve_trace_dir
+# get_adapter resolves the model adapter lazily (by dotted path) and is read only for its path/trace
+# ATTRIBUTES, and the common runner_utils is migration-free, so neither pulls a model/runner module
+# into this producer.
+from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 # Per-iter control metadata payload: 3 × uint32 = 12 bytes. Must match the
 # runner's H2D_METADATA_SIZE_BYTES and field order in prefill_runner.py, and
@@ -78,7 +80,7 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 
-VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
+ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
 
 def _load_tokens():
@@ -86,7 +88,7 @@ def _load_tokens():
     golden trace metadata.json (PREFILL_TRACE_DIR overrides the variant default). Loads the
     first NCHUNKS*CHUNK_SIZE tokens (chunk-aligned, all real). Pairs with the runner's request-loop
     PCC check against the same trace's golden KV."""
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
+    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
     n_chunks = int(os.environ.get("PREFILL_STANDALONE_NCHUNKS", "11"))
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % NUM_USERS
     total_len = n_chunks * CHUNK_SIZE
