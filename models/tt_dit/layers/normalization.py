@@ -213,11 +213,12 @@ class DistributedRMSNorm(Module):
 
         The buffer's chunk/window geometry is computed by the SAME compute_sizing
         the device op uses, so it MUST be fed the same inputs that affect chunking:
-        weight/RoPE (per-head-RoPE & streaming chunk clamp) and num_links (workers
-        are rounded to a multiple of num_links). The op here is invoked with the
-        default num_links (=1), so we leave create_stats_buffer at its default too;
-        but we MUST forward weight/RoPE or the buffer is sized for a different chunk
-        than the kernel writes, silently corrupting each chunk's last AG row.
+        weight/RoPE (per-head-RoPE & streaming chunk clamp) and num_links (num_forwarders
+        = min(num_links, num_workers); a mismatch vs the op's num_preferred_links corrupts
+        the gather). We pass ccl_manager.num_links here AND as num_preferred_links to the
+        op below so the two agree — more links = more parallel AG planes (faster gather at
+        large seq). We also forward weight/RoPE or the buffer is sized for a different
+        chunk than the kernel writes, silently corrupting each chunk's last AG row.
         """
         has_rope = rope_cos is not None
         key = (tuple(x.shape), num_heads_per_device, has_rope)
@@ -242,6 +243,7 @@ class DistributedRMSNorm(Module):
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
+                    num_links=self.ccl_manager.num_links,
                     weight=self.weight.data if self.weight is not None else None,
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
@@ -291,6 +293,7 @@ class DistributedRMSNorm(Module):
                 num_heads_per_device=num_heads_per_device,
                 weight=self.weight.data if self.weight is not None else None,
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+                num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
                 transformation_mat=trans_mat,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
@@ -504,7 +507,17 @@ class DistributedLayerNorm(Module):
 
         if _USE_FUSED_LAYERNORM and self._fused_ln_supported(x, dynamic_weight, weight):
             persistent_output_buffer = self._ensure_fused_ln_stats_buffer(x)
-            return ttnn.experimental.wan_fused_distributed_rmsnorm(
+            # The fused op fuses the affine in-op but only accepts BF16 weight/bias (its
+            # reader reads 2 B face-rows). adaLN modulation (1+scale)/shift is kept FP32 by
+            # the model (only `gate` is cast to bf16) for accuracy, and the composite chain
+            # preserves it. If we cast weight/bias to bf16 the block PCC drops measurably
+            # (99.995% -> 99.87% on Wan2.2). So:
+            #   - bf16 weight/bias  -> fuse the affine in-op (fast path).
+            #   - fp32 weight/bias  -> run the fused op as a PURE normalize (fp32 out; the
+            #     expensive welford PRE + ring AG + merge stay fused) and apply the affine
+            #     externally in fp32, preserving the modulation precision the composite keeps.
+            affine_is_bf16 = weight is None or weight.dtype == ttnn.bfloat16
+            out = ttnn.experimental.wan_fused_distributed_rmsnorm(
                 x,
                 self.mesh_axis,
                 self.mesh_device,
@@ -512,15 +525,25 @@ class DistributedLayerNorm(Module):
                 topology=self.ccl_manager.topology,
                 persistent_output_buffer=persistent_output_buffer,
                 epsilon=self.norm_eps,
-                weight=weight,
-                bias=bias,
+                weight=weight if affine_is_bf16 else None,
+                bias=bias if affine_is_bf16 else None,
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
                 num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
-                dtype=dtype,
+                dtype=dtype if affine_is_bf16 else ttnn.float32,
                 use_device_op=True,
                 norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
                 reciprocals=self._ensure_fused_ln_recip(x),
             )
+            if affine_is_bf16:
+                return out
+            # External fp32 affine: out = normed * weight + bias, weight/bias broadcast over
+            # the token (N) dim. ttnn binary broadcasting needs matching rank, so lift the
+            # [.., H] modulation to [1, 1, 1, H].
+            h = weight.shape[-1]
+            w4 = ttnn.reshape(weight, [1, 1, 1, h])
+            b4 = ttnn.reshape(bias, [1, 1, 1, h])
+            out = ttnn.add(ttnn.mul(out, w4), b4)
+            return out if dtype == ttnn.float32 else ttnn.typecast(out, dtype or ttnn.bfloat16)
 
         stats = ttnn.experimental.dit_layernorm_pre_allgather(
             x,
