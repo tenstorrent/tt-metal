@@ -86,6 +86,12 @@ DEVICE_PARAMS_E2E_2CQ_GENERATE = {
     **_MESH_FABRIC,
 }
 
+DEVICE_PARAMS_E2E_2CQ_GENERATE_SINGLE = {
+    "l1_small_size": 65536,
+    "trace_region_size": 450_000_000,
+    "num_command_queues": 2,
+}
+
 
 def seamless_mesh_shape_from_env() -> tuple[int, int]:
     mesh_env = os.environ.get("MESH_DEVICE")
@@ -159,6 +165,14 @@ MESH_DEVICE_PARAMETRIZE_TEXT_SINGLE_AND_1X4 = (
 MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE = (
     "mesh_device,device_params",
     [_mesh_device_param(DEVICE_PARAMS_E2E_2CQ_GENERATE)],
+)
+
+MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE_SINGLE_AND_1X4 = (
+    "mesh_device,device_params",
+    [
+        _mesh_device_param_for_shape(MESH_SHAPE_SINGLE, DEVICE_PARAMS_E2E_2CQ_GENERATE_SINGLE, id="1x1"),
+        _mesh_device_param_for_shape(MESH_SHAPE, DEVICE_PARAMS_E2E_2CQ_GENERATE, id="1x4"),
+    ],
 )
 
 
