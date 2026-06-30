@@ -129,6 +129,10 @@ def _get_stable_sort_modes(mathop):
         MathOperation.Atan,
         MathOperation.Sinh,
         MathOperation.Cosh,
+        MathOperation.Floor,
+        MathOperation.Ceil,
+        MathOperation.Trunc,
+        MathOperation.Frac,
     ],
     dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
     loop_factor=[
