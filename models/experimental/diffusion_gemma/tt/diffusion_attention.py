@@ -258,14 +258,30 @@ def _manual_gqa_attention(tt_q, tt_k, tt_v):
             ]
             k_group = ttnn.concat(k_heads, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             v_group = ttnn.concat(v_heads, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for tensor in k_heads[1:]:
+                tensor.deallocate(True)
+            for tensor in v_heads[1:]:
+                tensor.deallocate(True)
+            owns_k_group = True
+            owns_v_group = True
         else:
             k_group = k_head
             v_group = v_head
+            owns_k_group = False
+            owns_v_group = False
 
         k_transposed = ttnn.permute(k_group, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         scores = ttnn.matmul(q_group, k_transposed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
         outputs.append(ttnn.matmul(probs, v_group, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        q_group.deallocate(True)
+        if owns_k_group:
+            k_group.deallocate(True)
+        if owns_v_group:
+            v_group.deallocate(True)
+        k_transposed.deallocate(True)
+        scores.deallocate(True)
+        probs.deallocate(True)
 
     return ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
