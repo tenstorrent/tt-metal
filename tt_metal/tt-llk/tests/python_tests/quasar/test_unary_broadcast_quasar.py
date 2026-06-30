@@ -60,8 +60,8 @@ def get_valid_dest_acc_unary_broadcast(formats):
 @parametrize(
     formats=input_output_formats(
         [
-            # DataFormat.Float16_b,
-            DataFormat.Float32,  # Buggy functionality for Float32 (unpack_to_dest=True) tbd
+            DataFormat.Float16_b,
+            # DataFormat.Float32,  # Buggy functionality for Float32 (unpack_to_dest=True) tbd
             # DataFormat.MxFp8R,
             # DataFormat.MxFp8P,
             # DataFormat.MxFp4,
@@ -73,9 +73,9 @@ def get_valid_dest_acc_unary_broadcast(formats):
     ),
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=[
-        # BroadcastType.Scalar,
+        BroadcastType.Scalar,
         BroadcastType.Column,
-        # BroadcastType.Row,
+        BroadcastType.Row,
     ],
     implied_math_format=lambda formats: (
         [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
@@ -178,7 +178,6 @@ def test_unary_broadcast_quasar(
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
-        disable_format_inference=(implied_math_format == ImpliedMathFormat.Yes),
     )
 
     res_from_L1 = configuration.run().result

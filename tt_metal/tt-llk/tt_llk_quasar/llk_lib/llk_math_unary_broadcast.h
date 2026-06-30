@@ -54,11 +54,19 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
             }
                 .set(ADDR_MOD_3);
         }
+        else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
+        {
+            addr_mod_t {
+                .srcb = {.incr = 0},
+                .dest = {.incr = static_cast<std::uint16_t>(tensor_shape.face_r_dim * 2)},
+            }
+                .set(ADDR_MOD_3);
+        }
         else
         {
             addr_mod_t {
-                .srcb = {.clr = 0},
-                .dest = {.incr = static_cast<std::uint16_t>(tensor_shape.face_r_dim * 2)},
+                .srcb = {.incr = 0},
+                .dest = {.incr = 8},
             }
                 .set(ADDR_MOD_3);
         }
@@ -88,46 +96,75 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 
     if constexpr (unpack_to_dest)
     {
-        constexpr std::uint32_t replay_buf_len = 12;
-        load_replay_buf<0, replay_buf_len>(
-            []
-            {
-                TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
+        if constexpr (BROADCAST_TYPE == BroadcastType::COL)
+        {
+            constexpr std::uint32_t replay_buf_len = 12;
+            load_replay_buf<0, replay_buf_len>(
+                []
+                {
+                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
 
-                TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
+                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
 
-                TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
-                TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
-                TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
-                TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
 
-                TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
-                TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
-                TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
-                TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
+                });
 
-                // TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 32);
-                // TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 40);
+            ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
+            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
+            temp.program_bank0_sw_cntl(instrn_buffer);
+        }
+        else if (BROADCAST_TYPE == BroadcastType::ROW)
+        {
+            constexpr std::uint32_t replay_buf_len = 10;
+            load_replay_buf<0, replay_buf_len>(
+                []
+                {
+                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
 
-                // TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 32);
-                // TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 40);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
 
-                // TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 32);
-                // TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 40);
-                // TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 48);
-                // TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 56);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
+                });
 
-                // TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 32);
-                // TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 40);
-                // TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 48);
-                // TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 56);
-            });
+            ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
+            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
+            temp.program_bank0_sw_cntl(instrn_buffer);
+        }
+        else // BroadcastType::SCALAR
+        {
+            constexpr std::uint32_t replay_buf_len = 4;
+            load_replay_buf<0, replay_buf_len>(
+                []
+                {
+                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
 
-        ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
-        temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
-        temp.program_bank0_sw_cntl(instrn_buffer);
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                });
+
+            ckernel_template temp(1 /* mop_outer_loop */, 8 /* mop_inner_loop */, TT_OP_REPLAY(2, 2, 0, 0, 0, 0));
+            temp.set_start_op(TT_OP_REPLAY(0, 2, 0, 0, 0, 0));
+            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
+            temp.program_bank0_sw_cntl(instrn_buffer);
+        }
     }
     else
     {
@@ -157,44 +194,6 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             temp.set_last_outer_loop_instr(movb2d(ADDR_MOD_2));
         }
 
-        temp.program_bank0_sw_cntl(instrn_buffer);
-    }
-}
-
-/**
- * @brief MOP for MOVD2B when unpack wrote to dest (move dest rows back to srcB for MOVB2D).
- *
- * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
- * @param tensor_shape: Used for row/col loop counts outside ROW special case
- */
-template <BroadcastType BROADCAST_TYPE>
-inline void _llk_math_eltwise_unary_broadcast_d2b_mop_config_(const TensorShape& tensor_shape)
-{
-    if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
-    {
-        const auto f = [](std::uint8_t am, std::uint32_t d32) { return TT_OP_MOVD2B(d32, 0, am, p_movd2b::MOV_1_ROW, 0, 0); };
-
-        constexpr std::uint32_t replay_buf_len = 1;
-        load_replay_buf<0, replay_buf_len>([] { TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0, 0); });
-
-        ckernel_template temp(1, 1, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), f(ADDR_MOD_3, 0));
-        temp.set_last_inner_loop_instr(f(ADDR_MOD_3, 1));
-        temp.program_bank0_sw_cntl(instrn_buffer);
-    }
-    else
-    {
-        // SCALAR: all faces × rows. COL: column broadcast touches two faces in dest (mirrors unpack UNPACR_DEST_FACE 0 and 2), so row count is 2× face_r_dim.
-        const std::uint32_t rows_sel =
-            (BROADCAST_TYPE == BroadcastType::SCALAR) ? tensor_shape.total_num_faces() * tensor_shape.face_r_dim : tensor_shape.face_r_dim * 2;
-        const std::uint32_t inner_d2b = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : rows_sel >> rows_log2(ELTWISE_MATH_ROWS);
-
-        const auto f = [](std::uint8_t am, std::uint32_t d32) { return TT_OP_MOVD2B(d32, 0, am, p_mov_src_to_dest::MOV_8_ROWS, 0, 0); };
-
-        constexpr std::uint32_t replay_buf_len = 1;
-        load_replay_buf<0, replay_buf_len>([] { TTI_MOVD2B(0, 0, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, 0, 0); });
-
-        ckernel_template temp(1, inner_d2b * 2, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), f(ADDR_MOD_3, 0));
-        temp.set_last_inner_loop_instr(f(ADDR_MOD_3, 1));
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }
