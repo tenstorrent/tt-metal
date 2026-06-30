@@ -62,8 +62,11 @@ def test_causal_sdpa_past_32768(device, seq):
     v = torch.randn(1, 1, seq, HEAD_DIM)
     golden = _tiled_causal_oracle(q, k, v)
 
+    # Match production chunked_prefill_sdpa tiles: head_dim>=512 -> q=128 on (8,4)
+    # grid (q=256 overflows L1 there); head_dim<=256 -> q=256 on (8,8).
+    q_chunk = 128 if HEAD_DIM >= 512 else 256
     cfg = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=GRID, q_chunk_size=256, k_chunk_size=128, exp_approx_mode=False
+        compute_with_storage_grid_size=GRID, q_chunk_size=q_chunk, k_chunk_size=128, exp_approx_mode=False
     )
     tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.transformer.scaled_dot_product_attention(
