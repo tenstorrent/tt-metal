@@ -214,6 +214,9 @@ def test_abs_int32(input_shapes, low_a, high_a, device):
     torch_input_tensor_a = torch.linspace(low_a, high_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a[::5] = 0  # ensure the zero / sign-clear path is exercised
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(input_shapes)
+    # Guard the documented INT_MIN avoidance: abs(-2147483648) overflows int32 and would
+    # silently corrupt both golden and device results (a green-but-meaningless test).
+    assert torch_input_tensor_a.min().item() != -2147483648, "INT_MIN leaked into abs test input"
 
     golden_function = ttnn.get_golden_function(ttnn.abs)
     torch_output_tensor = golden_function(torch_input_tensor_a)
