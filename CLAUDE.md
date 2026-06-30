@@ -7,7 +7,8 @@
 
 ## Standards
 - PCC > 0.99 is MANDATORY for all ttnn blocks.
-- Reset device with 'tt-smi -r' if a hang occurs.
+- **NEVER run `tt-smi -r`, `tt-smi -glx_reset`, or any hardware reset command without explicit user instruction.** Ask the user to run resets themselves.
+- Reset device with 'tt-smi -r' if a hang occurs — but only when the user asks you to.
 - Follow the "Relay Race" flow: Architecture -> Reference -> TTNN -> Debug -> Opt -> Server.
 - Complete each part of the flow properly, in depth before moving to the next one.
 - Critical: No shortcuts that need to be reverted later.

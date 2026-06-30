@@ -36,18 +36,122 @@ def rms_norm_ttnn(x, weight, eps=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG):
     return ttnn.multiply(x_normed, weight, memory_config=memory_config)
 
 
-def _causal_conv1d_fir(x, weight, bias, kernel_size, device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """
-    Manual FIR decomposition of depthwise causal conv1d + SiLU.
+def _causal_conv1d_fir(
+    x,
+    weight,
+    bias,
+    kernel_size,
+    device,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    conv_state=None,
+    weight_taps=None,
+    bias_dev=None,
+    valid_len=None,
+):
+    """FIR decomposition of depthwise causal conv1d + SiLU.
 
-    Used for large T where native ttnn.conv1d would OOM in L1.
-    Decomposes the convolution into K element-wise multiply+accumulate
-    operations on shifted slices.
+    Extended API (used by TP GDN prefill in gdn/tp.py):
+      weight_taps  — list of K pre-sharded device tensors [1, 1, D_local], one per tap
+      conv_state   — optional [1, K-1, D_local] left context from prior chunk (None → zero pad)
+      valid_len    — if given, new_state captures tokens ending at this position
+      Returns (output [1, T, D_local], new_state [1, K-1, D_local])
+
+    Legacy API (weight, bias, kernel_size, device):
+      Returns output [1, T, D] only.
     """
+    import torch
+
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
+    K = kernel_size
 
+    if weight_taps is not None:
+        # ---- Extended API: pre-sharded taps, optional carry state ----
+        is_mesh = hasattr(device, "get_num_devices")
+
+        # Build left-padding: reuse conv_state if provided, else zeros
+        free_pad = False
+        if conv_state is not None:
+            pad = conv_state
+        else:
+            free_pad = True
+            zero_torch = torch.zeros(B, K - 1, D, dtype=torch.bfloat16)
+            if is_mesh:
+                pad = ttnn.from_torch(
+                    zero_torch,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=memory_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+            else:
+                pad = ttnn.from_torch(
+                    zero_torch,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=memory_config,
+                )
+
+        x_padded = ttnn.concat([pad, x], dim=1, memory_config=memory_config)
+        if free_pad:
+            ttnn.deallocate(pad)
+
+        # Accumulate K taps: sum_k( x_padded[:, k:k+T] * weight_taps[k] )
+        out = None
+        for k in range(K):
+            x_slice = ttnn.slice(x_padded, (0, k, 0), (B, k + T, D))
+            x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT, memory_config=memory_config)
+            term = ttnn.multiply(x_slice, weight_taps[k], memory_config=memory_config)
+            ttnn.deallocate(x_slice)
+            if out is None:
+                out = term
+            else:
+                new_out = ttnn.add(out, term, memory_config=memory_config)
+                ttnn.deallocate(out)
+                ttnn.deallocate(term)
+                out = new_out
+        ttnn.deallocate(x_padded)
+
+        # Capture new state: last K-1 real tokens from x (before padding)
+        end = valid_len if valid_len is not None else T
+        start = max(0, end - (K - 1))
+        real_len = end - start
+        if real_len < K - 1:
+            # Fewer real tokens than K-1: zero-pad on the left
+            need = K - 1 - real_len
+            zero_t = torch.zeros(B, need, D, dtype=torch.bfloat16)
+            if is_mesh:
+                z_dev = ttnn.from_torch(
+                    zero_t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=memory_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+            else:
+                z_dev = ttnn.from_torch(
+                    zero_t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=memory_config,
+                )
+            real_slice = ttnn.slice(x, (0, start, 0), (B, end, D))
+            new_state = ttnn.concat([z_dev, real_slice], dim=1, memory_config=memory_config)
+            ttnn.deallocate(z_dev)
+            ttnn.deallocate(real_slice)
+        else:
+            new_state = ttnn.slice(x, (0, start, 0), (B, end, D))
+
+        out_silu = ttnn.silu(out, memory_config=memory_config)
+        ttnn.deallocate(out)
+        return out_silu, new_state
+
+    # ---- Legacy single-device API ----
     pad = ttnn.zeros(
-        [B, kernel_size - 1, D],
+        [B, K - 1, D],
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -64,23 +168,26 @@ def _causal_conv1d_fir(x, weight, bias, kernel_size, device, memory_config=ttnn.
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        for k in range(kernel_size)
+        for k in range(K)
     ]
 
     out = None
-    for k in range(kernel_size):
+    for k in range(K):
         x_slice = x_padded[:, k : k + T]
         x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT, memory_config=memory_config)
-
         term = ttnn.multiply(x_slice, w_devices[k], memory_config=memory_config)
         out = term if out is None else ttnn.add(out, term, memory_config=memory_config)
 
     if bias is not None:
         bias_torch = ttnn.to_torch(bias).reshape(1, 1, D).contiguous()
-        bias_dev = ttnn.from_torch(
-            bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        bias_d = ttnn.from_torch(
+            bias_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        out = ttnn.add(out, bias_dev, memory_config=memory_config)
+        out = ttnn.add(out, bias_d, memory_config=memory_config)
 
     return ttnn.silu(out, memory_config=memory_config)
 

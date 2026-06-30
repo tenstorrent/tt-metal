@@ -40,6 +40,11 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_6_galaxy_v2.tt.gdn_chunk_ops_seq import chunk_gated_delta_rule_seq
+from models.demos.qwen3_6_galaxy_v2.tt.gdn_chunk_stable import (
+    _build_stable_masks,
+    _stable_ns_enabled,
+    chunk_gated_delta_rule_stable_ns,
+)
 
 # Prefill chunk kernel: use the qwen35-27b vendored kernel (clip-before-exp +
 # decay-offset normalization + HiFi2/fp32) instead of the shared experimental
@@ -125,6 +130,8 @@ def _causal_conv1d_fir_mesh(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    if pad.dtype != x_rm.dtype:
+        pad = ttnn.typecast(pad, x_rm.dtype, memory_config=memory_config)
     x_padded = ttnn.concat([pad, x_rm], dim=1, memory_config=memory_config)
     if not pad_is_persistent:
         pad.deallocate(True)
@@ -281,17 +288,13 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.eps = args.norm_eps
         self.max_batch_size = args.max_batch_size
 
-        # Prefill chunk-rule config. Match qwen35-27b/P150 (gdn_chunk_size=64):
-        # chunk_size=64 halves the number of sequential chunk iterations vs 32
-        # at a given ISL (4k -> 64 steps instead of 128). Build the triu/tril/
-        # eye masks ONCE here and reuse them every layer/call (the P150 path
-        # passes cached_masks; rebuilding them per call host-uploads 5 tensors
-        # on every one of the 48 linear layers, every prefill).
-        # NOTE: chunk_size=64 (P150's value) measured SLOWER here (warm prefill
-        # 4k 27.3s -> 31s) — the larger intra-chunk matmuls outweigh the halved
-        # iteration count on the Galaxy shapes. Keep 32 (faster + coherence-
-        # validated); cached_masks below is still a free win.
-        self.prefill_chunk_size = int(os.environ.get("QWEN36_GDN_CHUNK_SIZE", "32"))
+        # GDN prefill sub-chunk size. Must match BH TP=4 (gdn_chunk_size=128).
+        # At ISL=256k with QWEN36_PREFILL_CHUNK=4096: chunk_size=32 → 128 sub-chunks
+        # per C++ kernel call × 64 calls = 8192 total inter-chunk state updates;
+        # chunk_size=128 → 32 sub-chunks × 64 calls = 2048 — matching BH TP=4.
+        # 4× fewer state updates eliminates long-context coherency degradation.
+        # chunk_size=32 was faster at ISL=4k but causes word-salad at ISL≥32k.
+        self.prefill_chunk_size = int(os.environ.get("QWEN36_GDN_CHUNK_SIZE", "128"))
         self._chunk_masks = create_chunk_masks(self.prefill_chunk_size, mesh_device)
 
         # --- Per-row head counts ---
@@ -523,6 +526,10 @@ class TtQwen36DeltaAttention(LightweightModule):
             QKVZ_rows.append(torch.cat([q_row, k_row, v_row, z_row], dim=-1))  # [5120, 2048]
         QKVZ_w_T_interleaved = torch.cat(QKVZ_rows, dim=-1)  # [5120, 16384]
         self.w_qkvz = self._to_device(QKVZ_w_T_interleaved, row_shard_out, dtype=ttnn.bfloat16)
+        if os.environ.get("QWEN36_PROJ_CPU", "0") == "1":
+            # Store per-row fp32 CPU weights for the CPU projection diagnostic path.
+            # Row i gets columns [i*2048 : (i+1)*2048] of the interleaved weight.
+            self._cpu_qkvz_rows = [QKVZ_w_T_interleaved[:, i * 2048 : (i + 1) * 2048].float() for i in range(mesh_rows)]
 
         # B+A (per-row 6+6=12, NOT tile-multiple but matmul pads internally)
         BA_rows = []
@@ -532,6 +539,11 @@ class TtQwen36DeltaAttention(LightweightModule):
             BA_rows.append(torch.cat([b_row, a_row], dim=-1))  # [5120, 12]
         BA_w_T_interleaved = torch.cat(BA_rows, dim=-1)  # [5120, 96]
         self.w_ba = self._to_device(BA_w_T_interleaved, row_shard_out, dtype=ttnn.bfloat16)
+        if os.environ.get("QWEN36_PROJ_CPU", "0") == "1":
+            _ba_per_row = self.n_v_per_row * 2  # 12
+            self._cpu_ba_rows = [
+                BA_w_T_interleaved[:, i * _ba_per_row : (i + 1) * _ba_per_row].float() for i in range(mesh_rows)
+            ]
 
         # -- Conv1d weight: pre-interleave by row (Bug1 fix from v1) --
         conv_w_src = self._resolve_weight(sd, "linear_attn.conv1d.weight", "conv1d.weight")
@@ -907,6 +919,77 @@ class TtQwen36DeltaAttention(LightweightModule):
     # Forward-stage helpers (ported verbatim from v1; same math)
     # ------------------------------------------------------------------
 
+    def _project_inputs_cpu(self, x):
+        """CPU fp32 QKVZ+BA projections — skips bf16 col-axis all_reduce entirely.
+
+        QWEN36_PROJ_CPU=1 diagnostic: gather col-sharded x → full H per row on
+        CPU, compute fp32 matmul, upload result back as row-sharded col-replicated.
+        Returns the same tuple as _project_inputs so call sites are unaffected.
+        """
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        nrows, ncols = self.mesh_rows, self.mesh_cols
+        # Gather col-sharded x [1, T, H/ncols] → [1, T, H] per row
+        device_tensors_x = ttnn.get_device_tensors(x)
+        row_x = []
+        for r in range(nrows):
+            col_parts = [ttnn.to_torch(device_tensors_x[r * ncols + c]).float() for c in range(ncols)]
+            row_x.append(torch.cat(col_parts, dim=-1))  # [1, T, H]
+
+        # fp32 matmul per row: [1, T, H] @ [H, 2048] → [1, T, 2048]
+        qkvz_rows = [row_x[r] @ self._cpu_qkvz_rows[r] for r in range(nrows)]
+        ba_rows = [row_x[r] @ self._cpu_ba_rows[r] for r in range(nrows)]
+
+        # Cat along row dim: [nrows, T, out_dim] (each row_x[r] is [1, T, H] so cat gives [nrows, T, H])
+        row_shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
+        qkvz_stacked = torch.cat(qkvz_rows, dim=0)  # [nrows, T, 2048]
+        ba_stacked = torch.cat(ba_rows, dim=0)  # [nrows, T, 12]
+        # Upload: dim-0 sharded across rows, replicated across cols → [1, T, 2048] per device
+        qkvz = ttnn.from_torch(
+            qkvz_stacked,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=row_shard,
+            memory_config=mem,
+        )
+        ba = ttnn.from_torch(
+            ba_stacked,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=row_shard,
+            memory_config=mem,
+        )
+
+        # Slice qkvz and ba (same logic as _project_inputs, rank-3 path only)
+        out_rank = len(qkvz.shape)
+        assert out_rank == 3, f"_project_inputs_cpu: unexpected rank {out_rank}"
+        B_, T_, _ = qkvz.shape
+        q_per_row = self.q_per_row
+        v_per_row = self.v_per_row
+        conv_per_row = self.conv_per_row
+        n_v_per_row = self.n_v_per_row
+        _fuse_qkv = os.environ.get("QWEN36_DN_FUSE_QKV_SLICE", "1") == "1"
+        if _fuse_qkv:
+            mixed = ttnn.slice(qkvz, [0, 0, 0], [B_, T_, conv_per_row], memory_config=mem)
+            z = ttnn.slice(qkvz, [0, 0, conv_per_row], [B_, T_, conv_per_row + v_per_row], memory_config=mem)
+        else:
+            q = ttnn.slice(qkvz, [0, 0, 0], [B_, T_, q_per_row], memory_config=mem)
+            k = ttnn.slice(qkvz, [0, 0, q_per_row], [B_, T_, 2 * q_per_row], memory_config=mem)
+            v = ttnn.slice(qkvz, [0, 0, 2 * q_per_row], [B_, T_, 2 * q_per_row + v_per_row], memory_config=mem)
+            z = ttnn.slice(
+                qkvz, [0, 0, 2 * q_per_row + v_per_row], [B_, T_, 2 * q_per_row + 2 * v_per_row], memory_config=mem
+            )
+        qkvz.deallocate(True)
+
+        b = ttnn.slice(ba, [0, 0, 0], [B_, T_, n_v_per_row], memory_config=mem)
+        a = ttnn.slice(ba, [0, 0, n_v_per_row], [B_, T_, 2 * n_v_per_row], memory_config=mem)
+        ba.deallocate(True)
+
+        if _fuse_qkv:
+            return mixed, z, None, None, a, b, True
+        return q, k, v, z, a, b, False
+
     def _project_inputs(self, x):
         """V2-12 Lever 2: collapse Q+K+V+Z into a single fused matmul + B+A.
 
@@ -919,6 +1002,8 @@ class TtQwen36DeltaAttention(LightweightModule):
         ``ShardTensor2dMesh(dims=(1, None))`` contiguous-shard contract — naive
         cat would steer Q-only chunks to rows 0..3 and silently break coherency.
         """
+        if os.environ.get("QWEN36_PROJ_CPU", "0") == "1":
+            return self._project_inputs_cpu(x)
         mem = ttnn.DRAM_MEMORY_CONFIG
         ck = self.compute_kernel
         # V2-DN-TP: x is now COL-SHARDED H/4 = 1280 per chip (was full-H 5120).
@@ -928,6 +1013,16 @@ class TtQwen36DeltaAttention(LightweightModule):
         # QKVZ matmul (T>1 only, so decode is untouched). _project_inputs is
         # shared by prefill + decode.
         _T_qkvz = x.shape[-2]
+        # QWEN36_PROJ_FP32=1: compute QKVZ+BA matmuls in fp32 and all_reduce in fp32.
+        # The col-axis all_reduce (cluster_axis=1) sums 4 partial-K products; doing it
+        # in bf16 introduces ~4×2^-7 rounding error per element that compounds over 32
+        # lin layers. fp32 dtype eliminates both the matmul output quantization and the
+        # ring accumulation error. Prefill-only diagnostic; decode is unaffected.
+        # GATHER_SUM does NOT need fp32 matmul output: the all_gather is exact data movement
+        # regardless of dtype, and the local fp32 slice-sum eliminates the BF16 in-fabric
+        # reduction rounding (~0.006 max_err). BF16 matmul avoids the fp32-tile CB clash.
+        _proj_fp32 = os.environ.get("QWEN36_PROJ_FP32", "0") == "1" or os.environ.get("QWEN36_LIN_FP32", "0") == "1"
+        _proj_dtype = ttnn.float32 if _proj_fp32 else self._proj_act_dtype
         if os.environ.get("QWEN36_PREFILL_OPT", "0") == "1" and _T_qkvz > 1:
             # Reshape long T into 2048-wide chunks (llama70b pattern) so the 2D
             # matmul's M (per_core_M=8) fits the 10-row grid; otherwise M=T
@@ -937,7 +1032,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             qkvz_partial = ttnn.linear(
                 x_mm,
                 self.w_qkvz,
-                dtype=self._proj_act_dtype,
+                dtype=_proj_dtype,
                 memory_config=mem,
                 compute_kernel_config=ck,
                 program_config=self.model_config["QWEN36_DN_QKVZ_PREFILL_PROGCFG"](_T_qkvz),
@@ -947,12 +1042,53 @@ class TtQwen36DeltaAttention(LightweightModule):
             if len(qkvz_partial.shape) == 4:
                 qkvz_partial = ttnn.reshape(qkvz_partial, [1, _T_qkvz, qkvz_partial.shape[-1]])
         else:
-            qkvz_partial = ttnn.linear(
-                x, self.w_qkvz, dtype=self._proj_act_dtype, memory_config=mem, compute_kernel_config=ck
-            )
+            qkvz_partial = ttnn.linear(x, self.w_qkvz, dtype=_proj_dtype, memory_config=mem, compute_kernel_config=ck)
         # QWEN36_ABLATE_CCL: skip col-reduce (timing ablation; garbage values).
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             qkvz = qkvz_partial
+        elif os.environ.get("QWEN36_PROJ_GATHER_SUM", "0") == "1":
+            # DIAGNOSTIC PATH — kept for reference, NOT recommended for production.
+            #
+            # Hypothesis: all_gather (pure data movement) + local fp32 sum bypasses the
+            # broken fp32 all_reduce on cluster_axis=1 (which reduces in BF16 internally).
+            #
+            # EMPIRICAL RESULT (2026-06-28): fp32 + gather_sum gives single-layer PCC=0.9603,
+            # WORSE than BF16 all_reduce baseline (>0.99).  fp32 all_gather on cluster_axis=1
+            # appears ALSO broken on BH_GLX (not just all_reduce).  Both CCL ops for fp32 on
+            # the col (TP) axis produce incorrect bit patterns.
+            #
+            # CONCLUSION: fp32 QKVZ/BA projection is NOT viable on BH_GLX cluster_axis=1.
+            # Use BF16 matmul + BF16 all_reduce (the default) for QKVZ/BA.
+            # See test_fp32_allgather_sum_bh.py and test_fp32_allreduce_bh.py for diagnostics.
+            out_per_col = qkvz_partial.shape[-1]
+            gathered = ttnn.all_gather(
+                qkvz_partial,
+                dim=len(qkvz_partial.shape) - 1,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=mem,
+                topology=ttnn.Topology.Linear,
+            )
+            qkvz_partial.deallocate(True)
+            rank = len(gathered.shape)
+            _gshape = list(gathered.shape)
+            # Accumulate in fp32: typecast each BF16 segment to fp32 before adding so that
+            # the sum of the 4 partial K-sums is exact (no rounding in the accumulation).
+            _s0 = ttnn.slice(gathered, [0] * rank, _gshape[:-1] + [out_per_col], memory_config=mem)
+            qkvz = ttnn.typecast(_s0, ttnn.float32, memory_config=mem)
+            _s0.deallocate(True)
+            for _ci in range(1, self.mesh_cols):
+                _start = [0] * rank
+                _start[-1] = _ci * out_per_col
+                _end = _gshape[:-1] + [(_ci + 1) * out_per_col]
+                _seg = ttnn.slice(gathered, _start, _end, memory_config=mem)
+                _seg_fp32 = ttnn.typecast(_seg, ttnn.float32, memory_config=mem)
+                _seg.deallocate(True)
+                _new = ttnn.add(qkvz, _seg_fp32, memory_config=mem)
+                qkvz.deallocate(True)
+                _seg_fp32.deallocate(True)
+                qkvz = _new
+            gathered.deallocate(True)
         else:
             qkvz = ttnn.all_reduce(qkvz_partial, cluster_axis=1, num_links=1, memory_config=mem)
             qkvz_partial.deallocate(True)
@@ -1011,9 +1147,40 @@ class TtQwen36DeltaAttention(LightweightModule):
 
         # B+A fused (note: matches in_proj_ba layout which is b|a, not a|b)
         # V2-DN-TP: col-axis all_reduce to complete the inner-product sum.
-        ba_partial = ttnn.linear(x, self.w_ba, dtype=self._proj_act_dtype, memory_config=mem, compute_kernel_config=ck)
+        # NOTE: fp32 all_reduce AND fp32 all_gather on cluster_axis=1 are BOTH broken on BH_GLX.
+        # The _proj_fp32 gather_sum path is a DIAGNOSTIC ONLY — it gives PCC=0.9591 (worse
+        # than BF16 all_reduce >0.99).  Default path (BF16 all_reduce) is always correct.
+        ba_partial = ttnn.linear(x, self.w_ba, dtype=_proj_dtype, memory_config=mem, compute_kernel_config=ck)
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             ba = ba_partial  # skip col-reduce (timing ablation)
+        elif _proj_fp32:
+            _ba_per_col = ba_partial.shape[-1]
+            _ba_gathered = ttnn.all_gather(
+                ba_partial,
+                dim=len(ba_partial.shape) - 1,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=mem,
+                topology=ttnn.Topology.Linear,
+            )
+            ba_partial.deallocate(True)
+            _ba_rank = len(_ba_gathered.shape)
+            _bag_shape = list(_ba_gathered.shape)
+            _bs0 = ttnn.slice(_ba_gathered, [0] * _ba_rank, _bag_shape[:-1] + [_ba_per_col], memory_config=mem)
+            ba = ttnn.typecast(_bs0, ttnn.float32, memory_config=mem)
+            _bs0.deallocate(True)
+            for _bci in range(1, self.mesh_cols):
+                _bstart = [0] * _ba_rank
+                _bstart[-1] = _bci * _ba_per_col
+                _bend = _bag_shape[:-1] + [(_bci + 1) * _ba_per_col]
+                _bseg = ttnn.slice(_ba_gathered, _bstart, _bend, memory_config=mem)
+                _bseg_fp32 = ttnn.typecast(_bseg, ttnn.float32, memory_config=mem)
+                _bseg.deallocate(True)
+                _bnew = ttnn.add(ba, _bseg_fp32, memory_config=mem)
+                ba.deallocate(True)
+                _bseg_fp32.deallocate(True)
+                ba = _bnew
+            _ba_gathered.deallocate(True)
         else:
             ba = ttnn.all_reduce(ba_partial, cluster_axis=1, num_links=1, memory_config=mem)
             ba_partial.deallocate(True)
@@ -1293,7 +1460,7 @@ class TtQwen36DeltaAttention(LightweightModule):
         beta = ttnn.sigmoid(b, memory_config=mem)
         a_biased = ttnn.add(a, self.dt_bias, memory_config=mem)
         sp = ttnn.softplus(a_biased, memory_config=mem)
-        A_exp = ttnn.exp(self.A_log, memory_config=ttnn.L1_MEMORY_CONFIG)
+        A_exp = ttnn.exp(self.A_log, memory_config=mem)
         g = ttnn.multiply(ttnn.neg(A_exp, memory_config=mem), sp, memory_config=mem)
         return beta, g
 
@@ -2659,7 +2826,11 @@ class TtQwen36DeltaAttention(LightweightModule):
         # `llama_attention.py`. The original olmo session-11 lesson said
         # bf16 was needed to avoid residual-stream quantization, but llama70b
         # ships with bf8 here — try matching it and measure.
-        _dn_out_dtype = ttnn.bfloat8_b if _os.environ.get("QWEN36_ATTN_OUT_BF8", "0") == "1" else ttnn.bfloat16
+        _dn_out_dtype = (
+            ttnn.bfloat8_b
+            if _os.environ.get("QWEN36_ATTN_OUT_BF8", "0") == "1"
+            else (ttnn.float32 if _os.environ.get("QWEN36_LIN_FP32", "0") == "1" else ttnn.bfloat16)
+        )
 
         # QWEN36_PREFILL_OPT: tuned 2D-TP program config on the out-proj matmul
         # (T>1 only). Applied to the DRAM (non-pbuf) path; the pbuf path writes
@@ -2812,6 +2983,8 @@ class TtQwen36DeltaAttention(LightweightModule):
             "lower_causal": _create_tril_ones(C, self.mesh_device, ttnn.float32, _dd),
             "eye_32": _eye_dram(32),
         }
+        if _stable_ns_enabled():
+            self._stable_masks = _build_stable_masks(C, self.mesh_device)
 
     def _chunk_gdr_seq(self, q_exp, k_exp, v_h, beta, g, B, T, initial_state=None):
         """Prefill DeltaNet via the C++ ``gated_delta_attn_seq`` parallel-scan
@@ -2881,18 +3054,33 @@ class TtQwen36DeltaAttention(LightweightModule):
         if initial_state is not None:
             init_state_bhkv = ttnn.reshape(initial_state, [BH, K, V])
 
-        out, final_state = chunk_gated_delta_rule_seq(
-            q,
-            k,
-            v,
-            beta3,
-            g3,
-            chunk_size=self._seq_prefill_chunk_size,
-            scale=None,
-            initial_state=init_state_bhkv,
-            mesh_device=self.mesh_device,
-            cached_masks=None if os.environ.get("QWEN36_NO_MASK_CACHE") else self._seq_masks,
-        )
+        if _stable_ns_enabled():
+            stable_masks = getattr(self, "_stable_masks", None)
+            out, final_state = chunk_gated_delta_rule_stable_ns(
+                q,
+                k,
+                v,
+                beta3,
+                g3,
+                chunk_size=self._seq_prefill_chunk_size,
+                scale=None,
+                initial_state=init_state_bhkv,
+                mesh_device=self.mesh_device,
+                cached_masks=stable_masks,
+            )
+        else:
+            out, final_state = chunk_gated_delta_rule_seq(
+                q,
+                k,
+                v,
+                beta3,
+                g3,
+                chunk_size=self._seq_prefill_chunk_size,
+                scale=None,
+                initial_state=init_state_bhkv,
+                mesh_device=self.mesh_device,
+                cached_masks=None if os.environ.get("QWEN36_NO_MASK_CACHE") else self._seq_masks,
+            )
 
         # out: [BH, L, V] (L = padded to chunk multiple). Slice to T, back to [B,T,H,V].
         if out.shape[1] != T:
@@ -3151,6 +3339,26 @@ class TtQwen36DeltaAttention(LightweightModule):
         # the subsequent decode steps see them. ttnn.copy preserves the buffer
         # address — required for trace replay.
         _dst = getattr(self, "_pf_dst_row", 0)
+
+        # ttnn.copy cannot do dtype conversion on ROW_MAJOR tensors (see
+        # _build_conv_state_buffer docstring). If activations are fp32 but the
+        # buffer is bf16, roundtrip through TILE_LAYOUT to cast, then back to
+        # ROW_MAJOR so shapes match the ROW_MAJOR buffer. Prefill is untraced
+        # so the extra allocations are safe.
+        def _cast_to_buffer_dtype(t, buf):
+            if t.dtype == buf.dtype:
+                return t
+            mc = buf.memory_config()
+            orig_layout = t.layout
+            if t.layout != ttnn.TILE_LAYOUT:
+                t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=mc)
+            t = ttnn.typecast(t, buf.dtype, memory_config=mc)
+            if orig_layout == ttnn.ROW_MAJOR_LAYOUT:
+                t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+            return t
+
+        new_state = _cast_to_buffer_dtype(new_state, self.dn_state_buffer)
+        new_conv_state = _cast_to_buffer_dtype(new_conv_state, self.conv_state_buffer)
         self._copy_state_into_buffer(new_state, self.dn_state_buffer, dst_row=_dst)
         self._copy_state_into_buffer(new_conv_state, self.conv_state_buffer, dst_row=_dst)
         new_state.deallocate(True)

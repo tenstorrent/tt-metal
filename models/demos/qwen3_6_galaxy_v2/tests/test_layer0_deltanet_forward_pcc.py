@@ -32,6 +32,7 @@ import torch
 from safetensors.torch import load_file as load_st
 
 import ttnn
+from models.demos.qwen3_6_galaxy_v2.tt.gdn_chunk_ops_seq import _gdn_subop_pcc_report
 
 _SNAPSHOT = pathlib.Path(
     "/home/tt-admin/.cache/huggingface/hub/models--Qwen--Qwen3.6-27B"
@@ -334,5 +335,6 @@ def test_qwen36_layer0_deltanet_through_transformer_forward(bh_glx_mesh):
     diff_flat = (tt_out_cpu.float() - out_ref[:, :_T_PREFILL, :].float()).abs().flatten()
     p99 = torch.kthvalue(diff_flat, int(0.99 * diff_flat.numel())).values.item()
     print(f"[Layer0/forward] PCC = {pcc:.6f} (thresh={_PCC_THRESH})  |  p99 abs-diff = {p99:.4f}")
+    _gdn_subop_pcc_report()
     assert pcc > _PCC_THRESH, f"Layer0/forward PCC {pcc:.4f} < {_PCC_THRESH} (p99={p99:.4f})"
     print("[Layer0/forward] PASSED")

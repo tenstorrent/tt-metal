@@ -410,11 +410,19 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
+            # QWEN36_MLP_HIFI2=1: switch gate/up minimal_matmul from LoFi→HiFi2 at T>=4096.
+            # LoFi (2-bit mantissa) introduces significant per-layer MLP error that compounds
+            # over 64 layers. HiFi2 trades ~20% slower matmul for better PCC.
+            _mm_ck = (
+                self.args.compute_kernel_config_hifi2_fp16
+                if os.environ.get("QWEN36_MLP_HIFI2", "0") == "1"
+                else self.args.compute_kernel_config_lofi
+            )
             w1_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
                 config=minimal_pc_1_3,
-                compute_kernel_config=self.args.compute_kernel_config_lofi,
+                compute_kernel_config=_mm_ck,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             # minimal_matmul has no dtype= arg; typecast to bf16 to match TP=4 precision.
@@ -453,7 +461,7 @@ class TtLlamaMLP(LightweightModule):
                 input_tensor=x,
                 weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
                 config=minimal_pc_1_3,
-                compute_kernel_config=self.args.compute_kernel_config_lofi,
+                compute_kernel_config=_mm_ck,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             # minimal_matmul has no dtype= arg; typecast to bf16 to match TP=4 precision.

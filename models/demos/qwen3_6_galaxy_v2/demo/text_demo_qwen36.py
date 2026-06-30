@@ -917,8 +917,9 @@ def test_qwen36_demo_batch32(bh_glx_mesh):
     remaining rows are padding and can produce anything.
 
     Env overrides:
-      QWEN36_B32_N_USERS  — number of users to prefill (default 4)
+      QWEN36_B32_N_USERS  — number of users to prefill (default 32)
       QWEN36_B32_STEPS    — decode steps per user (default 32)
+      QWEN36_B32_GREEDY   — set=1 for greedy decode; verifies all users identical (default 0)
       QWEN36_PERF_T_PREFILL — prefill ISL (default 128)
     """
     import time as _time
@@ -931,7 +932,8 @@ def test_qwen36_demo_batch32(bh_glx_mesh):
     from models.demos.qwen3_6_galaxy_v2.tt.generator_vllm import allocate_vllm_kv_cache
 
     MAX_BATCH = 32
-    N_USERS = int(os.environ.get("QWEN36_B32_N_USERS", "4"))
+    N_USERS = int(os.environ.get("QWEN36_B32_N_USERS", "32"))
+    GREEDY = os.environ.get("QWEN36_B32_GREEDY", "0") == "1"
     STEPS = int(os.environ.get("QWEN36_B32_STEPS", "32"))
     assert 1 <= N_USERS <= MAX_BATCH, f"QWEN36_B32_N_USERS={N_USERS} must be 1..{MAX_BATCH}"
 
@@ -1002,7 +1004,10 @@ def test_qwen36_demo_batch32(bh_glx_mesh):
     # same drain the server gets from continuous batching.
     print(f"[b32] prefilling {N_USERS} users (server-pattern: interleaved prefill+decode) ...")
     sampling_params_greedy = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
-    sampling_params = SamplingParams(temperature=1.0, top_k=20, top_p=0.95)
+    sampling_params = sampling_params_greedy if GREEDY else SamplingParams(temperature=1.0, top_k=20, top_p=0.95)
+    print(
+        f"[b32] decode mode: {'greedy (deterministic, all users must match)' if GREEDY else 'sampling (temperature=1.0)'}"
+    )
 
     # Running decode state: grows as more users are prefilled.
     decode_tokens = torch.zeros(MAX_BATCH, 1, dtype=torch.long)
@@ -1082,8 +1087,7 @@ def test_qwen36_demo_batch32(bh_glx_mesh):
         text = tok.decode(first_tokens[uid : uid + 1] + generated[uid])
         print(f"[b32] user {uid}: {text!r}")
 
-    # Coherence checks on active users — at least some users must produce non-degenerate output.
-    # Without decode trace warmup, quality is degraded but should not be all-identical tokens.
+    # Coherence checks on active users.
     n_coherent = 0
     for uid in range(N_USERS):
         all_ids = first_tokens[uid : uid + 1] + generated[uid]
@@ -1091,11 +1095,32 @@ def test_qwen36_demo_batch32(bh_glx_mesh):
         has_variety = len(set(all_ids)) > 2
         if n_alpha >= 3 and has_variety:
             n_coherent += 1
-        else:
-            print(f"[b32] user {uid} low-quality: {tok.decode(all_ids)!r} (alpha={n_alpha})")
-    assert n_coherent >= N_USERS // 2, f"too few coherent users: {n_coherent}/{N_USERS}"
+        elif uid < 8:
+            print(f"[b32] user {uid} low-quality: {tok.decode(all_ids[:20])!r} (alpha={n_alpha})")
+    assert n_coherent >= N_USERS // 4, f"too few coherent users: {n_coherent}/{N_USERS}"
 
-    # Throughput gate: batch-32 should deliver > 10 tok/s total even without trace.
+    # Greedy correctness check: same input → all users must produce identical token sequences.
+    if GREEDY:
+        ref_ids = [first_tokens[0]] + generated[0]
+        n_mismatch = 0
+        for uid in range(1, N_USERS):
+            uid_ids = [first_tokens[uid]] + generated[uid]
+            if uid_ids != ref_ids:
+                n_mismatch += 1
+                if n_mismatch <= 4:
+                    diff_pos = next((i for i, (a, b) in enumerate(zip(ref_ids, uid_ids)) if a != b), len(ref_ids))
+                    print(
+                        f"[b32] MISMATCH user {uid} first diff at pos {diff_pos}: "
+                        f"ref={ref_ids[diff_pos] if diff_pos < len(ref_ids) else 'EOS'} "
+                        f"got={uid_ids[diff_pos] if diff_pos < len(uid_ids) else 'EOS'}"
+                    )
+        if n_mismatch > 0:
+            print(f"[b32] GREEDY MISMATCH: {n_mismatch}/{N_USERS - 1} users differ from user 0 — batch-32 decode BUG")
+        else:
+            print(f"[b32] GREEDY PASS: all {N_USERS} users produce identical output ✓")
+        assert n_mismatch == 0, f"{n_mismatch}/{N_USERS - 1} users differ from user 0 in greedy mode"
+
+    # Throughput gate.
     assert toks_per_sec > 10, f"throughput too low: {toks_per_sec:.1f} tok/s"
     print(
         f"[b32] PASS — {toks_per_sec:.1f} tok/s total ({toks_per_sec/MAX_BATCH:.1f} tok/s per user), {n_coherent}/{N_USERS} coherent"

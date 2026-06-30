@@ -372,22 +372,16 @@ class TT_CCL:
         )
         persistent_buffers["SDPA"] = tt_buffer
 
-        # Layernorm
-        grid_offset = ttnn.CoreCoord(1, 0)
-        tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-            shape=(32, 128),
-            core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
+        # Layernorm — DRAM so fp32 prefill matmul CBs (which reach ~1.48MB on
+        # the same cores) don't clash with an L1-resident buffer at 1.24MB.
+        # The stats tensor is tiny (32×128 × 2B = 8KB); DRAM bandwidth is
+        # negligible for decode.
         tt_buffer = ttnn.from_torch(
             torch.zeros((1, 1, M, 128)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            memory_config=tt_stats_sharded_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["LAYERNORM"] = tt_buffer

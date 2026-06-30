@@ -89,10 +89,6 @@ def chunk_gated_delta_rule_seq_adapter(
     V = v.shape[3]
     BH = B * H
 
-    # L2-norm q/k (the seq kernel does NOT normalize; it only scales q internally).
-    q = l2_norm_ttnn(q, dim=-1)
-    k = l2_norm_ttnn(k, dim=-1)
-
     def _to_bhtd(t, D):  # [B,T,H,D] -> [BH,T,D] float32 TILE/DRAM (ROW_MAJOR-correct)
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
         t = ttnn.reshape(t, [B, T, H, D])
@@ -113,8 +109,35 @@ def chunk_gated_delta_rule_seq_adapter(
             t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
         return t
 
+    # L2-norm q/k after reshaping to [BH, T, K] = [BH, T, 128].
+    # Applying the norm on 4D [1, T, H, K] tile-pads H=12→32, blowing L1.
+    # After the permute/reshape H is gone; the 3D shape has no padding issue.
+    # For large T (>4096), rms_norm's static CB allocation on BH (~4 tiles × T/32
+    # per core) exceeds the 1.5MB L1 hard limit.  Process T in 4096-token slices —
+    # L2 norm is per-row so slicing along T is exact (no cross-row dependency).
+    _L2_CHUNK = 4096  # safe upper bound for BH L1 CB limit
+
+    def _l2_norm_t_chunked(x, D):
+        # x: [BH, T, D]
+        BH_ = x.shape[0]
+        T_ = x.shape[1]
+        if T_ <= _L2_CHUNK:
+            return l2_norm_ttnn(x, dim=-1, memory_config=_DRAM)
+        parts = []
+        for s in range(0, T_, _L2_CHUNK):
+            e = min(s + _L2_CHUNK, T_)
+            c = ttnn.slice(x, (0, s, 0), (BH_, e, D))
+            parts.append(l2_norm_ttnn(c, dim=-1, memory_config=_DRAM))
+            ttnn.deallocate(c)
+        out = ttnn.concat(parts, dim=1, memory_config=_DRAM)
+        for p in parts:
+            ttnn.deallocate(p)
+        return out
+
     q_bh = _to_bhtd(q, K)
+    q_bh = _l2_norm_t_chunked(q_bh, K)
     k_bh = _to_bhtd(k, K)
+    k_bh = _l2_norm_t_chunked(k_bh, K)
     v_bh = _to_bhtd(v, V)
     g_bh = _to_bht(g)
     beta_bh = ttnn.reshape(_to_bht(beta), [BH, T, 1])

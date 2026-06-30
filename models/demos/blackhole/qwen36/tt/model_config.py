@@ -51,6 +51,9 @@ class Qwen36ModelArgs(ModelArgs):
             from huggingface_hub import snapshot_download
 
             os.environ["HF_MODEL"] = snapshot_download(hf_model)
+        # Set before super().__init__() so ModelArgs's KV-head divisibility guard
+        # (which uses getattr(self, "is_qwen36", False)) sees it at TP=8.
+        self.is_qwen36 = True
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
 
         # The base resolves the checkpoint dir from HF_MODEL into self.CKPT_DIR; mirror
@@ -77,19 +80,46 @@ class Qwen36ModelArgs(ModelArgs):
         )
         self.rope_head_dim = int(self.head_dim * self.partial_rotary_factor)
 
-        # DeltaNet-specific parameters (base does not know about these)
-        self.linear_num_key_heads = getattr(text_config, "linear_num_key_heads", 16)
-        self.linear_num_value_heads = getattr(text_config, "linear_num_value_heads", 32)
-        self.linear_key_head_dim = getattr(text_config, "linear_key_head_dim", 128)
-        self.linear_value_head_dim = getattr(text_config, "linear_value_head_dim", 128)
-        self.linear_conv_kernel_dim = getattr(text_config, "linear_conv_kernel_dim", 4)
+        # DeltaNet-specific parameters (base does not know about these).
+        # For VL checkpoints (model_type=qwen3_6_vl) AutoConfig's get_text_config()
+        # may not surface the nested text_config fields as Python attributes, so
+        # we read the JSON directly and use getattr only as a fallback.
+        import json
+
+        _cfg_path = Path(self.CKPT_DIR) / "config.json"
+        _raw_tc: dict = {}
+        if _cfg_path.exists():
+            with open(_cfg_path) as _f:
+                _raw = json.load(_f)
+            _raw_tc = _raw.get("text_config", _raw)
+
+        def _tc_get(attr: str, default):
+            """Read from live HF text_config attr, then raw JSON, then hard default."""
+            v = getattr(text_config, attr, None)
+            if v is not None:
+                return v
+            return _raw_tc.get(attr, default)
+
+        self.linear_num_key_heads = _tc_get("linear_num_key_heads", 16)
+        self.linear_num_value_heads = _tc_get("linear_num_value_heads", 32)
+        self.linear_key_head_dim = _tc_get("linear_key_head_dim", 128)
+        self.linear_value_head_dim = _tc_get("linear_value_head_dim", 128)
+        self.linear_conv_kernel_dim = _tc_get("linear_conv_kernel_dim", 4)
 
         # Layer type list — base only reads layer_types into a local (to derive
         # sliding_window_pattern); the 9B needs the full list to dispatch DeltaNet
         # vs. full-attention layers.
-        self.attention_type_list = getattr(text_config, "layer_types", None) or (
-            ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8
-        )
+        self.attention_type_list = getattr(text_config, "layer_types", None)
+        if not self.attention_type_list:
+            self.attention_type_list = _raw_tc.get("layer_types", None)
+        if not self.attention_type_list:
+            # Final fallback: GGGF pattern repeated for n_layers
+            self.attention_type_list = [
+                "linear_attention",
+                "linear_attention",
+                "linear_attention",
+                "full_attention",
+            ] * (self.n_layers // 4)
 
         # Derived
         self.linear_q_dim = self.linear_num_key_heads * self.linear_key_head_dim
@@ -260,11 +290,7 @@ class Qwen36ModelArgs(ModelArgs):
         normalizes that to the internal key scheme. This OVERRIDES the base meta-key
         (wq/wk/wv) loader — the 9B uses its own scheme.
         """
-        from models.demos.blackhole.qwen36.tt.weight_mapping import (
-            is_fp8_checkpoint,
-            load_qwen36_state_dict_fp8,
-            remap_qwen36_state_dict,
-        )
+        from models.demos.blackhole.qwen36.tt.weight_mapping import is_fp8_checkpoint, load_qwen36_state_dict_fp8
 
         # Block-wise FP8 checkpoints (e.g. Qwen3.5-27B-FP8) cannot go through
         # AutoModelForCausalLM here; dequant + remap to the TP key scheme that
@@ -272,9 +298,9 @@ class Qwen36ModelArgs(ModelArgs):
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
-        from transformers import AutoModelForCausalLM
+        # Load BF16 weights directly from safetensors to avoid AutoModelForCausalLM
+        # issues with unregistered model_type (e.g., qwen3_5 not in this transformers).
+        # Works for both text-only and VL checkpoints (strips model.language_model. prefix).
+        from models.demos.blackhole.qwen36.tt.weight_mapping import load_qwen36_state_dict_bf16
 
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto", trust_remote_code=True)
-        state_dict = remap_qwen36_state_dict(model.state_dict())
-        del model
-        return state_dict
+        return load_qwen36_state_dict_bf16(self.CKPT_DIR)

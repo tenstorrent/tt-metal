@@ -44,8 +44,10 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         # Filter out vision encoder weights (check original key — no prefix stripping yet)
         if "visual" in key or key.startswith("model.visual"):
             continue
-        # Filter out MTP (multi-token prediction) weights (original key)
+        # Pass MTP weights through unchanged (they have no prefix to strip).
+        # Qwen36Model.__init__ collects them into a separate MTP sub-dict.
         if key.startswith("mtp"):
+            remapped[key] = tensor
             continue
 
         # Strip the language-model prefix. Two checkpoint sources produce different
@@ -106,6 +108,39 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         remapped[new_key] = tensor
 
     return remapped
+
+
+def load_qwen36_state_dict_bf16(model_path) -> Dict[str, torch.Tensor]:
+    """Load Qwen3.5/3.6 BF16 weights directly from safetensors, bypassing AutoModelForCausalLM.
+
+    Works for both text-only checkpoints (model.X keys) and VL checkpoints
+    (model.language_model.X keys). Applies the same remap as
+    ``remap_qwen36_state_dict`` so the output key scheme is identical to what
+    the TP weight loaders expect.
+
+    Use this instead of AutoModelForCausalLM.from_pretrained when the model_type
+    (e.g. qwen3_5) is not registered in the installed transformers version.
+    """
+    from safetensors import safe_open
+
+    model_path = Path(model_path)
+    index_path = model_path / "model.safetensors.index.json"
+    with open(index_path) as f:
+        weight_map = json.load(f)["weight_map"]
+
+    file_to_keys: Dict[str, list] = {}
+    for key, filename in weight_map.items():
+        file_to_keys.setdefault(filename, []).append(key)
+
+    raw: Dict[str, torch.Tensor] = {}
+    for filename, keys in file_to_keys.items():
+        with safe_open(str(model_path / filename), framework="pt") as sf:
+            present = set(sf.keys())
+            for key in keys:
+                if key in present:
+                    raw[key] = sf.get_tensor(key).to(torch.bfloat16)
+
+    return remap_qwen36_state_dict(raw)
 
 
 def is_fp8_checkpoint(model_path) -> bool:

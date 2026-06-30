@@ -165,7 +165,7 @@ def get_pcc_threshold(request, default=0.99):
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
 def _resolve_mesh_shape(max_tp=4):
-    return {"P150": (1, 1), "P150x4": (1, 4)}.get(
+    return {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
         os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), max_tp))
     )
 

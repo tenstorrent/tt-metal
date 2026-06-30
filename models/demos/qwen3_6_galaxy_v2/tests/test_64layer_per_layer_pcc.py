@@ -38,7 +38,7 @@ _CONTEXT_CACHE_DIR = pathlib.Path("models/tt_transformers/demo/context_cache")
 # Override via ``QWEN36_PCC_T_PREFILL=4096`` to find the layer at which long-T
 # trajectory diverges from CPU reference.
 _T_PREFILL = int(os.environ.get("QWEN36_PCC_T_PREFILL", "128"))
-_N_LAYERS = 64
+_N_LAYERS = int(os.environ.get("QWEN36_PCC_N_LAYERS", "64"))
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +55,7 @@ def bh_glx_mesh():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-def _load_state_dict_all_layers(snapshot_dir: pathlib.Path) -> dict:
+def _load_state_dict_all_layers(snapshot_dir: pathlib.Path, n_layers: int = 64) -> dict:
     with open(snapshot_dir / "model.safetensors.index.json") as f:
         idx = json.load(f)
     weight_map = idx["weight_map"]
@@ -63,8 +63,7 @@ def _load_state_dict_all_layers(snapshot_dir: pathlib.Path) -> dict:
         "model.language_model.embed_tokens.",
         "model.language_model.norm.",
         "lm_head.",
-        "model.language_model.layers.",
-    ]
+    ] + [f"model.language_model.layers.{i}." for i in range(n_layers)]
     needed_keys = [k for k in weight_map if any(k.startswith(p) for p in needed_prefixes)]
     files = sorted({weight_map[k] for k in needed_keys})
     sd: dict[str, torch.Tensor] = {}
@@ -335,18 +334,18 @@ def _gather_col_sharded_to_full(tt_tensor, mesh, args, T):
 @pytest.mark.hardware
 def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
     """Per-layer hidden-state PCC sweep — find where compounding error begins."""
-    print("[per-layer] loading HF state_dict ...")
-    state_dict = _load_state_dict_all_layers(_SNAPSHOT)
+    print(f"[per-layer] loading HF state_dict (first {_N_LAYERS} layers) ...")
+    state_dict = _load_state_dict_all_layers(_SNAPSHOT, n_layers=_N_LAYERS)
 
     from models.demos.qwen3_6_galaxy.reference.qwen36 import Qwen36Config
 
     with open(_SNAPSHOT / "config.json") as f:
         cfg_dict = json.load(f)
     config = Qwen36Config(cfg_dict)
-    pattern = list(config.layer_types)
+    pattern = list(config.layer_types)[:_N_LAYERS]
     assert len(pattern) == _N_LAYERS
 
-    print("[per-layer] building TT 64-layer model ...")
+    print(f"[per-layer] building TT {_N_LAYERS}-layer model ...")
     model, args = _build_tt_model(bh_glx_mesh, state_dict, pattern, _N_LAYERS)
 
     from transformers import AutoTokenizer
@@ -368,6 +367,13 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
     # of intermediates at each sub-step within every decoder layer.
     # Default OFF — existing layer-level PCC table is unchanged.
     _subblock_mode = os.environ.get("QWEN36_PCC_SUBBLOCK", "0") == "1"
+
+    # QWEN36_DEVICE_ATTN_CPU_MLP=1: run GDN attention on device, replace MLP with
+    # CPU fp32. Isolates whether device MLP is the dominant PCC error source.
+    # Requires sub-block capture (post_attn_res) — forces _subblock_mode on internally.
+    _device_attn_cpu_mlp = os.environ.get("QWEN36_DEVICE_ATTN_CPU_MLP", "0") == "1"
+    if _device_attn_cpu_mlp:
+        _subblock_mode = True
 
     embed_w = state_dict["model.language_model.embed_tokens.weight"].float()
     x_cpu_torch = embed_w[input_ids_padded[0]].unsqueeze(0)
@@ -528,6 +534,21 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
     # assuming perfect GDN — isolates whether GDN or full-attn/MLP is the bottleneck.
     _cpu_gdn_mode = os.environ.get("QWEN36_PCC_CPU_GDN", "0") == "1"
 
+    # Pre-load CPU fp32 MLP weights for each lin layer (used by QWEN36_DEVICE_ATTN_CPU_MLP).
+    # Keys: (ff_norm_w, gate_proj_w, up_proj_w, down_proj_w) — all fp32 CPU tensors.
+    _cpu_mlp_weights: dict = {}
+    if _device_attn_cpu_mlp:
+        for _i, _pt in enumerate(pattern):
+            if _pt == "linear_attention":
+                _pfx = f"model.language_model.layers.{_i}."
+                _cpu_mlp_weights[_i] = (
+                    state_dict[_pfx + "post_attention_layernorm.weight"].float(),
+                    state_dict[_pfx + "mlp.gate_proj.weight"].float(),  # [H_ff, H]
+                    state_dict[_pfx + "mlp.up_proj.weight"].float(),  # [H_ff, H]
+                    state_dict[_pfx + "mlp.down_proj.weight"].float(),  # [H, H_ff]
+                )
+        print(f"[per-layer] DEVICE_ATTN_CPU_MLP: preloaded CPU MLP weights for {len(_cpu_mlp_weights)} lin layers")
+
     # Manually replicate the forward loop, snapping x at each step.
     rot_mats = (cos_tt, sin_tt)
     x = x_tt
@@ -554,6 +575,21 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
                 kv_cache=None,
                 batch_size=1,
             )
+        # QWEN36_DEVICE_ATTN_CPU_MLP: replace layer output with CPU MLP result.
+        # post_attn_res (device attention + residual, gathered to CPU) is in
+        # _tt_subblock_store[-1] courtesy of the sub-block patch applied above.
+        if _device_attn_cpu_mlp and pattern[i] == "linear_attention":
+            h_new_cpu = _tt_subblock_store[-1]["post_attn_res"]  # [1, T, H] float32
+            _norm_w, _w1, _w3, _w2 = _cpu_mlp_weights[i]
+            # CPU fp32 RMSNorm
+            _h_n = h_new_cpu * torch.rsqrt(h_new_cpu.pow(2).mean(-1, keepdim=True) + 1e-6) * _norm_w
+            # SwiGLU
+            _gate = torch.nn.functional.silu(_h_n @ _w1.T)
+            _up = _h_n @ _w3.T
+            _x_out = h_new_cpu + (_gate * _up) @ _w2.T
+            x.deallocate()
+            x = _send_col_sharded_hidden(_x_out.to(torch.bfloat16), bh_glx_mesh, args)
+
         # Don't deallocate x — it's the layer output going into next layer.
         # Clone via to_torch (gathers data; non-destructive).
         tt_hidden_cpu = _gather_col_sharded_to_full(x, bh_glx_mesh, args, T=_T_PREFILL)

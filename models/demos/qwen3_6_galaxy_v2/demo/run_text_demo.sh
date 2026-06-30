@@ -27,7 +27,7 @@ export QWEN36_CCL_NUM_LINKS_DELTA=2
 
 # ---- ISL select (default 128). For long context (>=16k incl 256k) ADD:
 #   export QWEN36_PERF_T_PREFILL=262144 QWEN36_PREFILL_CHUNK=4096
-#   (256k prefill validated; >128k DECODE coherence is NOT yet validated.)
+#   (256k coherence validated with default GDN chunk_size=128.)
 export QWEN36_PERF_T_PREFILL="${QWEN36_PERF_T_PREFILL:-128}"
 
 python -m pytest --noconftest \

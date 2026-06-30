@@ -89,10 +89,22 @@ class TtTransformerBlock(LightweightModule):
         if self.is_linear_attention_layer:
             # Late import: keeps the 70B import surface decoupled from the
             # qwen36-specific DeltaNet module.
-            from models.demos.qwen3_6_galaxy_v2.tt.qwen36_delta_attention import TtQwen36DeltaAttention
+            # QWEN36_1D_PREFILL=1: use the 1D-TP prefill subclass that gathers x
+            # across cols before the QKVZ/BA matmul, eliminating the col-axis
+            # all_reduce that causes the 0.837 64L PCC ceiling.  Decode unchanged.
+            import os as _os
+
+            if _os.environ.get("QWEN36_1D_PREFILL", "0") == "1":
+                from models.demos.qwen3_6_galaxy_v2.tt.qwen36_delta_attn_1d_prefill import (
+                    TtQwen36DeltaAttention1DPrefill as _DeltaNetCls,
+                )
+            else:
+                from models.demos.qwen3_6_galaxy_v2.tt.qwen36_delta_attention import (
+                    TtQwen36DeltaAttention as _DeltaNetCls,
+                )
 
             dn_weights = _extract_layer_dn_weights(state_dict, layer_num)
-            self.attention = TtQwen36DeltaAttention(
+            self.attention = _DeltaNetCls(
                 mesh_device=mesh_device,
                 args=args,
                 layer_num=layer_num,
@@ -671,7 +683,12 @@ class TtTransformerBlock(LightweightModule):
                     _x_for_attn_norm = ttnn.slice(
                         x, [0, 0, 0, 0], [_xb, 1, 1, _xh], memory_config=ttnn.DRAM_MEMORY_CONFIG
                     )
-            attn_in_sharded, _ = self.attention_norm(_x_for_attn_norm, None, norm_mlp_mode)
+            _x_norm_in = _x_for_attn_norm
+            if _x_norm_in.dtype == ttnn.float32:
+                _x_norm_in = ttnn.typecast(_x_norm_in, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_in_sharded, _ = self.attention_norm(_x_norm_in, None, norm_mlp_mode)
+            if _x_norm_in is not _x_for_attn_norm:
+                _x_norm_in.deallocate(True)
             if _carry32 and not _l1_residual and _x_for_attn_norm is not x:
                 _x_for_attn_norm.deallocate(True)
 
@@ -787,6 +804,10 @@ class TtTransformerBlock(LightweightModule):
                     attn_out.deallocate(True)
                     attn_out = attn_out_b
                 attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+            if attn_out.dtype == ttnn.bfloat16 and x.dtype == ttnn.float32:
+                attn_out = ttnn.typecast(attn_out, ttnn.float32, memory_config=skip_mem_cfg)
+            elif attn_out.dtype == ttnn.float32 and x.dtype == ttnn.bfloat16:
+                x = ttnn.typecast(x, ttnn.float32, memory_config=skip_mem_cfg)
             h_new = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
             x.deallocate(True)
             attn_out.deallocate(True)
@@ -815,7 +836,12 @@ class TtTransformerBlock(LightweightModule):
                     _h_for_ff_norm = ttnn.slice(
                         h_new, [0, 0, 0, 0], [_hb, 1, 1, _hh], memory_config=ttnn.DRAM_MEMORY_CONFIG
                     )
-            ff_in_sharded, _ = self.ff_norm(_h_for_ff_norm, None, norm_mlp_mode)
+            _h_norm_in = _h_for_ff_norm
+            if _h_norm_in.dtype == ttnn.float32:
+                _h_norm_in = ttnn.typecast(_h_norm_in, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ff_in_sharded, _ = self.ff_norm(_h_norm_in, None, norm_mlp_mode)
+            if _h_norm_in is not _h_for_ff_norm:
+                _h_norm_in.deallocate(True)
             if _carry32 and not _l1_residual and _h_for_ff_norm is not h_new:
                 _h_for_ff_norm.deallocate(True)
             if _l1_residual:
@@ -840,6 +866,10 @@ class TtTransformerBlock(LightweightModule):
                     ff_out_sharded.deallocate(True)
                     ff_out_sharded = ff_out_b
                 ff_out_sharded = ttnn.to_memory_config(ff_out_sharded, skip_mem_cfg)
+            if ff_out_sharded.dtype == ttnn.bfloat16 and h_new.dtype == ttnn.float32:
+                ff_out_sharded = ttnn.typecast(ff_out_sharded, ttnn.float32, memory_config=skip_mem_cfg)
+            elif ff_out_sharded.dtype == ttnn.float32 and h_new.dtype == ttnn.bfloat16:
+                h_new = ttnn.typecast(h_new, ttnn.float32, memory_config=skip_mem_cfg)
             out_sharded = ttnn.add(ff_out_sharded, h_new, memory_config=skip_mem_cfg)
             ff_out_sharded.deallocate(True)
             h_new.deallocate(True)

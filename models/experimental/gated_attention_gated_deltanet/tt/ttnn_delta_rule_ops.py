@@ -569,6 +569,7 @@ def recurrent_gated_delta_rule_ttnn(
     scale=None,
     initial_state=None,
     device=None,
+    high_precision=False,
 ):
     """
     Token-by-token recurrent gated delta rule using TTNN ops.
@@ -609,6 +610,10 @@ def recurrent_gated_delta_rule_ttnn(
     if scale is None:
         scale = K**-0.5
 
+    # When high_precision=True, run the recurrent step in float32 to reduce
+    # decay quantization error accumulation over long decode sequences.
+    _dtype = ttnn.float32 if high_precision else ttnn.bfloat16
+
     q_prev = q
     q = ttnn.multiply(q_prev, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
     q_prev.deallocate(True)  # l2_norm output, locally owned
@@ -628,23 +633,23 @@ def recurrent_gated_delta_rule_ttnn(
 
     # Optimize: combine typecast with memory config
     q_prev = q
-    q = ttnn.typecast(q_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q = ttnn.typecast(q_prev, _dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
     if q is not q_prev:
         q_prev.deallocate(True)
     k_prev = k
-    k = ttnn.typecast(k_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k = ttnn.typecast(k_prev, _dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
     if k is not k_prev:
         k_prev.deallocate(True)
     v_prev = v
-    v = ttnn.typecast(v_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v = ttnn.typecast(v_prev, _dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
     if v is not v_prev:
         v_prev.deallocate(True)
     beta_prev = beta
-    beta = ttnn.typecast(beta_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    beta = ttnn.typecast(beta_prev, _dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
     if beta is not beta_prev:
         beta_prev.deallocate(True)
     g_prev = g
-    g = ttnn.typecast(g_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    g = ttnn.typecast(g_prev, _dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
     if g is not g_prev:
         g_prev.deallocate(True)
 
@@ -653,12 +658,12 @@ def recurrent_gated_delta_rule_ttnn(
     g.deallocate(True)
 
     if initial_state is not None:
-        h = ttnn.typecast(initial_state, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.typecast(initial_state, _dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
         h = ttnn.zeros(
             [B, H, K, V],
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -722,6 +727,7 @@ def recurrent_gated_delta_rule_ttnn(
     o_prev = o
     o = ttnn.transpose(o_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     o_prev.deallocate(True)
+    # Always return bf16 output regardless of internal precision
     o_prev = o
     o = ttnn.typecast(o_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
     if o is not o_prev:
@@ -1326,3 +1332,7 @@ def chunk_gated_delta_rule_ttnn(
 
     final_state = ttnn.reshape(S, [B, H, K, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     return o, final_state
+
+
+# Alias: the TP decode module imports this name; the underlying op is identical.
+recurrent_gated_delta_rule_decode_ttnn = recurrent_gated_delta_rule_ttnn
