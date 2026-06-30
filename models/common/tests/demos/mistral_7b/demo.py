@@ -27,15 +27,10 @@ LazyWeight tensor cache (same rule as the Qwen2.5 demo):
 ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` is set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
-Reference artifact (``.refpt``): the legacy
-``models/tt_transformers/tests/reference_outputs/Mistral-7B-Instruct-v0.3.refpt`` has
-no ``prompt_len`` metadata and its intrinsic top-1 ceiling sits around 86%, well below
-the PERF.md thresholds. Generate a deterministic one before tuning::
-
-    ./python_env/bin/python models/common/tests/demos/mistral_7b/generate_controlled_refpt.py \\
-        --hf-model mistralai/Mistral-7B-Instruct-v0.3
-
-See the reference-sanity guide.
+Reference artifact (``.refpt``): the token-accuracy test gates on the committed book
+reference ``models/tt_transformers/tests/reference_outputs/Mistral-7B-Instruct-v0.3.refpt``
+(real-corpus teacher-forced targets; ``reference_tokens`` + ``top5_tokens``, no
+``prompt_len``/``metadata``), shared with the TTTv1 demo.
 """
 
 import json
@@ -215,9 +210,9 @@ def ref_basename_for_hf(hf_model_id: str) -> str:
 def load_reference_data(hf_model_id: str):
     """Load reference tensors and optional metadata from ``.refpt``.
 
-    Supports both the metadata-rich format produced by ``generate_controlled_refpt.py``
-    (``prompt_len`` + ``metadata`` keys) and the legacy half-split format. Callers must
-    check ``prompt_len is None`` to decide whether the half-split fallback is needed.
+    Supports both a metadata-rich format (``prompt_len`` + ``metadata`` keys) and the book
+    half-split format (the committed reference). Callers must check ``prompt_len is None`` to
+    decide whether the half-split fallback is needed.
     """
     name = ref_basename_for_hf(hf_model_id)
     ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
@@ -478,10 +473,8 @@ def _run_token_accuracy(model, mesh_device, expected):
         logger.info(f"Using metadata-driven prompt_len={prompt_len} from reference artifact")
     else:
         prompt_len = len(reference_tokens) // 2
-        logger.warning(
-            f"Reference missing prompt_len metadata; falling back to legacy half split={prompt_len}. "
-            "Run generate_controlled_refpt.py to produce a metadata-rich .refpt — the legacy artifact's "
-            "intrinsic top-1 ceiling is ~86% and will cap any measurement below PERF.md thresholds."
+        logger.info(
+            f"Reference has no prompt_len metadata; using the book half-split convention (prompt_len={prompt_len})."
         )
 
     if metadata:
