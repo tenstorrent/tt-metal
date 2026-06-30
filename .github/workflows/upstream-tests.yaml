@@ -327,7 +327,7 @@ jobs:
             image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
             extra-tag: pipeline-functional
             hf-home: /mnt/MLPerf/huggingface
-          - runner-label: BH-Quietbox-2
+          - runner-label: BH-Quietbox-2-iommu
             image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
             extra-tag: pipeline-perf
             hf-home: /mnt/models/huggingface
