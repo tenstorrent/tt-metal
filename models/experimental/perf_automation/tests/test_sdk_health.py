@@ -79,6 +79,13 @@ def test_model_error_is_reported_not_pip_upgraded(monkeypatch):
     assert "model name" in r["reason"].lower()
 
 
+def test_disabled_autosync_hint_follows_installer_env(monkeypatch):
+    monkeypatch.setattr(sdk_health, "smoke_test", _seq_smoke([(False, "Claude Code returned an error result")]))
+    monkeypatch.setattr(sdk_health, "_hint", lambda: "uv pip install")
+    r = sdk_health.ensure_compatible(autosync=False, log=lambda *a: None)
+    assert "uv pip install -U claude-agent-sdk" in r["reason"]
+
+
 def test_is_mismatch_vs_model_error():
     # genuine version/control-protocol problems -> mismatch (pip may help)
     assert sdk_health.is_mismatch("Claude Code returned an error result")
