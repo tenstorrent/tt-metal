@@ -166,12 +166,22 @@ def main() -> int:
         action="store_true",
         help="Verbose stage logs (VV_DEBUG=1) + device-synced timing breakdown (VV_PROFILE=1)",
     )
+    ap.add_argument(
+        "--trace",
+        action="store_true",
+        help="ttnn-trace the post-diffusion block (VV_TRACE_POSTDIFF=1) + open device with "
+        "trace region & 2 command queues. EVAL ONLY: not yet bit-exact (~0.985 PCC vs eager).",
+    )
     args = ap.parse_args()
 
     if args.debug:
         os.environ["VV_DEBUG"] = "1"
         os.environ["VV_PROFILE"] = "1"
         print("[demo_ttnn] debug enabled (VV_DEBUG=1 VV_PROFILE=1)", flush=True)
+
+    if args.trace:
+        os.environ["VV_TRACE_POSTDIFF"] = "1"
+        print("[demo_ttnn] post-diffusion trace enabled (VV_TRACE_POSTDIFF=1)", flush=True)
 
     if args.text:
         text_path = Path(args.text)
@@ -282,7 +292,11 @@ def main() -> int:
 
     import time as _time
 
-    mesh = ttnn.open_device(device_id=0, l1_small_size=32768)
+    _open_kwargs = dict(device_id=0, l1_small_size=32768)
+    if args.trace:
+        # Reserve a trace buffer + a 2nd command queue for the post-diffusion trace.
+        _open_kwargs.update(trace_region_size=200_000_000, num_command_queues=2)
+    mesh = ttnn.open_device(**_open_kwargs)
     try:
         if args.debug:
             print("[demo_ttnn] stage 2/5 open_device: device_id=0 l1_small_size=32768", flush=True)

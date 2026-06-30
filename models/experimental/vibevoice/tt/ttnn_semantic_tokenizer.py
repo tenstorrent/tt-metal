@@ -338,20 +338,25 @@ class TTConv1d:
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             if cp > 0:
                 if self._cache is None:
-                    cache = ttnn.zeros(
+                    # Fixed, pre-allocated streaming cache: allocated once and updated
+                    # in place below, so its buffer address stays constant across calls.
+                    # Reassigning it to a fresh ttnn.slice each call (the old behaviour)
+                    # breaks ttnn trace capture/replay, which requires stable addresses.
+                    self._cache = ttnn.zeros(
                         [B, 1, cp, self.in_ch],
                         dtype=self.compute_dtype,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
                         device=self.device,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
-                else:
-                    cache = self._cache
+                cache = self._cache
                 x_ctx = ttnn.concat([cache, x], dim=2)  # [B, 1, cp + T, in_ch]
-                # Update cache with the last `cp` input columns (pre right-pad).
-                self._cache = ttnn.slice(
+                # Update the cache IN PLACE with the last `cp` input columns (pre
+                # right-pad): write into the fixed buffer rather than rebinding it.
+                new_tail = ttnn.slice(
                     x_ctx, [0, 0, T, 0], [B, 1, cp + T, self.in_ch], memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
+                ttnn.copy(input_a=new_tail, input_b=self._cache)
             else:
                 x_ctx = x
             extra_pad = self._extra_right_pad(T) if is_final_chunk else 0
