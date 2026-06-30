@@ -234,12 +234,13 @@ class LTXTransformerBlock(Module):
                 compute_kernel_config=self.ff_compute_kernel_config,
                 parallel_config=self.parallel_config,
             )
-        if self.parallel_config.tensor_parallel.factor > 1:
-            normed = self.ccl_manager.all_gather_persistent_buffer(
-                normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-        ff_out = ffn(normed, compute_kernel_config=self.ff_compute_kernel_config)
-        return ttnn.addcmul(x_1BND, ff_out, gate_ff)
+        else:
+            if self.parallel_config.tensor_parallel.factor > 1:
+                normed = self.ccl_manager.all_gather_persistent_buffer(
+                    normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            ff_out = ffn(normed, compute_kernel_config=self.ff_compute_kernel_config)
+            return ttnn.addcmul(x_1BND, ff_out, gate_ff)
 
     def forward(
         self,
