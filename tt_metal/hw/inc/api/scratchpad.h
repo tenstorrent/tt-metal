@@ -76,8 +76,8 @@ public:
     using reference = T&;
     using const_reference = const T&;
 
-    // Resolve a scratchpad from its binding token: read the per-node base L1 address from the CRTA
-    // slot at the token's crta offset; size is the static spec value.
+    // Resolve a scratchpad from its accessor token: read the per-node base SRAM (L1) address from the CRTA
+    // slot at the accessor token's CRTA word offset; size is the static spec value.
     [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept :
         Scratchpad(pointer{get_common_arg_val<uint32_t>(accessor.crta_offset_)}, accessor.size_in_bytes_) {}
 
