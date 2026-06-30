@@ -369,6 +369,7 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=True,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            use_compression=True,
         )
 
     def forward(

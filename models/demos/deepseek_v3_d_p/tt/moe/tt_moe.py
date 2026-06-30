@@ -552,6 +552,19 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        # Path 1 (use_compression): FP8-compress x; dispatch the fp8 buffer with its per-token scales
+        # riding the metadata tail. Path 2: dispatch x (bf16) unchanged. x_scale is kept alive only to
+        # satisfy per_token_cast_back's input_scale arg (unused in masked mode — scales come from the
+        # metadata) and is freed right after the decompress below.
+        # NOTE: per_token_cast_to_fp8 dispatches across the full grid, so it must run BEFORE the
+        # sub-device manager is loaded — otherwise fd_mesh_command_queue asserts sub_device_ids.size()==1
+        # ("Programs must be executed on a single sub-device"). Only shared_expert and dispatch run
+        # inside the sub-device region.
+        x_scale = None
+        x_fp8 = None
+        if self.use_compression:
+            x_fp8, x_scale = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
@@ -571,13 +584,8 @@ class TtMoe(LightweightModule):
         # ========================================
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
-        # Path 1 (use_compression): FP8-compress x; dispatch the fp8 buffer with its per-token scales
-        # riding the metadata tail. Path 2: dispatch x (bf16) unchanged. x_scale is kept alive only to
-        # satisfy per_token_cast_back's input_scale arg (unused in masked mode — scales come from the
-        # metadata) and is freed right after the decompress below.
-        x_scale = None
         if self.use_compression:
-            x_fp8, x_scale = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+            logger.debug("SAJBERPANK")
             dispatched_buffer, metadata = self.dispatch_module(
                 x_fp8,
                 scores,
