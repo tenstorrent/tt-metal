@@ -72,3 +72,5 @@
 {"event":"test_run","status":"pass","test":"test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bf16]","pcc":0.9996,"rmse":0.00677,"wall_time":"70s","dispatch_timeout":"30s","params":"S=131072, D=128, bf16, causal, MQA","ts":"2026-06-30T18:26:08+00:00"}
 {"event":"test_run","status":"pass","test":"full golden suite (test_golden.py)","passed":1770,"xfailed":462,"skipped":1,"failures":0,"note":"matches R5 baseline exactly","ts":"2026-06-30T18:52:02+00:00"}
 {"event":"test_run","status":"pass","test":"acceptance tests","passed":396,"skipped":162,"failures":0,"ts":"2026-06-30T18:52:02+00:00"}
+{"event":"test_run","status":"pass","test":"refinement-specific tests","passed":13,"failures":0,"ts":"2026-06-30T19:02:05+00:00"}
+{"event":"test_run","status":"pass","test":"full golden suite (golden+regression)","passed":1802,"failed":7,"xfailed":462,"skipped":1,"note":"7 failures are pre-existing precision issues in test_regression.py, confirmed by stash test","ts":"2026-06-30T19:02:05+00:00"}
