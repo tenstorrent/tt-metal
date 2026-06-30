@@ -183,7 +183,7 @@ Wire this into `dispatch_core_manager::reset_dispatch_core_manager()` for Quasar
 
 Validate count and DM availability for the active topology:
 
-- **v1 (single-chip 1CQ, 2×3 emulator):** 1 dispatch core; prefetch on DM0, dispatcher on DM1 on that core
+- **v1 (single-chip 1CQ, 2×3 emulator):** 1 dispatch **tile**; prefetch on DM0, dispatcher on DM1 on that tile (`are_fd_kernels_on_same_core=true`). The **assignment pool** must still expose **≥ 2 logical entries** for that tile (duplicate `(0,0)`) because `prefetcher_core()` and `dispatcher_core()` each pop one slot — same pattern as interim Tensix YAML listing `[[1,-1], [1,-1]]` twice (see fix **C**)
 - **Future (multi-CQ, multi-chip):** multiple dispatch cores and multiple prefetcher/dispatcher kernel instances; specialized blocks on other DMs. Pool and assignment logic must not hard-code core count, CQ count, or DM indices — only v1 wiring is fixed to DM0/DM1
 
 For Quasar core descriptors, keep `dispatch_cores: []` on the **default** dispatch-engine path. Tensix-relative `dispatch_cores` entries in YAML (e.g. fast-dispatch sim variants) are used when **`TT_METAL_TENSIX_DISPATCH_CORES=1`** is set (including when soc dispatch-engine cores exist).
@@ -339,6 +339,7 @@ Slow dispatch remains available only when FD is not enabled via runtime options.
 - Compare against resolved dispatch core list from **`get_quasar_dispatch_cores()`** (not `DispatchCoreConfig` or soc-only lists)
 - Allow kernels with `get_kernel_core_type() == CoreType::DISPATCH` on dispatch-engine cores (including `cq_prefetch.cpp` / `cq_dispatch.cpp` launched by SD tests)
 - User kernels on dispatch-engine cores remain forbidden
+- **Physical chip id:** when compile runs on a **`MeshDevice`**, use **`device->build_id()`** for `resolve_dispatch_core_type()` and service-core lookups — **`device->id()`** is the mesh id, not `Cluster::get_soc_desc` chip id (see fix **B**)
 
 **Service cores:** `ServiceCoreManager` is BH/Galaxy Tensix dispatch-column only — **not applicable** to Quasar dispatch-engine cores. No extension needed; document exclusion.
 
@@ -362,6 +363,97 @@ Update consumers of dispatch core lists to handle `CoreType::DISPATCH`:
 - Add/extend UMD tests using the 2×3 soc with non-empty dispatch list (scaffolding exists in `test_soc_descriptor.cpp`)
 - **Emulator soc path:** build output lives under `tt-umd-simulators` (outside tt-metal tree). Validate the built `emu-quasar-2x3_DISPATCH/soc_descriptor.yaml` matches in-repo `quasar_simulation_2x3.yaml` before bringup; tt-metal simulator runs must load the emulator-built YAML when using `emu-quasar-2x3_DISPATCH`
 - **Future variants:** when new soc descriptors add one or more dispatch locations, no API changes — pool size and assignment strategy adapt to the ordered `dispatch:` list
+- **Do not confuse soc fields:** UMD reads only the **`dispatch:`** list for `CoreType::DISPATCH` tiles. Lines like **`dispatch_cores: [[1,-1], …]`** in an emulator soc YAML are **tt-metal core-descriptor syntax** copied by mistake — UMD ignores them; they do **not** expand the FD assignment pool. Interim Tensix dispatch coords belong in **`tt_metal/core_descriptors/quasar_simulation_2x3_arch_fast_dispatch.yaml`**, not in the soc descriptor.
+
+---
+
+## Bringup Regressions and Fixes (Post Phase 2–3b)
+
+Phase 2 (`resolve_dispatch_core_type()` + soc-based pool) and Phase 3b (DPRINT on `CoreType::DISPATCH`) landed before Phase 4b FD wiring was complete. Several integration gaps broke **Tensix-interim** and/or **default dispatch-engine** fast dispatch on the 2×3 emulator. Track these explicitly so Phase 4b does not reintroduce them.
+
+### Summary
+
+| Issue | Symptom | Affected path | Fix | Status |
+|-------|---------|---------------|-----|--------|
+| **A. `dispatch_s` on Quasar 1CQ** | `TT_ASSERT prefetch.cpp:295 downstream_kernels_.size() == 2` during FD init | Default dispatch-engine FD (and any path using `DispatchQueryManager` reset) | Restore pre–Phase 2 guard: `dispatch_s_enabled_` requires `arch != QUASAR` for 1CQ (topology has no `DISPATCH_S` node) | ✅ Fixed (`dispatch_query_manager.cpp`) |
+| **B. Mesh id vs physical chip** | `Cannot access soc descriptor for 1 … Call initialize_device_driver(1)` during `ProgramImpl::compile` | **Both** paths when compiling via `MeshDevice` (e.g. `SingleDmL1Write`) | `validate_kernel_placement` must pass **`device->build_id()`** (physical chip), not **`device->id()`** (mesh id), to `resolve_dispatch_core_type()` / `is_service_core()` | ✅ Fixed (`program.cpp`) |
+| **C. Dispatch pool size (1 tile, 2 FD roles)** | `No more available dispatch cores on device 0 to assign` during `populate_fd_kernels` / device open | Default dispatch-engine FD (`TT_METAL_TENSIX_DISPATCH_CORES` **unset**) | One soc dispatch tile is correct; **1CQ** topology still consumes **two** pool pops (`PREFETCH_HD` + `DISPATCH_HD`). Mirror interim Tensix YAML (**duplicate** the same logical core in the pool) or teach `dispatch_core_manager` to reuse one tile without double-pop | ⏳ **Required for Phase 4b** |
+| **D. DPRINT “all dispatch” on engine path** | Misleading success: FW prints from engine tile, then FD fails with **C** | Dispatch-engine path with `TT_METAL_DPRINT_CORES=dispatch` | DPRINT working proves **`dispatch:`** and Phase 3 FW are fine; FD failure is pool assignment, not missing soc cores | Documented (not a separate code fix) |
+
+**Regression test (2×3 emulator, fast dispatch):**
+
+```bash
+export TT_METAL_SIMULATOR=/path/to/emu-quasar-2x3_DISPATCH/
+unset TT_METAL_SLOW_DISPATCH_MODE
+
+# Interim Tensix path — must keep passing after Phase 4b changes:
+export TT_METAL_TENSIX_DISPATCH_CORES=1
+./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
+
+# Default dispatch-engine path — blocked until fix **C**:
+unset TT_METAL_TENSIX_DISPATCH_CORES
+./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
+```
+
+### A. `dispatch_s_enabled` on Quasar 1CQ
+
+**Cause:** Phase 2 `DispatchQueryManager::reset()` enabled `dispatch_s` when `resolved_dispatch_core_type == WORKER`, but Quasar **`quasar_single_chip_1cq`** has only **`PREFETCH_HD` + `DISPATCH_HD`** (no `DISPATCH_S`). WH/BH 1-CQ uses three nodes including `DISPATCH_S`.
+
+**Fix:** Keep the historical Quasar guard:
+
+```cpp
+dispatch_s_enabled_ = (num_hw_cqs == 1 or resolved_dispatch_core_type == CoreType::WORKER) and
+                        resolved_dispatch_core_type != CoreType::DISPATCH and arch != tt::ARCH::QUASAR;
+```
+
+**Note:** With **`TT_METAL_TENSIX_DISPATCH_CORES=1`**, `resolve_dispatch_core_type()` returns **`WORKER`**, so the `arch != QUASAR` term is what prevents spurious `dispatch_s` on Quasar 1CQ Tensix FD.
+
+### B. `validate_kernel_placement` and `MeshDevice::id()`
+
+**Cause:** Phase 2 `validate_kernel_placement()` calls `resolve_dispatch_core_type(env, device_id, …)`, which calls `get_soc_desc(device_id)`. When compile is invoked on a **`MeshDevice`**, `device->id()` returns **`mesh_id_`** (often **1** on a unit mesh), not the physical chip (**0**). The simulator only initializes soc descriptors for chip **0**.
+
+**Fix:** Use **`device->build_id()`** at both `validate_kernel_placement` call sites in `ProgramImpl::compile()` — same as the remote JIT path already does. Rename the helper parameter to `physical_chip_id` to avoid repeat mistakes.
+
+**Rule for future call sites:** any code that passes an id into **`Cluster::get_soc_desc`**, **`resolve_dispatch_core_type`**, **`get_quasar_dispatch_cores`**, or **`ServiceCoreManager`** chip-keyed APIs must use **physical chip id** (`build_id()` on `IDevice`, or explicit `ChipId` from device pool), **not** mesh id.
+
+### C. Dispatch-core pool: one engine tile, two assignment slots (Phase 4b blocker)
+
+**Cause:** `dispatch_core_manager` assigns FD roles by **popping** entries from the front of `available_dispatch_cores_by_device`. For **`quasar_single_chip_1cq`**:
+
+| FD role | API | Pool pops |
+|---------|-----|-----------|
+| Prefetch HD | `prefetcher_core()` | 1 |
+| Dispatch HD | `completion_queue_writer_core()` / `dispatcher_core()` | 1 |
+
+**Interim Tensix path (`TT_METAL_TENSIX_DISPATCH_CORES=1`):** pool comes from core descriptor YAML — **`dispatch_cores: [[1,-1], [1,-1]]`** lists the **same** logical coord **twice**, so two pops succeed (same physical tensix).
+
+**Default dispatch-engine path:** pool comes from soc — **`dispatch: [0-2]`** → **one** synthetic logical core **`(0,0)`** → first pop succeeds, second throws **`No more available dispatch cores`**.
+
+DPRINT output (`DE-DM*: DISPATCH DM0-FW: initialized`) confirms the soc **`dispatch:`** list and Phase 3 firmware are working; the failure is **pool sizing**, not missing hardware.
+
+**Required fix (pick one, prefer mirroring Tensix YAML):**
+
+1. **Pool expansion (recommended, minimal):** In **`get_quasar_dispatch_cores_cached()`**, when the soc lists a **single** dispatch-engine core and FD needs multiple assignment slots, **duplicate** `(0,0)` in the returned vector — at minimum **`2 × num_hw_cqs`** entries for same-core 1CQ (prefetch + dispatch per CQ). Matches interim YAML behavior without changing assignment APIs.
+
+2. **Same-core reuse (alternative):** In **`dispatch_core_manager`**, when Quasar + **`CoreType::DISPATCH`** + **`are_fd_kernels_on_same_core`**, **`dispatcher_core` / `completion_queue_writer_core`** reuse the core already assigned to **`prefetcher_core`** without a second pool pop (closer to hardware truth, more invasive).
+
+**Validation:** After fix **C**, **`SingleDmL1Write`** and full FD init must pass with **`TT_METAL_TENSIX_DISPATCH_CORES` unset** on `emu-quasar-2x3_DISPATCH`.
+
+### D. Preserving interim Tensix FD while landing Phase 4b
+
+Requirements so **`TT_METAL_TENSIX_DISPATCH_CORES=1`** keeps working:
+
+| Area | Must remain true |
+|------|------------------|
+| **`resolve_dispatch_core_type`** | Env **checked first** → **`WORKER`** when env set, regardless of soc `dispatch:` |
+| **`get_quasar_dispatch_cores`** | Env set → pool from **core descriptor YAML** (duplicate coords), not soc list |
+| **`DispatchQueryManager`** | **`arch != QUASAR`** guard for **`dispatch_s`** (fix **A**) |
+| **`validate_kernel_placement`** | **`build_id()`** for soc/service lookups (fix **B**) |
+| **`risc_firmware_initializer`** | Skip dispatch-engine **`dispatch_dm.cc`** init when env set (`assert_dispatch_cores` / engine init gated on `!get_use_quasar_tensix_dispatch_cores()`) |
+| **DPRINT** | Tensix dispatch cores stay **`CoreType::WORKER`**; `TT_METAL_DPRINT_CORES=dispatch` uses WORKER loop, not DISPATCH reroute |
+| **FD topology** | **`DispatchMemMap(WORKER)`** + Tensix **`QuasarDataMovementConfig`** on interim path until Phase 4b replaces initializer wiring |
+
+Phase 4b must **not** remove or bypass the env override; default-path pool fix (**C**) must **not** break the YAML-backed pool when the env is set.
 
 ---
 
@@ -502,6 +594,9 @@ Full FD later reuses the same dispatch-engine core type, DM assignment model, an
 
 - `resolve_dispatch_core_type()` arch gate
 - Update `dispatch_core_manager`, `DispatchQueryManager`, allocator, and program validation to use **`get_quasar_dispatch_cores()`** / **`resolve_dispatch_core_type()`** (not raw soc lists or `DispatchCoreConfig`)
+- **Bringup fixes (see [Bringup Regressions](#bringup-regressions-and-fixes-post-phase-23b)):**
+  - **`DispatchQueryManager::reset`:** restore **`arch != QUASAR`** guard on **`dispatch_s_enabled_`** for 1CQ (fix **A**)
+  - **`program.cpp::validate_kernel_placement`:** pass **`device->build_id()`** (physical chip), not **`device->id()`** (mesh id), into `resolve_dispatch_core_type()` / service-core checks (fix **B**)
 
 ### Phase 3 — HAL and firmware
 
@@ -564,7 +659,9 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 - **`dispatch_kernel_initializer`:** Quasar path registers **`DispatchMemMap(CoreType::DISPATCH)`** (replaces today’s `DispatchMemMap(WORKER)`); compile/configure prefetch/dispatch execution kernels — WH/BH pattern
 - FDKernel processor assignment on dispatch-engine DMs (`configure_kernel_variant` → `CreateDispatchEngineKernel`)
 - Topology pool wiring via `dispatch_core_manager`
-- Remove Tensix-based Quasar dispatch YAML dependency
+- Remove Tensix-based Quasar dispatch YAML dependency for the **default** path only — keep YAML + **`TT_METAL_TENSIX_DISPATCH_CORES=1`** as interim fallback
+- **Dispatch pool for 1CQ same-core (fix **C**, required):** expand soc-based pool (duplicate synthetic `(0,0)` entries) **or** reuse one tile across prefetch + dispatch HD without double-pop — see [Bringup Regressions](#bringup-regressions-and-fixes-post-phase-23b)
+- **Regression gate:** `QuasarMeshDeviceSingleCardFixture.SingleDmL1Write` passes on 2×3 emulator **with and without** `TT_METAL_TENSIX_DISPATCH_CORES=1` after Phase 4b
 
 ### Phase 5 — Tooling and integration tests
 
@@ -623,6 +720,9 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | **`DISPATCH_KERNEL` define** | **Keep `DISPATCH_KERNEL=1`** on cq/FD kernels on dispatch-engine DMs (profiler/sanitize paths) |
 | **JIT build hash** | Uses **resolved dispatch type** (`DISPATCH` vs `WORKER` from `resolve_dispatch_core_type()`), not user `DispatchCoreConfig` |
 | **`TT_METAL_TENSIX_DISPATCH_CORES=1`** | **Always** forces interim Tensix path when set — overrides soc dispatch-engine cores; interim YAML coords unchanged |
+| **Interim Tensix FD regression tests** | **`SingleDmL1Write`** (and similar mesh FD tests) must pass with env set after Phase 4b; fixes **A** + **B** required |
+| **Default dispatch-engine FD (1CQ pool)** | Soc **`dispatch: [0-2]`** is one tile; pool must allow **two** assignment pops for prefetch + dispatch HD (fix **C**) |
+| **MeshDevice compile / validation** | Use **`build_id()`** for physical chip in soc/service APIs; **`id()`** is mesh id only |
 | **No dispatch engines (default)** | Quasar **FD init fails** with clear message (env unset, empty soc dispatch list) |
 | **`dispatch_core_axis` on Quasar** | **Silently ignored** (along with other `DispatchCoreConfig` dispatch-engine fields) |
 | **Scope (v1)** | **Single-chip 1CQ** only; design extensible to multi-CQ and multi-chip |
@@ -643,4 +743,4 @@ Implement **Phases 1 → 2 → 3 → 3b → 4a** as the **first runnable milesto
 4. **Phase 3b** — DPRINT host attach for **`CoreType::DISPATCH`** (FW + cq-kernel prints collectible before SD bringup)
 5. **Phase 4a** — SD `test_prefetcher` / `test_dispatcher` on dispatch engine `(0,2)`, DM0/DM1 (requires `dispatch_dm.cc` already loaded; no `dispatch_kernel_initializer`)
 
-**Phase 4b** wires full FD through `dispatch_core_manager` and **`dispatch_kernel_initializer`** (`DispatchMemMap(CoreType::DISPATCH)`). **`TT_METAL_TENSIX_DISPATCH_CORES=1`** always selects interim Tensix fallback from core descriptor YAML when set. Multi-CQ / multi-chip extensions follow the same core pool and DM model without public API changes.
+**Phase 4b** wires full FD through `dispatch_core_manager` and **`dispatch_kernel_initializer`** (`DispatchMemMap(CoreType::DISPATCH)`). Complete **bringup regression fixes A–C** (see [Bringup Regressions](#bringup-regressions-and-fixes-post-phase-23b)) before declaring Phase 4b done. **`TT_METAL_TENSIX_DISPATCH_CORES=1`** always selects interim Tensix fallback from core descriptor YAML when set. Multi-CQ / multi-chip extensions follow the same core pool and DM model without public API changes.
