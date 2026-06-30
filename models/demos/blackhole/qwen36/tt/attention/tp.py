@@ -40,30 +40,25 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         return str(cache_dir / n) if cache_dir is not None else None
 
     tw = {}
-    # Column-parallel: shard output dim (contiguous heads per device, gate kept with Q)
+    # Column-parallel: shard output dim (contiguous heads per device, gate kept with Q).
+    # q/k/v weights are stored DRAM-WIDTH_SHARDED so the M=1 decode matmul reads them at near-peak
+    # DRAM bandwidth (mirrors the MLP w1/w3 path). On by default for TP (the memcfgs exist); the
+    # single-device 9B path never reaches this loader. Distinct `.dramshard` cache names:
+    # ttnn.as_tensor reloads a cache as-is and ignores the requested memory_config, so the sharded
+    # and interleaved layouts must not share a cache file.
+    qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
+    qg_mc = args.attn_qg_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
+    k_mc = args.attn_k_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
+    v_mc = args.attn_v_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
+    tag = ".dramshard" if qkv_sharded else ""
     tw["wqkv"] = tpc.shard_w(
-        state_dict["q_proj.weight"],
-        mesh,
-        dim=-1,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cache_path=c("wqkv"),
-        dtype=ttnn.bfloat8_b,
+        state_dict["q_proj.weight"], mesh, dim=-1, memory_config=qg_mc, cache_path=c("wqkv" + tag), dtype=ttnn.bfloat8_b
     )
     tw["wk"] = tpc.shard_w(
-        state_dict["k_proj.weight"],
-        mesh,
-        dim=-1,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cache_path=c("wk"),
-        dtype=ttnn.bfloat8_b,
+        state_dict["k_proj.weight"], mesh, dim=-1, memory_config=k_mc, cache_path=c("wk" + tag), dtype=ttnn.bfloat8_b
     )
     tw["wv"] = tpc.shard_w(
-        state_dict["v_proj.weight"],
-        mesh,
-        dim=-1,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cache_path=c("wv"),
-        dtype=ttnn.bfloat8_b,
+        state_dict["v_proj.weight"], mesh, dim=-1, memory_config=v_mc, cache_path=c("wv" + tag), dtype=ttnn.bfloat8_b
     )
     # Row-parallel: shard input dim → reduce-scatter after
     tw["wo"] = tpc.shard_w(
@@ -102,6 +97,9 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
+        # Mirror the weight-load gate: q/k/v stored DRAM-WIDTH_SHARDED → use the DRAM-sharded
+        # decode matmul (see _col_proj). Must match qkv_sharded in load_attention_weights_tp.
+        self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self.k_caches = None
         self.v_caches = None
         # Paged KV cache (vLLM / model-contract path). Bound via set_paged_kv_cache;
@@ -116,6 +114,23 @@ class TPAttention:
         self.paged_k = k_cache
         self.paged_v = v_cache
         self.use_paged = True
+
+    def _col_proj(self, x, weight, decode_progcfg):
+        """Column-parallel input projection (q / k / v). When DRAM-sharding is enabled the
+        decode (M<=32) matmul reads the weight at near-peak DRAM bandwidth; otherwise this is
+        the validated plain interleaved ttnn.linear. Output is DRAM-interleaved either way, so
+        the head reshape/slice downstream is unchanged."""
+        if not self._dram_sharded:
+            return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return tpc.sharded_decode_matmul(
+            x,
+            weight,
+            self.compute_cfg,
+            decode_progcfg,
+            self.args.act_shard_hidden,
+            self.args.prefill_progcfg,
+            self.args.dim,
+        )
 
     def reset_state(self):
         def z():
@@ -136,9 +151,9 @@ class TPAttention:
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         S = x.shape[-2]
 
-        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qg = self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg)
+        kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
+        vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
 
         # [1,1,S,NH*HD*2] -> [1,S,NH,2*HD] -> split -> [1,NH,S,HD]
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
@@ -213,9 +228,9 @@ class TPAttention:
         if not use_paged and self.k_caches is None:
             self.reset_state()
 
-        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qg = self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg)
+        kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
+        vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
 
         qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2))
         ttnn.deallocate(qg)
@@ -360,9 +375,9 @@ class TPAttention:
             chunk_start_idx = 0
         S = x.shape[-2]
 
-        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qg = self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg)
+        kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
+        vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
 
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
         q = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, 0), (1, S, NH, HD)), 1, 2)

@@ -81,8 +81,19 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
     )
     tw = {}
+    # Column-parallel qkvz in-projection (the large GDN input matmul) stored DRAM-WIDTH_SHARDED so
+    # the M=1 decode matmul reads it at near-peak DRAM bandwidth (mirrors MLP w1/w3). On by default
+    # for TP (the memcfg exists). Distinct `.dramshard` cache (ttnn.as_tensor reloads a cache as-is,
+    # ignoring memory_config). `ab`/`out` stay interleaved.
+    qkvz_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
+    qkvz_mc = args.gdn_qkvz_weight_memcfg if qkvz_sharded else ttnn.DRAM_MEMORY_CONFIG
     tw["qkvz"] = tpc.shard_w(
-        fused, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("qkvz"), dtype=ttnn.bfloat8_b
+        fused,
+        mesh,
+        dim=-1,
+        memory_config=qkvz_mc,
+        cache_path=c("qkvz" + (".dramshard" if qkvz_sharded else "")),
+        dtype=ttnn.bfloat8_b,
     )
     # ---- fused A+B (column-parallel), per-device [a(nv_per), b(nv_per)] ----
     a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
@@ -133,6 +144,9 @@ class TPGatedDeltaNet:
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
+        # Mirror the weight-load gate: qkvz stored DRAM-WIDTH_SHARDED → DRAM-sharded decode matmul
+        # (see _col_proj). Must match qkvz_sharded in load_gdn_weights_tp.
+        self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
         # Pre-build the chunk-prefill masks ONCE (replicated across the mesh) so the seq kernel
         # reads them from cache instead of rebuilding eye/triu/tril via from_torch on every call.
         # The from_torch fallback is a host write that TT_FATALs inside the captured chunk-outer
@@ -215,6 +229,22 @@ class TPGatedDeltaNet:
         ttnn.copy(zcc, self.conv_carry)
         ttnn.deallocate(zcc)
 
+    def _col_proj(self, x, weight, decode_progcfg):
+        """Column-parallel qkvz in-projection. DRAM-sharded decode matmul when enabled, else the
+        validated plain interleaved ttnn.linear. Output is DRAM-interleaved either way so the
+        downstream slice into qkv/z is unchanged."""
+        if not self._dram_sharded:
+            return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return tpc.sharded_decode_matmul(
+            x,
+            weight,
+            self.cfg,
+            decode_progcfg,
+            self.args.act_shard_hidden,
+            self.args.prefill_progcfg,
+            self.args.dim,
+        )
+
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
@@ -247,7 +277,7 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
-        qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkvz = self._col_proj(x, tw["qkvz"], self.args.gdn_qkvz_progcfg)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, T, self.qkv_dim_tp))
         z = ttnn.slice(qkvz, (0, 0, self.qkv_dim_tp), (1, T, self.qkvz_dim_tp))
         ttnn.deallocate(qkvz)
@@ -360,7 +390,7 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))  # [1,B,dim]
 
-        qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkvz = self._col_proj(x, tw["qkvz"], self.args.gdn_qkvz_progcfg)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, B, self.qkv_dim_tp))
         z = ttnn.slice(qkvz, (0, 0, self.qkv_dim_tp), (1, B, self.qkvz_dim_tp))
         ttnn.deallocate(qkvz)
