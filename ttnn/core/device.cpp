@@ -25,7 +25,7 @@ tt::tt_metal::DispatchCoreType cluster_aware_dispatch_core_type() {
 
 tt::tt_metal::DispatchCoreAxis default_dispatch_core_axis(tt::tt_fabric::FabricTensixConfig fabric_tensix_config) {
     if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE &&
-        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::MUX) {
         return tt::tt_metal::DispatchCoreAxis::COL;
     }
     return tt::tt_metal::DispatchCoreAxis::ROW;
