@@ -11,6 +11,7 @@
 #include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
+#include "per_token_cast_back_common.hpp"
 
 // per_token_cast_back: Convert (e4m3 input, scale) -> (bfloat16 or float32 output)
 // Implementation requires row-major inputs and outputs.
@@ -22,14 +23,6 @@ namespace ttnn::experimental::prim::per_token_cast_back {
 namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8;
 
 namespace {
-
-std::pair<uint32_t, uint32_t> fold_M_H(const ttnn::Shape& shape) {
-    uint64_t M = 1;
-    for (size_t i = 0; i + 1 < shape.size(); ++i) {
-        M *= static_cast<uint64_t>(shape[i]);
-    }
-    return {static_cast<uint32_t>(M), static_cast<uint32_t>(shape[shape.size() - 1])};
-}
 
 uint32_t rows_for_core_from_split(
     const CoreCoord& core,
@@ -186,7 +179,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         cb_out_tile_idx,
         cb_out_idx,
         tile_h,
-        tile_w};
+        tile_w,
+        /*DYNAMIC_NUM_BLOCKS=*/0,  // plain path: num_blocks via runtime arg below
+        /*cb_nblocks=*/0};         // unused when DYNAMIC_NUM_BLOCKS=0
     // fp32_dest_acc_en=True required (input_e4m3 CB on core); HiFi4 (the ComputeConfig default) keeps the
     // broadcast multiply precise.
     KernelHandle compute_kernel_id = CreateKernel(
