@@ -727,6 +727,33 @@ class TTSeamlessM4Tv2Model:
         if not preserve_vocoder:
             self.vocoder._conv1d_prepared_cache.clear()
             self.vocoder._matmul_pc_cache.clear()
+        # Evict large speech-encoder L1 attention-mask cache entries that would clash with the
+        # T2U encoder's static CB region (ending at ~869 KB).  For a seq_len N the two masks
+        # ([1,1,N,N] chunk + additive) together occupy ~4*N²/110 bytes of L1 per bank starting
+        # at DATA_BUFFER_SPACE_BASE (~220 KB).  The clash region begins around N ≥ 4096 (where
+        # the high-water mark reaches ~835 KB, inside the 869 KB CB limit).  Shorter sequences
+        # (≤ 2048 → ~375 KB peak) are safe and their cached entries are left intact so the next
+        # speech-encoder call can reuse them without rebuilding.
+        # The clash is only observed on single-device BH (num_devices == 1); multi-device
+        # configurations such as BH QB (num_devices == 4) have sufficient L1 headroom and do
+        # not require this eviction.
+        _L1_MASK_CLASH_SEQ_THRESHOLD = 4096
+        _needs_eviction = self.device.get_num_devices() == 1
+        if _needs_eviction:
+            _chunk_keys_to_evict = [
+                k for k in self.speech_encoder._chunk_attn_mask_cache if k[1] >= _L1_MASK_CLASH_SEQ_THRESHOLD
+            ]
+            for _k in _chunk_keys_to_evict:
+                _t = self.speech_encoder._chunk_attn_mask_cache.pop(_k)
+                if _t is not None:
+                    ttnn.deallocate(_t)
+            _additive_keys_to_evict = [
+                k for k in self.speech_encoder._encoder_additive_mask_cache if k[1] >= _L1_MASK_CLASH_SEQ_THRESHOLD
+            ]
+            for _k in _additive_keys_to_evict:
+                _t = self.speech_encoder._encoder_additive_mask_cache.pop(_k)
+                if _t is not None:
+                    ttnn.deallocate(_t)
 
     def _release_speech_generate_runtime(self) -> None:
         """Release traces/KV after speech ``generate()`` without flushing vocoder program cache."""
@@ -2802,6 +2829,17 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(enc_tt2)
         if enc_attn_owned2:
             ttnn.deallocate(enc_attn_tt2)
+
+        # The text-decoder's final layer-norm returns an L1 interleaved tensor.  At long mel
+        # inputs (e.g. 4096 frames) the decode-trace cross-SDPA programs leave the L1 allocator's
+        # high-water mark near 833 KB; ``dec_hidden_padded`` is then allocated there — inside
+        # the T2U encoder's first-matmul static CB region (ends at ~869 KB) — causing a
+        # TT_THROW on CB validation.  Moving to DRAM here prevents the clash regardless of how
+        # high the preceding trace drove the L1 watermark.
+        if dec_hidden_padded.memory_config().buffer_type == ttnn.BufferType.L1:
+            _dec_hidden_dram = ttnn.to_memory_config(dec_hidden_padded, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(dec_hidden_padded)
+            dec_hidden_padded = _dec_hidden_dram
 
         # T2U prep: characters & char counts come from the generated text-token sequence.
         seq_full_ints = list(seq_host)
