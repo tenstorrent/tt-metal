@@ -251,3 +251,37 @@ static_assert; old-style is why DPRINT "didn't compile" before). Findings:
 
 MODEL STATUS: still gated (DistributedLayerNorm._FUSED_LN_MAX_RESIDENT_TILE_COLS=40). Narrow shards
 (WAN tp4/tp8, the common model configs) keep fused LN and are correct; wide shards use composite.
+
+### ISSUE 3A — standard-kernel review + fix direction (still OPEN; model still gated)
+Reviewed the non-distributed streaming Welford layernorm (layernorm/device/kernels/compute/
+layernorm_large_tensor_welford.cpp) per request. Two paths, and the contrast is the key:
+- **no_fuse path**: accumulates the running mean/M2 in LREG4/5 across streamed tiles, resetting
+  per row with a plain `welford_init()`. Works across many (warm) rows ONLY because there is NO
+  clobbering SFPU op between rows.
+- **fuse_pre_add path**: has a clobbering pre-add BETWEEN welford updates, and therefore NEVER
+  trusts LREG to survive it. It SPILLS the welford state to CBs (cb_ex/cb_ex2) with
+  `welford_save_state(mean_dst)` and RELOADS it with `copy_tile(cb -> mean_dst/var_dst)` +
+  `welford_restore_state(mean_dst)`. `copy_tile` is an L1->DST read (UNPREDICATED), so it
+  reliably writes every lane — unlike `welford_init`'s SFPLOADI clear (and `fill_tile`), which
+  only write CC-enabled lanes.
+It also re-arms per tile after an fp32 transpose (`transpose_wh_init_short` +
+`welford_init<WelfordInitMode::PreserveStats>()`), and handles the padded last tile with
+`welford_update_rows<W>` (we omit this — fine only because our W is tile-aligned).
+
+OUR BUG maps exactly to the fuse_pre_add situation: the per-row `combine` (TP>1 only) is a
+clobbering SFPU op, and our streaming PRE resets with a plain `welford_init()` like the no_fuse
+path — which is INSUFFICIENT after a clobber. Confirmed on device: welford INPUT is clean
+(in[tok]=~0.96) but the welford-produced running mean for some token lanes is ~4.98e36 on warm
+rows (bit-identical across devices = a stale accumulator lane, not data). The SFPLOADI-based clear
+(and fill_tile) do not reset those lanes.
+
+Tried + FAILED on device: per-tile welford replay re-arm; fill_tile(0)+welford_restore_state;
+SFPENCC(3,0,0,10) lane-enable in the clear; legacy<->non-legacy rsqrt in the combine. None reset
+the lane. The one robust pattern NOT yet tried is the fuse_pre_add path's exact mechanism: capture
+a zeroed welford state into a CB ONCE at cold start (CC clean), then each row reload it via
+`copy_tile(zero_cb)` + `welford_restore_state` (UNPREDICATED L1 path) instead of relying on the
+predicated clear. `fill_tile` failed because it is ALSO SFPLOADI-predicated; `copy_tile` is not.
+
+FIX DIRECTION (implementable, mirrors the shipping fuse_pre_add kernel): add a small zeroed-state
+CB, pack zeros once at kernel start, and replace the per-row reset with copy_tile(zero)+restore.
+Model stays gated (_FUSED_LN_MAX_RESIDENT_TILE_COLS=40) until this lands.
