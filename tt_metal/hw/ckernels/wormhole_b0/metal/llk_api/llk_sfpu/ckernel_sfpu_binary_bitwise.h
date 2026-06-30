@@ -26,23 +26,38 @@ template <
     int ITERATIONS = 8>
 inline void calculate_sfpu_binary_bitwise(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    static_assert(
+        INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16,
+        "INSTRUCTION_MODE must be one of: INT32, LO16.");
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64 rows
-        constexpr std::uint32_t dst_tile_size = 64;
-
-        TT_SFPLOAD(0, INSTRUCTION_MODE, 3, dst_index_in0 * dst_tile_size);
-        TT_SFPLOAD(1, INSTRUCTION_MODE, 3, dst_index_in1 * dst_tile_size);
-
-        if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
-            TTI_SFPAND(0, 1, 0, 0);
-        } else if constexpr (BITWISE_OP == BinaryBitwiseOp::OR) {
-            TTI_SFPOR(0, 1, 0, 0);
-        } else if constexpr (BITWISE_OP == BinaryBitwiseOp::XOR) {
-            TTI_SFPXOR(0, 1, 0, 0);
+        if constexpr (INSTRUCTION_MODE == InstrModLoadStore::LO16) {
+            vUInt a = dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>();
+            vUInt b = dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>();
+            vUInt res;
+            if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
+                res = a & b;
+            } else if constexpr (BITWISE_OP == BinaryBitwiseOp::OR) {
+                res = a | b;
+            } else {
+                res = a ^ b;
+            }
+            dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>() = res;
+        } else {
+            vInt a = dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+            vInt b = dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+            vInt res;
+            if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
+                res = a & b;
+            } else if constexpr (BITWISE_OP == BinaryBitwiseOp::OR) {
+                res = a | b;
+            } else {
+                res = a ^ b;
+            }
+            dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = res;
         }
-
-        TT_SFPSTORE(0, INSTRUCTION_MODE, 3, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }
