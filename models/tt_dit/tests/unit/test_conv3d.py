@@ -12,6 +12,8 @@ from loguru import logger
 
 import ttnn
 
+from models.common.utility_functions import skip_for_blackhole
+
 from ...layers.conv3d import ContextParallelConv3d as TtContextParallelConv3d
 from ...parallel.config import MochiVAEParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
@@ -87,6 +89,7 @@ def validate_outputs(tt_output, ref_output, test_name):
     [(1, 1)],
     indirect=True,
 )
+@skip_for_blackhole("Large Conv3D tensor allocation hangs on Blackhole. TODO Debug and fix in the future.")
 def test_context_parallel_conv3d_forward_noshard(
     mesh_device, input_shape, out_channels, kernel_size, stride, reset_seeds
 ):
