@@ -1046,6 +1046,78 @@ def test_rmsnorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_mes
             assert fused_pcc >= comp_pcc - 5e-4, f"fused ({fused_pcc}) worse than composite ({comp_pcc})"
 
 
+# (mesh, device_params, model, dim, tp, topology, tp_axis, full_mesh)
+_LNBENCH_PARAMS = [
+    ((4, 8), _DP_GAL, FLUX, 3072, 4, ttnn.Topology.Linear, 1, False),  # FLUX TP4 submesh line
+    ((4, 8), _DP_GAL, WAN, 5120, 4, ttnn.Topology.Linear, 1, False),  # WAN TP4 (wider feat)
+]
+_LNBENCH_IDS = ["flux_tp4", "wan_tp4"]
+# Typical FLUX-ish per-device row counts (full sequence; only dim is TP-sharded):
+# 512 text/prompt, 1024 (512px latent), 4096 (1024px latent), 8192 (large/video).
+_LNBENCH_SEQLENS = [512, 1024, 4096, 8192]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "model", "dim", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNBENCH_PARAMS, _LNBENCH_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_layernorm_module_bench(mesh_device, model, dim, tp, topology, tp_axis, full_mesh):
+    """Traced speedup: fused Welford LayerNorm device op vs the composite
+    dit_layernorm chain, in the DistributedLayerNorm module (adaLN), across a span of
+    sequence lengths. Prints a table; not an assertion test."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    iters = 100
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedLayerNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+    rows = []
+    for seq in _LNBENCH_SEQLENS:
+        torch.manual_seed(0)
+        x = bf16_tensor(
+            torch.randn(1, 1, seq, dim, dtype=torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1
+        )
+        dw = bf16_tensor(torch.randn(1, 1, dim, dtype=torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        db = bf16_tensor(torch.randn(1, 1, dim, dtype=torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        row = {"seq": seq}
+        try:
+            _norm._USE_FUSED_LAYERNORM = False
+            row["composite"] = _trace_and_time(
+                submesh, lambda: mod.forward(x, dynamic_weight=dw, dynamic_bias=db), num_iters=iters
+            )
+            _norm._USE_FUSED_LAYERNORM = True
+            # Ping-pong: the module rotates its pob+AG-sem internally per forward, so two
+            # captured traces bind the two resource sets; replay them round-robin.
+            run_ops = [lambda: mod.forward(x, dynamic_weight=dw, dynamic_bias=db) for _ in range(_PINGPONG)]
+            row["fused"] = _trace_and_time(submesh, run_ops, num_iters=iters)
+        except Exception as e:  # noqa: BLE001
+            row["err"] = type(e).__name__
+            logger.warning(f"seq={seq} FAILED: {str(e)[:160]}")
+        finally:
+            _norm._USE_FUSED_LAYERNORM = False
+        rows.append(row)
+
+    feat = dim // tp
+    title = f"DistributedLayerNorm: composite vs fused (model={model}, dim={dim}, TP={tp}, feat_local={feat})"
+    box = "=" * max(len(title), 58)
+    print("\n" + box + f"\n{title}\n" + box)
+    print(f"{'seq_len':>8} {'composite_us':>13} {'fused_us':>10} {'speedup':>8}")
+    print("-" * 42)
+    for r in rows:
+        if "err" in r:
+            print(f"{r['seq']:>8} {r['err']:>13} {'':>10} {'':>8}")
+            continue
+        c, f = r["composite"], r["fused"]
+        print(f"{r['seq']:>8} {c:>13.2f} {f:>10.2f} {c / f:>7.2f}x")
+    print(box)
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_CORR_PARAMS, _CORR_IDS)],
