@@ -678,6 +678,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_groups_per_core", num_groups_per_core},
         {"num_batches_per_core", num_batches_per_core_group_1},
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_channels_per_group", num_channels_per_group},
         {"num_tiles_per_batch", per_core_Mt_group_1 * Wt / num_batches_per_core_group_1},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
@@ -707,6 +708,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_groups_per_core", num_groups_per_core},
         {"num_batches_per_core", num_batches_per_core_group_2},
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_channels_per_group", num_channels_per_group},
         {"num_tiles_per_batch", per_core_Mt_group_2 * Wt / num_batches_per_core_group_2},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
@@ -743,12 +745,25 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    std::map<std::string, std::string> writer_defines;
+    // See groupnorm_sharded_program_factory.cpp for the mask data path
+    // selection (synthesize / partial read / full read). Synthesis can fire
+    // even when the device op got no input_mask tensor — see that comment.
+    const bool synth_mask =
+        !input_mask.has_value() ? !use_welford : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
+    if (synth_mask) {
+        writer_defines["MASK_SYNTHESIZE"] = "1";
+    } else if (!use_welford && input_mask.has_value() && mask_format_supports_partial_read(in_mask_cb_data_format)) {
+        writer_defines["MASK_PARTIAL_READ"] = "1";
+    }
+
     KernelDescriptor writer_desc_g1;
     writer_desc_g1.kernel_source = writer_kernel;
     writer_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc_g1.core_ranges = all_cores_group_1;
     writer_desc_g1.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc_g1.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_1);
+    writer_desc_g1.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc_g1.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -762,6 +777,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         writer_desc_g2.core_ranges = all_cores_group_2;
         writer_desc_g2.compile_time_args = writer_mcast_sender_compile_time_args_group_2;
         writer_desc_g2.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_2);
+        writer_desc_g2.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
         writer_desc_g2.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
@@ -1094,7 +1110,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }}},
         });
     }
-    if (input_mask.has_value()) {
+    if (input_mask.has_value() || synth_mask) {
         constexpr uint32_t in_mask_cb_index = tt::CBIndex::c_28;
         desc.cbs.push_back(CBDescriptor{
             .total_size = in_mask_CB_size,

@@ -8,10 +8,40 @@
 #include <cstdint>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace ttnn::prim {
 
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
+
+// True when the mask format is safe for the gamma-style partial-row NOC read
+// (only face 0 / face 1 row 0 are fetched, rest of the tile is left
+// uninitialized). Block-float formats (Bfp2/4/8) store a shared-exponent block
+// per face — the data for "logical row 0" doesn't live at face byte offset 0
+// — so partial reads are unsafe for them. Plain fp formats (Float16_b,
+// Float16, Float32, ...) are safe.
+inline bool mask_format_supports_partial_read(tt::DataFormat fmt) {
+    switch (fmt) {
+        case tt::DataFormat::Bfp2:
+        case tt::DataFormat::Bfp2_b:
+        case tt::DataFormat::Bfp4:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp8:
+        case tt::DataFormat::Bfp8_b: return false;
+        default: return true;
+    }
+}
+
+// True when the writer kernel can synthesize the per-group 0/1 mask directly
+// in L1 instead of fetching it from a host-built DRAM tensor. Requires:
+//   - non-block-float dtype (so the on-tile byte layout is the simple
+//     {face0_row0, face1_row0} = {[0, face_w_bytes), [face_bytes, ...)} map);
+//   - non-Welford compute path (Welford consumes the full mask tile via
+//     mul_tiles_bcast_scalar with mask on the broadcast-target side, so row 0
+//     alone is not enough).
+inline bool mask_supports_synthesis(tt::DataFormat fmt, bool use_welford) {
+    return mask_format_supports_partial_read(fmt) && !use_welford;
+}
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 

@@ -101,9 +101,21 @@ ttnn::Tensor get_mask_tensor(
     const std::optional<ttnn::Tensor>& input_mask,
     const std::optional<ttnn::Tensor>& negative_mask,
     const CoreGrid& core_grid,
-    const int num_groups) {
+    const int num_groups,
+    bool use_welford) {
     ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
     if (!input_mask.has_value() and !negative_mask.has_value()) {
+        // The writer kernel can synthesize the per-group {0.0, 1.0} mask
+        // directly in L1 from `num_channels_per_group` and a small recurrence
+        // — see groupnorm_mask_synthesize.hpp. The synthesis path is gated on
+        // non-Welford compute (Welford reads the FULL mask tile via
+        // mul_tiles_bcast_scalar) and non-block-float dtype. We always pick
+        // BFLOAT16 here, so the dtype gate is always satisfied; only
+        // !use_welford matters. When synthesis is going to fire we skip the
+        // host-side build entirely — no DRAM tensor is allocated.
+        if (!use_welford) {
+            return ttnn::Tensor();
+        }
         // create input mask
         int64_t num_channel = input_tensor.padded_shape()[-1];
         int64_t num_cores_across_channel;
@@ -362,8 +374,18 @@ Tensor group_norm(
     }
 
     // auto generate mask tensor if both input_mask and negative_mask are not provided
-    ttnn::Tensor mask = operations::normalization::get_mask_tensor(
-        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups);
+    // (skipped entirely when the writer kernel will synthesize the mask in-L1)
+    //
+    // Synthesis is gated identically here and in the program factories:
+    // non-Welford + (caller didn't pass a mask). When that fires we leave the
+    // device-op's input_mask argument as nullopt — no DRAM tensor allocated.
+    const bool will_synthesize = !input_mask.has_value() && !negative_mask.has_value() && !use_welford;
+    std::optional<ttnn::Tensor> mask_for_op = input_mask;
+    if (!will_synthesize) {
+        ttnn::Tensor mask = operations::normalization::get_mask_tensor(
+            input_tensor, input_mask, negative_mask, core_grid.value(), num_groups, use_welford);
+        mask_for_op = mask;
+    }
 
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
@@ -382,7 +404,7 @@ Tensor group_norm(
             use_welford,
             gamma,
             beta,
-            mask,
+            mask_for_op,
             negative_mask,
             reciprocals);
     }
@@ -406,7 +428,7 @@ Tensor group_norm(
         use_welford,
         gamma,
         beta,
-        mask,
+        mask_for_op,
         negative_mask,
         reciprocals);
 }

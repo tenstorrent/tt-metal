@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -12,6 +13,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
@@ -91,6 +95,13 @@ void kernel_main() {
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
+#if defined(MASK_PARTIAL_READ)
+    constexpr uint32_t mask_tile_hw = tt::constants::TILE_HW;
+    const uint32_t input_mask_element_bytes = input_mask_single_tile_size_bytes / mask_tile_hw;
+    const uint32_t input_mask_face_bytes = input_mask_element_bytes * tt::constants::FACE_HW;
+    const uint32_t input_mask_face_w_bytes = input_mask_element_bytes * tt::constants::FACE_WIDTH;
+#endif
+
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
@@ -108,25 +119,88 @@ void kernel_main() {
     index_b_offset = 0;
     constexpr uint32_t row_tile_max_index = num_cols_tile_gamma_beta;
 
+#if defined(MASK_SYNTHESIZE)
+    // Group sizing for in-kernel mask synthesis — mirrors the host
+    // start_stride recurrence in groupnorm_input_mask.cpp:60-72.
+    //
+    // num_cols_per_group (above) is num_channels_per_group_mod_tile_w, used by
+    // the existing index_g_offset arithmetic. The mask synthesis path needs
+    // the FULL group size (num_channels_per_group) to compute end_stride
+    // correctly when block_wt > 1.
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W =
+        (num_channels_per_group % tile_width == 0) ? 0 : (num_channels_per_group % tile_width);
+#endif
+
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
         index_g_offset = 0;
         row_offset = num_cols_per_group;
+#if defined(MASK_SYNTHESIZE)
+        uint32_t mask_row_offset = 0;
+#endif
 
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
             cb_input_mask.reserve_back(block_w);
             uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
+#if defined(MASK_SYNTHESIZE)
+            tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+                l1_write_addr_input_mask,
+                mask_row_offset,
+                num_channels_per_group,
+                block_w,
+                input_mask_single_tile_size_bytes,
+                tile_width,
+                tt::tt_metal::groupnorm::BF16_ONE,
+                tt::tt_metal::groupnorm::BF16_ZERO);
+            mask_row_offset =
+                tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, tile_width);
+#else
             for (uint32_t j = 0; j < block_w; ++j) {
+#if defined(MASK_PARTIAL_READ)
+                // Face 1 sits at tile byte offset `face_bytes` (=512 for bf16),
+                // not `face_w_bytes` (=32). See the comment in
+                // writer_unary_sharded_gn_rm_gb_v2.cpp.
+#ifdef ARCH_BLACKHOLE
+                noc.async_read(
+                    mask,
+                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                    input_mask_face_w_bytes * 2,
+                    {.page_id = input_mask_tile_id},
+                    {});
+                noc.async_read(
+                    mask,
+                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask + input_mask_face_bytes),
+                    input_mask_face_w_bytes * 2,
+                    {.page_id = input_mask_tile_id, .offset_bytes = input_mask_face_bytes},
+                    {});
+#else
+                noc.async_read(
+                    mask,
+                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                    input_mask_face_w_bytes,
+                    {.page_id = input_mask_tile_id},
+                    {});
+                noc.async_read(
+                    mask,
+                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask + input_mask_face_bytes),
+                    input_mask_face_w_bytes,
+                    {.page_id = input_mask_tile_id, .offset_bytes = input_mask_face_bytes},
+                    {});
+#endif
+#else
                 noc.async_read(
                     mask,
                     CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
                     input_mask_single_tile_size_bytes,
                     {.page_id = input_mask_tile_id},
                     {});
+#endif
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
             }
             noc.async_read_barrier();
+#endif  // MASK_SYNTHESIZE
             cb_input_mask.push_back(block_w);
 
             if (i == 0 and b == 0) {

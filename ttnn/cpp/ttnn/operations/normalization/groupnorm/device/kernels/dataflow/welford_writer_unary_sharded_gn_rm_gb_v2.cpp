@@ -62,6 +62,16 @@ void kernel_main() {
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
+#if defined(MASK_PARTIAL_READ)
+    // The Welford kernel consumes the mask via mul_tiles_bcast_scalar, which
+    // unpacks element (0, 0) of the source tile only (byte offset 0 in face
+    // 0). We still populate face 1 row 0 alongside face 0 row 0 — same
+    // gamma-style pattern as the non-Welford writer; cheap and consistent.
+    const uint32_t input_mask_element_bytes = input_mask_single_tile_size_bytes / TILE_HW;
+    const uint32_t input_mask_face_bytes = input_mask_element_bytes * tt::constants::FACE_HW;
+    const uint32_t input_mask_face_w_bytes = input_mask_element_bytes * tt::constants::FACE_WIDTH;
+#endif
+
     constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
     const uint32_t eps = get_arg_val<uint32_t>(0);
     generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
@@ -71,12 +81,49 @@ void kernel_main() {
         cb_input_mask.reserve_back(block_w);
         uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
         for (uint32_t j = 0; j < block_w; ++j) {
+#if defined(MASK_PARTIAL_READ)
+            // See writer_unary_sharded_gn_rm_gb_v2.cpp for the byte map. Face 1
+            // sits at byte offset `face_bytes` (typically 512 for bf16), so
+            // the second strip is fetched from DRAM at `offset_bytes =
+            // input_mask_face_bytes`. Welford's SCALAR-broadcast unpacker
+            // reads element (0,0) only, but the gamma-style two-strip pattern
+            // populates both face 0 row 0 and face 1 row 0 — a tiny bit of
+            // redundancy in exchange for one consistent read pattern.
+#ifdef ARCH_BLACKHOLE
+            noc.async_read(
+                mask,
+                CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                input_mask_face_w_bytes * 2,
+                {.page_id = input_mask_tile_id},
+                {});
+            noc.async_read(
+                mask,
+                CoreLocalMem<uint32_t>(l1_write_addr_input_mask + input_mask_face_bytes),
+                input_mask_face_w_bytes * 2,
+                {.page_id = input_mask_tile_id, .offset_bytes = input_mask_face_bytes},
+                {});
+#else
+            noc.async_read(
+                mask,
+                CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                input_mask_face_w_bytes,
+                {.page_id = input_mask_tile_id},
+                {});
+            noc.async_read(
+                mask,
+                CoreLocalMem<uint32_t>(l1_write_addr_input_mask + input_mask_face_bytes),
+                input_mask_face_w_bytes,
+                {.page_id = input_mask_tile_id, .offset_bytes = input_mask_face_bytes},
+                {});
+#endif
+#else
             noc.async_read(
                 mask,
                 CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
                 input_mask_single_tile_size_bytes,
                 {.page_id = input_mask_tile_id},
                 {});
+#endif
             l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
             input_mask_tile_id += 1;
         }
