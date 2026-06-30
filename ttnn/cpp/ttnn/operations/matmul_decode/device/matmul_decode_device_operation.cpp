@@ -146,8 +146,22 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     output_shape[-1] = operation_attributes.N;
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
+
     CoreRangeSet output_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
     int output_num_cores = output_core_range_set.num_cores();
+    if (operation_attributes.partial_width_sharded) {
+        // The partial layout reduces across K_blocks cores, so the output is sharded
+        // across N_blocks cores (one N-slice per block). Mirror the factory: each B
+        // shard is [Kc, Nc], so the cores spanning N is N_tiles / Nc_tiles and that
+        // equals N_blocks.
+        const auto& b_shard_spec = input_tensor_b.memory_config().shard_spec().value();
+        const int N_tiles = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+        const int Nc_tiles = static_cast<int>(b_shard_spec.shape[1]) / tt::constants::TILE_WIDTH;
+        const int N_blocks = N_tiles / Nc_tiles;
+        output_num_cores = N_blocks;
+        output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
+            output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
+    }
     int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
     std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
     auto shard_spec =
