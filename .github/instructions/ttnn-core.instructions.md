@@ -1,6 +1,6 @@
 ---
 description: 'PR review rules for TTNN core'
-applyTo: 'ttnn/core/**,ttnn/ttnn/**,ttnn/**/*nanobind*'
+applyTo: 'ttnn/core/**,ttnn/ttnn/**'
 excludeAgent: "cloud-agent"
 ---
 
@@ -17,7 +17,6 @@ excludeAgent: "cloud-agent"
 
 - **Avoid heap allocations in hot paths**: runtime argument patching, program cache lookups, and op dispatch are performance-critical. Flag multiple heap allocations (vector resizes, map insertions) in `override_runtime_arguments` or descriptor patching paths. Prefer pre-allocated storage.
 - **`[[nodiscard]]` for RAII guards**: scope guards (sub-device guards, composite trace guards) must be marked `[[nodiscard]]` to prevent accidental creation without binding to a variable, which would immediately destroy the guard.
-- **Python GC incompatibility with C++ guards**: C++ RAII guards exposed to Python via nanobind are dangerous — Python's garbage collector does not guarantee destruction order. Avoid exposing guards directly; prefer context managers or explicit release APIs.
 - **Generic function names**: utility functions and defaults must have descriptive names. `get_default_type()` is unreadable at the call site (`auto type = get_default_type()`). Name functions to be self-documenting when read in context.
 - **Prefer structs over pairs/tuples**: for return values or stored data with named fields, use a small struct with named members instead of `std::pair` (avoiding `.first`/`.second` which obscure meaning).
 - **Initialize primitive struct members**: when adding new structs (especially in program descriptors or device operations), always initialize primitive members. Uninitialized members in cached/reused structures produce non-deterministic behavior.
@@ -43,4 +42,3 @@ excludeAgent: "cloud-agent"
 - [ ] Primitive struct members initialized
 - [ ] `std::move` preserved on refactored temporaries
 - [ ] Function/variable names self-documenting at the call site
-- [ ] No Python-exposed C++ guards without explicit lifecycle management
