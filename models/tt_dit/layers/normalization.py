@@ -19,6 +19,13 @@ from .module import Module, Parameter
 # Set WAN_USE_FUSED_RMSNORM=1 to enable.
 _USE_FUSED_RMSNORM = os.getenv("WAN_USE_FUSED_RMSNORM") == "1"
 
+# Same switch for DistributedLayerNorm: route through the fused Welford LayerNorm
+# device op (wan_fused_distributed_rmsnorm with norm_type=LAYERNORM) instead of the
+# composite dit_layernorm_{pre,post}_allgather chain. Set WAN_USE_FUSED_LAYERNORM=1.
+# The fused path covers the adaLN case (dynamic weight/bias, batch=1, no static
+# affine); other cases transparently fall back to the composite chain.
+_USE_FUSED_LAYERNORM = os.getenv("WAN_USE_FUSED_LAYERNORM") == "1"
+
 
 class RMSNorm(Module):
     def __init__(
@@ -411,6 +418,68 @@ class DistributedLayerNorm(Module):
                 .reshape(-1, self.TILE_SIZE * self.mesh_width)
             )
 
+    def _ensure_fused_ln_recip(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Lazy-allocate the row-major fp32 reciprocal LUT the fused op consumes.
+
+        Distinct from self.recip_tensor (HEIGHT_SHARDED L1, the composite Welford op's
+        layout): the fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device]
+        DRAM tensor [1/1..1/width] (replicated per device). Cached per device+width.
+        """
+        width = self.embedding_dim // self.mesh_width
+        cached = getattr(self, "_fused_ln_recip", None)
+        if cached is not None:
+            return cached
+        recip = torch.tensor([1.0 / (i + 1) for i in range(width)], dtype=torch.float32).reshape(1, 1, 1, width)
+        self._fused_ln_recip = ttnn.from_torch(
+            recip,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return self._fused_ln_recip
+
+    def _ensure_fused_ln_stats_buffer(self, x: ttnn.Tensor):
+        """Ping-pong pool of LayerNorm-sized stats AG scratch buffers (mirrors
+        DistributedRMSNorm._ensure_fused_stats_buffer; norm_type=LAYERNORM sizes the
+        page for 2 stats/token — mean+var). Returns None on the no-AG path."""
+        key = tuple(x.shape)
+        cache = getattr(self, "_fused_ln_stats_cache", None)
+        if cache is None:
+            cache = {}
+            self._fused_ln_stats_cache = cache
+        entry = cache.get(key)
+        if entry is None:
+            bufs = [
+                ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                    x,
+                    self.mesh_axis,
+                    self.mesh_device,
+                    norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
+                )
+                for _ in range(2)
+            ]
+            entry = {"bufs": bufs, "idx": 0}
+            cache[key] = entry
+        bufs = entry["bufs"]
+        if bufs[0] is None:
+            return None
+        buf = bufs[entry["idx"]]
+        entry["idx"] = (entry["idx"] + 1) % len(bufs)
+        return buf
+
+    def _fused_ln_supported(self, x: ttnn.Tensor, dynamic_weight, weight) -> bool:
+        """The fused op requires a [1,1,N,H] input (batch==1, single channel). adaLN
+        (dynamic weight/bias) and no-affine map cleanly; static ROW_MAJOR affine and
+        batch>1 fall back to the composite chain."""
+        if len(x.shape) != 4 or x.shape[0] != 1 or x.shape[1] != 1:
+            return False
+        # Static affine uses the ROW_MAJOR [dim//n, n] weight the composite expects, not
+        # the [1,H] TILE the fused op wants. Only adaLN/no-affine go fused.
+        if dynamic_weight is None and weight is not None:
+            return False
+        return True
+
     def forward(
         self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None, dtype=None
     ) -> ttnn.Tensor:
@@ -427,6 +496,25 @@ class DistributedLayerNorm(Module):
         else:
             weight = self.weight.data if self.weight is not None else None
             bias = self.bias.data if self.bias is not None else None
+
+        if _USE_FUSED_LAYERNORM and self._fused_ln_supported(x, dynamic_weight, weight):
+            persistent_output_buffer = self._ensure_fused_ln_stats_buffer(x)
+            return ttnn.experimental.wan_fused_distributed_rmsnorm(
+                x,
+                self.mesh_axis,
+                self.mesh_device,
+                self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+                topology=self.ccl_manager.topology,
+                persistent_output_buffer=persistent_output_buffer,
+                epsilon=self.norm_eps,
+                weight=weight,
+                bias=bias,
+                compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+                dtype=dtype,
+                use_device_op=True,
+                norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
+                reciprocals=self._ensure_fused_ln_recip(x),
+            )
 
         stats = ttnn.experimental.dit_layernorm_pre_allgather(
             x,

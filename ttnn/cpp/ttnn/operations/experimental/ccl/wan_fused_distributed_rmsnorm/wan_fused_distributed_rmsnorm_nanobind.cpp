@@ -84,7 +84,8 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("weight") = nb::none(),
         nb::arg("transformation_mat") = nb::none(),
         nb::arg("rope_cos") = nb::none(),
-        nb::arg("rope_sin") = nb::none());
+        nb::arg("rope_sin") = nb::none(),
+        nb::arg("norm_type") = ttnn::experimental::WanFusedNormType::RMS);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

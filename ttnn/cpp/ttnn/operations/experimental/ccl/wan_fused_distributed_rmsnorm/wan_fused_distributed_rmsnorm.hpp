@@ -77,6 +77,10 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& weight = std::nullopt,
     const std::optional<const ttnn::Tensor>& transformation_mat = std::nullopt,
     const std::optional<const ttnn::Tensor>& rope_cos = std::nullopt,
-    const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt);
+    const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt,
+    // Must match the norm_type the op is invoked with: LayerNorm transports 2 stats/token
+    // (mean+var, 256 B sticks) vs RMS's 1 (128 B), so the stats scratch page is 2x wider.
+    // An RMS-sized buffer used for a LayerNorm op silently corrupts the gather.
+    WanFusedNormType norm_type = WanFusedNormType::RMS);
 
 }  // namespace ttnn::experimental
