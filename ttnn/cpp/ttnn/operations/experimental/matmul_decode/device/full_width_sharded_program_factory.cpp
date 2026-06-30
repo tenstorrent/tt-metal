@@ -23,16 +23,14 @@ using namespace tt::tt_metal;
 // width(K)-sharded across a subset of cores ("senders"); since every core needs
 // the full A to compute its N slice, the reader gathers A onto all cores.
 //
-// This sets up the in0 / in1 / out / full_in0 circular buffers, the gather
-// semaphores, and the reader kernel. The reader multicasts each sender's A slice
-// to every core (assembling full_in0) and publishes B, which is already resident
-// in L1. Sender cores are split across both NoCs to balance multicast traffic.
-//
-// Still TODO to make it functional:
-//   1. A compute kernel that does matmul_block over the gathered full A and this
-//      core's B slice, accumulating over K, into the output CB.
-//   2. A writer kernel (or sharded output CB handoff) to produce the output
-//      width shard.
+// Sets up the in0 / in1 / out / full_in0 circular buffers, the gather semaphores, the
+// reader kernel, and the compute kernel:
+//   - Reader: multicasts each sender's A slice to every core (assembling full_in0) and
+//     publishes B, which is already resident in L1. Sender cores are split across both
+//     NoCs to balance multicast traffic.
+//   - Compute: matmul_block over the gathered full A and this core's B slice, accumulating
+//     over K into the output (sharded) CB; the output width shard is produced via the
+//     buffer-backed out CB (no separate writer kernel).
 ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -142,7 +140,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     ProgramDescriptor desc;
 
     // ---- Circular buffers (allocated on every participating core) ----
-    // Input A Real Input
     constexpr uint32_t in0_cb_index = CBIndex::c_0;
     constexpr uint32_t in1_cb_index = CBIndex::c_1;
     constexpr uint32_t out_cb_index = CBIndex::c_2;
@@ -263,7 +260,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         K_tiles * inB_N_tiles_per_core,
     };
 
-    // Map each A-holding core to its K-slice index (== semaphore id).  Cores are
+    // Map each A-holding core to its K-slice index (its sender_id runtime arg).  Cores are
     // walked in row-major order so the slice ordering matches the width-sharded
     // layout of input A across `inputA_core_range_set`.
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);

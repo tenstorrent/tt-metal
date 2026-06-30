@@ -73,7 +73,7 @@ void kernel_main() {
 
     // Gathered A is a regular CB (reader publishes via push_back).
     cb_wait_front(in0_cb_id, in0_num_tiles);
-    // in1/out are buffer-backed: data is already in L1 (see vecadd_sharding).
+    // in1/out are buffer-backed (sharded) CBs: their data is already resident in L1.
 
     mm_block_init(in0_cb_id, in1_cb_id, out_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
