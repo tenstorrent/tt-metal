@@ -104,7 +104,7 @@ y=0:  DRAM(0,0)       DRAM(1,0)
 
 7. **DISPATCH HAL `KERNEL_CONFIG` size** — `create_dispatch_mem_map` copies the Tensix mem-map sizes, where `KERNEL_CONFIG` size is 0 (Tensix runtime-arg validation uses the hardcoded `max_runtime_args` constant instead). `Kernel::validate_runtime_args_size` sizes DISPATCH runtime args from `get_dev_size(DISPATCH, KERNEL_CONFIG)`, so without an explicit size `SetRuntimeArgs` fails with "Max allowable is 0". Must populate it in the dispatch memmap.
 
----
+8. **Static TLB not configured for dispatch-engine cores** — `ll_api::configure_static_tlbs` (`tlb_config.cpp`) only mapped **TENSIX** and **ETH** cores. SD `test_prefetcher` writes FetchQ entries via `Cluster::get_static_tlb_window` on the prefetch core; on the dispatch-engine path that is NOC0 `(0,2)`. Without a TLB mapping, UMD throws `TLB window for core (0, 2) not found` during `SDPrefetchDRAMToL1TestFixture.TestTerminate`. **Fix:** add a loop over `sdesc.get_cores(CoreType::DISPATCH, TRANSLATED)` in `configure_static_tlbs` (same `configure_tlb` call as workers). Empty on WH/BH socs with no `dispatch:` list. Also required for **Phase 4b** FD (`system_memory_manager.cpp` uses `get_static_tlb_window` on prefetcher cores). *(Fixed during Phase 4a bringup.)*
 
 ## Reference Patterns to Follow
 
@@ -473,6 +473,7 @@ Full FD later reuses the same dispatch-engine core type, DM assignment model, an
   - SD prefetcher tests in `test_prefetcher` pass with kernels on dispatch-engine core 0, DM0/DM1
   - SD dispatcher tests in `test_dispatcher` pass with `cq_dispatch.cpp` on dispatch engine
   - Both Tensix compute cores `(0,1)` and `(1,1)` remain available as worker targets (no interim dispatch Tensix reservation)
+- **Status (partial):** ✅ `DispatchLinearWriteSDTestFixture` (dispatcher-only SD via `spoof_prefetch.cpp`); ✅ `SDPrefetchDRAMToL1TestFixture.TestTerminate` (prefetch+dispatch SD via `cq_prefetch.cpp` + FetchQ TLB path)
 - No new public API for dispatch-engine core selection
 - Running SD cq-kernel tests on the **default** dispatch-engine path requires soc dispatch cores and **`dispatch_dm.cc` loaded in Phase 3** (Phase **3b** for DPRINT); **`TT_METAL_TENSIX_DISPATCH_CORES=1`** runs SD cq-kernel tests on interim Tensix cores instead
 
@@ -554,6 +555,8 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 - `CreateSemaphore` / memmap / coordinate lookup on `CoreType::DISPATCH`
 - Kernel placement validation allows dispatch-engine cores for cq kernels (`DISPATCH_KERNEL=1` unchanged)
 - **`DispatchEngineKernel::configure` must write binaries into the kernel-config ring buffer** via `llrt::write_binary_to_address(base_address + offsets[riscv_id])` — the same path as `DataMovementKernel` / `QuasarDataMovementKernel`. It must **not** use `test_load_write_read_risc_binary` (which loads to the JIT default address): SD `finalize_kernel_bins` places binaries in the kernel-config ring buffer and records `kernel_text_offset[]` accordingly, and `dispatch_dm.cc` jumps to `kernel_config_base + kernel_text_offset`. Loading to the wrong address makes the FW jump into empty/garbage memory after GO, so the kernels never complete and **`LaunchProgram` hangs** (no validation, no progress). *(Fixed during Phase 4a bringup.)*
+- **`configure_static_tlbs` must map `CoreType::DISPATCH` cores** — SD `test_prefetcher` enqueues work by writing FetchQ slots through `get_static_tlb_window` on the prefetch physical core (dispatch engine `(0,2)` on 2×3). Extend `ll_api::configure_static_tlbs` in `tlb_config.cpp` to call `configure_tlb` for every `get_cores(DISPATCH, TRANSLATED)` entry, mirroring the existing TENSIX/ETH loops. Symptom without fix: `TLB window for core (0, 2) not found` (`tlb_manager.cpp`) in `SDPrefetchDRAMToL1TestFixture.TestTerminate`. *(Fixed during Phase 4a bringup.)*
+- **Recommended SD prefetcher bringup order:** `SDPrefetchDRAMToL1TestFixture.TestTerminate` (`use_exec_buf_disabled`) first, then `DRAMToL1PagedRead` same param variant; defer `SmokeTest`, `RandomTest`, `HostTest`, and `use_exec_buf_enabled` until the issue-queue path is stable
 - Confirm `test_dispatch` (dispatch_program) SD tests still pass with full Tensix compute grid
 
 ### Phase 4b — Full FD kernel integration
@@ -579,7 +582,7 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 |------|-----------|
 | UMD | `grendel_implementation.hpp`, soc YAMLs, `coordinate_manager.cpp`, `quasar_coordinate_manager.cpp` |
 | Core discovery | `llrt/core_descriptor.cpp`, new helper in `core_descriptor.hpp` or `metal_soc_descriptor.cpp` |
-| Coordinates | `llrt/tt_cluster.cpp`, `llrt/metal_soc_descriptor.{hpp,cpp}` |
+| Coordinates | `llrt/tt_cluster.cpp`, `llrt/metal_soc_descriptor.{hpp,cpp}`, **`llrt/tlb_config.cpp`** (`configure_static_tlbs` for `CoreType::DISPATCH`) |
 | Device FW types | `hw/inc/internal/tt-2xx/quasar/core_config.h` (`ProgrammableCoreType::DISPATCH`) |
 | Type resolution | `dispatch_core_common.cpp`, `dispatch_core_manager.{hpp,cpp}`, `llrt/rtoptions.{hpp,cpp}` |
 | HAL | `hal_types.hpp`, **`qa_hal_dispatch.cpp`**, `qa_hal.cpp`, **`hal_2xx_common.cpp`**, `llrt/llrt.cpp` |
@@ -612,6 +615,7 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | **DPRINT on dispatch engine** | **Phase 3b** — host DPrint server attaches to `CoreType::DISPATCH`; device-side buffers from Phase 3 HAL; end-to-end before Phase 4a debug |
 | **`dispatch_kernel_initializer`** | **Phase 4b only** — `DispatchMemMap(CoreType::DISPATCH)` + execution kernels; **skipped in slow dispatch / Phase 4a** (`!using_fast_dispatch()` early return) |
 | **`DispatchEngineKernel`** | Dedicated configure path (like `DramKernel`); used by SD, FDKernel, and `CreateDispatchEngineKernel`. **`configure` writes binaries into the kernel-config ring buffer** via `write_binary_to_address(base + offsets[riscv_id])` (same as `DataMovementKernel`), **not** `test_load_write_read_risc_binary` — otherwise SD `LaunchProgram` hangs (FW jumps to wrong L1 address). |
+| **Static TLB (dispatch engine)** | **`configure_static_tlbs`** maps `CoreType::DISPATCH` soc tiles (same as TENSIX/ETH) so `get_static_tlb_window` works for FetchQ writes on prefetch cores at NOC0 `(0,2)`; required for SD `test_prefetcher` and FD `system_memory_manager` |
 | **`kernel_config_base[]` index** | Dispatch-engine kernels use **`ProgrammableCoreType::DISPATCH`** slot (new enum index), not Tensix |
 | **`dispatch_engine_cores.hpp`** | **Required** internal header — coordinates, resolver helpers, `CreateDispatchEngineKernel` |
 | **Execution kernel init** | **`dispatch_kernel_initializer`** (Phase 4b) — `DispatchMemMap(CoreType::DISPATCH)` + prefetch/dispatch execution kernels |
