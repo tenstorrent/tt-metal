@@ -47,7 +47,10 @@ class DenseMLP:
         row_mapper = mesh_config.row_parallel(mesh_device)  # shard input (intermediate) dim
 
         def _load(name, weight, mapper):
-            if weight is None:
+            # weight is None in cache-only mode (empty state_dict) — still build so ttnn.as_tensor loads
+            # the tilized tensor straight from the cache. A dense FFN always has all three projections,
+            # so return None only when there's no cache path to load from.
+            if weight is None and not tensor_cache_path:
                 return None
             return ttnn.as_tensor(
                 weight,
