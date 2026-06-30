@@ -162,7 +162,9 @@ void kernel_main() {
 #endif
                                 reconfig_data_format(addcmul_temp_cb, addcmul_b_cb);
                                 pack_reconfig_data_format(addcmul_temp_cb);
+#ifndef ADDCMUL_SCALAR_IS_ONE
                                 binop_with_scalar_tile_init();
+#endif
 
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     tile_regs_acquire();
@@ -172,7 +174,9 @@ void kernel_main() {
 #else
                                     mul_tiles(addcmul_temp_cb, addcmul_b_cb, tile_id, tile_id, 0);
 #endif
+#ifndef ADDCMUL_SCALAR_IS_ONE
                                     mul_unary_tile(0, fused_ternary_scalar_uint);
+#endif
                                     tile_regs_commit();
                                     tile_regs_wait();
                                     pack_tile(0, addcmul_temp_cb);
