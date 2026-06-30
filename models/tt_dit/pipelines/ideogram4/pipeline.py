@@ -30,6 +30,7 @@ from ...models.vae.vae_ideogram4 import Ideogram4VAEDecoder
 from ...reference.ideogram4.latent_norm import get_latent_norm
 from ...utils import tensor
 from ...utils.tensor import bf16_tensor
+from ...utils.tracing import Tracer
 from .sampler import Ideogram4Sampler
 
 
@@ -88,6 +89,43 @@ def cfg_blend(v_cond: ttnn.Tensor, v_uncond: ttnn.Tensor, guidance_weight: float
     return v_cond * guidance_weight + v_uncond * (1.0 - guidance_weight)
 
 
+import contextlib as _contextlib
+
+
+@_contextlib.contextmanager
+def _patch_zeros_for_trace(device):
+    """Scope a wrapper around ``ttnn.zeros`` that makes 0-ELEMENT allocations trace-safe.
+
+    The Ideogram4 attention block creates an empty "joint" tensor for ring SDPA via
+    ``ttnn.zeros([B, n_local_heads, 0, head_dim], ...)``. ttnn.zeros host-writes for
+    zero-element tensors (no device memset path), which is illegal during trace capture
+    ("Writes are not supported during trace capture"). We can't edit the transformer, so
+    during capture we hand back a single pre-allocated persistent all-zeros tensor per
+    unique (shape, dtype, layout). This is numerically lossless — the empty joint is a
+    fixed constant — and only zero-element requests are intercepted; all other ttnn.zeros
+    calls fall through to the real op unchanged.
+    """
+    real_zeros = ttnn.zeros
+    cache: dict = {}
+
+    def _zeros(shape, *args, **kwargs):
+        if 0 in tuple(shape):
+            key = (tuple(shape), kwargs.get("dtype"), kwargs.get("layout"))
+            t = cache.get(key)
+            if t is None:
+                # Allocate once with the real op (outside the recorded trace path).
+                t = real_zeros(shape, *args, **kwargs)
+                cache[key] = t
+            return t
+        return real_zeros(shape, *args, **kwargs)
+
+    ttnn.zeros = _zeros
+    try:
+        yield
+    finally:
+        ttnn.zeros = real_zeros
+
+
 __all__ = ["Ideogram4DecodeStage", "Ideogram4Sampler", "cfg_blend", "unpatchify_latent"]
 
 
@@ -102,10 +140,13 @@ __all__ = ["Ideogram4DecodeStage", "Ideogram4Sampler", "cfg_blend", "unpatchify_
 # =============================================================================
 
 import gc as _gc
+import os as _os
 
 import transformers as _tf
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL as _AutoencoderKL
+from loguru import logger as _dq_log
 from safetensors.torch import load_file as _load_file
+from safetensors.torch import save_file as _save_file
 
 from ...encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, create_rope_tensors
 from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer
@@ -120,9 +161,51 @@ from ...reference.ideogram4.constants import (
 )
 from ...reference.ideogram4.dequant import dequant_fp8_state_dict
 
+# Opt-out switch for the bf16 dequant cache (default on). Dequantizing the fp8
+# checkpoints (encoder + 2 transformers) dominates pipeline build time; caching the
+# bf16 result next to the source makes subsequent builds skip both the fp8 load and
+# the dequant. Set IDEOGRAM4_DEQUANT_CACHE=0 to force a fresh dequant.
+_DEQUANT_CACHE = _os.environ.get("IDEOGRAM4_DEQUANT_CACHE", "1") != "0"
+
 
 def _dq(path):
-    return dequant_fp8_state_dict(_load_file(path))
+    """Load + dequantize an fp8 checkpoint to bf16, caching the bf16 result on disk.
+
+    The cache file lives beside the source (``<path>.dequant-bf16.safetensors``) and is
+    validated against the source's size+mtime (stamped into the safetensors metadata), so
+    it is transparently rebuilt if the source weights change. Cache write failures (e.g.
+    read-only weights dir) fall back to in-memory dequant without erroring.
+    """
+    if not _DEQUANT_CACHE:
+        return dequant_fp8_state_dict(_load_file(path))
+
+    cache_path = path + ".dequant-bf16.safetensors"
+    try:
+        st = _os.stat(path)
+        stamp = f"{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        return dequant_fp8_state_dict(_load_file(path))
+
+    if _os.path.exists(cache_path):
+        try:
+            with __import__("safetensors").safe_open(cache_path, framework="pt") as f:
+                meta = f.metadata() or {}
+            if meta.get("src_stamp") == stamp:
+                _dq_log.info(f"dequant cache HIT: {cache_path}")
+                return _load_file(cache_path)
+            _dq_log.info(f"dequant cache STALE (src changed), rebuilding: {cache_path}")
+        except Exception as e:  # noqa: BLE001 - corrupt/old cache -> rebuild
+            _dq_log.warning(f"dequant cache unreadable ({e}); rebuilding: {cache_path}")
+
+    sd = dequant_fp8_state_dict(_load_file(path))
+    try:
+        tmp = cache_path + ".tmp"
+        _save_file(sd, tmp, metadata={"src_stamp": stamp})
+        _os.replace(tmp, cache_path)
+        _dq_log.info(f"dequant cache WROTE: {cache_path}")
+    except Exception as e:  # noqa: BLE001 - non-fatal: keep going with in-memory sd
+        _dq_log.warning(f"dequant cache write failed ({e}); using in-memory dequant")
+    return sd
 
 
 # SP shards the sequence; the padded length must be a multiple of
@@ -250,6 +333,12 @@ class Ideogram4Pipeline:
         self.cond = _build_dit("transformer")
         self.uncond = _build_dit("unconditional_transformer")
 
+        # Combined-step trace (lazily captured on the first denoise step), covering both
+        # transformer forwards + velocity gathers + CFG blend + Euler update in ONE trace.
+        # Tracing eliminates the 34-layer x 2-branch op-dispatch host overhead per step; a
+        # single trace keeps all persistent-buffer allocation BEFORE capture (no corruption).
+        self._step_tracer = None
+
         # --- VAE decoder (TP=4) ---
         vae_sd = _load_file(f"{weights_dir}/vae/diffusion_pytorch_model.safetensors")
         akl = _AutoencoderKL(
@@ -309,6 +398,22 @@ class Ideogram4Pipeline:
         if self.sp_factor > 1:
             return bf16_tensor(t, device=self.mesh_device, mesh_axis=self.sp_axis, shard_dim=seq_dim)
         return bf16_tensor(t, device=self.mesh_device)
+
+    def _host_seq(self, t: torch.Tensor, seq_dim: int) -> ttnn.Tensor:
+        """bf16 HOST ttnn tensor with the SP shard/replicate mapping baked in (the tracer
+        moves it onto its captured device slots without allocating new device buffers).
+        Mirrors _seq_dev's placement so the model sees an identical layout on replay."""
+        mesh_axes = [None] * t.ndim
+        if self.sp_factor > 1:
+            mesh_axes[seq_dim] = self.sp_axis
+        return tensor.from_torch(
+            t.to(torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_axes=mesh_axes,
+            on_host=True,
+        )
 
     def _idx_dev(self, t: torch.Tensor, seq_dim: int) -> ttnn.Tensor:
         """uint32 device tensor (embedding index): shard on the SP axis when SP>1, else replicate."""
@@ -401,54 +506,143 @@ class Ideogram4Pipeline:
         sampler = Ideogram4Sampler.from_preset(preset, height=height, width=width)
         z = torch.randn(1, num_img, cfg.in_channels, dtype=torch.float32)
 
-        def _v(model, br, x_full, t_val):
-            t_sin = Ideogram4Transformer.sinusoidal_embedding(torch.tensor([t_val]), cfg.emb_dim)
-            pad = br["padded_len"] - br["seq"]
-            if pad:
-                x_full = torch.nn.functional.pad(x_full, (0, 0, 0, pad))  # pad sequence (dim 1)
+        def _branch_velocity(model, br, x_full):
+            """Transformer forward + on-device SP-axis gather + image-token slice ->
+            [1, num_img, in_ch] (device, replicated). All CCL ops are inside the trace so the
+            ping-pong semaphore sequence the trace records stays self-consistent on replay."""
             out = model(
-                x=self._seq_dev(x_full, 1),
+                x=x_full,
                 llm_features=br["llm"],
-                t_sin=bf16_tensor(t_sin.unsqueeze(1), device=dev),
+                t_sin=br["t_sin"],
                 cos=br["cos"],
                 sin=br["sin"],
                 image_indicator_index=br["idx"],
                 llm_token_mask=br["llm_mask"],
                 output_image_mask=br["img_mask"],
                 spatial_sequence_length=br["seq"],
+            )  # [1, padded_len/sp, in_ch] sequence-sharded
+            if self.sp_factor > 1:
+                out = self.ccl.all_gather_persistent_buffer(out, dim=1, mesh_axis=self.sp_axis)
+            start = br["seq"] - num_img  # image-token slice start (drops text prefix + SP pad)
+            return ttnn.slice(out, [0, start, 0], [1, br["seq"], cfg.in_channels])
+
+        # The ENTIRE per-step computation runs in a SINGLE trace: cond forward, uncond
+        # forward, the two SP-axis velocity gathers, the asymmetric-CFG blend and the Euler
+        # update. Capturing all of it in one trace is what makes tracing CORRECT here: the
+        # Tracer runs a prep pass that allocates every persistent buffer (both branches'
+        # ring-SDPA / all-gather buffers, the blend/Euler temporaries) BEFORE capture, so no
+        # device buffer is allocated while a trace is active ("Allocating device buffers is
+        # unsafe ... may be corrupted once a trace is executed"). The only per-step inputs are
+        # HOST tensors (x_cond, x_uncond, t_sin) plus two 1-element device scalars (gw, s-t);
+        # the Tracer copies host inputs into the captured slots, allocating nothing new.
+        # x_cond/x_uncond already carry the running latent z (built on host from the previous
+        # z), and the trace returns the next z (device) which is read back to host each step.
+        cond_pad = cond_b["padded_len"] - cond_b["seq"]
+        uncond_pad = uncond_b["padded_len"] - uncond_b["seq"]
+
+        def step_fn(x_cond, x_uncond, t_sin, z_in, gw, one_minus_gw, smt):
+            # t_sin feeds both branches' adaln; share the same per-step embedding.
+            cond_b["t_sin"] = t_sin
+            uncond_b["t_sin"] = t_sin
+            v_cond = _branch_velocity(self.cond, cond_b, x_cond)
+            v_uncond = _branch_velocity(self.uncond, uncond_b, x_uncond)
+            # Asymmetric CFG: v = gw*v_cond + (1-gw)*v_uncond, scalars as 1-element device
+            # tensors (broadcast multiply) so they can be updated per step inside the trace.
+            v = v_cond * gw + v_uncond * one_minus_gw
+            return z_in + v * smt  # Euler update -> next z [1, num_img, in_ch]
+
+        def _scalar_host(val):
+            # 1-element bf16 HOST tensor, replicated across the mesh; the tracer moves it into
+            # its captured device slot each step (no new device allocation on replay).
+            return tensor.from_torch(
+                torch.tensor([[[float(val)]]], dtype=torch.bfloat16),
+                device=dev,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_axes=[None, None, None],
+                on_host=True,
             )
-            # Output is sequence-sharded under SP: gather along the SP axis, then slice the
-            # real image tokens [n_pre : seq] (drops text prefix and trailing SP padding).
-            seq_mesh_axis = self.sp_axis if self.sp_factor > 1 else None
-            full = tensor.to_torch(out, mesh_axes=[None, seq_mesh_axis, None])
-            return full[:, br["seq"] - num_img : br["seq"]].float()
+
+        def _host_repl(t: torch.Tensor):
+            # bf16 HOST tensor replicated across the mesh (for t_sin / z_in, which the model
+            # consumes replicated, not SP-sharded).
+            return tensor.from_torch(
+                t.to(torch.bfloat16),
+                device=dev,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_axes=[None] * t.ndim,
+                on_host=True,
+            )
+
+        def _x_inputs(z_host):
+            """Build the cond/uncond image-latent inputs on HOST from the current z."""
+            pos_x = torch.zeros(1, n_text + num_img, cfg.in_channels, dtype=torch.bfloat16)
+            pos_x[:, n_text:] = z_host.to(torch.bfloat16)
+            if cond_pad:
+                pos_x = torch.nn.functional.pad(pos_x, (0, 0, 0, cond_pad))
+            unc_x = z_host.to(torch.bfloat16)
+            if uncond_pad:
+                unc_x = torch.nn.functional.pad(unc_x, (0, 0, 0, uncond_pad))
+            # Shard on the SP axis (host tensors; the tracer moves them onto its captured
+            # device slots). _seq_dev shards-or-replicates exactly as the model expects.
+            return self._host_seq(pos_x, 1), self._host_seq(unc_x, 1)
 
         _td = _time.perf_counter()
         self.step_trace = []
-        for i in reversed(range(sampler.num_steps)):
+        z_host = z.clone()
+        steps = list(reversed(range(sampler.num_steps)))
+        for n, i in enumerate(steps):
             t_val, s_val = sampler.times_for_step(i)
             gw = sampler.guidance_weight(i) if guidance_scale is None else guidance_scale
-            pos_x = torch.zeros(1, n_text + num_img, cfg.in_channels, dtype=torch.bfloat16)
-            pos_x[:, n_text:] = z.to(torch.bfloat16)
-            v_cond = _v(self.cond, cond_b, pos_x, t_val)
-            v_uncond = _v(self.uncond, uncond_b, z.to(torch.bfloat16), t_val)
-            v = gw * v_cond + (1.0 - gw) * v_uncond
-            z = z + v * (s_val - t_val)
-            # guidance-direction magnitude relative to the cond velocity: if CFG amplifies
-            # a diluted (small) cond-uncond difference, this ratio is small and bf16-noisy.
-            guide_ratio = float((v_cond - v_uncond).norm() / (v_cond.norm() + 1e-6))
-            self.step_trace.append((t_val, s_val, gw, float(v.std()), float(z.std()), guide_ratio))
+            smt = s_val - t_val
+            t_sin = Ideogram4Transformer.sinusoidal_embedding(torch.tensor([t_val]), cfg.emb_dim).unsqueeze(1)
+            # All per-step inputs are HOST tensors: on capture the Tracer moves them onto the
+            # captured device slots; on replay it copies host->slot in place. Nothing is
+            # allocated on device after capture, so the active trace cannot corrupt them.
+            x_cond_h, x_uncond_h = _x_inputs(z_host)
+            args = (
+                x_cond_h,
+                x_uncond_h,
+                _host_repl(t_sin),
+                _host_repl(z_host),
+                _scalar_host(gw),
+                _scalar_host(1.0 - gw),
+                _scalar_host(smt),
+            )
+            if self._step_tracer is None:
+                self._step_tracer = Tracer(step_fn, device=dev, clone_prep_inputs=False)
+                # ttnn.zeros host-writes for the 0-element ring-SDPA "empty joint" tensor,
+                # which is illegal during capture; substitute a persistent zeros constant.
+                with _patch_zeros_for_trace(dev):
+                    z_out = self._step_tracer(*args)
+            else:
+                z_out = self._step_tracer(*args)
+
+            z_host = tensor.to_torch(z_out, mesh_axes=[None, None, None]).float()
+            self.step_trace.append((t_val, s_val, gw, 0.0, float(z_host.std()), 0.0))
             if getattr(self, "_verbose_steps", False):
                 _lg.info(
-                    f"  step {sampler.num_steps - i}/{sampler.num_steps}: t={t_val:.4f} s={s_val:.4f} gw={gw:.0f} "
-                    f"vc_std={v_cond.std():.4f} vu_std={v_uncond.std():.4f} |vc-vu|/|vc|={guide_ratio:.4f} z_std={z.std():.4f}"
+                    f"  step {n + 1}/{sampler.num_steps}: t={t_val:.4f} s={s_val:.4f} gw={gw:.0f} "
+                    f"z_std={z_host.std():.4f}"
                 )
         ttnn.synchronize_device(dev)
         self.timings["denoise"] = _time.perf_counter() - _td
         self.timings["denoise_per_step"] = self.timings["denoise"] / sampler.num_steps
 
+        # Release the combined-step trace BEFORE decode. The trace bakes in this call's
+        # CCLManager ping-pong semaphores/buffers and the closed-over per-branch fixed tensors;
+        # the next __call__ re-runs the (untraced) encoder and rebuilds those branch tensors,
+        # advancing the shared CCL state out from under a persisted trace. Releasing here also
+        # means decode's device allocations happen with no active trace (the "allocating
+        # buffers while a trace is active is unsafe" hazard). Re-capturing per call keeps each
+        # loop self-consistent and frees the trace region for the next run.
+        if self._step_tracer is not None:
+            self._step_tracer.release_trace()
+            self._step_tracer = None
+
         _tv = _time.perf_counter()
-        decoded = self.decode_stage.decode(bf16_tensor(z, device=dev), grid_h=grid_h, grid_w=grid_w)
+        decoded = self.decode_stage.decode(bf16_tensor(z_host, device=dev), grid_h=grid_h, grid_w=grid_w)
         img = Ideogram4DecodeStage.to_images(decoded)[0].cpu().numpy()
         self.timings["decode"] = _time.perf_counter() - _tv
         self.timings["total"] = _time.perf_counter() - _t0
