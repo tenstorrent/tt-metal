@@ -941,7 +941,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 // if the result is width/block-sharded, the padding operation must be performed after --
                 // otherwise the padding might change alignment for row-major tensors, which would've caused
                 // the sharding failure, due to assertion in `RowMajorPageConfig::validate_alignment`
-                if (input_tensor_sharded_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                const bool can_pre_pad =
+                    input_tensor_sharded_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                    input_tensor.layout() == Layout::TILE;
+
+                if (can_pre_pad) {
                     pad_tensor();
                 }
 
@@ -950,7 +954,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                     device,
                     (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
 
-                if (input_tensor_sharded_memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+                if (!can_pre_pad) {
                     pad_tensor();
                 }
             }
