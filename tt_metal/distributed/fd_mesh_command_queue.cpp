@@ -145,9 +145,8 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     reader_thread_pool_(reader_thread_pool),
     prefetcher_dram_aligned_block_size_(
         MetalContext::instance(mesh_device->impl().get_context_id()).hal().get_alignment(HalMemType::DRAM)),
-    prefetcher_cache_sizeB_(MetalContext::instance(mesh_device->impl().get_context_id())
-                                .dispatch_mem_map(this->dispatch_core_type_)
-                                .ringbuffer_size()),
+    prefetcher_cache_sizeB_(
+        MetalContext::instance(mesh_device->impl().get_context_id()).dispatch_mem_map().ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
@@ -302,10 +301,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto dispatch_core_config = MetalContext::instance(this->device()->impl().get_context_id())
-                                    .get_dispatch_core_manager()
-                                    .get_dispatch_core_config();
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     if (!sysmem_manager.get_bypass_mode()) {
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
@@ -423,7 +418,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
-            dispatch_core_type,
             sub_device_id,
             dispatch_metadata,
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
@@ -1076,14 +1070,10 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     bool stall_first,
     bool stall_before_program,
     std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    auto dispatch_core_config = MetalContext::instance(mesh_device_->impl().get_context_id())
-                                    .get_dispatch_core_manager()
-                                    .get_dispatch_core_config();
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
         program_dispatch::write_program_command_sequence(
-            program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
+            program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
     });
 }
@@ -1440,7 +1430,6 @@ void FDMeshCommandQueue::record_end() {
                 worker_launch_msg_state.get_unicast_wptr(),
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
                 this->virtual_program_dispatch_core(),
-                MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
                 sub_device_id,
                 ProgramBinaryStatus::Committed,
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores));
@@ -1452,7 +1441,6 @@ void FDMeshCommandQueue::record_end() {
                 cached_program_command_sequence,
                 sysmem_manager_for_trace,
                 this->id_,
-                MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
                 node.dispatch_metadata.stall_first,
                 node.dispatch_metadata.stall_before_program,
                 node.dispatch_metadata.send_binary);

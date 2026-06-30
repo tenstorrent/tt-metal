@@ -1120,7 +1120,7 @@ public:
             append_dispatch_payload(raw, term_cmd);
         }
 
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map();
         const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
         const uint32_t dispatch_buffer_size = dispatch_buffer_pages * page_size;
