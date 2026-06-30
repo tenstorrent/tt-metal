@@ -3937,3 +3937,88 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
 
     with expect_error(RuntimeError, r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
         ttnn.matmul(in0, in1, program_config=program_config)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 10_000_000}], indirect=True)
+def test_matmul_without_program_config_fatals_under_require_stable_cache(device, expect_error):
+    """ttnn.matmul without a program_config must raise when REQUIRE_STABLE_CACHE is set.
+
+    Auto-config queries live device L1 space, making the program cache key
+    non-deterministic. A capture that opts into REQUIRE_STABLE_CACHE forbids such
+    ops so the trace is reproducible across replays.
+
+    Related issue: https://github.com/tenstorrent/tt-metal/issues/48275
+    """
+    a = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Sanity: works fine outside trace capture.
+    out = ttnn.matmul(a, b)
+    assert out.shape == (1, 1, 32, 32)
+
+    # Inside a REQUIRE_STABLE_CACHE capture it must fatal with a clear message.
+    tid = ttnn.begin_trace_capture(device, cq_id=0, policy=ttnn.TracePolicy.REQUIRE_STABLE_CACHE)
+    try:
+        with expect_error(RuntimeError, "not trace-safe"):
+            ttnn.matmul(a, b)
+    finally:
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 10_000_000}], indirect=True)
+def test_matmul_with_program_config_succeeds_during_trace(device):
+    """ttnn.matmul with an explicit program_config must work inside trace capture."""
+    a = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+    )
+
+    ttnn.matmul(a, b, program_config=program_config)
+    ttnn.synchronize_device(device)
+
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.matmul(a, b, program_config=program_config)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.release_trace(device, tid)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 10_000_000}], indirect=True)
+def test_matmul_without_program_config_allowed_by_default(device):
+    """ttnn.matmul without a program_config is permitted in a default (NONE) capture.
+
+    The default policy enforces no checks, so auto-config matmul is allowed inside
+    trace capture and the captured trace must replay successfully. A caller that needs
+    reproducibility opts into REQUIRE_STABLE_CACHE (see the fatal test above).
+    """
+    a = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Warm up the auto-config path / program cache outside capture first.
+    ttnn.matmul(a, b)
+    ttnn.synchronize_device(device)
+
+    # Default policy (NONE) — no program_config needed.
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.matmul(a, b)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.release_trace(device, tid)
+
+
+def test_trace_policy_is_a_flag():
+    """TracePolicy must behave like an enum.Flag: NONE is empty, bits compose with |."""
+    assert int(ttnn.TracePolicy.NONE.value) == 0
+    combined = ttnn.TracePolicy.NONE | ttnn.TracePolicy.REQUIRE_STABLE_CACHE
+    assert combined & ttnn.TracePolicy.REQUIRE_STABLE_CACHE
+    # NONE carries no policy bit.
+    assert not (ttnn.TracePolicy.NONE & ttnn.TracePolicy.REQUIRE_STABLE_CACHE)
