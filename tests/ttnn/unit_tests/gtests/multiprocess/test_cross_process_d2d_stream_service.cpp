@@ -622,7 +622,6 @@ MeshWorkload make_stress_d2h_compute_workload(
         const auto* up_dbuf = inbound->get_backing_tensor().mesh_buffer().get_device_buffer(coord);
         auto accessor_ct = TensorAccessorArgs(*up_dbuf).get_compile_time_args();
         std::vector<uint32_t> ct_args = {
-            transfer_done_sem_addr,
             static_cast<uint32_t>(inbound->get_data_ready_sem_addr()),
             static_cast<uint32_t>(up_buf->address()),
             dest_addr,
@@ -632,6 +631,7 @@ MeshWorkload make_stress_d2h_compute_workload(
             metadata_enabled ? 1u : 0u,
             metadata_size_bytes,
             inbound_metadata_l1_addr,
+            transfer_done_sem_addr,
         };
         ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -663,11 +663,11 @@ MeshWorkload make_stress_d2h_compute_workload(
                 static_cast<uint32_t>(up_svc_phys.x),
                 static_cast<uint32_t>(up_svc_phys.y),
                 skip_gate,
-                write_ack_addr,
-                static_cast<uint32_t>(d2h_svc_phys.x),
-                static_cast<uint32_t>(d2h_svc_phys.y),
                 is_metadata_writer,
                 d2h_metadata_input_addr,
+                static_cast<uint32_t>(d2h_svc_phys.x),
+                static_cast<uint32_t>(d2h_svc_phys.y),
+                write_ack_addr,
             };
             SetRuntimeArgs(program, kernel, wc, rt_args);
         }
