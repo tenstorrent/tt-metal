@@ -48,7 +48,11 @@ public:
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
         std::optional<distributed::MeshComposerConfig> composer_config;
         uint32_t fifo_size_bytes = 0;
-        uint32_t scratch_cb_size_bytes = 0;
+        // Optional upper bound on the socket page size (read-coalescing granularity), in bytes. 0 =
+        // auto (burst-derived default). NOT a total scratch-CB size -- the data-CB slot depth is
+        // auto-sized to fill the service-core L1 regardless. The effective page may be smaller
+        // (capped by L1 and by divisibility of the tensor page count).
+        uint32_t max_socket_page_size_bytes = 0;
         std::optional<CoreRange> worker_cores;
         std::optional<CoreCoord> metadata_master_core;
         uint32_t metadata_size_bytes = 0;
@@ -79,6 +83,9 @@ public:
     const TensorSpec& get_per_shard_spec() const;
     std::size_t payload_size_bytes() const;
     std::size_t metadata_size_bytes() const;
+
+    // Data-CB depth (full socket-page slots) the service derived from service-core L1.
+    uint32_t get_slot_count() const;
 
     std::vector<distributed::D2HSocket*> get_sockets() const;
 
@@ -159,6 +166,7 @@ private:
 
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
+    uint32_t slot_count_ = 0;  // data-CB depth derived from service-core L1 (owner only)
 
     std::vector<std::unique_ptr<HostReadWorkerState>> host_read_worker_states_;
     std::vector<std::thread> host_read_workers_;

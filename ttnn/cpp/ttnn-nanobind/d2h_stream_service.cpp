@@ -37,7 +37,7 @@ void py_module_types(nb::module_& mod) {
                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
                const tt::tt_metal::TensorSpec& global_spec,
                uint32_t fifo_size_bytes,
-               uint32_t scratch_cb_size_bytes,
+               uint32_t max_socket_page_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                std::optional<tt::tt_metal::distributed::MeshComposerConfig> composer_config,
                std::optional<CoreRange> worker_cores,
@@ -50,7 +50,7 @@ void py_module_types(nb::module_& mod) {
                     .mapper = std::move(mapper),
                     .composer_config = std::move(composer_config),
                     .fifo_size_bytes = fifo_size_bytes,
-                    .scratch_cb_size_bytes = scratch_cb_size_bytes,
+                    .max_socket_page_size_bytes = max_socket_page_size_bytes,
                     .worker_cores = worker_cores,
                     .metadata_master_core = metadata_master_core,
                     .metadata_size_bytes = metadata_size_bytes,
@@ -62,7 +62,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("global_spec"),
             nb::arg("fifo_size_bytes"),
-            nb::arg("scratch_cb_size_bytes"),
+            nb::arg("max_socket_page_size_bytes"),
             nb::arg("mapper").none() = nb::none(),
             nb::arg("composer_config").none() = nb::none(),
             nb::arg("worker_cores").none() = nb::none(),
@@ -112,6 +112,7 @@ void py_module_types(nb::module_& mod) {
             nb::rv_policy::reference_internal)
         .def("payload_size_bytes", &tt::tt_metal::D2HStreamService::payload_size_bytes)
         .def("metadata_size_bytes", &tt::tt_metal::D2HStreamService::metadata_size_bytes)
+        .def("get_slot_count", &tt::tt_metal::D2HStreamService::get_slot_count)
         .def("get_sockets", &tt::tt_metal::D2HStreamService::get_sockets)
         .def("get_worker_cores", &tt::tt_metal::D2HStreamService::get_worker_cores)
         .def("get_metadata_master_core", &tt::tt_metal::D2HStreamService::get_metadata_master_core)

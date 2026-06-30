@@ -66,7 +66,7 @@ constexpr uint32_t kPerfIters = 300;
 constexpr uint32_t kLatencyIters = 50;
 
 constexpr uint32_t kElemBytes = sizeof(uint32_t);
-constexpr uint32_t kDefaultTargetSocketPageBytes = 64 * 1024;
+constexpr uint32_t kDefaultTargetSocketPageBytes = 128 * 1024;
 constexpr uint32_t kDefaultFifoSocketPages = 8;
 
 // One ack worker is enough to preserve the service's worker-sync handshake without adding
@@ -82,18 +82,19 @@ enum class PlacementPattern {
 struct BenchmarkCase {
     std::string label;   // "<payload_regime>/<mode>/bytes<...>/pages<...>/fifo_socket_pages<...>"
     std::string regime;  // small_payload / medium_payload / large_payload
-    std::string mode;    // size / page_granularity
+    std::string mode;    // size / page_granularity / host_threads
     PlacementPattern placement = PlacementPattern::FullShard2D;
     uint32_t per_device_bytes = 0;
     uint32_t tensor_num_pages = 0;
     uint32_t fifo_socket_pages = kDefaultFifoSocketPages;
+    uint32_t target_socket_page_bytes = 0;  // 0 = use kDefaultTargetSocketPageBytes
     bool parallel_host_read = true;
     uint32_t host_read_thread_count = 0;
 };
 
 struct ServiceGeometryConfig {
     uint32_t tensor_page_bytes = 0;
-    uint32_t scratch_cb_size_bytes = 0;
+    uint32_t max_socket_page_size_bytes = 0;
     uint32_t fifo_size_bytes = 0;
     uint32_t target_socket_page_bytes = kDefaultTargetSocketPageBytes;
 };
@@ -194,6 +195,8 @@ ServiceGeometryConfig service_geometry_for(const BenchmarkCase& cs) {
 
     ServiceGeometryConfig geometry;
     geometry.tensor_page_bytes = cs.per_device_bytes / cs.tensor_num_pages;
+    geometry.target_socket_page_bytes =
+        cs.target_socket_page_bytes > 0 ? cs.target_socket_page_bytes : kDefaultTargetSocketPageBytes;
     TT_FATAL(
         geometry.tensor_page_bytes % kElemBytes == 0,
         "derived tensor_page_bytes ({}) must be divisible by element size ({})",
@@ -204,10 +207,10 @@ ServiceGeometryConfig service_geometry_for(const BenchmarkCase& cs) {
         std::max<uint32_t>(1, geometry.target_socket_page_bytes / geometry.tensor_page_bytes);
     const uint32_t pages_per_chunk = std::min(cs.tensor_num_pages, target_pages_per_chunk);
 
-    // Current D2H expresses socket-page coalescing through scratch_cb_size_bytes. Keep this
+    // Translate the benchmark's target socket-page size into max_socket_page_size_bytes. Keep this
     // translation local so benchmark case names do not depend on the service's transient API.
-    geometry.scratch_cb_size_bytes = pages_per_chunk * geometry.tensor_page_bytes;
-    geometry.fifo_size_bytes = cs.fifo_socket_pages * geometry.scratch_cb_size_bytes;
+    geometry.max_socket_page_size_bytes = pages_per_chunk * geometry.tensor_page_bytes;
+    geometry.fifo_size_bytes = cs.fifo_socket_pages * geometry.max_socket_page_size_bytes;
     return geometry;
 }
 
@@ -337,14 +340,14 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     log_info(
         tt::LogTest,
         "[{}] Starting: global_shape={}, per_device_bytes={}, tensor_num_pages={}, tensor_page_bytes={}, "
-        "scratch_cb_size_bytes={}, fifo_size_bytes={}, ack_worker_count={}, parallel_host_read={}, "
+        "max_socket_page_size_bytes={}, fifo_size_bytes={}, ack_worker_count={}, parallel_host_read={}, "
         "host_read_thread_count={}, perf_iters={}",
         cs.label,
         stream_string(global_shape),
         cs.per_device_bytes,
         cs.tensor_num_pages,
         geometry.tensor_page_bytes,
-        geometry.scratch_cb_size_bytes,
+        geometry.max_socket_page_size_bytes,
         geometry.fifo_size_bytes,
         ack_worker_count,
         cs.parallel_host_read,
@@ -361,7 +364,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         .global_spec = global_spec,
         .mapper = ttnn::distributed::create_mesh_mapper(*g_mesh_device, MeshMapperConfig{.placements = placements}),
         .fifo_size_bytes = geometry.fifo_size_bytes,
-        .scratch_cb_size_bytes = geometry.scratch_cb_size_bytes,
+        .max_socket_page_size_bytes = geometry.max_socket_page_size_bytes,
         .worker_cores = kProducerCores,
         .parallel_host_read = cs.parallel_host_read,
         .host_read_thread_count = cs.host_read_thread_count,
@@ -518,7 +521,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["tensor_num_pages"] = static_cast<double>(cs.tensor_num_pages);
         state.counters["tensor_page_bytes"] = static_cast<double>(geometry.tensor_page_bytes);
         state.counters["target_socket_page_bytes"] = static_cast<double>(geometry.target_socket_page_bytes);
-        state.counters["scratch_cb_size_bytes"] = static_cast<double>(geometry.scratch_cb_size_bytes);
+        state.counters["max_socket_page_size_bytes"] = static_cast<double>(geometry.max_socket_page_size_bytes);
         state.counters["fifo_socket_pages_configured"] = static_cast<double>(cs.fifo_socket_pages);
         state.counters["fifo_size_bytes"] = static_cast<double>(geometry.fifo_size_bytes);
         state.counters["ack_worker_count"] = static_cast<double>(ack_worker_count);
@@ -529,11 +532,13 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["socket_page_size"] = static_cast<double>(socket_page_size);
         state.counters["num_socket_pages"] = static_cast<double>(num_socket_pages);
         state.counters["pages_per_chunk"] = static_cast<double>(pages_per_chunk);
-        state.counters["single_kernel_slot_count"] = 1.0;
+        state.counters["slot_count"] = static_cast<double>(service.get_slot_count());
         state.counters["fifo_socket_pages"] = static_cast<double>(fifo_socket_pages);
         state.counters["fifo_transfer_depth"] = fifo_transfer_depth;
         state.counters["host_fifo_depth_transfers"] = static_cast<double>(warmup_plan.host_fifo_depth_transfers);
         state.counters["pipeline_depth_transfers"] = static_cast<double>(warmup_plan.pipeline_depth_transfers);
+        state.counters["device_cb_depth_transfers"] =
+            static_cast<double>(service.get_slot_count()) / static_cast<double>(num_socket_pages);
         state.counters["barrier_tail_ms"] = barrier_tail_ms;
         state.counters["producer_finish_tail_ms"] = producer_finish_tail_ms;
         if (latency_iters > 0) {
@@ -573,7 +578,8 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
                         uint32_t tensor_num_pages,
                         uint32_t fifo_socket_pages = kDefaultFifoSocketPages,
                         bool parallel_host_read = true,
-                        uint32_t host_read_thread_count = 0) {
+                        uint32_t host_read_thread_count = 0,
+                        uint32_t target_socket_page_bytes = 0) {
         TT_FATAL(per_device_bytes > 0, "per_device_bytes must be > 0");
         TT_FATAL(tensor_num_pages > 0, "tensor_num_pages must be > 0");
         if (per_device_bytes % tensor_num_pages != 0) {
@@ -583,16 +589,25 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
         if (tensor_page_bytes == 0 || tensor_page_bytes % kElemBytes != 0) {
             return;
         }
+        // When an explicit socket page target is set, verify it divides evenly into the payload.
+        if (target_socket_page_bytes > 0 && target_socket_page_bytes % tensor_page_bytes != 0) {
+            return;
+        }
+        std::string label = regime + "/" + mode + "/" + host_read_label(parallel_host_read, host_read_thread_count) +
+                            "/bytes" + std::to_string(per_device_bytes) + "/pages" + std::to_string(tensor_num_pages);
+        if (target_socket_page_bytes > 0) {
+            label += "/socket_page" + std::to_string(target_socket_page_bytes);
+        }
+        label += "/fifo_socket_pages" + std::to_string(fifo_socket_pages);
         cases.push_back(BenchmarkCase{
-            .label = regime + "/" + mode + "/" + host_read_label(parallel_host_read, host_read_thread_count) +
-                     "/bytes" + std::to_string(per_device_bytes) + "/pages" + std::to_string(tensor_num_pages) +
-                     "/fifo_socket_pages" + std::to_string(fifo_socket_pages),
+            .label = label,
             .regime = regime,
             .mode = mode,
             .placement = PlacementPattern::FullShard2D,
             .per_device_bytes = per_device_bytes,
             .tensor_num_pages = tensor_num_pages,
             .fifo_socket_pages = fifo_socket_pages,
+            .target_socket_page_bytes = target_socket_page_bytes,
             .parallel_host_read = parallel_host_read,
             .host_read_thread_count = host_read_thread_count,
         });

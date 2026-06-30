@@ -76,36 +76,101 @@ struct D2HMetadataArgs {
     uint32_t metadata_l1_addr = 0;
 };
 
+// The writer half owns the D2H socket and runs on RISCV_1's default NOC. build_persistent_d2h_program
+// (kernel placement) and set_worker_mcast_corners (coord ordering) must agree on this single source of
+// truth, so a future NOC reassignment stays correct without introducing the multicast-direction bug.
+// Named distinctly from H2D's kWriterNoc to avoid ODR clash in unity builds.
+constexpr NOC kD2HWriterNoc = NOC::RISCV_1_default;
+
+// Order a worker-grid multicast box for the NOC the reader will issue the multicast on.
+// (Same logic as H2D's set_worker_mcast_corners: NOC 0 leads low, NOC 1 leads high.)
+void set_d2h_worker_mcast_corners(D2HWorkerSyncArgs& args, NOC noc, CoreCoord start_phys, CoreCoord end_phys) {
+    const bool reverse = (noc == NOC::NOC_1);
+    const CoreCoord lead = reverse ? end_phys : start_phys;
+    const CoreCoord trail = reverse ? start_phys : end_phys;
+    args.mcast_noc_x_start = static_cast<uint32_t>(lead.x);
+    args.mcast_noc_y_start = static_cast<uint32_t>(lead.y);
+    args.mcast_noc_x_end = static_cast<uint32_t>(trail.x);
+    args.mcast_noc_y_end = static_cast<uint32_t>(trail.y);
+}
+
+// Usable service-core L1 for the data CB, given the service core's measured free L1
+// (`free_l1_bytes` == svc.bytes_available()), after reserving kD2HServiceScratchReserveBytes.
+// The caller measures free_l1_bytes BEFORE constructing sockets, so it's the full unreserved
+// region -- the socket config buffer and the post-plan scratch words aren't allocated yet, but
+// the reserve is sized to cover them. Keeps the CB from colliding with the top-down scratch.
+uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes) {
+    const uint64_t reserved = kD2HServiceScratchReserveBytes;
+    TT_FATAL(
+        free_l1_bytes > reserved,
+        "D2HStreamService: service-core free L1 ({} B) too small for reservations ({} B)",
+        free_l1_bytes,
+        reserved);
+    return free_l1_bytes - reserved;
+}
+
+// Builds the two-kernel persistent D2H program for one socket / device buffer: a reader on
+// RISCV_0 (DRAM -> data CB) and a writer on RISCV_1 (data CB -> host-pinned socket FIFO),
+// connected by a multi-slot data CB. Splitting the phases onto two RISCs lets the reader
+// stage ahead while the writer drains.
+//
+// Reader CT-arg layout (must stay in sync with persistent_d2h_reader.cpp):
+//   [0]  num_socket_pages
+//   [1]  input_tensor_page_size
+//   [2]  pages_per_chunk
+//   [3]  data_cbuf_index
+//   [4]  worker_sync_enabled             (uint32 0/1)
+//   [5]  transfer_done_sem_addr
+//   [6]  write_ack_counter_addr
+//   [7]  worker_mcast_noc_x_start         (corners ordered for RISCV_0's default NOC)
+//   [8]  worker_mcast_noc_y_start
+//   [9]  worker_mcast_noc_x_end
+//   [10] worker_mcast_noc_y_end
+//   [11] num_workers
+//   [12..] TensorAccessorArgs
+// Reader RT-arg layout:
+//   [0]  termination_semaphore_addr
+//   [1]  input_tensor_addr
+//
+// Writer CT-arg layout (must stay in sync with persistent_d2h_writer.cpp):
+//   [0]  socket_page_size
+//   [1]  num_socket_pages
+//   [2]  data_cbuf_index
+//   [3]  metadata_enabled                (uint32 0/1)
+//   [4]  metadata_l1_addr
+//   [5]  metadata_size_bytes             (uint32, actual meaningful bytes; 0 if disabled)
+// Writer RT-arg layout:
+//   [0]  socket_config_addr
+//   [1]  termination_semaphore_addr
 Program build_persistent_d2h_program(
     const Buffer& device_buffer,
     const CoreCoord& sender_core,
     uint32_t socket_config_buffer_address,
     uint32_t termination_semaphore_addr,
-    const ChunkPlan& plan,
+    const D2HChunkPlan& plan,
     uint32_t tensor_page_size,
     DataType dtype,
     const D2HWorkerSyncArgs& worker_sync,
     const D2HMetadataArgs& metadata) {
     auto program = CreateProgram();
 
-    constexpr tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
-    auto cb_cfg =
-        CircularBufferConfig(plan.socket_page_size, {{scratch_cb_index, datatype_to_dataformat_converter(dtype)}})
-            .set_page_size(scratch_cb_index, plan.socket_page_size);
-    CreateCircularBuffer(program, sender_core, cb_cfg);
+    constexpr tt::CBIndex data_cb_index = tt::CBIndex::c_0;
+    const auto data_format = datatype_to_dataformat_converter(dtype);
+
+    // Data CB: slot_count full socket pages so the reader can stage ahead of the writer.
+    auto data_cb_cfg = CircularBufferConfig(plan.slot_count * plan.socket_page_size, {{data_cb_index, data_format}})
+                           .set_page_size(data_cb_index, plan.socket_page_size);
+    CreateCircularBuffer(program, sender_core, data_cb_cfg);
 
     auto tensor_accessor_args = TensorAccessorArgs(device_buffer);
     auto tensor_accessor_compile_args = tensor_accessor_args.get_compile_time_args();
 
-    std::vector<uint32_t> ct_args = {
-        socket_config_buffer_address,
-        termination_semaphore_addr,
-        plan.socket_page_size,
+    // --- Reader (RISCV_0): DRAM reads + worker-sync handshake ---
+    std::vector<uint32_t> reader_ct_args = {
         plan.num_socket_pages,
-        static_cast<uint32_t>(device_buffer.address()),
         tensor_page_size,
         plan.pages_per_chunk,
-        static_cast<uint32_t>(scratch_cb_index),
+        static_cast<uint32_t>(data_cb_index),
         static_cast<uint32_t>(worker_sync.enabled ? 1u : 0u),
         worker_sync.transfer_done_sem_addr,
         worker_sync.write_ack_counter_addr,
@@ -114,21 +179,45 @@ Program build_persistent_d2h_program(
         worker_sync.mcast_noc_x_end,
         worker_sync.mcast_noc_y_end,
         worker_sync.num_workers,
-        static_cast<uint32_t>(metadata.enabled ? 1u : 0u),
-        metadata.metadata_size_bytes,
-        metadata.metadata_l1_addr,
     };
-    ct_args.insert(ct_args.end(), tensor_accessor_compile_args.begin(), tensor_accessor_compile_args.end());
+    reader_ct_args.insert(
+        reader_ct_args.end(), tensor_accessor_compile_args.begin(), tensor_accessor_compile_args.end());
 
-    CreateKernel(
+    auto reader_kernel = CreateKernel(
         program,
-        "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_d2h_sender.cpp",
+        "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_d2h_reader.cpp",
         sender_core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = ct_args,
+            .compile_args = reader_ct_args,
         });
+    SetRuntimeArgs(
+        program,
+        reader_kernel,
+        sender_core,
+        {termination_semaphore_addr, static_cast<uint32_t>(device_buffer.address())});
+
+    // --- Writer (RISCV_1): socket PCIe writes + metadata ---
+    std::vector<uint32_t> writer_ct_args = {
+        plan.socket_page_size,
+        plan.num_socket_pages,
+        static_cast<uint32_t>(data_cb_index),
+        static_cast<uint32_t>(metadata.enabled ? 1u : 0u),
+        metadata.metadata_l1_addr,
+        metadata.metadata_size_bytes,
+    };
+
+    auto writer_kernel = CreateKernel(
+        program,
+        "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_d2h_writer.cpp",
+        sender_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = kD2HWriterNoc,
+            .compile_args = writer_ct_args,
+        });
+    SetRuntimeArgs(program, writer_kernel, sender_core, {socket_config_buffer_address, termination_semaphore_addr});
 
     return program;
 }
@@ -149,7 +238,6 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     mesh_device_(mesh_device), cfg_(std::move(cfg)) {
     TT_FATAL(mesh_device_ != nullptr, "D2HStreamService: mesh_device must not be null");
     TT_FATAL(cfg_.fifo_size_bytes > 0, "D2HStreamService: fifo_size_bytes must be > 0");
-    TT_FATAL(cfg_.scratch_cb_size_bytes > 0, "D2HStreamService: scratch_cb_size_bytes must be > 0");
     TT_FATAL(
         cfg_.metadata_size_bytes == 0 || cfg_.worker_cores.has_value(),
         "D2HStreamService: metadata_size_bytes={} requires Config::worker_cores to be set",
@@ -226,23 +314,53 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         mesh_id_claimed_cores_.assign(registered.begin(), registered.end());
     }
 
-    sockets_.reserve(coords.size());
-    for (const auto& coord : coords) {
-        sockets_.push_back(std::make_unique<distributed::D2HSocket>(
-            mesh_device_, distributed::MeshCoreCoord(coord, service_cores_.at(coord)), cfg_.fifo_size_bytes));
-    }
-
+    // Derive the chunk plan BEFORE constructing sockets, so socket_page_size is known in time
+    // to set on the sockets. L1 layout is uniform across coords, so a representative service
+    // core suffices.
     const uint32_t tensor_page_size = device_tensor_.buffer()->page_size();
     const uint32_t tensor_num_pages = device_tensor_.buffer()->num_pages();
-    const ChunkPlan plan = derive_chunk_plan(tensor_page_size, tensor_num_pages, cfg_.scratch_cb_size_bytes);
+    auto* rep_device = mesh_device_->get_device(coords.front());
+    const uint64_t service_core_free_l1 = svc.bytes_available(rep_device, service_cores_.at(coords.front()));
+    const uint64_t usable_cb_l1 = service_core_cb_l1_budget(service_core_free_l1);
+    const D2HChunkPlan plan =
+        derive_d2h_chunk_plan(tensor_page_size, tensor_num_pages, usable_cb_l1, cfg_.max_socket_page_size_bytes);
     socket_page_size_ = plan.socket_page_size;
     num_socket_pages_ = plan.num_socket_pages;
+    slot_count_ = plan.slot_count;
 
     TT_FATAL(
         cfg_.metadata_size_bytes <= socket_page_size_,
         "D2HStreamService: metadata_size_bytes={} exceeds derived socket_page_size={}",
         cfg_.metadata_size_bytes,
         socket_page_size_);
+
+    // Belt-and-suspenders L1 guard: the data CB (program allocator, bottom-up) and the service-core
+    // scratch (ServiceCoreManager, top-down) share the unreserved region with no cross-allocator check.
+    const uint64_t data_cb_bytes = static_cast<uint64_t>(plan.slot_count) * plan.socket_page_size;
+    TT_FATAL(
+        data_cb_bytes + kD2HServiceScratchReserveBytes <= service_core_free_l1,
+        "D2HStreamService: data CB {} B + scratch reserve {} B exceeds service-core free L1 {} B",
+        data_cb_bytes,
+        kD2HServiceScratchReserveBytes,
+        service_core_free_l1);
+
+    log_debug(
+        tt::LogOp,
+        "D2HStreamService L1: socket_page={} B, pages_per_chunk={}, num_socket_pages={}, slots={}, "
+        "data_cb={} B, usable_for_cb={} B, fifo={} B",
+        plan.socket_page_size,
+        plan.pages_per_chunk,
+        plan.num_socket_pages,
+        plan.slot_count,
+        data_cb_bytes,
+        usable_cb_l1,
+        cfg_.fifo_size_bytes);
+
+    sockets_.reserve(coords.size());
+    for (const auto& coord : coords) {
+        sockets_.push_back(std::make_unique<distributed::D2HSocket>(
+            mesh_device_, distributed::MeshCoreCoord(coord, service_cores_.at(coord)), cfg_.fifo_size_bytes));
+    }
 
     for (auto& s : sockets_) {
         s->set_page_size(plan.socket_page_size);
@@ -299,14 +417,14 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
     if (cfg_.metadata_size_bytes > 0) {
         const uint32_t l1_align = hal::get_l1_alignment();
-        const DeviceAddr aligned_staging_size =
-            tt::align(static_cast<DeviceAddr>(socket_page_size_), static_cast<DeviceAddr>(l1_align));
+        const DeviceAddr aligned_metadata_size =
+            tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align));
         for (const auto& coord : coords) {
             auto* d = mesh_device_->get_device(coord);
             const CoreCoord chosen = service_cores_.at(coord);
-            const DeviceAddr addr = svc.allocate_l1(d, chosen, aligned_staging_size);
+            const DeviceAddr addr = svc.allocate_l1(d, chosen, aligned_metadata_size);
             metadata_input_addrs_.emplace(coord, addr);
-            std::vector<uint8_t> zero_meta(aligned_staging_size, 0);
+            std::vector<uint8_t> zero_meta(aligned_metadata_size, 0);
             tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), zero_meta, CoreType::WORKER);
         }
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
@@ -330,10 +448,8 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
             const auto end_phys = d->worker_core_from_logical_core(worker_range.end_coord);
             worker_sync.enabled = true;
             worker_sync.transfer_done_sem_addr = static_cast<uint32_t>(transfer_done_sem_->address());
-            worker_sync.mcast_noc_x_start = static_cast<uint32_t>(start_phys.x);
-            worker_sync.mcast_noc_y_start = static_cast<uint32_t>(start_phys.y);
-            worker_sync.mcast_noc_x_end = static_cast<uint32_t>(end_phys.x);
-            worker_sync.mcast_noc_y_end = static_cast<uint32_t>(end_phys.y);
+            // The reader (RISCV_0) issues the multicast; order corners for its default NOC.
+            set_d2h_worker_mcast_corners(worker_sync, NOC::RISCV_0_default, start_phys, end_phys);
         }
 
         D2HMetadataArgs metadata;
@@ -731,6 +847,8 @@ std::size_t D2HStreamService::payload_size_bytes() const { return cfg_.global_sp
 
 std::size_t D2HStreamService::metadata_size_bytes() const { return cfg_.metadata_size_bytes; }
 
+uint32_t D2HStreamService::get_slot_count() const { return slot_count_; }
+
 std::string D2HStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "D2HStreamService::export_descriptor: only owner-side services can be exported");
     TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::export_descriptor: mesh device unavailable");
@@ -796,7 +914,7 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
         .mapper = std::move(mapper),
         .composer_config = desc.composer_config,
         .fifo_size_bytes = 0,
-        .scratch_cb_size_bytes = 0,
+        .max_socket_page_size_bytes = 0,
         .worker_cores = std::nullopt,
         .metadata_master_core = std::nullopt,
         .metadata_size_bytes = desc.metadata_size_bytes,

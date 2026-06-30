@@ -58,8 +58,15 @@ MODE_AXIS = {
     "size": ("per_device_bytes", "per-device payload"),
     "page_granularity": ("tensor_num_pages", "tensor pages per device"),
     "host_threads": ("host_threads", "host read threads"),
+    "socket_page_size": ("socket_page_bytes", "socket page size"),
 }
-INTEGER_SWEEP_AXES = ("tensor_num_pages", "fifo_socket_pages", "fifo_socket_pages_configured", "host_threads")
+INTEGER_SWEEP_AXES = (
+    "tensor_num_pages",
+    "fifo_socket_pages",
+    "fifo_socket_pages_configured",
+    "host_threads",
+    "socket_page_bytes",
+)
 
 CASE_KEY = [
     "family",
@@ -68,6 +75,7 @@ CASE_KEY = [
     "host_threads",
     "per_device_bytes",
     "tensor_num_pages",
+    "socket_page_bytes",
     "fifo_socket_pages_configured",
 ]
 PRIMARY_METRIC = "aggregate_gbps"
@@ -86,6 +94,7 @@ AXIS_SHORT = {
     "fifo_socket_pages_configured": "fifo_socket_pages",
     "host_read": "host",
     "host_threads": "threads",
+    "socket_page_bytes": "socket_page",
 }
 
 NUMERIC_COLUMNS = [
@@ -100,7 +109,8 @@ NUMERIC_COLUMNS = [
     "tensor_num_pages",
     "tensor_page_bytes",
     "target_socket_page_bytes",
-    "scratch_cb_size_bytes",
+    "max_socket_page_size_bytes",
+    "socket_page_bytes",
     "fifo_socket_pages_configured",
     "fifo_size_bytes",
     "ack_worker_count",
@@ -112,11 +122,12 @@ NUMERIC_COLUMNS = [
     "socket_page_size",
     "num_socket_pages",
     "pages_per_chunk",
-    "single_kernel_slot_count",
+    "slot_count",
     "fifo_socket_pages",
     "fifo_transfer_depth",
     "host_fifo_depth_transfers",
     "pipeline_depth_transfers",
+    "device_cb_depth_transfers",
     "barrier_tail_ms",
     "producer_finish_tail_ms",
     "latency_avg_us",
@@ -131,7 +142,9 @@ NUMERIC_COLUMNS = [
 _NAME_RE = re.compile(
     rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/"
     r"(?:(?:host(?P<host>serial|parallel))|(?:threads(?P<threads>\d+)))/"
-    r"bytes(?P<bytes>\d+)/pages(?P<pages>\d+)/fifo_socket_pages(?P<fifo_socket_pages>\d+)"
+    r"bytes(?P<bytes>\d+)/pages(?P<pages>\d+)"
+    r"(?:/socket_page(?P<socket_page>\d+))?"
+    r"/fifo_socket_pages(?P<fifo_socket_pages>\d+)"
 )
 
 _OLD_NAME_RE = re.compile(
@@ -146,6 +159,8 @@ def held_cols(mode: str, xcol: str) -> list[str]:
     elif mode == "size":
         candidates = ("fifo_socket_pages_configured", "host_read")
     elif mode == "host_threads":
+        candidates = ("per_device_bytes", "fifo_socket_pages_configured")
+    elif mode == "socket_page_size":
         candidates = ("per_device_bytes", "fifo_socket_pages_configured")
     else:
         candidates = (
@@ -216,6 +231,7 @@ def parse_name(name: str) -> dict[str, str | int] | None:
     match = _NAME_RE.match(name)
     if match:
         host_threads = int(match.group("threads")) if match.group("threads") is not None else 0
+        socket_page = int(match.group("socket_page")) if match.group("socket_page") is not None else 0
         return {
             "family": match.group("family"),
             "mode": match.group("mode"),
@@ -223,6 +239,7 @@ def parse_name(name: str) -> dict[str, str | int] | None:
             "host_threads": host_threads,
             "per_device_bytes": int(match.group("bytes")),
             "tensor_num_pages": int(match.group("pages")),
+            "socket_page_bytes": socket_page,
             "fifo_socket_pages_configured": int(match.group("fifo_socket_pages")),
         }
     match = _OLD_NAME_RE.match(name)
@@ -235,6 +252,7 @@ def parse_name(name: str) -> dict[str, str | int] | None:
         "host_threads": 0,
         "per_device_bytes": int(match.group("bytes")),
         "tensor_num_pages": int(match.group("pages")),
+        "socket_page_bytes": 0,
         "fifo_socket_pages_configured": int(match.group("fifo_socket_pages")),
     }
 
