@@ -43,7 +43,7 @@ from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
 from models.common.tensor_utils import get_rot_transformation_mat, zeros_like_kv_cache, zeros_like_paged_cache
 from models.common.tests.utils import stable_model_seed
-from models.common.utility_functions import comp_allclose, comp_pcc, is_wormhole_b0, nearest_32
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 
 # =============================================================================
 # RoPE Helper Functions (replaces TTTv1 rope imports)
@@ -1186,11 +1186,6 @@ def test_attention_1d_vs_reference(
     test_attention_1d_vs_reference_from_model_args which uses existing infrastructure
     that handles HF API differences.
     """
-    # WH B0 multi-device: reduce_scatter output topology generates duplicate shard dims
-    # causing TT_FATAL @ partition.cpp:152. Single-device (1x1) is unaffected. Refs #46878.
-    if is_wormhole_b0() and ttnn_mesh_device.get_num_devices() > 1:
-        pytest.skip("WH B0 multi-device: TT_FATAL duplicate dims in partition.cpp (refs #46878)")
-
     # Skip if mesh_shape doesn't match device
     device_shape = (ttnn_mesh_device.shape[0], ttnn_mesh_device.shape[1])
     if device_shape != mesh_shape:
