@@ -25,12 +25,69 @@ from PIL import Image
 import ttnn
 
 from ....pipelines.ideogram4.pipeline import Ideogram4Pipeline
-from .test_generate_ideogram4 import PROMPT_JSON
 
-# Ideogram 4 was trained exclusively on structured-JSON captions; the in-distribution
-# JSON prompt is the known-good format (plain prose triggers in-weights moderation
-# washout at >=1024px per the status notes). Reuse the verified caption.
-PROMPT = PROMPT_JSON
+
+def _typography_prompt_json() -> str:
+    """Typography-heavy in-distribution JSON caption that showcases Ideogram 4's
+    best-in-class text rendering (crisp legible lettering + bbox layout + palette).
+
+    Ideogram 4 was trained exclusively on structured-JSON captions; quoting the exact
+    text strings and placing them with bbox is the reliable way to get them rendered.
+    """
+    import json
+
+    caption = {
+        "aspect_ratio": "1:1",
+        "high_level_description": (
+            "A bold retro travel poster with large, crisp typography. A condensed sans-serif "
+            'headline reading "EXPLORE THE WILD" arcs across the top, a clean letter-spaced '
+            'subtitle "NATIONAL PARKS · EST. 1872" sits beneath it, and a small banner at the '
+            'bottom reads "ADVENTURE AWAITS". Set over a stylized sunrise mountain landscape '
+            "with pine silhouettes; flat vintage screen-print look, sharp legible lettering."
+        ),
+        "colour_palette": ["#F4A259", "#2E4600", "#1B3A4B", "#F2E8CF", "#BC4749"],
+        "compositional_deconstruction": {
+            "background": (
+                "Stylized sunrise sky in warm cream and orange bands, layered mountain ridges in "
+                "deep green and teal, a row of pine-tree silhouettes along the lower third, flat "
+                "screen-print texture with subtle grain."
+            ),
+            "elements": [
+                {
+                    "type": "text",
+                    "bbox": [70, 70, 290, 930],
+                    "text": "EXPLORE THE WILD",
+                    "desc": "Large bold condensed sans-serif headline in cream, all caps, gentle "
+                    "upward arc, high contrast against the sky.",
+                },
+                {
+                    "type": "text",
+                    "bbox": [300, 180, 400, 820],
+                    "text": "NATIONAL PARKS · EST. 1872",
+                    "desc": "Smaller clean uppercase subtitle in warm orange, generously "
+                    "letter-spaced, centered beneath the headline.",
+                },
+                {
+                    "type": "text",
+                    "bbox": [840, 250, 960, 750],
+                    "text": "ADVENTURE AWAITS",
+                    "desc": "Small bold uppercase banner text in cream on a deep-red rounded ribbon.",
+                },
+                {
+                    "type": "obj",
+                    "bbox": [410, 60, 880, 940],
+                    "desc": "Layered mountain range at sunrise with a bold circular sun disc, deep "
+                    "green and teal ridges, vintage poster shading.",
+                },
+            ],
+        },
+    }
+    return json.dumps(caption, ensure_ascii=False, separators=(",", ":"))
+
+
+# Typography showcase prompt (JSON is the known-good format; plain prose washes out
+# at >=1024px per the in-weights-moderation finding).
+PROMPT = _typography_prompt_json()
 
 
 @pytest.mark.parametrize(
@@ -51,7 +108,16 @@ PROMPT = PROMPT_JSON
 def test_pipeline_class(*, mesh_device, submesh_shape, tp_axis, height, width, preset) -> None:
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis)
+
+    # Warmup run: triggers JIT compile + program-cache fill (NOT timed).
+    pipe(PROMPT, height=height, width=width, preset=preset, seed=1234)
+    # Timed run: program cache is warm, so the timings exclude JIT compile.
     img = pipe(PROMPT, height=height, width=width, preset=preset, seed=1234)
+    t = pipe.timings
+    logger.info(
+        f"WARM E2E LATENCY {height}px {preset}: total={t['total']:.2f}s | encode={t['encode']:.2f}s "
+        f"| denoise={t['denoise']:.2f}s ({t['denoise_per_step']*1000:.0f}ms/step) | decode={t['decode']:.2f}s"
+    )
 
     out = f"/data/cglagovich/ideogram4_pipeline_class_{height}_{preset}.png"
     Image.fromarray(img).save(out)
