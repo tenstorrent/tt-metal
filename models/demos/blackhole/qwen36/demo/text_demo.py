@@ -545,11 +545,34 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     model._ondev_argmax = _greedy
     _per_shard = vocab // model.num_devices  # column offset per device (vocab-sharded LM head)
 
+    # Multi-core max VALUE over the vocab shard: reshape the single row into a tile-aligned R×256 grid
+    # (pad with -1e30 so padding never wins), maxW to R partials, reshape to one row, maxW again
+    _MAXVAL_C = 256
+    _MAXVAL_R = (((_per_shard + _MAXVAL_C - 1) // _MAXVAL_C) + 31) // 32 * 32  # rows, rounded to a tile
+
+    def _maxval_dev(sharded_logits):
+        padded = ttnn.pad(
+            sharded_logits, [(0, 0), (0, 0), (0, 0), (0, _MAXVAL_R * _MAXVAL_C - _per_shard)], value=-1e30
+        )
+        grid = ttnn.reshape(padded, (1, 1, _MAXVAL_R, _MAXVAL_C))
+        part = ttnn.max(grid, dim=-1)  # [1,1,R,1] across cores
+        part_row = ttnn.reshape(part, (1, 1, 1, _MAXVAL_R))
+        val = ttnn.max(part_row, dim=-1)  # [1,1,1,1] over R partials
+        ttnn.deallocate(padded)
+        ttnn.deallocate(grid)
+        ttnn.deallocate(part)
+        ttnn.deallocate(part_row)
+        return val
+
     def _argmax_dev(sharded_logits):
         # sharded_logits: [1,1,vocab/nd] TILE, distinct per device. Return per-device (local argmax
-        # index, max value). ttnn.argmax works on the TILE tensor directly (do NOT untilize — the
-        # ROW_MAJOR multicore argmax path returns garbage on this width).
-        return ttnn.argmax(sharded_logits, dim=-1, keepdim=False), ttnn.max(sharded_logits, dim=-1)
+        # index, max value). INDEX: untilize to ROW_MAJOR first so ttnn.argmax takes the multi-core path
+        # (~0.12ms vs ~2.1ms single-core on TILE); don't pass sub_core_grids (auto grid works, explicit
+        # stalls). VALUE: multi-core reduce via _maxval_dev (reads the original TILE tensor).
+        logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
+        idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
+        ttnn.deallocate(logits_rm)
+        return idx, _maxval_dev(sharded_logits)
 
     def _read_tok(idx_t, val_t):
         # Combine the 4 per-device (local_idx, max_val): winner device d = argmax of the 4 max vals;
