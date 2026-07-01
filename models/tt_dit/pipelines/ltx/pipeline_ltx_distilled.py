@@ -46,6 +46,25 @@ class LTXDistilledPipeline(LTXPipeline):
         )
         return ttnn.add(ttnn.multiply(denoised, denoise_mask), ttnn.multiply(clean_latent, one_minus))
 
+    @staticmethod
+    def _noise_video_latent(
+        base: torch.Tensor,
+        denoise_mask: torch.Tensor | None,
+        sigma: torch.Tensor,
+        seed: int,
+        noise_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """GaussianNoiser (ltx_core): ``noise·(mask·σ) + base·(1−mask·σ)``.
+
+        ``denoise_mask`` None is the plain forward step (mask ≡ 1); a per-token mask holding
+        ``1−strength`` at the conditioning tokens pins them toward ``base``. ``noise_dtype`` is
+        the RNG draw precision (bf16 for the pure-noise T2V start, fp32 elsewhere) and is
+        load-bearing: it reproduces prior seeds bit-for-bit."""
+        torch.manual_seed(seed)
+        noise = torch.randn(base.shape, dtype=noise_dtype).to(base.dtype)
+        scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
+        return noise * scaled_mask + base * (1.0 - scaled_mask)
+
     def warmup_buffers(
         self,
         *,
@@ -324,11 +343,11 @@ class LTXDistilledPipeline(LTXPipeline):
 
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
-        # ----- Video latent init (always end up with shape (B, video_N, C)) -----
-        if image_cond:  # I2V path
-            ns = sigmas[0].item()
-            torch.manual_seed(seed)
-            if initial_video_latent is not None:  # I2V S2
+        # ----- Video latent init: one GaussianNoiser over three bases — I2V (frame-0 replaced by
+        # the clean cond latent), T2V-S2 (upsampled latent), T2V-S1 (zeros). denoise_mask pins the
+        # conditioning tokens; None ≡ full forward noise. Ends at (B, video_N, C). -----
+        if image_cond:  # I2V: zeros (S1) or upsampled (S2), frame-0 overwritten by the cond latent
+            if initial_video_latent is not None:
                 base_v = initial_video_latent.float()
                 if base_v.dim() == 2:
                     base_v = base_v.unsqueeze(0)
@@ -336,21 +355,17 @@ class LTXDistilledPipeline(LTXPipeline):
             else:
                 base_v = torch.zeros(B, video_N_real, self.in_channels)
             base_v[:, :n_cond, :] = clean_latent[:, :n_cond, :]
-            noise_v = torch.randn_like(base_v)
-            scaled_mask = denoise_mask * ns
-            video_lat_real = noise_v * scaled_mask + base_v * (1.0 - scaled_mask)
-        elif initial_video_latent is not None:  # T2V S2
-            # Stage-2 path: upsampled latent comes in at (B, video_N_real, C).
-            video_lat_real = initial_video_latent.float()
-            assert video_lat_real.shape[1] == video_N_real, (
-                f"initial_video_latent seq dim {video_lat_real.shape[1]} != " f"video_N_real {video_N_real}"
-            )
-            torch.manual_seed(seed)
-            noise_v = torch.randn_like(video_lat_real)
-            video_lat_real = video_lat_real * (1 - sigmas[0]) + noise_v * sigmas[0]
-        else:  # T2V S1
-            torch.manual_seed(seed)
-            video_lat_real = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            noise_dtype = torch.float32
+        elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
+            base_v = initial_video_latent.float()
+            assert (
+                base_v.shape[1] == video_N_real
+            ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
+            noise_dtype = torch.float32
+        else:  # T2V S1: pure noise from zeros (bf16 draw, kept for seed reproducibility)
+            base_v = torch.zeros(B, video_N_real, self.in_channels)
+            noise_dtype = torch.bfloat16
+        video_lat_real = self._noise_video_latent(base_v, denoise_mask, sigmas[0], seed, noise_dtype)
 
         if video_N > video_N_real:
             video_lat = torch.zeros(B, video_N, self.in_channels)
