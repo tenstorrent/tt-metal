@@ -469,6 +469,38 @@ void fill_runtime_args_watcher_pattern(uint32_t* dst, uint32_t num_words) {
     }
 }
 
+using RtaDataPair =
+    std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>;
+
+// Retarget one core's per-kernel RuntimeArgsData at the payload just written into the command stream, so
+// later in-place RTA edits (and re-enqueues) update the command directly. If a kernel's rt_args_data was
+// already retargeted by a previous command sequence, schedule an rta_update copy from there instead.
+// `base` points at the start of this core's RTA payload in the command buffer; kernels are laid out back
+// to back at their [count | args] stride. Shared by the packed and large-unicast RTA emission paths.
+void repoint_rta_data_into_command_stream(
+    char* base,
+    std::vector<RtaDataPair>& kernel_rta_pairs,
+    [[maybe_unused]] const std::vector<std::tuple<const void*, uint32_t, uint32_t>>& kernel_data_and_sizes,
+    uint32_t count_word_offset,
+    std::vector<ProgramCommandSequence::RtaUpdate>& rta_updates) {
+    uint32_t offset = 0;
+    for (uint32_t j = 0; j < kernel_rta_pairs.size(); ++j) {
+        auto& data = kernel_rta_pairs[j];
+        uint32_t* data_in_sequence = reinterpret_cast<uint32_t*>(base + offset) + count_word_offset;
+        // rt_args_data points to args; data.second.get().data() points to count when watcher enabled.
+        if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
+            data.first.get().rt_args_data = data_in_sequence;
+        } else {
+            TT_ASSERT(
+                data.first.get().rt_args_data ==
+                (reinterpret_cast<const uint32_t*>(std::get<0>(kernel_data_and_sizes[j])) + count_word_offset));
+            rta_updates.emplace_back(
+                data.first.get().rt_args_data, data_in_sequence, data.first.get().rt_args_count * sizeof(uint32_t));
+        }
+        offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
+    }
+}
+
 template <typename PackedSubCmd>
 void generate_runtime_args_cmds(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
@@ -570,30 +602,12 @@ void generate_runtime_args_cmds(
         const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
-            uint32_t offset = 0;
-            for (uint32_t j = 0; j < rt_args_data[i].size(); ++j) {
-                auto& data = rt_args_data[i][j];
-                uint32_t* data_in_sequence =
-                    reinterpret_cast<uint32_t*>(
-                        reinterpret_cast<char*>(runtime_args_command_sequences.back().data()) + data_offset + offset) +
-                    count_word_offset;
-                // rt_args_data points to args; data.second.get().data() points to count when watcher enabled
-                if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
-                    // Update the pointer to point into the command sequence. Future RTA updates will modify the command
-                    // sequence directly.
-                    data.first.get().rt_args_data = data_in_sequence;
-                } else {
-                    TT_ASSERT(
-                        data.first.get().rt_args_data ==
-                        (reinterpret_cast<const uint32_t*>(std::get<0>(rt_data_and_sizes[i][j])) + count_word_offset));
-                    // Pointer already points into another command sequence. Schedule a copy from there.
-                    rta_updates.emplace_back(
-                        data.first.get().rt_args_data,
-                        data_in_sequence,
-                        data.first.get().rt_args_count * sizeof(uint32_t));
-                }
-                offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
-            }
+            repoint_rta_data_into_command_stream(
+                reinterpret_cast<char*>(runtime_args_command_sequences.back().data()) + data_offset,
+                rt_args_data[i],
+                rt_data_and_sizes[i],
+                count_word_offset,
+                rta_updates);
             data_offset += data_inc;
         }
         num_packed_cmds_in_seq -= num_packed_cmds;
@@ -675,25 +689,16 @@ void generate_runtime_args_cmds_large_unicast(
             write_offset_index);
         TT_ASSERT(command_obj.size_bytes() == command_obj.write_offset_bytes());
 
-        // Repoint each kernel's RuntimeArgsData into the command stream (or schedule an rta_update copy),
-        // exactly as the packed path and BatchedTransferGenerator do.
+        // Repoint each core's kernels' RuntimeArgsData into the command stream (or schedule an rta_update
+        // copy). Each core's payload is a distinct data_collection entry (no fixed inter-core stride).
         for (uint32_t k = 0; k < num_in_chunk; ++k) {
             const uint32_t i = offset_idx + k;
-            uint8_t* base = data_collection_location[k];
-            uint32_t offset = 0;
-            for (uint32_t j = 0; j < rt_args_data[i].size(); ++j) {
-                auto& data = rt_args_data[i][j];
-                uint32_t* data_in_sequence = reinterpret_cast<uint32_t*>(base + offset) + count_word_offset;
-                if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
-                    data.first.get().rt_args_data = data_in_sequence;
-                } else {
-                    rta_updates.emplace_back(
-                        data.first.get().rt_args_data,
-                        data_in_sequence,
-                        data.first.get().rt_args_count * sizeof(uint32_t));
-                }
-                offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
-            }
+            repoint_rta_data_into_command_stream(
+                reinterpret_cast<char*>(data_collection_location[k]),
+                rt_args_data[i],
+                rt_data_and_sizes[i],
+                count_word_offset,
+                rta_updates);
         }
         offset_idx += num_in_chunk;
     }
