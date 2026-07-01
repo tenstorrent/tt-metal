@@ -163,3 +163,10 @@ proven SDPA ring_joint_reader does with cb_q_in. Single read, reliable: indexed[
 is reliable (rotation 3/3), so it is left unchanged (reads at a less-contended point).
 BRANCHING: per user, this work is NOT on ppopovic/trace_experiments (I mistakenly committed+pushed there;
 reverted the remote to commit 1 326056b7ac8). Work now lives on ppopovic/per_element_metadata (local).
+
+### Phase 3 core validation COMPLETE (2026-07-01) — end-to-end trace KV-PCC green
+test_kimi_prefill_transformer_chunked_trace_kv_pcc (11-chunk metadata trace, per-element tensors):
+- L10-chunks11: PASS min PCC 0.994096 (layers 0..10 >= 0.96)
+- L61-chunks11: PASS min-over-asserted 0.993545, min-over-61 0.966851 (matches packed baseline ~0.967)
+=> the per-element metadata + both read fixes work end-to-end, no hacks. Results in
+PER_ELEMENT_TENSOR_RESULTS.log. Continuing remaining Phase 3 (padded trace, runner, ring_mla perf).
