@@ -211,7 +211,7 @@ def test_exp(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanh(device, h, w):
-    run_unary_test(device, h, w, ttnn.tanh, pcc_check=True, pcc=0.993)
+    run_unary_test(device, h, w, ttnn.tanh, ulp=3)
 
 
 @pytest.mark.parametrize("h", [64])
