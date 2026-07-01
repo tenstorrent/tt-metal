@@ -2,9 +2,8 @@
 
 End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights trace+2CQ perf path at **~31 ms / chunk** on a 1×8 Blackhole mesh (**~42 ms** single-chip) — measured against the upstream `pi05_libero` checkpoint (10-action chunks, 5 denoise steps, 3 cameras).
 
-The supported multi-chip path is the **1×8 single-mesh pipeline** (SigLIP DP +
-prefill TP=8 + replicated denoise on one 1×8 Blackhole mesh) — see
-[Multi-chip pipelines](#multi-chip-pipelines-tttt_bh_glx).
+The supported multi-chip path is the **1×8 single-mesh pipeline** (`pipeline_1x8.py`):
+SigLIP DP + prefill TP=8 + replicated denoise on one 1×8 Blackhole mesh.
 
 ---
 
@@ -151,9 +150,8 @@ export PYTHONPATH=$PWD TT_METAL_HOME=$PWD PI05_CHECKPOINT_DIR=/path/to/pi05_libe
 
 ### TTNN — e2e trace + 2CQ perf (Blackhole)
 
-The tests self-select devices (single-chip defaults to chip 9; the 1×8 test to
-chips 8–15) — override with `TT_VISIBLE_DEVICES` if needed. Two knobs vary the
-workload (defaults from `pi05_production.env`):
+The 1×8 test self-selects chips 8–15 (override with `TT_VISIBLE_DEVICES`). Two knobs
+vary the workload (defaults from `pi05_production.env`):
 
 - `PI0_NUM_CAMERAS` — 2 or 3 cameras (3 = training spec; 2 also set `PI0_VLM_CHUNK_SIZE=768`).
 - `PI05_NUM_DENOISE_STEPS` — denoise steps (5 = perf-tuned, 10 = training default).
@@ -161,11 +159,6 @@ workload (defaults from `pi05_production.env`):
 ```bash
 source models/experimental/pi0_5/common/pi05_production.env   # perf flags (tests auto-apply too)
 
-# Single BH chip
-PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
-  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
-
-# 8 BH chips (1×8 mesh)
 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
   python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
 ```
@@ -201,41 +194,20 @@ export PYTHONPATH=$PWD TT_METAL_HOME=$PWD PI05_CHECKPOINT_DIR=/path/to/pi05_libe
 
 ### PCC tests
 
-Compare TTNN vs the PyTorch reference on real upstream weights, gated at **PCC ≥ 0.99**.
+Compare TTNN vs the PyTorch reference on real upstream weights, gated at **PCC ≥ 0.99**
+(8 BH chips, 1×8 mesh):
 
-**Single BH chip**
-```bash
-# per-block vs torch + single-chip e2e
-python_env/bin/pytest -sq \
-  models/experimental/pi0_5/tests/pcc/test_pcc_siglip_vs_torch.py \
-  models/experimental/pi0_5/tests/pcc/test_pcc_paligemma_vs_torch.py \
-  models/experimental/pi0_5/tests/pcc/test_pcc_prefix_vs_torch.py \
-  models/experimental/pi0_5/tests/pcc/test_pcc_suffix_vs_torch.py \
-  models/experimental/pi0_5/tests/pcc/test_pcc_pi05_model_libero.py
-# single-chip (tp1) stages
-python_env/bin/pytest -sq \
-  "models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py::test_prefill_tp1_pcc" \
-  "models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py::test_vision_tp1_pcc"
-```
-
-**8 BH chips (1×8 mesh)**
 ```bash
 PI05_E2E_PCC=1 python_env/bin/pytest -sq models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_1x8.py
 ```
 
 Results (upstream pi05_libero, ≥ 0.99 bar):
 
-| test | chips | PCC |
-|---|---|---|
-| SigLIP vision tower | 1 | 0.9976 |
-| PaliGemma embed_image / VLM block | 1 | 0.9997 / 0.9973 |
-| prefix / suffix embedding | 1 | 0.9999 / 0.9997 |
-| single-chip e2e | 1 | 0.9963 |
-| single-chip stages (prefill / vision tp1) | 1 | 0.9934 / 0.9997 |
-| 1×8 vision / prefill / e2e | 8 | 0.9997 / 0.9946 / 0.9965 |
-
-E2E PCC is mildly seed-sensitive (the 5-step flow-matching ODE amplifies bf16 drift
-per initial-noise pattern), so the bar keeps headroom above the ~0.996 typical value.
+| stage | PCC |
+|---|---|
+| vision | 0.9997 |
+| prefill | 0.9946 |
+| e2e | 0.9965 |
 
 ### Perf tests
 
@@ -245,13 +217,7 @@ Trace + 2CQ (the canonical "fast" path). Vary the workload with two env vars
 - `PI0_NUM_CAMERAS` — `2` or `3` cameras (`3` = training spec; `2` also set `PI0_VLM_CHUNK_SIZE=768`).
 - `PI05_NUM_DENOISE_STEPS` — denoise steps (`5` = perf-tuned, `10` = training default).
 
-**Single BH chip**
-```bash
-PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
-  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
-```
-
-**8 BH chips (1×8 mesh)**
+Run (8 BH chips, 1×8 mesh):
 ```bash
 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
   python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
@@ -261,39 +227,11 @@ Results (trace + 2CQ, N=5 — per-chunk ms · throughput):
 
 | | 2 cameras | 3 cameras |
 |---|---|---|
-| **Single BH chip** | 36.6 ms · 273 act/s | 42.3 ms · 236 act/s |
 | **8 BH chips (1×8)** | 29.0 ms · 345 act/s | 31.2 ms · 320 act/s |
 
-10-action chunks (throughput = 10 / per-chunk). The 1×8 mesh absorbs the extra camera
-far better (+2.2 ms for 2→3 cam vs +5.7 ms single-chip). The SigLIP encoder runs in L1
+10-action chunks (throughput = 10 / per-chunk). The SigLIP encoder runs in L1
 block-sharded layout (12×8 grid); `PI0_SIGLIP_BS=0` reverts to interleaved-LN with no
 rebuild. Per-stage / CCL breakdown: `test_perf_tt_bh_glx_1x8.py::test_perf_1x8_traced_staged`.
-
----
-
-## Multi-chip pipelines (`tt/tt_bh_glx/`)
-
-Everything above runs on a **single Blackhole chip**. The supported multi-chip
-path is the **1×8 single-mesh pipeline** (`pipeline_1x8.py`,
-`Pi0_5GLX1x8Pipeline`): SigLIP DP + Prefill TP=8 + replicated denoise, all on one
-1×8 mesh, with on-device CCL for cross-stage handoff (no host bounce, no fabric
-sockets). This is what the `test_*_tt_bh_glx_1x8` PCC/perf tests and the
-`--backend ttnn_1x8` LIBERO rollout exercise.
-
-- Open the mesh with `mesh_setup.open_prefill_tp4_mesh(tp=8, num_command_queues=2)`
-  (chips 8–15 on this box).
-- The 1×8-specific flags (`PI0_TP=8`, `PI0_TP4_ATTN_HEADPAR=1`, `PI0_MLP_BS=1`,
-  `PI0_MLP_FUSED_RS=0`) are auto-applied by the 1×8 test files.
-- Exercised by `tests/pcc/test_pcc_tt_bh_glx_1x8.py` and
-  `tests/perf/test_perf_tt_bh_glx_1x8.py` (see [Tests](#tests)).
-
-`pipeline_1x8.py` is **self-contained**: its only shared building blocks are the small
-`_PrefillHead` / `_DenoiseHead` classes in `heads.py` and the `*_slice.py` stage slices —
-no dependency on any legacy driver. The older 28-chip host-bounce pipeline
-(`pipeline.py` / `Pi0_5GLXPipeline`) and its stage/transport/migration machinery
-(`stage_{vision,prefill,denoise}.py`, `transport.py`, `kv_migration.py`,
-`_l1_migration.py`) plus the `--backend ttnn_glx` path were removed in the cleanup;
-`mesh_setup.open_galaxy_mesh` is retained for reference.
 
 ---
 
