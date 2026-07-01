@@ -1055,6 +1055,37 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
         offset);
 }
 
+// Sparse multicast where each writing chip receives the payload at its OWN destination page.
+// dest_pages must be ordered by ascending hop distance from the source (nearest first): the router
+// advances write_idx on each writing hop, so slot i is consumed by the i-th writing chip along the line.
+// Currently supports 1D Ring topology, single direction.
+template <int32_t FabricMaxPacketSzBytes, typename AddrGenType, typename FabricConnectionsArrayType>
+inline void fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction(
+    AddrGenType addrgen,
+    FabricConnectionsArrayType& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint16_t fabric_mcast_hop_mask,
+    uint32_t fabric_direction,  // eth_chan_directions index
+    const uint32_t* dest_pages,
+    uint8_t num_dests,
+    uint32_t payload_l1_address,
+    int32_t size_bytes,
+    const uint32_t alignment,
+    uint32_t offset = 0) {
+    fabric_set_sparse_multicast_route((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, fabric_mcast_hop_mask);
+
+    auto& fabric_connection = fabric_connections[fabric_direction];
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
+        tt::tt_fabric::linear::to_noc_sparse_mcast_write(
+            align(curr_packet_size, alignment), packet_header, dest_pages, num_dests, addrgen, offset);
+        perform_payload_send<true, true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        payload_l1_address += curr_packet_size;
+        offset += curr_packet_size;
+        size_bytes -= curr_packet_size;
+    }
+}
+
 // Calculate the distance between two mesh coordinates, with the packet travelling in a specific direction.
 // Positive Polarity: Refers to going "forward" (ascending order of coordinates).
 // Eg. Going East (0->3) or South (0->2)

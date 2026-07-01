@@ -100,6 +100,25 @@ FORCE_INLINE void to_noc_unicast_write(
     to_noc_unicast_write(page_size, pkt_hdr, id, d, offset);
 }
 
+// Resolves one page id per writing chip through the shared addrgen. Valid because the destination
+// tensor is replicated with identical layout on every chip, so page id -> noc address is the same
+// function everywhere; only the page differs per chip. Pages must be in hop order (see the setter).
+template <typename AddrGenType>
+FORCE_INLINE void to_noc_sparse_mcast_write(
+    uint32_t packet_payload_size,
+    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    const uint32_t* ids,
+    uint8_t num_dests,
+    const AddrGenType& d,
+    uint32_t offset = 0) {
+    NocSparseMulticastWriteCommandHeader cmd;
+    for (uint8_t i = 0; i < num_dests; i++) {
+        cmd.noc_address[i] = addrgen_detail::get_noc_address(d, ids[i], offset);
+    }
+    cmd.num_dests = num_dests;
+    pkt_hdr->to_noc_sparse_mcast_write(cmd, packet_payload_size);
+}
+
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
     uint32_t page_size,

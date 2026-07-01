@@ -882,9 +882,27 @@ FORCE_INLINE void receiver_forward_packet(
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
             case LowLatencyFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                if (packet_start->noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) {
+                    // Per-chip destination address: this chip writes its own slot, then write_idx is
+                    // advanced so the downstream chip picks the next address. The increment must precede
+                    // the forward because forwarding sends the (mutated) header downstream.
+                    execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                    packet_start->command_fields.sparse_mcast_write.write_idx++;
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interface,
+                        transaction_id);
+                } else {
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interface,
+                        transaction_id);
+                    execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                }
                 // In 1D, the forwarding sender channel is always sender channel 1
                 // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
