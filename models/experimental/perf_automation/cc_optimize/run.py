@@ -32,6 +32,7 @@ _ALLOWED_TOOLS = [
     "mcp__perf-mcp__git_revert",
     "mcp__perf-mcp__termination_check",
     "mcp__perf-mcp__record_kernel_attempt",
+    "mcp__perf-mcp__tp_pick_degree",
     "mcp__perf-mcp__verify_tp_fracture",
     "Read",
     "Edit",
@@ -522,7 +523,7 @@ def _model_weight_bytes(demo_dir, hint=None) -> int:
 
 
 def _decide_parallelism_route(
-    demo_dir, manifest, repo_root=None, metric="device_ms", allow_tp_latency=False, devices="all", model_id_hint=None
+    demo_dir, manifest, repo_root=None, metric="device_ms", devices="all", model_id_hint=None
 ) -> None:
     """Decide single-chip vs tensor-parallel from model size + detected hardware, print the route, and
     (when the model does not fit on one chip) export TT_PERF_TP_REGIME=1 to the loop automatically.
@@ -554,10 +555,11 @@ def _decide_parallelism_route(
                 cfg = {**_hf_cache_dims(mid), **cfg}
         heads = int(cfg.get("num_attention_heads") or cfg.get("num_heads") or 1)
         hidden = int(cfg.get("hidden_size") or cfg.get("d_model") or 1)
-        route = decide_parallelism(weight_bytes, cap, chips, heads, hidden, metric, allow_tp_latency)
+        route = decide_parallelism(weight_bytes, cap, chips, heads, hidden, metric)
         print(f"  [optimize/cc] parallelism route: {route['route']} — {route['reason']}")
         if route.get("tp_regime"):
             os.environ["TT_PERF_TP_REGIME"] = "1"
+            os.environ["TT_PERF_TP_FLOOR"] = str(route.get("floor", 1))
             print("  [optimize/cc] tensor-parallel regime ENABLED; propagated to loop")
     except Exception as exc:  # never fail the run on the route decision
         print(f"  [optimize/cc] parallelism route decision skipped ({exc})")
@@ -576,7 +578,6 @@ def run_cc_optimize(
     sync_catalog: bool = False,
     catalog_remote: str = "origin",
     catalog_branch: str = "perf-catalog",
-    allow_tp_latency: bool = False,
     model_id_hint=None,
 ) -> dict | None:
     """Top-level cc engine: discover pipeline(s), then optimize EVERY one to the gate's can_stop.
@@ -604,7 +605,7 @@ def run_cc_optimize(
         if _seq:
             os.environ["TT_PERF_SEQ_LEN"] = _seq
             print(f"  [optimize/cc] perf workload seq pinned to {_seq} (baseline shape-retry); propagated to loop")
-    _decide_parallelism_route(demo_dir, manifest, repo_root, metric, allow_tp_latency, devices, model_id_hint)
+    _decide_parallelism_route(demo_dir, manifest, repo_root, metric, devices, model_id_hint)
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
     pipes = pipelines_from_manifest(manifest, model_rel)

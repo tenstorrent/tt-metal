@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """TP activation wiring (run.py route decision). _decide_parallelism_route turns the discovered
 manifest + model weight files into a route and exports TT_PERF_TP_REGIME=1 automatically when the
-model does not fit on one chip. Fail-safe: a fits-on-chip model, a missing capacity fact, or any
-error leaves the regime off."""
+model does not fit on one chip, or when it fits under a latency metric on a mesh. A throughput metric,
+a missing capacity fact, or any error leaves the regime off."""
 import importlib.util
 from pathlib import Path
 
@@ -24,12 +24,20 @@ def _mk_weights(tmp_path, gb):
     return tmp_path
 
 
-def test_fits_on_chip_leaves_regime_off(tmp_path, monkeypatch):
+def test_fits_throughput_metric_leaves_regime_off(tmp_path, monkeypatch):
     monkeypatch.delenv("TT_PERF_TP_REGIME", raising=False)
-    run._decide_parallelism_route(_mk_weights(tmp_path, 4), BH)
+    run._decide_parallelism_route(_mk_weights(tmp_path, 4), BH, metric="fps")
     import os
 
     assert os.environ.get("TT_PERF_TP_REGIME") != "1"
+
+
+def test_fits_latency_metric_auto_enables_regime(tmp_path, monkeypatch):
+    monkeypatch.delenv("TT_PERF_TP_REGIME", raising=False)
+    run._decide_parallelism_route(_mk_weights(tmp_path, 4), BH, metric="device_ms")
+    import os
+
+    assert os.environ.get("TT_PERF_TP_REGIME") == "1"
 
 
 def test_too_big_enables_regime_automatically(tmp_path, monkeypatch):
