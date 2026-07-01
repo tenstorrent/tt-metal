@@ -2485,6 +2485,22 @@ static_assert(
     std::is_aggregate_v<CrossNodeDataflowBufferSpec>,
     "CrossNodeDataflowBufferSpec must remain an aggregate to support designated initializers");
 
+// DataMovementHardwareConfig::Gen1Config::create_from_role builds the conventional Gen1 placement
+// for a READER/WRITER kernel: READER -> NCRISC (RISCV_1) on NOC_0; WRITER -> BRISC (RISCV_0) on NOC_1.
+TEST(DataMovementHardwareConfig, Gen1ConfigCreateFromRole) {
+    using Gen1Config = DataMovementHardwareConfig::Gen1Config;
+
+    const auto reader = Gen1Config::create_from_role(DataMovementRoleHint::READER);
+    EXPECT_EQ(reader.processor, DataMovementProcessor::RISCV_1);
+    EXPECT_EQ(reader.noc, NOC::NOC_0);
+    EXPECT_EQ(reader.noc_mode, NOC_MODE::DM_DEDICATED_NOC);
+
+    const auto writer = Gen1Config::create_from_role(DataMovementRoleHint::WRITER);
+    EXPECT_EQ(writer.processor, DataMovementProcessor::RISCV_0);
+    EXPECT_EQ(writer.noc, NOC::NOC_1);
+    EXPECT_EQ(writer.noc_mode, NOC_MODE::DM_DEDICATED_NOC);
+}
+
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.
 
