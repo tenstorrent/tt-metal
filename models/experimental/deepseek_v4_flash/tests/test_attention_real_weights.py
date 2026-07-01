@@ -45,7 +45,7 @@ import torch
 
 
 # Cached transformers (the only install with ``deepseek_v4``).
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash"
+_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
 
 
 # --------------------------------------------------------------------------- #
@@ -213,7 +213,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (  # noqa: E4
 
 _SYSTEM_PYTHON = shutil.which("python") or sys.executable
 _THIS_FILE = str(Path(__file__).resolve())
-_WEIGHT_DTYPE = ttnn.bfloat16
+_WEIGHT_DTYPE = ttnn.bfloat4_b
 # Decode reuses the *prefill* HF reference: a single-token decode step is the
 # bit-for-bit-equivalent of a full prefill over the same tokens-so-far, so the
 # decoded row at position p must match the reference's full-prefill row p. Decode
@@ -350,9 +350,11 @@ def test_attention_real_weights_decode(
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
     kv_cache = _LayerKVCache(cfg.sliding_window, is_compressor)
+    print("seq_len: ", seq_len)
     for pos in range(seq_len):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
         cos_win_d = sin_win_d = None
+        print("pos: ", pos)
         if is_compressor and (pos + 1) // cr > 0:
             n_win = (pos + 1) // cr
             cw, sw = make_rope_table(bundle["cos_win"][:n_win], bundle["sin_win"][:n_win])
@@ -372,8 +374,10 @@ def test_attention_real_weights_decode(
             continue  # seeding the cache; no reference row to compare yet
 
         ref_row = reference[:, pos : pos + 1]
-        out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
+        print("ref_row: ", ref_row.shape)
 
+        out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
+        print("out_torch: ", out_torch.shape)
         passing, pcc_message = comp_pcc(ref_row, out_torch, pcc=DECODE_PCC_THRESHOLD)
         logger.info(comp_allclose(ref_row, out_torch))
         logger.info(f"[attention layer {layer_idx} ({layer_type}) pos {pos}] PCC: {pcc_message}")
