@@ -6,6 +6,8 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/trace_policy.hpp>
 
 namespace ttnn::operations::matmul {
 
@@ -992,6 +994,16 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
+    const auto& mesh_cq = input_tensor_a.device()->mesh_command_queue();
+    const bool capturing_trace = mesh_cq.trace_id().has_value();
+    const bool stable_cache_required =
+        tt::tt_metal::is_trace_policy_set(mesh_cq.trace_policy(), tt::tt_metal::TracePolicy::REQUIRE_STABLE_CACHE);
+    TT_FATAL(
+        !capturing_trace || !stable_cache_required,
+        "ttnn.matmul without a program_config is not trace-safe: it queries live device L1 space to auto-select "
+        "blocking parameters, which can cause non-deterministic program cache misses during trace capture. This "
+        "capture was started with policy=TracePolicy.REQUIRE_STABLE_CACHE, which forbids such ops. Pass a "
+        "MatmulProgramConfig (e.g. MatmulMultiCoreReuseProgramConfig) for this matmul.");
     auto config = generate_matmul_program_config(
         input_tensor_a,
         input_tensor_b,

@@ -104,6 +104,8 @@ private:
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
     // i.e. between record_begin() and record_end() being called
     std::optional<MeshTraceId> trace_id_;
+    // Trace policy supplied at record_begin(); reset to NONE at record_end().
+    TracePolicy trace_policy_ = TracePolicy::NONE;
     std::shared_ptr<MeshTraceDescriptor> trace_ctx_;
     std::vector<MeshTraceNode> trace_nodes_;
 
@@ -214,6 +216,8 @@ public:
 
     std::optional<MeshTraceId> trace_id() const override { return this->trace_id_; }
 
+    TracePolicy trace_policy() const override { return this->trace_policy_; }
+
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 
@@ -253,7 +257,10 @@ public:
         const vector_aligned<uint32_t>& go_signal_noc_data,
         const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
         tt::stl::Span<const uint32_t> workers_per_sub_device) override;
-    void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
+    void record_begin(
+        const MeshTraceId& trace_id,
+        const std::shared_ptr<MeshTraceDescriptor>& ctx,
+        TracePolicy policy = TracePolicy::NONE) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
     // Main function (event loop) for the Completion Queue Reader
