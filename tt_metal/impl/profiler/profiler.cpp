@@ -2627,6 +2627,64 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
 #endif
 }
 
+// TT: Phase 4 (Nsight-like zone tooltips) helper. Compact magnitude for a counter digest value
+// (1234567 -> "1.23M") so the per-zone label stays short. // TT-END
+static std::string formatCounterMagnitude(double v) {
+    const char* suffix = "";
+    if (v >= 1e9) {
+        v /= 1e9;
+        suffix = "G";
+    } else if (v >= 1e6) {
+        v /= 1e6;
+        suffix = "M";
+    } else if (v >= 1e3) {
+        v /= 1e3;
+        suffix = "K";
+    } else {
+        return fmt::format("{:.0f}", v);
+    }
+    return fmt::format("{:.2f}{}", v, suffix);
+}
+
+// TT: Phase 4. Aggregate each op's captured HW counters (summed across the op's cores, per the
+// plan's "NoC/compute counters are an across-core aggregate" rule) into a short digest string keyed
+// by runtime_host_id. Surfaced on the op's FW zone in the Tracy GUI (see TracyTTDevice.hpp). Built
+// only from counters already present this run, so it is empty and zero-overhead on the default
+// no-counter profile. Bounded to the top counters so the srcloc label (and #srclocs) stays small.
+// TT-END
+static std::unordered_map<uint64_t, std::string> buildOpCounterDigests(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
+    std::unordered_map<uint64_t, std::map<std::string, double>> per_op;
+    for (const auto& ref : device_markers_vec) {
+        const tracy::TTDeviceMarker& m = ref.get();
+        if (m.marker_id != PERF_COUNTER_PROFILER_ID) {
+            continue;
+        }
+        if (!m.meta_data.contains("counter type") || !m.meta_data.contains("value") ||
+            !m.meta_data["value"].is_number()) {
+            continue;
+        }
+        per_op[m.runtime_host_id][m.meta_data["counter type"].get<std::string>()] += m.meta_data["value"].get<double>();
+    }
+
+    std::unordered_map<uint64_t, std::string> digests;
+    for (const auto& [op_id, by_type] : per_op) {
+        std::vector<std::pair<std::string, double>> items(by_type.begin(), by_type.end());
+        std::sort(items.begin(), items.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::string digest = "[HW";
+        size_t n = 0;
+        for (const auto& [type, value] : items) {
+            if (n++ >= 4) {
+                break;
+            }
+            digest += fmt::format(" {}={}", type, formatCounterMagnitude(value));
+        }
+        digest += "]";
+        digests[op_id] = std::move(digest);
+    }
+    return digests;
+}
+
 void DeviceProfiler::pushTracyDeviceResults(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
 #if defined(TRACY_ENABLE)
@@ -2644,6 +2702,10 @@ void DeviceProfiler::pushTracyDeviceResults(
     }
 
     updateTracyContexts(device_markers_vec);
+
+    // TT: Phase 4 -- per-op HW-counter digest surfaced on the op's FW zone (rendered by
+    // TracyTTDevice.hpp). Empty when no counters were captured, so the default profile is unchanged.
+    const std::unordered_map<uint64_t, std::string> op_zone_summary = buildOpCounterDigests(device_markers_vec);
 
     for (auto& marker_ref : device_markers_vec) {
         std::reference_wrapper<const tracy::TTDeviceMarker>& marker_to_push_ref = marker_ref;
@@ -2672,6 +2734,26 @@ void DeviceProfiler::pushTracyDeviceResults(
                 orig_marker.marker_name_keyword_flags,
                 orig_marker.meta_data);
             marker_to_push_ref = std::cref(marker_with_adjusted_timestamp);
+        }
+
+        // TT: Phase 4 -- attach the op's counter digest to its FW ZONE_START (the same zones that
+        // carry the run-id in TracyTTDevice::getRunIdString, so #srclocs stays bounded to #ops).
+        tracy::TTDeviceMarker marker_with_summary;
+        if (!op_zone_summary.empty()) {
+            const tracy::TTDeviceMarker& m = marker_to_push_ref.get();
+            const bool is_op_fw_zone_start =
+                m.marker_type == tracy::TTDeviceMarkerType::ZONE_START &&
+                (m.marker_name_keyword_flags[static_cast<uint16_t>(
+                     tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
+                 m.marker_name_keyword_flags[static_cast<uint16_t>(tracy::MarkerDetails::MarkerNameKeyword::ERISC_FW)]);
+            if (is_op_fw_zone_start) {
+                const auto summary_it = op_zone_summary.find(m.runtime_host_id);
+                if (summary_it != op_zone_summary.end()) {
+                    marker_with_summary = m;
+                    marker_with_summary.meta_data["zone_summary"] = summary_it->second;
+                    marker_to_push_ref = std::cref(marker_with_summary);
+                }
+            }
         }
 
         const tracy::TTDeviceMarker& marker_to_push = marker_to_push_ref.get();
