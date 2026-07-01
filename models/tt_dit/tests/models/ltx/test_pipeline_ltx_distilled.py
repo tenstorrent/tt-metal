@@ -622,7 +622,7 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     # output, which is otherwise unverified — exactly the gap that let a broken trace ship).
     # Per-1s-interval error-to-signal (rmse/σ, dB) + overall PCC; the absolute level (~−18 dB
     # conv1d) is the fp32/bf16 floor, gated only against a gross spike.
-    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c_real
+    from models.tt_dit.tests.models.ltx.test_audio_ltx import _build_torch_stage_c_real
 
     z = pipeline.tt_audio_decoder.z_channels
     audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()

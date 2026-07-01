@@ -5,7 +5,7 @@
 """
 Tests for LTX-2 Video VAE components.
 
-Torch references use diffusers LTX-2 VAE modules (mirrors test_vae_wan2_1.py / test_audio_components_ltx.py).
+Torch references use diffusers LTX-2 VAE modules (mirrors test_vae_wan2_1.py / test_audio_ltx.py).
 """
 
 from __future__ import annotations
