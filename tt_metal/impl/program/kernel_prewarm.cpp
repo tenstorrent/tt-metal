@@ -227,6 +227,15 @@ void build_target(const std::string& gpp, const jit_build::TargetRecipe& target,
             fs::remove(src_path);
         }
     }
+
+    // Publish the .build_state gate (mirrors JitBuildState::write_build_state_hash). Without this, a
+    // cold build_key (e.g. the profiler build_key, whose subtree has no prior .build_state) makes the
+    // op-by-op JitBuildState force a full recompile even though .o/.elf/.dephash are already warm.
+    if (target.build_state_hash != 0) {
+        jit_build::utils::FileRenamer bs_file(out_dir + ".build_state");
+        std::ofstream f(bs_file.path());
+        f << target.build_state_hash;
+    }
 }
 
 void write_generated_files(const std::string& kernel_dir, const std::vector<jit_build::GeneratedFile>& files) {
@@ -279,6 +288,7 @@ void fill_target_recipe(jit_server::rpc::TargetRecipe::Builder builder, const ji
     builder.setWeakenedFirmwareName(t.weakened_firmware_name);
     builder.setFirmwareIsKernelObject(t.firmware_is_kernel_object);
     builder.setLinkerOptLevel(t.linker_opt_level);
+    builder.setBuildStateHash(t.build_state_hash);
 }
 
 jit_build::TargetRecipe read_target_recipe(jit_server::rpc::TargetRecipe::Reader r) {
@@ -302,6 +312,7 @@ jit_build::TargetRecipe read_target_recipe(jit_server::rpc::TargetRecipe::Reader
     t.weakened_firmware_name = r.getWeakenedFirmwareName().cStr();
     t.firmware_is_kernel_object = r.getFirmwareIsKernelObject();
     t.linker_opt_level = r.getLinkerOptLevel().cStr();
+    t.build_state_hash = r.getBuildStateHash();
     return t;
 }
 
