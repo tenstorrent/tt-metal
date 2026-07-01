@@ -284,7 +284,7 @@ jobs:
     needs: [check-harbor, build-artifact]
     if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
     secrets: inherit
-    uses: ./.github/workflows/ttnn-post-commit.yaml
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
       enabled-skus: "bh_p100"
       docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
