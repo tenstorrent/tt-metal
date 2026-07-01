@@ -253,6 +253,24 @@ class TTVibeVoiceGenerator:
         self._diff_eps_out: Optional[ttnn.Tensor] = None
         self._diff_eager_steps = 0
 
+        # Optional ttnn trace of the positive 28-layer LM decode step (opt-in via
+        # VV_TRACE_LM=1, set by demo_ttnn.py --trace).  This is the dominant per-token
+        # cost.  It is driven entirely by device tensors (KV write position + SDPA read
+        # bound via cur_pos, RoPE via a host-written row), so one capture replays for the
+        # whole generation (positive KV cache persists — no per-segment reset), and it is
+        # bit-exact vs eager (validated to 64 chunks).  See TTVibeVoiceLM.forward_decode_
+        # traced_embeds.  Only the fused post-diffusion embed step is traced; the rare
+        # token-input steps (_lm_decode_token) stay eager.
+        self._trace_lm = os.environ.get("VV_TRACE_LM", "0") == "1"
+        self._lm_tid = None
+        self._lm_emb_in: Optional[ttnn.Tensor] = None
+        self._lm_cos_in: Optional[ttnn.Tensor] = None
+        self._lm_sin_in: Optional[ttnn.Tensor] = None
+        self._lm_pos_in: Optional[ttnn.Tensor] = None
+        self._lm_logits_out: Optional[ttnn.Tensor] = None
+        self._lm_hidden_out: Optional[ttnn.Tensor] = None
+        self._lm_warmup = 0
+
     def _token_label(self, token_id: int) -> str:
         labels = {
             self.speech_start_id: "speech_start",
@@ -715,6 +733,12 @@ class TTVibeVoiceGenerator:
         if self._ref_lm is not None:
             cpu = ttnn.to_torch(inputs_embeds).to(torch.float32).squeeze(1)
             return self._ref_lm.step_embeds(cpu)
+        # Trace the 28-layer decode (opt-in).  Requires a 1024-aligned KV cache so the
+        # fused SDPA-decode k_chunk is 512 (the validated regime); alloc_kv_cache always
+        # satisfies this.  The positive cache persists for the whole generation, so a
+        # single capture replays for every embed step — no per-segment reset.
+        if self._trace_lm and kv_cache.max_seq % 1024 == 0:
+            return self._lm_step_traced(inputs_embeds, start_pos, kv_cache)
         logits, last_hidden = self.lm.forward(
             inputs_embeds,
             start_pos=start_pos,
@@ -722,6 +746,101 @@ class TTVibeVoiceGenerator:
             return_last_hidden=True,
         )
         return logits, last_hidden
+
+    _LM_TRACE_WARMUP = 2
+
+    def _set_lm_trace_inputs(self, inputs_embeds: ttnn.Tensor, start_pos: int) -> None:
+        """Copy this step's inputs into the persistent (fixed-address) trace buffers."""
+        lm = self.lm
+        hd = lm.cfg.head_dim
+        if self._lm_emb_in is None:
+            self._lm_emb_in = ttnn.zeros(
+                list(inputs_embeds.shape),
+                dtype=inputs_embeds.dtype,
+                layout=inputs_embeds.layout,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._lm_cos_in = ttnn.zeros(
+                [1, 1, 1, hd],
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._lm_sin_in = ttnn.zeros(
+                [1, 1, 1, hd],
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._lm_pos_in = ttnn.zeros(
+                [1],
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        ttnn.copy(input_a=inputs_embeds, input_b=self._lm_emb_in)  # device->device, fixed address
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.from_numpy(lm._cos_np[start_pos]).reshape(1, 1, 1, hd).to(torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            ),
+            self._lm_cos_in,
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.from_numpy(lm._sin_np[start_pos]).reshape(1, 1, 1, hd).to(torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            ),
+            self._lm_sin_in,
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([start_pos], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+            ),
+            self._lm_pos_in,
+        )
+
+    def _lm_step_traced(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        start_pos: int,
+        kv_cache: KVCache,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        lm = self.lm
+        dev = self.device
+        self._set_lm_trace_inputs(inputs_embeds, start_pos)
+
+        def _run():
+            return lm.forward_decode_traced_embeds(
+                self._lm_emb_in,
+                self._lm_cos_in,
+                self._lm_sin_in,
+                self._lm_pos_in,
+                kv_cache,
+                return_last_hidden=True,
+            )
+
+        if self._lm_tid is None:
+            if self._lm_warmup < self._LM_TRACE_WARMUP:
+                self._lm_warmup += 1
+                return _run()  # eager warm-up (compiles programs, writes real KV)
+            # Capture once.  Capture records ops without computing, so the KV write at this
+            # position is garbage; re-run this step eagerly afterward to fix it before any
+            # replay attends over it.  The captured output handles are what replays fill.
+            self._lm_tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._lm_logits_out, self._lm_hidden_out = _run()
+            ttnn.end_trace_capture(dev, self._lm_tid, cq_id=0)
+            _vv_debug("lm_step: trace captured")
+            return _run()  # capture-poison fix (returns this step's correct logits/hidden)
+
+        ttnn.execute_trace(dev, self._lm_tid, cq_id=0, blocking=False)
+        return self._lm_logits_out, self._lm_hidden_out
 
     def _lm_decode_token(
         self,

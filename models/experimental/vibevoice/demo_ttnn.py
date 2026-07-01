@@ -173,6 +173,13 @@ def main() -> int:
         "post-diffusion block (VV_TRACE_POSTDIFF=1, ~0.985 PCC) + open device with trace "
         "region & 2 command queues. EVAL ONLY while post-diffusion is not yet bit-exact.",
     )
+    ap.add_argument(
+        "--trace-lm",
+        action="store_true",
+        help="ttnn-trace ONLY the positive 28-layer LM decode step (VV_TRACE_LM=1). Bit-exact "
+        "vs eager and the largest single decode cost (~6x on the LM step); leaves the "
+        "diffusion/post-diffusion blocks eager. Reserves the trace region & 2 command queues.",
+    )
     args = ap.parse_args()
 
     if args.debug:
@@ -188,6 +195,10 @@ def main() -> int:
             "diffusion-head (VV_TRACE_DIFFUSION=1)",
             flush=True,
         )
+
+    if args.trace_lm:
+        os.environ["VV_TRACE_LM"] = "1"
+        print("[demo_ttnn] trace enabled: LM decode step (VV_TRACE_LM=1, bit-exact)", flush=True)
 
     if args.text:
         text_path = Path(args.text)
@@ -299,10 +310,11 @@ def main() -> int:
     import time as _time
 
     _open_kwargs = dict(device_id=0, l1_small_size=32768)
-    if args.trace:
-        # Reserve a trace buffer + a 2nd command queue for the diffusion-head and
-        # post-diffusion traces (both captures are held simultaneously).
-        _open_kwargs.update(trace_region_size=200_000_000, num_command_queues=2)
+    if args.trace or args.trace_lm:
+        # Reserve a trace buffer + a 2nd command queue.  --trace holds the diffusion-head
+        # and post-diffusion captures; --trace-lm holds the 28-layer LM decode capture
+        # (larger — needs ~350MB).
+        _open_kwargs.update(trace_region_size=400_000_000, num_command_queues=2)
     mesh = ttnn.open_device(**_open_kwargs)
     try:
         if args.debug:
