@@ -27,6 +27,9 @@ _FP8_FORMATS = {
 }
 _EXP_SECTION_SIZE_KEY = "exp_section_size"
 
+# These may vary run to run. Excluded so that tests don't fail spuriously.
+_IGNORED_GROUPS = ("address_counters", "register_window_counters")
+
 
 def _exp_section_size_required(dst: DataFormat) -> bool:
     return dst in _BFP_FORMATS or dst == DataFormat.Int8 or dst in _FP8_FORMATS
@@ -110,6 +113,10 @@ def test_pack_reconfig(
 
     configuration.run()
     actual = TensixState.fetch(TestConfig.TENSIX_LOCATION)
+
+    for group in _IGNORED_GROUPS:
+        expected.pop(group, None)
+        actual.pop(group, None)
 
     if not _exp_section_size_required(next_dst):
         expected = _drop_key(expected, _EXP_SECTION_SIZE_KEY)

@@ -10,6 +10,9 @@ from helpers.tensix import TensixState
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX, TO_FROM_INT8
 
+# These may vary run to run. Excluded so that tests don't fail spuriously.
+_IGNORED_GROUPS = ("address_counters", "register_window_counters")
+
 FORMATS = [
     (
         DataFormat.Float16,
@@ -120,5 +123,9 @@ def test_unpack_reconfig(
 
     configuration.run()
     actual = TensixState.fetch(TestConfig.TENSIX_LOCATION)
+
+    for group in _IGNORED_GROUPS:
+        expected.pop(group, None)
+        actual.pop(group, None)
 
     TensixState.assert_equal(expected, actual)
