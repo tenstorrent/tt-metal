@@ -333,6 +333,9 @@ jobs:
           - arch: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
+          - arch: quasar
+            build_suffix: release_qsr
+            soc_desc: quasar_32_arch.yaml
     container:
       image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -384,10 +387,7 @@ jobs:
         timeout-minutes: ${{ inputs.job-timeout }}
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
-            # ToDo: Re-enable this test once tt-sim supports NOC
-            # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim/issues/24
-            # ./build/test/tt_metal/test_single_dm_l1_write
-            :
+            ./build/test/tt_metal/unit_tests_legacy --gtest_filter="QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelMultipleThreads:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline:QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline"
           else
             # Exclude *TestQuasar fixtures (configure_mock_mode(QUASAR) triggers dispatch-core
             # assertion in TTSim) and ProgramSpecHWTest.* (real HW tests that time out in TTSim)
