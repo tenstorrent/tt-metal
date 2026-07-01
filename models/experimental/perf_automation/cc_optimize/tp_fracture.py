@@ -74,7 +74,7 @@ def _dense_on_one_chip(mesh_device, x, w):
     return x_tt, w_tt
 
 
-def _time_ms(fn, iters: int = 20) -> float:
+def _time_ms(fn, iters: int = 5) -> float:
     fn()
     t0 = time.monotonic()
     for _ in range(iters):
@@ -117,3 +117,59 @@ def bench_fracture(mesh_device, m: int, k: int, n: int) -> dict:
     d_ms = _time_ms(dense)
     f_ms = _time_ms(frac)
     return {"dense_ms": d_ms, "frac_ms": f_ms, "speedup": d_ms / f_ms if f_ms else 0.0, "m": m, "k": k, "n": n}
+
+
+def _time_degree(mesh_device, x, w, degree: int, num_devices: int) -> float:
+    xr = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    if degree <= 1:
+        wr = ttnn.from_torch(
+            w,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        def run():
+            y = ttnn.matmul(xr, wr)
+            ttnn.synchronize_device(mesh_device)
+            return y
+
+        return _time_ms(run)
+    ws = ttnn.from_torch(
+        w,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+    )
+
+    def run():
+        y = ttnn.matmul(xr, ws)
+        g = ttnn.all_gather(y, dim=-1)
+        ttnn.synchronize_device(mesh_device)
+        return g
+
+    return _time_ms(run)
+
+
+def sweep_degrees(mesh_device, m: int, k: int, n: int, candidates=None) -> dict:
+    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
+    num = rows * cols
+    if candidates is None:
+        candidates = [1, num]
+    candidates = [d for d in dict.fromkeys(candidates) if d == 1 or d == num]
+    torch.manual_seed(0)
+    x = torch.randn(m, k)
+    w = torch.randn(k, n)
+    timings = {}
+    for d in candidates:
+        timings[d] = _time_degree(mesh_device, x, w, d, num)
+    best_tp = min(timings, key=timings.get)
+    return {"best_tp": best_tp, "timings_ms": timings, "m": m, "k": k, "n": n}
