@@ -72,7 +72,7 @@ class MyModelAdapter(PrefillModelAdapter):
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return the runtime handle (section 2).
         The runtime is stateless w.r.t. the KV cache — it receives the engine-owned cache
-        as an argument on each call. The engine calls `.compile(kv_cache)` next. `params`
+        as an argument on each call. `params`
         carries the resolved per-rank knobs (mesh shape, this rank's num_layers /
         first_layer_idx / is_first_rank / is_last_rank, chunk_size, num_users, max_seq_len,
         capacity_factor, num_links, gate_mode_name, kv_only_last_layer, weight_cache_path)
@@ -95,11 +95,13 @@ for the H2D producers.
 ## 2. The runtime interface
 
 `build_runtime` returns a runtime handle. This is where the model actually lives: the
-engine compiles it, drives it per chunk, and reads a few attributes off it. The
+engine drives it per chunk and reads a few attributes off it. The
 runtime knows how to read/write the KV cache but does NOT own it — the engine
 allocates the cache (via the adapter's `allocate_kv_cache`) and passes it into every
 call that touches it. The engine owns the loop, the sockets, the cache lifetime, and
-all comms (migration publish, LayerAck channel lifecycle, shutdown).
+all comms (migration publish, LayerAck channel lifecycle, shutdown). There is no
+`compile`/warm-up step: the first chunk compiles lazily, so the input driver sends one
+throwaway warm-up chunk before timed/production traffic (see "Validate").
 
 ```python
 class PrefillRuntime:  # structural contract — not a base class you must inherit
@@ -111,14 +113,10 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     is_first_rank, is_last_rank. The engine reads these to drive the chunk schedule
     and the per-rank pipeline role."""
 
-    def compile(self, kv_cache: "ttnn.Tensor") -> None:
-        """Warm up / compile the model so the per-chunk loop hits no first-run cost.
-        The engine calls this once, after build_runtime, with the cache it owns."""
-
     def make_chunk_input(self, token_ids: list[int]) -> "ttnn.Tensor":
-        """Build one chunk's device input for prefill_chunk: the chunk's token IDs on
-        the first rank, or a placeholder hidden-state activation on a non-first pipeline
-        rank (which receives the real activation over the D2D socket)."""
+        """Build one chunk's first-rank device input for prefill_chunk (SP-sharded token IDs).
+        Only the first rank embeds; a non-first pipeline rank receives its input activation over
+        the D2D socket (the engine's recv), so it never calls this."""
 
     def prefill_chunk(self, input_tensor, kv_cache, *, slot_id, actual_start, actual_end):
         """Prefill ONE chunk into user `slot_id`'s slice of `kv_cache` (the engine-owned
@@ -199,6 +197,10 @@ swapping the manifest. (A manifest may also carry a migration `users[]` block fo
 KV-migration validation; see `_apply_manifest_env`.)
 
 ## 4. Validate
+
+There is no compile step — the first chunk pays a one-time lazy-compile cost, so treat chunk 0 as
+warm-up (the standalone loop's first chunk; a synthetic first request in production) and measure from
+chunk 1.
 
 **Standalone + KV PCC** — single galaxy, golden-trace input, no external producer:
 
