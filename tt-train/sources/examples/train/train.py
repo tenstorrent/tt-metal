@@ -91,10 +91,13 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
-        # warmup_linear knobs: warmup_steps (absolute) overrides warmup_ratio (fraction of the run).
+        # warmup_linear knobs: warmup_steps (absolute) overrides warmup_ratio (fraction of the schedule).
         self.warmup_ratio = float(tc.get("warmup_ratio", _WARMUP_LINEAR_WARMUP_FRACTION))
         self.warmup_steps = int(tc.get("warmup_steps", 0))
         self.min_lr_ratio = float(tc.get("min_lr_ratio", _WARMUP_LINEAR_MIN_LR_FRACTION))
+        # Steps the LR curve is shaped over; 0 = the run length. Set larger than max_steps to run
+        # only a prefix of a longer curve (e.g. max_steps=500, lr_schedule_steps=1000 = first half).
+        self.lr_schedule_steps = int(tc.get("lr_schedule_steps", 0))
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
@@ -240,13 +243,16 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
 # ── LR schedule ───────────────────────────────────────────────────────────────
 
 
-def resolve_warmup_steps(training_cfg: TrainingConfig, max_steps: int) -> int:
-    """Absolute warmup length: explicit `warmup_steps` wins, else `warmup_ratio` of the run."""
-    return training_cfg.warmup_steps or round(max_steps * training_cfg.warmup_ratio)
+def resolve_warmup_steps(training_cfg: TrainingConfig, total_steps: int) -> int:
+    """Absolute warmup length: explicit `warmup_steps` wins, else `warmup_ratio` of the schedule."""
+    return training_cfg.warmup_steps or round(total_steps * training_cfg.warmup_ratio)
 
 
-def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, max_steps: int) -> Callable[[int], float]:
-    """Return a `step -> lr` callable. `warmup_linear` runs warmup → linear decay; anything else is constant LR."""
+def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, total_steps: int) -> Callable[[int], float]:
+    """Return a `step -> lr` callable. `warmup_linear` runs warmup → linear decay; anything else is constant LR.
+
+    `total_steps` is the horizon the curve is shaped over — the run may stop before reaching it.
+    """
     base_lr = optimizer.get_lr()
 
     if training_cfg.scheduler_type == "warmup_linear":
@@ -254,9 +260,9 @@ def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, max_steps: i
             SpeedrunSchedulerConfig(
                 max_lr=base_lr,
                 min_lr=base_lr * training_cfg.min_lr_ratio,
-                warmup_steps=resolve_warmup_steps(training_cfg, max_steps),
+                warmup_steps=resolve_warmup_steps(training_cfg, total_steps),
                 hold_steps=0,
-                total_steps=max_steps,
+                total_steps=total_steps,
             )
         )
         return sched.lr_at
@@ -586,8 +592,10 @@ def run_training(
 
     saver, loader = build_checkpoint_io(tokenizer, model_cfg)
 
-    # Schedule over the steps actually run, so warmup + decay complete by the end of training.
-    schedule = build_lr_schedule(training_cfg, optimizer, effective_max_steps)
+    # Shape the LR curve over lr_schedule_steps (default: the run length). A larger horizon runs only
+    # a prefix of a longer curve; warmup + decay otherwise complete exactly at the end of training.
+    schedule_horizon = training_cfg.lr_schedule_steps or effective_max_steps
+    schedule = build_lr_schedule(training_cfg, optimizer, schedule_horizon)
 
     sft_cfg = SFTConfig(
         max_steps=effective_max_steps,
@@ -632,8 +640,14 @@ def run_training(
         vocab_str = f"{model_cfg.vocab_size}"
 
     if training_cfg.scheduler_type == "warmup_linear":
-        warmup_steps = resolve_warmup_steps(training_cfg, effective_max_steps)
-        schedule_str = f"warmup_linear ; {warmup_steps:,} warmup ; {effective_max_steps - warmup_steps:,} decay"
+        warmup_steps = resolve_warmup_steps(training_cfg, schedule_horizon)
+        schedule_str = f"warmup_linear ; {warmup_steps:,} warmup ; {schedule_horizon - warmup_steps:,} decay"
+        if schedule_horizon > effective_max_steps:
+            # Run ends before the curve completes: only a prefix of a longer schedule.
+            schedule_str += f" ; horizon {schedule_horizon:,} (run stops early at {effective_max_steps:,})"
+        elif schedule_horizon < effective_max_steps:
+            # Curve reaches min_lr at the horizon; the run then continues flat at min_lr.
+            schedule_str += f" ; then {effective_max_steps - schedule_horizon:,} at min_lr"
     else:
         schedule_str = "constant"
 
