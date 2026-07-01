@@ -26,7 +26,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs_int32() {
     // Kept as raw TTI intrinsics on purpose: SFPABS computes int32 abs in a single SFPU op. The sfpi
     // `v & 0x7FFFFFFF` form (#48598) needed two extra per-element SFPLOADI to rebuild the mask inside
-    // the replay block, costing +30% cyc/tile. See docs/SFPI_ABS_INT32_REGRESSION_WH.md.
+    // the replay block, costing +30% cyc/tile.
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(1, InstrModLoadStore::INT32, 3, 0);
         TTI_SFPABS(0, 1, 0, 0);
