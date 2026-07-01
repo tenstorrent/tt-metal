@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(17);
     constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(18) != 0;
-    constexpr uint32_t cb_neginf = get_compile_time_arg_val(19);  // persistent all -inf causal mask tile
+    constexpr uint32_t cb_neginf = get_compile_time_arg_val(19);
     constexpr auto out_args = TensorAccessorArgs<20, 0>();
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto k_args =
