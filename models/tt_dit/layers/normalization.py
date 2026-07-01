@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from typing import ClassVar
 
 import torch
 
@@ -192,60 +193,6 @@ class DistributedRMSNorm(Module):
         if "weight" in state:
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
-    def _ensure_fused_stats_buffer(
-        self, x: ttnn.Tensor, num_heads_per_device: int, rope_cos=None, rope_sin=None, trans_mat=None
-    ):
-        """Lazy-allocate the persistent stats buffer for the fused device op.
-
-        The buffer's chunk/window geometry is computed by the SAME compute_sizing
-        the device op uses, so it MUST be fed the same inputs that affect chunking:
-        weight/RoPE (per-head-RoPE & streaming chunk clamp) and num_links (num_forwarders
-        = min(num_links, num_workers); a mismatch vs the op's num_preferred_links corrupts
-        the gather). We pass ccl_manager.num_links here AND as num_preferred_links to the
-        op below so the two agree — more links = more parallel AG planes (faster gather at
-        large seq). We also forward weight/RoPE or the buffer is sized for a different
-        chunk than the kernel writes, silently corrupting each chunk's last AG row.
-        """
-        has_rope = rope_cos is not None
-        key = (tuple(x.shape), num_heads_per_device, has_rope)
-        cache = getattr(self, "_fused_stats_buffer_cache", None)
-        if cache is None:
-            cache = {}
-            self._fused_stats_buffer_cache = cache
-        entry = cache.get(key)
-        if entry is None:
-            # Rotating POOL of buffers (not a single cached one). The device op resets
-            # its out_ready semaphore at end-of-op, so two same-shape norm ops that
-            # share ONE scratch buffer race on the AG, and a lagging device's atomic
-            # inc can land across the reset onto the wrong invocation (the dropped-sem
-            # / device-skew hazard). Handing each successive call a different buffer
-            # (paired with get_ag_ping_pong_semaphore's 2-set sem rotation) keeps a
-            # buffer free of in-flight AG traffic from the previous use. Pool size 2
-            # matches the sem ping-pong depth. (create_stats_buffer returns None for
-            # the non-MUX path, where there's no AG and no buffer is needed.)
-            bufs = [
-                ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
-                    x,
-                    self.mesh_axis,
-                    self.mesh_device,
-                    num_heads_per_device=num_heads_per_device,
-                    num_links=self.ccl_manager.num_links,
-                    weight=self.weight.data if self.weight is not None else None,
-                    transformation_mat=trans_mat,
-                    rope_cos=rope_cos,
-                    rope_sin=rope_sin,
-                )
-                for _ in range(2)
-            ]
-            entry = {"bufs": bufs, "idx": 0}
-            cache[key] = entry
-        bufs = entry["bufs"]
-        if bufs[0] is None:
-            return None
-        buf = bufs[entry["idx"]]
-        entry["idx"] = (entry["idx"] + 1) % len(bufs)
-        return buf
-
     def forward(
         self,
         x: ttnn.Tensor,
@@ -272,8 +219,19 @@ class DistributedRMSNorm(Module):
             self.mesh_device,
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
-            persistent_output_buffer=self._ensure_fused_stats_buffer(
-                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
+                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None),
+                lambda: ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                    x,
+                    self.mesh_axis,
+                    self.mesh_device,
+                    num_heads_per_device=num_heads_per_device,
+                    num_links=self.ccl_manager.num_links,
+                    weight=self.weight.data if self.weight is not None else None,
+                    transformation_mat=trans_mat,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                ),
             ),
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
@@ -292,6 +250,10 @@ class DistributedLayerNorm(Module):
     """
     Implements LayerNorm on an activation sharded on the reduction dimension.
     """
+
+    # The fused-op reciprocal LUT depends only on (device, width_per_device), so it is shared
+    # across DistributedLayerNorm instances of the same shape instead of each allocating its own.
+    _fused_ln_recip_cache: ClassVar[dict[tuple[int, int], "ttnn.Tensor"]] = {}
 
     def __init__(
         self,
@@ -365,52 +327,20 @@ class DistributedLayerNorm(Module):
         DRAM tensor [1/1..1/width] (replicated per device). Cached per device+width.
         """
         width = self.embedding_dim // self.mesh_width
-        cached = getattr(self, "_fused_ln_recip", None)
+        key = (self.mesh_device.id(), width)
+        cached = DistributedLayerNorm._fused_ln_recip_cache.get(key)
         if cached is not None:
             return cached
         recip = torch.tensor([1.0 / (i + 1) for i in range(width)], dtype=torch.float32).reshape(1, 1, 1, width)
-        self._fused_ln_recip = ttnn.from_torch(
+        tensor = ttnn.from_torch(
             recip,
             dtype=ttnn.float32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        return self._fused_ln_recip
-
-    def _ensure_fused_ln_stats_buffer(self, x: ttnn.Tensor):
-        """Ping-pong pool of LayerNorm-sized stats AG scratch buffers (mirrors
-        DistributedRMSNorm._ensure_fused_stats_buffer; norm_type=LAYERNORM sizes the
-        page for 2 stats/token — mean+var). Returns None on the no-AG path."""
-        key = tuple(x.shape)
-        cache = getattr(self, "_fused_ln_stats_cache", None)
-        if cache is None:
-            cache = {}
-            self._fused_ln_stats_cache = cache
-        entry = cache.get(key)
-        if entry is None:
-            # num_links MUST match the op's num_preferred_links below: the buffer's
-            # chunk/window geometry is num_links-dependent (num_forwarders =
-            # min(num_links, num_workers)); a mismatch corrupts the gather. More links =
-            # more parallel AG planes = a faster gather (the AG dominates at large seq).
-            bufs = [
-                ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
-                    x,
-                    self.mesh_axis,
-                    self.mesh_device,
-                    num_links=self.ccl_manager.num_links,
-                    norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
-                )
-                for _ in range(2)
-            ]
-            entry = {"bufs": bufs, "idx": 0}
-            cache[key] = entry
-        bufs = entry["bufs"]
-        if bufs[0] is None:
-            return None
-        buf = bufs[entry["idx"]]
-        entry["idx"] = (entry["idx"] + 1) % len(bufs)
-        return buf
+        DistributedLayerNorm._fused_ln_recip_cache[key] = tensor
+        return tensor
 
     def forward(
         self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None, dtype=None
@@ -436,7 +366,16 @@ class DistributedLayerNorm(Module):
             self.mesh_device,
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
-            persistent_output_buffer=self._ensure_fused_ln_stats_buffer(x),
+            persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
+                ("ln", tuple(x.shape)),
+                lambda: ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                    x,
+                    self.mesh_axis,
+                    self.mesh_device,
+                    num_links=self.ccl_manager.num_links,
+                    norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
+                ),
+            ),
             epsilon=self.norm_eps,
             weight=weight,
             bias=bias,
