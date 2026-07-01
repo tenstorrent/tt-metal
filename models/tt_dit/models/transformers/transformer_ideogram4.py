@@ -48,6 +48,11 @@ def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
 
     Reference (modeling_ideogram4.py): x1=x[..., :half], x2=x[..., half:],
     returns cat((-x2, x1)). NOT the interleaved alt_complex_rotate90 convention.
+
+    NOTE: ttnn.experimental.rotate_half fuses slice+neg+concat into one op with the
+    identical half-split convention, but on the (4,2) loudbox it runs on far fewer
+    cores than the 120-wide elementwise slice/neg/concat and MEASURED ~20% SLOWER at
+    2048px (traced denoise 28.9s -> 35.1s). So keep the multi-core elementwise form.
     """
     half = x.shape[-1] // 2
     x1 = x[..., :half]
@@ -56,8 +61,16 @@ def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """q_embed = q * cos + rotate_half(q) * sin (reference _apply_rotary_pos_emb)."""
-    return x * cos + _rotate_half(x) * sin
+    """q_embed = q * cos + rotate_half(q) * sin (reference _apply_rotary_pos_emb).
+
+    Re-associated to fold the final `x*cos + rot*sin` add into one addcmul:
+        rot_sin = rotate_half(x) * sin  # 1 mul (plus the rotate_half slice/neg/concat)
+        out = x * cos + rot_sin         # 1 addcmul (was mul + add = 2 ops)
+    Saves one op vs `x*cos + rotate_half(x)*sin`. Element-wise throughout — no
+    fidelity/precision change vs the reference math.
+    """
+    rot_sin = _rotate_half(x) * sin
+    return ttnn.addcmul(rot_sin, x, cos, value=1.0)
 
 
 class Ideogram4TransformerBlock(Module):
@@ -472,14 +485,17 @@ class Ideogram4TransformerBlock(Module):
         scale_msa, gate_msa, scale_mlp, gate_mlp = ttnn.chunk(mod, 4, -1)
         gate_msa = ttnn.tanh(gate_msa, fast_and_approximate_mode=False)
         gate_mlp = ttnn.tanh(gate_mlp, fast_and_approximate_mode=False)
-        scale_msa = scale_msa + 1.0
-        scale_mlp = scale_mlp + 1.0
+        # scale_* keep the RAW (pre-+1) value; the reference `norm(x) * (1 + scale)`
+        # is applied as a single fused addcmul below (norm_x + norm_x * scale), which
+        # folds the `+1.0` and the scale-multiply into one element-wise op per branch.
 
         # ----------------- attention sub-block -----------------
         # norm1(x): DistributedRMSNorm on fractured hidden (cross-device RMS stats) ->
         # fractured out. * scale_msa (fractured). Reference applies the affine-weighted
         # RMSNorm THEN the adaLN scale, so scale is a separate elementwise multiply.
-        attn_in = self._block_norm(self.attention_norm1, x) * scale_msa
+        # norm(x) * (1 + scale_msa) fused: norm_x + norm_x * scale_msa (one addcmul).
+        norm1_x = self._block_norm(self.attention_norm1, x)
+        attn_in = ttnn.addcmul(norm1_x, norm1_x, scale_msa, value=1.0)
         attn_out = self._attention(
             attn_in, cos=cos, sin=sin, attn_mask=attn_mask, spatial_sequence_length=spatial_sequence_length
         )  # fractured on hidden
@@ -487,7 +503,9 @@ class Ideogram4TransformerBlock(Module):
         x = ttnn.addcmul(x, gate_msa, self._block_norm(self.attention_norm2, attn_out), value=1.0)
 
         # ----------------- feed-forward sub-block -----------------
-        ff_in = self._block_norm(self.ffn_norm1, x) * scale_mlp  # fractured
+        # norm(x) * (1 + scale_mlp) fused: norm_x + norm_x * scale_mlp (one addcmul).
+        norm1_ff = self._block_norm(self.ffn_norm1, x)
+        ff_in = ttnn.addcmul(norm1_ff, norm1_ff, scale_mlp, value=1.0)  # fractured
         ff_in = self._all_gather_hidden(ff_in)  # fractured -> replicated for ColParallel ff1
         ff_hidden = self.ff1(ff_in, compute_kernel_config=self.matmul_compute_kernel_config)  # fractured on inner
         ff_hidden = self._all_gather_hidden(ff_hidden)  # inner fractured -> replicated for ColParallel ff2
