@@ -1795,6 +1795,88 @@ TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsLargeUnicast) {
     }
 }
 
+// Large common (multicast) RTAs: > 341 words, sent via the multicast CQ_DISPATCH_CMD_WRITE_PACKED_LARGE
+// path (BatchedTransferGenerator). Confirms the raised RTA ceiling permits large common args and that they
+// are delivered correctly. Uses the full worker grid.
+TEST_F(UnitMeshCQFixture, TensixLargeCommonRuntimeArgsLargeMulticast) {
+    for (const auto& device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set(cr);
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        // 0 unique, 1100 common words (> 341); COMPUTE common-arg L1 slot is offset well past the unique
+        // slot (see get_args_addr) so it does not overlap.
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device,
+            dummy_program_config,
+            0,
+            1100,
+            {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0}));
+    }
+}
+
+// Patch large unique RTAs and re-run: after the first enqueue repoints RuntimeArgsData into the command
+// stream, a second SetRuntimeArgs must update the large-unicast payload in place so the next enqueue sends
+// the new values. Full grid (> 35 cores) so the update spans multiple LARGE_UNICAST commands.
+TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsPatchedAcrossRuns) {
+    constexpr uint32_t kNumArgs = 1100;  // > 1024 words → large-unicast path
+    for (const auto& device : devices_) {
+        auto* dev = device->get_devices()[0];
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set(cr);
+
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range(zero_coord, zero_coord);
+
+        const uint32_t rta_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        Program program;
+        std::map<std::string, std::string> defines = {
+            {"DATA_MOVEMENT", "1"},
+            {"NUM_RUNTIME_ARGS", std::to_string(kNumArgs)},
+            {"RESULTS_ADDR", std::to_string(rta_base)}};
+        auto kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+
+        auto make_args = [](const CoreCoord& c, uint32_t phase) {
+            std::vector<uint32_t> args(kNumArgs);
+            const uint32_t base = (c.x * 100000) + (c.y * 1000) + (phase * 7);
+            for (uint32_t i = 0; i < kNumArgs; i++) {
+                args[i] = base + i;
+            }
+            return args;
+        };
+
+        distributed::MeshWorkload workload;
+        for (const CoreCoord& core : cr) {
+            SetRuntimeArgs(program, kernel, core, make_args(core, 0));
+        }
+        workload.add_program(device_range, std::move(program));
+
+        // Run twice: phase 0 initial, then patch in place with phase 1 values and re-run.
+        for (uint32_t phase = 0; phase < 2; phase++) {
+            auto& prog = workload.get_programs().at(device_range);
+            if (phase == 1) {
+                for (const CoreCoord& core : cr) {
+                    SetRuntimeArgs(prog, kernel, core, make_args(core, 1));
+                }
+            }
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
+            Finish(device->mesh_command_queue());
+
+            for (const CoreCoord& core : cr) {
+                std::vector<uint32_t> readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(dev, core, rta_base, kNumArgs * sizeof(uint32_t), readback);
+                EXPECT_EQ(readback, make_args(core, phase)) << "core " << core.str() << " phase " << phase;
+            }
+        }
+    }
+}
+
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via BRISC.
 TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
     CoreRange cr0({1, 1}, {2, 2});
