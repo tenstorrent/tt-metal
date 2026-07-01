@@ -143,83 +143,50 @@ pi0_5/
 
 ## Quickstart
 
-### Inference (PyTorch reference)
-
-```python
-from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
-from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
-from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model
-
-loader = Pi0_5WeightLoader("/path/to/pi05_libero_upstream")
-model  = Pi0_5Model(Pi0_5ModelConfig(), loader)
-
-actions = model.sample_actions(
-    images=[img_tensor],            # list of (B, 3, 224, 224)
-    img_masks=[mask],
-    lang_tokens=tok_ids,            # (B, L) — includes discretized state
-    lang_masks=tok_mask,
-    state=None,                     # ignored on the pi0.5 path
-)  # → (B, action_horizon, action_dim)
-```
-
-### Inference (TTNN, Blackhole)
+Set once (get the checkpoint via [`weights/download_pi05_libero.py`](weights/README.md)):
 
 ```bash
-# Source the validated production defaults (15 perf flags + 3-cam + checkpoint path).
-source models/experimental/pi0_5/common/pi05_production.env
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
 ```
 
-```python
-import ttnn
-from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
-from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
-from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
+### TTNN — e2e trace + 2CQ perf (Blackhole)
 
-device = ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=80_000_000)
-ckpt   = "/path/to/pi05_libero_upstream"   # or $PI05_CHECKPOINT_DIR
-loader = Pi0_5WeightLoader(ckpt)
-# Use from_checkpoint(...) so action_horizon is auto-read from <ckpt>/config.json.
-# Plain Pi0_5ModelConfig() defaults action_horizon=50, which silently wrong-sizes
-# the denoise loop against the upstream pi05_libero checkpoint (trained at 10).
-cfg    = Pi0_5ModelConfig.from_checkpoint(ckpt)
-model  = Pi0_5ModelTTNN(cfg, loader, device)
+The tests self-select devices (single-chip defaults to chip 9; the 1×8 test to
+chips 8–15) — override with `TT_VISIBLE_DEVICES` if needed. Two knobs vary the
+workload (defaults from `pi05_production.env`):
 
-actions = model.sample_actions(
-    images=[image_ttnn],            # list of ttnn.Tensor
-    img_masks=[mask_ttnn],
-    lang_tokens=tokens_ttnn,
-    lang_masks=lang_masks_ttnn,
-    state=None,
-)
-ttnn.synchronize_device(device)
-actions_torch = ttnn.to_torch(actions)
-```
-
----
-
-## Performance tuning environment variables
-
-All tuned perf flags live in **`common/pi05_production.env`** — a single source of
-truth, each flag documented with an inline one-line comment. The perf/PCC tests
-auto-apply it at import (via `common/prod_env.py`; `setdefault` semantics so an
-explicit shell export still wins), so a manual `source` is only needed for
-non-pytest entry points such as the LIBERO rollout:
+- `PI0_NUM_CAMERAS` — 2 or 3 cameras (3 = training spec; 2 also set `PI0_VLM_CHUNK_SIZE=768`).
+- `PI05_NUM_DENOISE_STEPS` — denoise steps (5 = perf-tuned, 10 = training default).
 
 ```bash
-source models/experimental/pi0_5/common/pi05_production.env
+source models/experimental/pi0_5/common/pi05_production.env   # perf flags (tests auto-apply too)
+
+# Single BH chip
+PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
+
+# 8 BH chips (1×8 mesh)
+PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
 ```
 
-You normally only configure these three; the rest are matmul/attention tuning flags
-you shouldn't need to touch (see the env file for what each does):
+### LIBERO sim — task-success rollout
 
-| Flag | Default | When to change |
-|---|---|---|
-| `PI05_CHECKPOINT_DIR` | `…/pi05_libero_upstream` | **Set to your checkpoint dir** (machine-specific). |
-| `PI0_NUM_CAMERAS` | `3` | `3` = training spec (2 real + 1 pad); set `2` (and `PI0_VLM_CHUNK_SIZE=768`) for the fast path (−~14 ms, skips the pad). |
-| `PI05_NUM_DENOISE_STEPS` | `5` | `5` = perf-tuned (validated ~97% LIBERO); `10` = openpi training default. |
+Full setup + all flags in [`libero_sim/README.md`](libero_sim/README.md). Prefix the
+LIBERO env vars (`PI0_TOKENIZER_PATH`, `LIBERO_REPO_PATH`, `MUJOCO_GL=osmesa`) and pick
+`--backend ttnn` (single chip) or `ttnn_1x8` (`TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15`):
 
-LIBERO-only env vars (`PI0_TOKENIZER_PATH`, `LIBERO_REPO_PATH`, `MUJOCO_GL=osmesa`) are
-documented in [`libero_sim/README.md`](libero_sim/README.md).
+```bash
+ROLL="models/experimental/pi0_5/libero_sim/libero_rollout.py --checkpoint $PI05_CHECKPOINT_DIR \
+  --backend ttnn --steps-sweep 5 --replan-steps 5 \
+  --suites libero_spatial libero_object libero_goal libero_10 --task-range 0 9"
+
+# Quick check — 40 episodes (1 init/task × 10 tasks × 4 suites)
+python_env/bin/python -u $ROLL --num-episodes 1
+
+# Full run — 400 episodes (10 init/task × 10 tasks × 4 suites)
+python_env/bin/python -u $ROLL --num-episodes 10
+```
 
 ---
 
@@ -232,54 +199,65 @@ commands assume:
 export PYTHONPATH=$PWD TT_METAL_HOME=$PWD PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
 ```
 
-PCC tests compare TTNN vs the PyTorch reference on real upstream weights, gated at
-**PCC ≥ 0.99**. Perf tests are trace + 2CQ (the canonical "fast" path).
+### PCC tests
 
-### Single BH chip
+Compare TTNN vs the PyTorch reference on real upstream weights, gated at **PCC ≥ 0.99**.
 
+**Single BH chip**
 ```bash
-# PCC — per-block vs torch, single-chip e2e, and single-chip (tp1) stages
+# per-block vs torch + single-chip e2e
 python_env/bin/pytest -sq \
   models/experimental/pi0_5/tests/pcc/test_pcc_siglip_vs_torch.py \
   models/experimental/pi0_5/tests/pcc/test_pcc_paligemma_vs_torch.py \
   models/experimental/pi0_5/tests/pcc/test_pcc_prefix_vs_torch.py \
   models/experimental/pi0_5/tests/pcc/test_pcc_suffix_vs_torch.py \
   models/experimental/pi0_5/tests/pcc/test_pcc_pi05_model_libero.py
+# single-chip (tp1) stages
 python_env/bin/pytest -sq \
   "models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py::test_prefill_tp1_pcc" \
   "models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py::test_vision_tp1_pcc"
-
-# Perf — full sample_actions, trace + 2CQ
-python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
 ```
 
-### 8 BH chips (1×8 mesh)
-
+**8 BH chips (1×8 mesh)**
 ```bash
-export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
-
-# PCC — vision / prefill / e2e vs torch (opt-in; runs the CPU torch ref)
 PI05_E2E_PCC=1 python_env/bin/pytest -sq models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_1x8.py
-
-# Perf — traced 2CQ + eager/traced/staged breakdowns
-python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
 ```
 
-### PCC results (upstream pi05_libero, ≥ 0.99 bar)
+Results (upstream pi05_libero, ≥ 0.99 bar):
 
-| test | PCC |
-|---|---|
-| SigLIP vision tower | 0.9976 |
-| PaliGemma embed_image / VLM block | 0.9997 / 0.9973 |
-| prefix / suffix embedding | 0.9999 / 0.9997 |
-| single-chip e2e | 0.9963 |
-| single-chip stages (prefill / vision tp1) | 0.9934 / 0.9997 |
-| 1×8 vision / prefill / e2e | 0.9997 / 0.9946 / 0.9965 |
+| test | chips | PCC |
+|---|---|---|
+| SigLIP vision tower | 1 | 0.9976 |
+| PaliGemma embed_image / VLM block | 1 | 0.9997 / 0.9973 |
+| prefix / suffix embedding | 1 | 0.9999 / 0.9997 |
+| single-chip e2e | 1 | 0.9963 |
+| single-chip stages (prefill / vision tp1) | 1 | 0.9934 / 0.9997 |
+| 1×8 vision / prefill / e2e | 8 | 0.9997 / 0.9946 / 0.9965 |
 
 E2E PCC is mildly seed-sensitive (the 5-step flow-matching ODE amplifies bf16 drift
 per initial-noise pattern), so the bar keeps headroom above the ~0.996 typical value.
 
-### Perf results (trace + 2CQ, N=5 — per-chunk ms · throughput)
+### Perf tests
+
+Trace + 2CQ (the canonical "fast" path). Vary the workload with two env vars
+(defaults from `pi05_production.env`):
+
+- `PI0_NUM_CAMERAS` — `2` or `3` cameras (`3` = training spec; `2` also set `PI0_VLM_CHUNK_SIZE=768`).
+- `PI05_NUM_DENOISE_STEPS` — denoise steps (`5` = perf-tuned, `10` = training default).
+
+**Single BH chip**
+```bash
+PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
+```
+
+**8 BH chips (1×8 mesh)**
+```bash
+PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
+```
+
+Results (trace + 2CQ, N=5 — per-chunk ms · throughput):
 
 | | 2 cameras | 3 cameras |
 |---|---|---|
@@ -385,68 +363,6 @@ Key flags: `--backend {ttnn | ttnn_1x8 | pytorch}` · `--steps-sweep 5` (our pat
 Untraced rollout ≈ **250 ms/chunk** (host↔device transfer bound); the **trace + 2CQ**
 path is **~42 ms single-chip / ~31 ms on 1×8** (see [Perf tests](#perf-tests-blackhole)).
 Task success is in the [400-episode/suite sweep](#libero-success-rate-upstream-pi05_libero-400-episodes-per-n-replan5) below.
-
----
-
-## Verified architecture (cross-checked against `model.safetensors`)
-
-Every dimension below was read directly from
-`<ckpt_dir>/model.safetensors` of the `pi05_libero_upstream` checkpoint
-(not inferred from the Orbax `_METADATA` sharded shapes). Cross-checked
-2026-06-07.
-
-| Component | Shape | Source (safetensors tensor) |
-|---|---|---|
-| **SigLIP layers** | 27 | counted: `vision_tower.…encoder.layers.{0..26}` |
-| **SigLIP hidden** | 1152 | `vision_model.encoder.layers.0.layer_norm1.weight` = (1152,) |
-| **SigLIP MLP** | 4304 | `vision_model.encoder.layers.0.mlp.fc1.weight` = (4304, 1152) |
-| **SigLIP heads × head_dim** | 16 × 72 | `self_attn.q_proj.weight` = (1152, 1152); 1152/16 = 72 |
-| **SigLIP patch** | 14 × 14 × 3 → 1152 | `embeddings.patch_embedding.weight` = (1152, 3, 14, 14) |
-| **SigLIP pos_embedding** | (256, 1152) | `embeddings.position_embedding.weight`; 256 = (224/14)² |
-| **Multi-modal projector** | 1152 → 2048 | `multi_modal_projector.linear.weight` = (2048, 1152) |
-| **Gemma VLM layers** | 18 | counted: `paligemma.…language_model.layers.{0..17}` |
-| **Gemma VLM hidden** | 2048 | `language_model.layers.0.input_layernorm.weight` = (2048,) |
-| **Gemma VLM Q-heads** | 8 | `self_attn.q_proj.weight` = (2048, 2048); 2048 / head_dim 256 = 8 |
-| **Gemma VLM KV-heads** | 1 (MQA) | `self_attn.k_proj.weight` = (256, 2048); 256 / 256 = 1 |
-| **Gemma VLM head_dim** | 256 | implied by k/v_proj output dim = 256 |
-| **Gemma VLM MLP** | 16384 | `mlp.gate_proj.weight` = (16384, 2048) |
-| **Vocab (joint)** | 257152 | `paligemma.lm_head.weight` = (257152, 2048); `gemma_expert.lm_head.weight` = (257152, 1024) |
-| **Expert layers** | 18 | counted: `gemma_expert.model.layers.{0..17}` |
-| **Expert hidden** | 1024 | `gemma_expert.layers.0.mlp.gate_proj.weight` = (4096, 1024) |
-| **Expert Q-heads × head_dim** | 8 × 256 | `self_attn.q_proj.weight` = (2048, 1024); 2048 = 8 × 256 |
-| **Expert KV-heads** | 1 (MQA) | `self_attn.k_proj.weight` = (256, 1024) |
-| **Expert MLP** | 4096 | `mlp.gate_proj.weight` = (4096, 1024) |
-| **Expert adaRMSNorm dense** | 1024 → 3072 | `input_layernorm.dense.weight` = (3072, 1024); 3072 = 3 × hidden (scale+shift+gate) |
-| **Action in_proj** | 32 → 1024 | `action_in_proj.weight` = (1024, 32) |
-| **Action out_proj** | 1024 → 32 | `action_out_proj.weight` = (32, 1024) |
-| **Time MLP in** | 1024 → 1024 | `time_mlp_in.weight` = (1024, 1024) |
-| **Time MLP out** | 1024 → 1024 | `time_mlp_out.weight` = (1024, 1024) |
-
-Note: the expert is "Gemma-300M-sized" (18L, 1024H, 4096 MLP) but with
-`head_dim=256` to **match the VLM** — not stock Gemma-300M's head_dim=64.
-This is required because pi0.5 cross-attention reuses the VLM's KV
-cache; expert Q heads must share `head_dim` with VLM K/V. Enforced by an
-assertion in `PaliGemmaConfig.__post_init__`.
-
-### Real action / state dims (from `norm_stats.json`)
-
-| Tensor | Real dim | Padded dim (in config) | Notes |
-|---|---:|---:|---|
-| state | 8 | 32 | joint angles + EE pose; pi05 state-in-prompt mode bin-encodes into language tokens, so the 32 padding is unused |
-| actions | 7 | 32 | 6-DoF Cartesian + gripper; padded to 32 for tile alignment |
-
-### Upstream openpi source references
-
-All training-time defaults verified against the public `Physical-Intelligence/openpi` repo (no auth required for source files; only the HF checkpoint mirror is gated):
-
-| File | What it gives us |
-|---|---|
-| [`src/openpi/training/config.py`](https://github.com/Physical-Intelligence/openpi/blob/main/src/openpi/training/config.py) — `pi05_libero` entry | `Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False)` + `LeRobotLiberoDataConfig(repo_id="physical-intelligence/libero")` |
-| [`src/openpi/models/pi0_config.py`](https://github.com/Physical-Intelligence/openpi/blob/main/src/openpi/models/pi0_config.py) — `Pi0Config` | Base defaults: `action_dim=32`, `action_horizon=50` (overridden), `paligemma_variant="gemma_2b"`, `action_expert_variant="gemma_300m"`, `max_token_len=200` when `pi05=True` |
-| [`src/openpi/models/model.py`](https://github.com/Physical-Intelligence/openpi/blob/main/src/openpi/models/model.py) | `IMAGE_RESOLUTION = (224, 224)` |
-| `Pi0Config.inputs_spec(...)` | Hardcoded 3-camera dict: `base_0_rgb`, `left_wrist_0_rgb`, `right_wrist_0_rgb`, each `(B, 224, 224, 3)` |
-| [`gs://openpi-assets/checkpoints/pi05_libero/`](https://storage.googleapis.com/storage/v1/b/openpi-assets/o?prefix=checkpoints/pi05_libero/) | Authoritative Orbax checkpoint (16 files, ~7.2 GB). `assets/.../norm_stats.json` is public; `params/` is the JAX checkpoint that gets converted to the HF safetensors mirror. |
-| [`huggingface.co/openpi/pi05_libero`](https://huggingface.co/openpi/pi05_libero) | Safetensors mirror (gated). Source of `model.safetensors` + minimal `config.json` we use. |
 
 ---
 
