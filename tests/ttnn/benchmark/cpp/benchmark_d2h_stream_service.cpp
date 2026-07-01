@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -134,11 +135,11 @@ uint32_t effective_host_read_thread_count(
     if (!parallel_host_read || host_read_thread_count == 1 || num_sockets <= 1) {
         return 1;
     }
-    const size_t worker_count =
-        host_read_thread_count == 0
-            ? std::min<size_t>(tt::tt_metal::D2HStreamService::kAutoHostReadThreadCount, num_sockets)
-            : std::min<size_t>(host_read_thread_count, num_sockets);
-    return static_cast<uint32_t>(worker_count);
+    if (host_read_thread_count == 0) {
+        return static_cast<uint32_t>(
+            std::min<size_t>(tt::tt_metal::D2HStreamService::kAutoHostReadThreadCount, num_sockets));
+    }
+    return static_cast<uint32_t>(std::min<size_t>(host_read_thread_count, num_sockets));
 }
 
 std::string host_read_mode_name(bool parallel_host_read) { return parallel_host_read ? "parallel" : "serial"; }
@@ -232,7 +233,7 @@ LatencyStats summarize_latency_us(std::vector<double> latencies_us) {
     TT_FATAL(!latencies_us.empty(), "latencies_us must not be empty");
     std::sort(latencies_us.begin(), latencies_us.end());
     const auto percentile = [&](double fraction) {
-        const auto idx = static_cast<std::size_t>((latencies_us.size() - 1) * fraction + 0.5);
+        const auto idx = static_cast<std::size_t>(std::lround(static_cast<double>(latencies_us.size() - 1) * fraction));
         return latencies_us[idx];
     };
     const double sum = std::accumulate(latencies_us.begin(), latencies_us.end(), 0.0);
