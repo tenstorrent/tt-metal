@@ -312,9 +312,9 @@ def main() -> int:
     _open_kwargs = dict(device_id=0, l1_small_size=32768)
     if args.trace or args.trace_lm:
         # Reserve a trace buffer + a 2nd command queue.  --trace holds the diffusion-head
-        # and post-diffusion captures; --trace-lm holds the 28-layer LM decode capture
-        # (larger — needs ~350MB).
-        _open_kwargs.update(trace_region_size=400_000_000, num_command_queues=2)
+        # and post-diffusion captures; --trace-lm holds the positive AND negative 28-layer
+        # LM decode captures simultaneously (two live traces).
+        _open_kwargs.update(trace_region_size=700_000_000, num_command_queues=2)
     mesh = ttnn.open_device(**_open_kwargs)
     try:
         if args.debug:
