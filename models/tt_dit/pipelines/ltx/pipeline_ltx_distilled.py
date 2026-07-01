@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 
 import torch
 from loguru import logger
@@ -23,6 +24,16 @@ from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline
 # Distilled sigma schedules for the two stages.
 DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
+
+
+@dataclass
+class _I2VConditioning:
+    """Frame-0 image conditioning for one denoise stage — the tt analog of the reference
+    LatentState fields written by ``VideoConditionByLatentIndex.apply_to`` (latent_idx=0)."""
+
+    denoise_mask: torch.Tensor | None  # (B, N, 1): 1−strength at cond tokens else 1; None = plain T2V
+    clean_latent: torch.Tensor | None  # (B, N, C): cond tokens at frame-0 else 0
+    n_cond: int  # count of pinned frame-0 tokens
 
 
 class LTXDistilledPipeline(LTXPipeline):
@@ -64,6 +75,33 @@ class LTXDistilledPipeline(LTXPipeline):
         noise = torch.randn(base.shape, dtype=noise_dtype).to(base.dtype)
         scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
         return noise * scaled_mask + base * (1.0 - scaled_mask)
+
+    def _build_i2v_conditioning(
+        self,
+        image_cond_latent: torch.Tensor | None,
+        image_cond_strength: float,
+        needs_video_ts: bool,
+        B: int,
+        video_N_real: int,
+    ) -> _I2VConditioning:
+        """Build the frame-0 conditioning (per-token denoise mask + clean latent) — tt analog of the
+        reference ``create_initial_state`` + ``VideoConditionByLatentIndex.apply_to``. ``denoise_mask``
+        is None only when the transformer needs no per-token video timestep and no image is staged
+        (the plain-T2V forward-noise path)."""
+        if image_cond_latent is None and not needs_video_ts:
+            return _I2VConditioning(denoise_mask=None, clean_latent=None, n_cond=0)
+        denoise_mask = torch.ones(B, video_N_real, 1)
+        clean_latent = None
+        n_cond = 0
+        if image_cond_latent is not None:
+            cond_tokens = image_cond_latent.float().permute(0, 2, 3, 4, 1).reshape(B, -1, self.in_channels)
+            n_cond = cond_tokens.shape[1]
+            assert n_cond <= video_N_real, f"image cond tokens {n_cond} exceed video tokens {video_N_real}"
+            clean_latent = torch.zeros(B, video_N_real, self.in_channels)
+            clean_latent[:, :n_cond, :] = cond_tokens
+            denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
+            logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
+        return _I2VConditioning(denoise_mask=denoise_mask, clean_latent=clean_latent, n_cond=n_cond)
 
     def warmup_buffers(
         self,
@@ -307,20 +345,7 @@ class LTXDistilledPipeline(LTXPipeline):
 
         image_cond = image_cond_latent is not None
         needs_video_ts = getattr(self.transformer, "image_conditioning", False)
-        denoise_mask = None
-        clean_latent = None
-        n_cond = 0
-        if image_cond or needs_video_ts:
-            denoise_mask = torch.ones(B, video_N_real, 1)
-            if image_cond:
-                cond = image_cond_latent.float()
-                cond_tokens = cond.permute(0, 2, 3, 4, 1).reshape(B, -1, self.in_channels)
-                n_cond = cond_tokens.shape[1]
-                assert n_cond <= video_N_real, f"image cond tokens {n_cond} exceed video tokens {video_N_real}"
-                clean_latent = torch.zeros(B, video_N_real, self.in_channels)
-                clean_latent[:, :n_cond, :] = cond_tokens
-                denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
-                logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
+        i2v = self._build_i2v_conditioning(image_cond_latent, image_cond_strength, needs_video_ts, B, video_N_real)
 
         logger.info(f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) [sp={sp_factor}]")
 
@@ -361,7 +386,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 base_v = base_v.clone()
             else:
                 base_v = torch.zeros(B, video_N_real, self.in_channels)
-            base_v[:, :n_cond, :] = clean_latent[:, :n_cond, :]
+            base_v[:, : i2v.n_cond, :] = i2v.clean_latent[:, : i2v.n_cond, :]
             noise_dtype = torch.float32
         elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
             base_v = initial_video_latent.float()
@@ -372,7 +397,7 @@ class LTXDistilledPipeline(LTXPipeline):
         else:  # T2V S1: pure noise from zeros (bf16 draw, kept for seed reproducibility)
             base_v = torch.zeros(B, video_N_real, self.in_channels)
             noise_dtype = torch.bfloat16
-        video_lat_real = self._noise_video_latent(base_v, denoise_mask, sigmas[0], seed, noise_dtype)
+        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed, noise_dtype)
 
         if video_N > video_N_real:
             video_lat = torch.zeros(B, video_N, self.in_channels)
@@ -412,9 +437,9 @@ class LTXDistilledPipeline(LTXPipeline):
             # Mask stays width-1; ttnn broadcasts it against the (…,128) latent in the pin. Padded
             # tokens keep 1.0 (unpinned).
             mask_host = torch.ones(1, 1, video_N, 1)
-            mask_host[:, :, :video_N_real, :] = denoise_mask[0, :, 0].unsqueeze(-1)
+            mask_host[:, :, :video_N_real, :] = i2v.denoise_mask[0, :, 0].unsqueeze(-1)
             clean_host = torch.zeros(1, 1, video_N, self.in_channels)
-            clean_host[:, :, :video_N_real, :] = clean_latent
+            clean_host[:, :, :video_N_real, :] = i2v.clean_latent
             # Copy into the pre-allocated trace-baked buffers so pin inputs keep stable addresses
             # across replays — never freshly allocated here.
             state._tt_i2v_mask.update(mask_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
@@ -433,12 +458,12 @@ class LTXDistilledPipeline(LTXPipeline):
             if needs_video_ts:
                 # Per-token timestep has 2 values (pinned frame-0 vs. sigma): pass the (2,) pair +
                 # {0,1} pin mask so the transformer blends per token (avoids dense modulation OOM).
-                pinned_scale = (1.0 - image_cond_strength) if (image_cond and n_cond > 0) else 1.0
+                pinned_scale = (1.0 - image_cond_strength) if (image_cond and i2v.n_cond > 0) else 1.0
                 ts_pair = torch.tensor([pinned_scale * sigma, sigma], dtype=torch.float32)
                 state._tt_video_ts_pair.update(ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, device=self.mesh_device)
                 pin_mask_host = torch.zeros(1, 1, video_N, 1)
-                if n_cond > 0:
-                    pin_mask_host[:, :, :n_cond, :] = 1.0
+                if i2v.n_cond > 0:
+                    pin_mask_host[:, :, : i2v.n_cond, :] = 1.0
                 state._tt_video_pin_mask.update(
                     pin_mask_host,
                     traced,
