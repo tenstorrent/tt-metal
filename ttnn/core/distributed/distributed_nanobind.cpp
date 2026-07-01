@@ -35,6 +35,8 @@
 #include <ttnn/api/ttnn/types.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/create_socket.hpp"
+#include "ttnn/distributed/isocket.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "distribution_mode.hpp"
@@ -136,6 +138,37 @@ void py_module_types(nb::module_& mod) {
     nb::class_<SystemMeshDescriptor>(mod, "SystemMeshDescriptor");
     nb::class_<DistributedHostBuffer>(mod, "DistributedHostBuffer");
     nb::class_<TensorTopology>(mod, "TensorTopology");
+
+    // Pluggable distributed socket: a transport-agnostic point-to-point socket whose
+    // backend (MPI or fabric) is chosen at runtime via create_socket(), instead of
+    // always going through MeshSocket's fabric send_async/recv_async path.
+    nb::enum_<SocketType>(mod, "SocketType", "Transport backing a DistributedSocket.")
+        .value("MPI", SocketType::MPI, "Host-staged MPI point-to-point, addressed by rank.")
+        .value("FABRIC", SocketType::FABRIC, "Tenstorrent fabric device-to-device.");
+
+    nb::class_<ISocket>(
+        mod, "DistributedSocket", "Opaque socket returned by create_socket(); sends/receives ttnn.Tensor objects.")
+        .def(
+            "send",
+            [](ISocket& self, const ttnn::Tensor& tensor) { self.send(tensor); },
+            nb::arg("tensor"),
+            "Send a tensor to the peer rank (blocking).")
+        .def(
+            "recv",
+            [](ISocket& self, ttnn::Tensor tensor) {
+                // recv writes into the passed template in place; the returned handle
+                // shares storage with it. The template must already be allocated on the
+                // intended destination (sub)mesh -- that placement is what selects the
+                // receiving device on the MPI path (MPISocket::recv -> to_device(tensor.device())).
+                self.recv(tensor);
+                return tensor;
+            },
+            nb::arg("tensor"),
+            "Receive into a pre-allocated, correctly-placed template tensor (blocking); returns it.")
+        .def(
+            "get_rank",
+            [](const ISocket& self) { return *self.get_rank(); },
+            "Peer rank this socket communicates with.");
 }
 // NOLINTEND(misc-redundant-expression)
 // NOLINTEND(bugprone-unused-raii)
@@ -1109,6 +1142,49 @@ void py_module(nb::module_& mod) {
 
             Returns:
                 bytes: The received data.
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+        )doc");
+
+    // Open a transport-agnostic distributed socket over the current world context.
+    // Mirrors ttnn::distributed::create_socket, but injects get_current_world() as the
+    // socket's distributed_context (the ttnn.SocketConfig binding has no way to set it).
+    //
+    // For SocketType.MPI the tensor is staged host-side and sent point-to-point by rank;
+    // an internal MeshSocket is still constructed, so socket_config MUST carry non-empty
+    // SocketConnections (mesh_socket.cpp asserts this), but the fabric data path / routing
+    // is not used. This is the Python entry point for MPISocket without going through ttml.
+    mod.def(
+        "create_socket",
+        [](SocketType socket_type,
+           std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+           int peer_rank,
+           tt::tt_metal::distributed::SocketConfig socket_config) -> std::unique_ptr<ISocket> {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            socket_config.distributed_context = DistributedContext::get_current_world();
+            return ttnn::distributed::create_socket(
+                socket_type, EndpointSocketType::BIDIRECTIONAL, mesh_device, Rank(peer_rank), socket_config);
+        },
+        nb::arg("socket_type"),
+        nb::arg("mesh_device"),
+        nb::arg("peer_rank"),
+        nb::arg("socket_config"),
+        R"doc(
+            Create a DistributedSocket to a peer rank, using the current world context.
+
+            Args:
+                socket_type (SocketType): MPI (host-staged, by-rank) or FABRIC (device-to-device).
+                mesh_device (MeshDevice): The (sub)mesh this endpoint lives on.
+                peer_rank (int): The rank of the other endpoint.
+                socket_config (SocketConfig): Connections + memory config. Its distributed_context
+                    is overwritten with the current world; for MPI the connections are still
+                    required but the fabric routing they describe is not used for transfer.
+
+            Returns:
+                DistributedSocket: A reusable socket; call .send(tensor) / .recv(template).
 
             Raises:
                 RuntimeError: If the distributed context has not been initialized.
