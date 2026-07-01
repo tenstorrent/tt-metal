@@ -48,6 +48,21 @@ ALWI void pack_subblock_row_strided(
 }
 
 /**
+ * Contiguous mirror of pack_subblock_row_strided for the SubblockMajor in-place accumulate
+ * pack: pack ntiles contiguous DST tiles to the fixed absolute offset abs_off in pack_target_id
+ * via pack_tile<true> (out-of-order). Used when the helper has done ONE reserve over the whole
+ * output block (in-place accumulate) so pack_tile_block's wr_ptr-relative pack would clobber —
+ * each SubblockMajor subblock instead lands at its own contiguous region
+ * (subblock_idx * out_num_tiles). PRECONDITION: caller reserved the whole output block in
+ * pack_target_id and owns the matching push_back.
+ */
+ALWI void pack_subblock_at_offset(uint32_t dst_start_idx, uint32_t pack_target_id, uint32_t abs_off, uint32_t ntiles) {
+    for (uint32_t t = 0; t < ntiles; t++) {
+        pack_tile<true>(dst_start_idx + t, pack_target_id, abs_off + t);
+    }
+}
+
+/**
  * Read mirror of pack_subblock_row_strided: reload a row-strided-spilled (h × w) sub-block
  * into CONTIGUOUS DST. Each row's w tiles sit at source offset (r * row_stride + col_base)
  * from fifo_rd_ptr and land at DST[r * w], so the matmul/pack sees the same row-major
@@ -127,18 +142,18 @@ ALWI void matmul_block(
     constexpr bool pack_last_to_interm = (last_block_target == LastBlockTarget::Interm);
     constexpr bool pack_relu = (last_block_target == LastBlockTarget::OutWithRelu);
 
-    // single_reserve: the (TileRowMajor + packer_l1_acc + Interm) config packs in place — one
-    // reserve_back over the whole output block before the K-loop + one push_back after (issued
-    // INTERNALLY here, per batch), skipping the per-K-block reserve/push/drain. Each K-block packs to
-    // absolute offsets in that fixed region (the M-row-group base folded into the OOP offset) and
-    // packer_l1_acc accumulates in place. This is the ONLY config where that path is correct: the
-    // software-reload accumulation path (the per-K-block spill push paired with the reload wait_front
-    // below) is statically dead only for last_block_target == Interm (the sole branch that forces
-    // enable_reload = false); it additionally needs TileRowMajor (whose absolute-offset pack is the
-    // only one that places each subblock correctly into the fixed region) and packer_l1_acc (in-place
-    // accumulation being the whole point). Every OTHER config keeps the per-block FIFO reserve/push.
-    constexpr bool single_reserve =
-        (tile_order == OutputCBLayout::TileRowMajor) && packer_l1_acc && pack_last_to_interm;
+    // in_place: the (packer_l1_acc + Interm) config packs in place — one reserve_back over the whole
+    // output block before the K-loop + one push_back after (issued INTERNALLY here, per batch),
+    // skipping the per-K-block reserve/push/drain. Each K-block packs to absolute offsets in that
+    // fixed region and packer_l1_acc accumulates in place. Correct because: the software-reload
+    // accumulation path (the per-K-block spill push paired with the reload wait_front below) is
+    // statically dead only for last_block_target == Interm (the sole branch that forces
+    // enable_reload = false), and packer_l1_acc makes in-place L1 accumulation the whole point. Both
+    // layouts place each subblock correctly into the fixed region via an absolute-offset pack:
+    // TileRowMajor packs row-strided (M-row-group base folded into the OOP offset), SubblockMajor
+    // packs each subblock to its own contiguous region (subblock_idx * out_num_tiles). Every OTHER
+    // config keeps the per-block FIFO reserve/push.
+    constexpr bool in_place = packer_l1_acc && pack_last_to_interm;
 
     // Cache integer IDs for legacy LLK calls. buf_id() resolves to
     // get_cb_id() on CircularBuffer or get_id() on DataflowBuffer.
@@ -210,10 +225,10 @@ ALWI void matmul_block(
     for (uint32_t b = 0; b < shape.batch; b++) {
         bool enable_reload = false;
 
-        // single_reserve: reserve the whole output block ONCE per batch before the K-loop. Each
+        // in_place: reserve the whole output block ONCE per batch before the K-loop. Each
         // K-block packs to absolute offsets in this fixed region with packer_l1_acc accumulating in
-        // place; the helper skips its own per-block reserve/push/drain (gated below on single_reserve).
-        if constexpr (single_reserve) {
+        // place; the helper skips its own per-block reserve/push/drain (gated below on in_place).
+        if constexpr (in_place) {
             interm_buf.reserve_back(out_block_num_tiles);
         }
 
@@ -283,10 +298,10 @@ ALWI void matmul_block(
             // SubblockMajor: reserve the full out_block on the first non-last K-block so
             // interm spills don't clobber output when interm shares out's L1 region (the
             // factory's share-buffer layout), and so reserve/wait increments stay uniform
-            // across the K-loop. Skipped in the single_reserve path (the helper reserved the whole
-            // block once before the K-loop). (single_reserve is TileRowMajor-only, so this SBM branch
+            // across the K-loop. Skipped in the in_place path (the helper reserved the whole
+            // block once before the K-loop). (in_place is TileRowMajor-only, so this SBM branch
             // is inert under it — the gate is defensive.)
-            if constexpr (tile_order == OutputCBLayout::SubblockMajor && !single_reserve) {
+            if constexpr (tile_order == OutputCBLayout::SubblockMajor && !in_place) {
                 if (block == 0 && !last_out) {
                     out_buf.reserve_back(out_block_num_tiles);
                 }
@@ -300,7 +315,7 @@ ALWI void matmul_block(
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < shape.in0_num_subblocks; in0_subblock++) {
-                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !single_reserve) {
+                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !in_place) {
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
                     // Smaller than full-block reserve, so shared out/interm buffers don't deadlock.
                     if (last_out) {
@@ -389,7 +404,7 @@ ALWI void matmul_block(
                         }
 
                         tile_regs_commit();
-                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !single_reserve) {
+                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !in_place) {
                             pack_target_buf.reserve_back(out_num_tiles);
                         }
                         // Pack-side sync: apply_activation_from_pack does SFPU on the packer
@@ -420,17 +435,27 @@ ALWI void matmul_block(
                             }
                         }
 
-                        if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
+                        if constexpr (in_place && tile_order == OutputCBLayout::SubblockMajor) {
+                            // SubblockMajor in-place accumulate: there is no per-subblock reserve
+                            // (the helper did ONE reserve over the whole block, FIFO wr_ptr fixed at
+                            // the base), so each subblock must pack to its own CONTIGUOUS absolute
+                            // region (subblock_idx * out_num_tiles); pack_tile_block's wr_ptr-relative
+                            // pack would clobber all subblocks onto the same slot. Contiguous mirror of
+                            // the TileRowMajor row-strided pack below.
+                            const uint32_t abs_off =
+                                (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
+                            pack_subblock_at_offset(0, pack_target_id, abs_off, out_num_tiles);
+                        } else if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
                             // Absolute-offset per-tile pack into the row-group reserve; row stride
                             // = out_row_width. The per-row-group reserve supplies the M-row-group
                             // base, leaving only the in1 col offset.
                             //
-                            // single_reserve: there is no per-row-group reserve (the helper did ONE
+                            // in_place: there is no per-row-group reserve (the helper did ONE
                             // reserve over the whole block, FIFO wr_ptr fixed at the base), so the
                             // M-row-group base must be folded into the absolute offset here
                             // (in0_subblock * row_group_tiles); otherwise every row group packs onto
                             // row 0 (latent when in0_num_subblocks == 1, garbles when > 1).
-                            const uint32_t row_base = single_reserve ? in0_subblock * row_group_tiles : 0;
+                            const uint32_t row_base = in_place ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
@@ -444,7 +469,7 @@ ALWI void matmul_block(
                         if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_uninit(pack_target_id);
                         }
-                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !single_reserve) {
+                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !in_place) {
                             pack_target_buf.push_back(out_num_tiles);
                         }
 
@@ -453,7 +478,7 @@ ALWI void matmul_block(
                         // row-major (to match the last block when accumulating in the same interm
                         // region) or subblock-major (compatible with the software per-subblock reload).
                         tile_regs_commit();
-                        if constexpr (!spill_row_grouped && !single_reserve) {
+                        if constexpr (!spill_row_grouped && !in_place) {
                             interm_buf.reserve_back(out_num_tiles);
                         }
                         tile_regs_wait();
@@ -467,10 +492,17 @@ ALWI void matmul_block(
                             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
                         }
 
-                        if constexpr (spill_row_grouped) {
-                            // single_reserve: fold the M-row-group base into the offset, same as the
+                        if constexpr (in_place && tile_order == OutputCBLayout::SubblockMajor) {
+                            // SubblockMajor in-place accumulate spill: same contiguous absolute offset
+                            // as the last-block pack, so packer_l1_acc accumulates each subblock in the
+                            // same L1 cells across K-blocks.
+                            const uint32_t abs_off =
+                                (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
+                            pack_subblock_at_offset(0, interm_cb_id, abs_off, out_num_tiles);
+                        } else if constexpr (spill_row_grouped) {
+                            // in_place: fold the M-row-group base into the offset, same as the
                             // last-block pack above.
-                            const uint32_t row_base = single_reserve ? in0_subblock * row_group_tiles : 0;
+                            const uint32_t row_base = in_place ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
@@ -478,7 +510,7 @@ ALWI void matmul_block(
                             pack_tile_block(0, interm_cb_id, out_num_tiles);
                         }
                         tile_regs_release();
-                        if constexpr (!spill_row_grouped && !single_reserve) {
+                        if constexpr (!spill_row_grouped && !in_place) {
                             interm_buf.push_back(out_num_tiles);
                         }
                     }
@@ -486,7 +518,7 @@ ALWI void matmul_block(
                     in1_index_subblock_offset += shape.out_subblock_w;
                 }
 
-                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !single_reserve) {
+                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !in_place) {
                     if (last_out) {
                         pack_target_buf.push_back(row_group_tiles);
                     } else if constexpr (spill_row_grouped) {
@@ -500,13 +532,13 @@ ALWI void matmul_block(
             if constexpr (packer_l1_acc) {
                 // Drain the L1_ACC partials in increments matching the producer's push
                 // granularity (row_group_tiles when spill_row_grouped, else subblock-sized);
-                // the CB API requires uniform increments. Skipped in the single_reserve path (the
+                // the CB API requires uniform increments. Skipped in the in_place path (the
                 // helper pushes nothing per block, so there is nothing to drain).
                 const uint32_t drain_step = spill_row_grouped ? row_group_tiles : out_num_tiles;
                 if constexpr (pack_last_to_interm) {
                     // No software reload: Interm accumulates in place (and SBM-contiguous reload
                     // offsets wouldn't match the row-strided spill anyway).
-                    if constexpr (!single_reserve) {
+                    if constexpr (!in_place) {
                         if (block < shape.num_k_blocks - 1) {
                             for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
                                 interm_buf.wait_front(drain_step);
@@ -516,7 +548,7 @@ ALWI void matmul_block(
                     }
                     enable_reload = false;
                 } else {
-                    if constexpr (!single_reserve) {
+                    if constexpr (!in_place) {
                         if (shape.num_k_blocks >= 2 && block < shape.num_k_blocks - 2) {
                             for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
                                 interm_buf.wait_front(drain_step);
@@ -558,11 +590,11 @@ ALWI void matmul_block(
             post_k_block(block, shape.num_k_blocks, last_out);
         }
 
-        // single_reserve: publish the fully-accumulated output block (matches the reserve_back at
+        // in_place: publish the fully-accumulated output block (matches the reserve_back at
         // the top of the batch loop). Block 0 packed with l1_acc=0 (fresh) and later blocks with
         // l1_acc=1 (accumulate) — handled per-block above — so no pre-reserve reset is needed here;
         // the post-push reconfig_l1_acc(0) restores a clean packer state for the next consumer/op.
-        if constexpr (single_reserve) {
+        if constexpr (in_place) {
             interm_buf.push_back(out_block_num_tiles);
             if constexpr (packer_l1_acc) {
                 PACK((llk_pack_reconfig_l1_acc(0)));
