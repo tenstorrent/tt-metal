@@ -679,15 +679,15 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
     //     (per_core_M) divisible by relaxed.out_subblock_h.
     bool conv_tile_pack_row_major = false;
-    // caller_owns class: the deep-K
-    // packer_l1_acc + bias convs that pin used to capture (rn50 DS2/DS3/L3a/L3b/L4a/L4b) now route
-    // through the matmul-helper caller_owns_pack_target + TileRowMajor path (pin has been deleted —
-    // GH#45995). These convs all satisfy out_subblock_w == per_core_N (in1_num_subblocks == 1), so
-    // TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the SBM-derived subblock (do NOT
-    // re-derive the relaxed/taller subblock) and only flip the layout flag + emit the caller_owns
-    // define (below, near the compute_defines). The decision is finalized after get_cb_info (where
-    // partials_cb_uses_output is known); see the conv_caller_owns block following the CB-info call.
-    bool conv_caller_owns = false;
+    // In-place-pack class (formerly "caller_owns"): the deep-K packer_l1_acc + bias convs that pin used
+    // to capture (rn50 DS2/DS3/L3a/L3b/L4a/L4b) now route through the matmul helper's in-place pack path
+    // (TileRowMajor + packer_l1_acc + Interm — the helper does its own single reserve/push; pin has been
+    // deleted — GH#45995). These convs all satisfy out_subblock_w == per_core_N (in1_num_subblocks == 1),
+    // so TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the SBM-derived subblock (do NOT
+    // re-derive the relaxed/taller subblock) and only flip the layout flag (CONV_TILE_PACK_ROW_MAJOR). The
+    // kernel derives the in-place-pack behavior itself from (TileRowMajor + packer_l1_acc + Interm); there
+    // is no longer a separate host define. The decision is finalized after get_cb_info (where
+    // partials_cb_uses_output is known); see the pin_class_caller_owns block following the CB-info call.
     {
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
         const bool weights_df_supported =
@@ -889,15 +889,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
-    // ── caller_owns class (DEFAULT — replaces the deleted pin for the deep-K INTERM-target class) ─────
+    // ── in-place-pack class (DEFAULT — replaces the deleted pin for the deep-K INTERM-target class) ────
     // The compute kernel used to pin (the now-deleted pin_interm_to_captured_base) exactly when:
     //     packer_l1_acc && SubblockMajor && (fuse_bias || untilize_out || !partials_cb_uses_output)
-    // Pin has been removed (GH#45995); that class now routes through the matmul-helper
-    // caller_owns_pack_target + TileRowMajor path instead. caller_owns requires TileRowMajor layout +
-    // DEDICATED (non-aliased) partials. For the engaged convs out_subblock_w == per_core_N
-    // (in1_num_subblocks == 1), so TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the
-    // SBM-derived subblock (no relaxed re-derive) and only flip the layout flag + emit
-    // CONV_CALLER_OWNS_PACK_TARGET.
+    // Pin has been removed (GH#45995); that class now routes through the matmul helper's in-place pack
+    // path (TileRowMajor + packer_l1_acc + Interm — the helper does its own single reserve/push and skips
+    // the per-block reserve/push/drain). It requires TileRowMajor layout + DEDICATED (non-aliased)
+    // partials. For the engaged convs out_subblock_w == per_core_N (in1_num_subblocks == 1), so
+    // TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the SBM-derived subblock (no relaxed
+    // re-derive) and only flip the layout flag (CONV_TILE_PACK_ROW_MAJOR); the kernel derives the
+    // in-place-pack behavior from the template args, so there is no longer a separate host define.
     //
     // Engage only when the production no-bias TRM-relaxed path above did NOT already claim this conv
     // (conv_tile_pack_row_major still false): that path re-derives a taller subblock, which is incompatible
@@ -938,7 +939,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out);
     if (!conv_tile_pack_row_major && pin_class_caller_owns) {
         conv_tile_pack_row_major = true;
-        conv_caller_owns = true;
         log_debug(
             tt::LogOp,
             "conv2d CALLER_OWNS (default, was pin): per_core_M={} per_core_N={} out_subblock={}x{} "
@@ -1125,13 +1125,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // out_subblock_{h,w} were already folded into the compute compile args.
     if (conv_tile_pack_row_major) {
         compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
-        // caller_owns class (default, replaces the deleted pin for the deep-K fuse_bias + packer_l1_acc
-        // class): tell the kernel to switch the matmul interm pack onto the caller_owns_pack_target
-        // contract (single outer reserve/push, helper skips its own reserve/push/drain). The other
-        // (no-bias) TileRowMajor convs keep the helper-owned reserve/push.
-        if (conv_caller_owns) {
-            compute_defines["CONV_CALLER_OWNS_PACK_TARGET"] = "1";
-        }
+        // The deep-K fuse_bias/untilize + packer_l1_acc INTERM-target convs (formerly the caller_owns /
+        // pin class) no longer need a separate define: the matmul helper packs in place automatically for
+        // (TileRowMajor + packer_l1_acc + Interm), doing its own single reserve/push and skipping the
+        // per-block reserve/push/drain. The kernel derives that class from its own template args, and the
+        // no-bias TileRowMajor convs (LastBlockTarget != Interm or !packer_l1_acc) keep the FIFO path.
     }
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(

@@ -11,7 +11,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_constraints.hpp"
 
 namespace compute_kernel_lib {
 
@@ -24,9 +23,11 @@ namespace compute_kernel_lib {
  * Interm + reblock_and_untilize). The default path is FIFO spill/reload: the helper
  * reserves/pushes/pops the pack target in one-block increments per K-block.
  *
- * caller_owns_pack_target opts out of that bookkeeping — the helper skips its own
- * reserve/push/drain; the caller does one reserve before + one push after, packing
- * K-blocks into a fixed caller-owned region. Pairs with TileRowMajor + packer_l1_acc + Interm.
+ * The (TileRowMajor + packer_l1_acc + Interm) config packs in place instead: the helper does
+ * ONE reserve_back over the whole output block before the K-loop and ONE push_back after
+ * (internally, per batch), skipping the per-K-block reserve/push/drain. Each K-block packs to
+ * absolute offsets in that fixed region and packer_l1_acc accumulates in place. Callers pass no
+ * flag for this — the helper selects it from (TileRowMajor + packer_l1_acc + Interm).
  */
 
 /**
@@ -287,9 +288,6 @@ struct NoIn1BaseOffset {
  *   KBlockInnerDimFn   per-K-block FMA step count (for unpadded/partial K-blocks).
  *   In0SourceFn        per-K-block in0 CB selector (alternates must share in0's dataformat).
  *   In1BaseOffsetFn    per-K-block in1 base-offset shift within the fronted region.
- *   caller_owns_pack_target  caller does one reserve before + one push after; the helper
- *                            skips its own reserve/push/drain. Pairs with TileRowMajor +
- *                            packer_l1_acc + Interm.
  *   Activation         fuse an SFPU activation on the PACKER thread at the last-block pack
  *                      (default none); independent of PostComputeFn (MATH thread) and
  *                      allowed with Interm. Build from the sfpu_activation_helpers.hpp
@@ -349,7 +347,6 @@ template <
     typename KBlockInnerDimFn = NoKBlockInnerDimFn,
     typename In0SourceFn = NoIn0Source,
     typename In1BaseOffsetFn = NoIn1BaseOffset,
-    bool caller_owns_pack_target = false,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT,
     typename Buf = ::CircularBuffer>
