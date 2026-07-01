@@ -309,7 +309,8 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "tp-fracture",
             "single-chip levers + both kernels exhausted and this dense matmul is still memory-bound on "
             "a mesh that cannot fit the model on one chip -> fracture the weight across the TP axis and "
-            "insert the matching CCL (GUIDELINES/08 §7); record_kernel_attempt(...,'tp-fracture',...)",
+            "insert the matching CCL (GUIDELINES/08 §7); verify_tp_fracture(M,K,N,tp) to PROVE it is "
+            "PCC-correct, then record_kernel_attempt(...,'tp-fracture',...)",
         )
     # BOX (4) STRUCTURAL (ALWAYS ON, GENERAL — no model/architecture knowledge) — the per-op ladder
     # above (grid+dtype+tt-lang+C++) is exhausted but a MATERIAL GAP REMAINS (this op is in the
@@ -878,6 +879,31 @@ def termination_check() -> dict:
             "termination_check after each rung."
         ),
     }
+
+
+@mcp.tool()
+def verify_tp_fracture(m: int, k: int, n: int, tp: int = 4) -> dict:
+    """Validate the tensor-parallel fracture of a dense matmul (M x K x N) on the real mesh: shard the
+    weight across the mesh, matmul per-chip, all_gather, and compare to the dense single-chip result.
+    Returns {ok, pcc, ...}: ok=True when pcc>0.99 (the fracture is mathematically correct). Call this
+    on the tp-fracture rung to PROVE a fracture is correct before committing it."""
+    try:
+        import ttnn
+
+        from cc_optimize.tp_fracture import verify_fracture
+
+        rows = cols = 2
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
+        try:
+            r = verify_fracture(mesh, m=m, k=k, n=n, tp=tp)
+        finally:
+            ttnn.close_mesh_device(mesh)
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        r["ok"] = bool(r.get("pcc", 0.0) > 0.99)
+        return r
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)[-400:]}
 
 
 if __name__ == "__main__":
