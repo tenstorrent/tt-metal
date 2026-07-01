@@ -121,6 +121,9 @@ enum class FWMailboxMsg : uint8_t {
     POSTCODE,
     // ETH link training status
     TRAIN_STATUS,
+    // Actual trained ETH link speed in Gbps (eth_status_t.train_speed); lets host code read the
+    // real per-link rate (200/400/800G) instead of a hardcoded per-arch guess. 0 where unwired.
+    TRAIN_SPEED,
     // SerDes reset status
     SERDES_RESET_STATUS,
     // Number of mailbox message types

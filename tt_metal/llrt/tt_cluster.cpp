@@ -1173,6 +1173,50 @@ void Cluster::disable_ethernet_cores_with_retrain() {
     }
 }
 
+Cluster::FabricLinkBw Cluster::get_trained_fabric_link_bw(ChipId chip_id) const {
+    // Arch nominal per-link fabric BW (GB/s). Mirrors ttnn::ccl::lookup_fabric_link_bw, duplicated
+    // here so tt_metal (the profiler) can supply a peak without depending on ttnn.
+    auto arch_nominal_gb_s = [](tt::ARCH a) -> double {
+        switch (a) {
+            case tt::ARCH::WORMHOLE_B0: return 12.5;  // 100 Gbps/link
+            case tt::ARCH::BLACKHOLE: return 50.0;    // 400 Gbps/link
+            default: return 0.0;
+        }
+    };
+    FabricLinkBw result;
+    result.per_link_gb_s = arch_nominal_gb_s(this->arch());
+
+    // train_speed (Gbps) is only wired on archs that expose the eth-FW mailbox for it; 0 elsewhere.
+    const uint32_t train_speed_addr =
+        (this->hal_ != nullptr) ? this->hal_->get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::TRAIN_SPEED) : 0;
+
+    std::vector<uint32_t> read_vec;
+    uint32_t min_gbps = 0;
+    const auto& connected = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+    for (const auto& [other_chip_id, eth_cores] : connected) {
+        for (const auto& eth_core : eth_cores) {
+            result.num_active_links++;
+            if (train_speed_addr == 0) {
+                continue;
+            }
+            tt_cxy_pair virtual_eth_core(
+                chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
+            this->read_core(read_vec, sizeof(uint32_t), virtual_eth_core, train_speed_addr);
+            const uint32_t gbps = read_vec.empty() ? 0 : read_vec[0];
+            // Take the slowest live link: a mixed-speed mesh should report the bottleneck, and a
+            // conservative peak keeps util% from ever printing an impossible >100%.
+            if (gbps != 0) {
+                min_gbps = (min_gbps == 0) ? gbps : std::min(min_gbps, gbps);
+            }
+        }
+    }
+    if (min_gbps != 0) {
+        result.per_link_gb_s = static_cast<double>(min_gbps) / 8.0;  // Gbps -> GB/s (8 bits/byte)
+        result.from_hw = true;
+    }
+    return result;
+}
+
 void Cluster::rediscover_ethernet_links() {
     this->driver_->refresh_cluster_description();
 
