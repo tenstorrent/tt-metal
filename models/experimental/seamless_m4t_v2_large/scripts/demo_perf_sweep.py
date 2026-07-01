@@ -11,8 +11,9 @@ methodology as ``demo.py``, sweeping input sequence length by doubling: 32, 64, 
 
 Long inputs are prepared once at startup:
 
-  * Text — Alice in Wonderland from Project Gutenberg (repeated/trimmed per length).
-  * Audio — preamble WAV downloaded online, concatenated until >= 4096 mel frames.
+  * Text — *A Tale of Two Cities* from ``models/tt_transformers/tests/tale-of-two-cities.txt.bz2``
+    (same corpus as tt-transformers / Devstral prefill tests; repeated/trimmed per length).
+  * Audio — preamble WAV from ``demo.py`` (downloaded once if missing), concatenated until >= 4096 mel frames.
 
 Results are appended to a text log with per-length headers, TT-aligned metrics, and
 decoded task outputs (translated/transcribed text; speech stats and WAV files for T2ST/S2ST).
@@ -32,12 +33,11 @@ Optional::
 from __future__ import annotations
 
 import argparse
+import bz2
 import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
@@ -66,8 +66,7 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 DEFAULT_LOG = OUTPUT_DIR / "perf_sweep.txt"
-STORY_URL = "https://www.gutenberg.org/cache/epub/11/pg11.txt"
-STORY_FILE = OUTPUT_DIR / "alice_in_wonderland.txt"
+STORY_SOURCE = _REPO_ROOT / "models/tt_transformers/tests/tale-of-two-cities.txt.bz2"
 LONG_AUDIO_WAV = OUTPUT_DIR / "long_speech_input.wav"
 
 SRC_LANG = "eng"
@@ -98,42 +97,27 @@ def _weights_dir() -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _download_bytes(url: str, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    try:
-        with urllib.request.urlopen(url, timeout=120) as resp:
-            data = resp.read()
-        if not data:
-            raise RuntimeError("response body was empty")
-        tmp.write_bytes(data)
-        tmp.replace(dest)
-    except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"Failed to download {url}: {exc}") from exc
-
-
-def _clean_gutenberg_text(raw: str) -> str:
-    """Strip Gutenberg header/footer boilerplate; keep story body."""
-    start = re.search(r"\*\*\* START OF (THE|THIS) PROJECT GUTENBERG EBOOK.*?\*\*\*", raw, re.IGNORECASE)
-    end = re.search(r"\*\*\* END OF (THE|THIS) PROJECT GUTENBERG EBOOK.*?\*\*\*", raw, re.IGNORECASE)
-    if start and end:
-        raw = raw[start.end() : end.start()]
+def _normalize_story_text(raw: str) -> str:
+    raw = raw.lstrip("\ufeff")
     raw = re.sub(r"\r\n?", "\n", raw)
     raw = re.sub(r"[ \t]+\n", "\n", raw)
     raw = re.sub(r"\n{3,}", "\n\n", raw)
     return raw.strip()
 
 
-def ensure_long_story(url: str = STORY_URL, dest: Path = STORY_FILE) -> str:
-    """Download and cache a long English story for text-input sweeps."""
-    if dest.is_file() and dest.stat().st_size > 0:
-        return dest.read_text(encoding="utf-8", errors="replace")
-    _download_bytes(url, dest)
-    text = _clean_gutenberg_text(dest.read_text(encoding="utf-8", errors="replace"))
+def ensure_long_story(source: Path | None = None) -> str:
+    """Load English story text for text-input sweeps (tt-transformers prefill corpus)."""
+    path = (source or STORY_SOURCE).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Story text not found: {path}")
+    if path.suffix == ".bz2":
+        with bz2.open(path, "rt", encoding="utf-8") as f:
+            raw = f.read()
+    else:
+        raw = path.read_text(encoding="utf-8-sig", errors="replace")
+    text = _normalize_story_text(raw)
     if len(text) < 1000:
-        raise RuntimeError(f"Downloaded story at {dest} is unexpectedly short ({len(text)} chars)")
-    dest.write_text(text, encoding="utf-8")
+        raise RuntimeError(f"Story text at {path} is unexpectedly short ({len(text)} chars)")
     return text
 
 
@@ -147,20 +131,19 @@ def ensure_long_audio(
     sample_rate: int,
     *,
     min_mel_frames: int = SEQ_LEN_MAX,
-    url: str = demo_mod.PREAMBLE_WAV_URL,
     dest: Path = LONG_AUDIO_WAV,
 ) -> tuple[np.ndarray, Path]:
     """Build a mono 16 kHz waveform with at least ``min_mel_frames`` mel frames.
 
-    Downloads ``url`` (online preamble speech by default) and concatenates copies until the
-    processor timeline is long enough, then caches ``dest``.
+    Uses the demo preamble WAV (fetched once by ``demo.ensure_demo_audio`` if missing) and
+    concatenates copies until the processor timeline is long enough, then caches ``dest``.
     """
     if dest.is_file() and dest.stat().st_size > 0:
         wav, _ = demo_mod._load_mono_wav_resampled(dest, sample_rate)
         if _mel_frame_count(processor, wav, sample_rate) >= min_mel_frames:
             return wav, dest
 
-    preamble_path = demo_mod.ensure_demo_audio(url=url, dest=demo_mod.PREAMBLE_WAV)
+    preamble_path = demo_mod.ensure_demo_audio(dest=demo_mod.PREAMBLE_WAV)
     chunk, _ = demo_mod._load_mono_wav_resampled(preamble_path, sample_rate)
     if chunk.size == 0:
         raise RuntimeError(f"Preamble audio at {preamble_path} is empty")
@@ -635,13 +618,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--min-len", type=int, default=SEQ_LEN_MIN, help="First sequence length (then double)")
     parser.add_argument("--max-len", type=int, default=SEQ_LEN_MAX, help="Last sequence length (power-of-two sweep)")
-    parser.add_argument("--story-url", type=str, default=STORY_URL, help="URL for long English story text")
-    parser.add_argument(
-        "--audio-url",
-        type=str,
-        default=demo_mod.PREAMBLE_WAV_URL,
-        help="URL for seed speech WAV (concatenated to reach max mel frames)",
-    )
     parser.add_argument("--quiet", action="store_true", help="Write log file only (no stdout)")
     parser.add_argument(
         "--continue-on-error",
@@ -696,12 +672,11 @@ def main(argv: list[str] | None = None) -> None:
         original_default=original_default,
     )
 
-    story = ensure_long_story(url=args.story_url)
+    story = ensure_long_story()
     long_wav, long_wav_path = ensure_long_audio(
         processor,
         sample_rate,
         min_mel_frames=args.max_len,
-        url=args.audio_url,
     )
     full_audio = processor(audio=long_wav, sampling_rate=sample_rate, return_tensors="pt")
     full_speech_features = full_audio["input_features"].to(torch.bfloat16)
@@ -725,7 +700,7 @@ def main(argv: list[str] | None = None) -> None:
             f"speech={demo_mod._DEMO_SPEECH_WARMUP_ITERS} untimed iter(s), "
             f"then {demo_mod._DEMO_MEASURE_ITERS} timed (report min elapsed)"
         )
-        log.write(f"  Text input story: {STORY_FILE} ({len(story)} chars from {args.story_url})")
+        log.write(f"  Text input story: {STORY_SOURCE} ({len(story)} chars)")
         log.write(
             f"  Speech input: {long_wav_path} ({long_wav.size} samples @ {sample_rate} Hz, "
             f"{long_wav.size / sample_rate:.2f}s, mel_frames={max_mel_frames})"
