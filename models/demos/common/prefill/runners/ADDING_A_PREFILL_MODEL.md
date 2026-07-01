@@ -7,7 +7,9 @@ every model:
 - rank topology and the per-rank contiguous layer split (pipeline parallel),
 - the H2D input socket (rank 0) and the D2D inter-rank activation sockets,
 - the request (unbounded, production) and standalone (bounded, bring-up) loops,
-- fabric-link lease/reclaim per chunk, per-layer LayerAck, and shutdown,
+- fabric-link lease/reclaim per chunk, per-layer LayerAck, and graceful shutdown
+  (the producer/scheduler closes the request stream with an all -1 PrefillMetadata
+  sentinel; each rank forwards it downstream and exits — SIGKILL is the hard fallback),
 - KV-chunk-table publish + WORKER_READY handshake for cache migration.
 
 The engine never imports a model class. It selects an adapter by name
