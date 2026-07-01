@@ -204,6 +204,7 @@ class TTDecoder:
         *,
         use_torch_stft_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
+        activations_in_l1: bool = False,
     ) -> None:
         self.device = device
         self.params = params
@@ -221,6 +222,7 @@ class TTDecoder:
             params.generator,
             use_torch_stft_fallback=use_torch_stft_fallback,
             use_torch_phase_fallback=use_torch_phase_fallback,
+            activations_in_l1=activations_in_l1,
         )
 
     def forward(

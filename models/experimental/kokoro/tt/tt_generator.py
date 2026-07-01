@@ -390,9 +390,17 @@ class TTGenerator:
         *,
         use_torch_stft_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
+        activations_in_l1: bool = False,
     ) -> None:
         self.device = device
         self.params = params
+        # When True, the upsample/resblock loop keeps its activations L1-resident instead of
+        # DRAM-interleaved. The resblock AdaIN/Snake elementwise ops are DRAM-round-trip bound on
+        # the small per-stage tensors, so L1 residency is a ~4% device-time win (PCC-neutral — same
+        # fp32 math). Default off: it is only memory-safe for short sequences (the upsampled
+        # activations grow with audio length and can overflow L1). The harmonic source / STFT path
+        # is always left on the caller's ``memory_config``.
+        self._activations_in_l1 = activations_in_l1
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -504,14 +512,17 @@ class TTGenerator:
         """
         p = self.params
         ck = self.compute_kernel_config
-        activ_mc = memory_config
+        # Upsample/resblock loop runs in L1 when opted in (see ``activations_in_l1``); the harmonic
+        # source / STFT path always uses the caller's ``memory_config``. When the flag is off,
+        # ``activ_mc == memory_config`` and the path is byte-for-byte the original behaviour.
+        activ_mc = ttnn.L1_MEMORY_CONFIG if self._activations_in_l1 else memory_config
 
         har_nlc = self._harmonic_source_path(
             f0,
             sinegen_rand_ini=sinegen_rand_ini,
             sinegen_noise_raw=sinegen_noise_raw,
             source_noise_raw=source_noise_raw,
-            memory_config=activ_mc,
+            memory_config=memory_config,
         )
 
         target_dtype = har_nlc.dtype

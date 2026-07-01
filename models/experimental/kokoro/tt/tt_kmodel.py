@@ -234,6 +234,7 @@ class TTKModel:
         *,
         use_torch_stft_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
+        activations_in_l1: bool = False,
         disable_complex: bool = False,
     ) -> None:
         self.device = device
@@ -243,6 +244,7 @@ class TTKModel:
         self._ref_decoder = ref.decoder  # kept for lazy preprocess_tt_decoder calls
         self._use_stft_fallback = use_torch_stft_fallback
         self._use_phase_fallback = use_torch_phase_fallback
+        self._activations_in_l1 = activations_in_l1
         self._disable_complex = disable_complex
 
         self._bert = TTCustomAlbert(device, params.bert)
@@ -269,6 +271,7 @@ class TTKModel:
                 dec_params,
                 use_torch_stft_fallback=self._use_stft_fallback,
                 use_torch_phase_fallback=self._use_phase_fallback,
+                activations_in_l1=self._activations_in_l1,
             )
         return self._decoder_cache[t_mel]
 

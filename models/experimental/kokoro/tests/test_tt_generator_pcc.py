@@ -32,6 +32,7 @@ We therefore split the PCC validation into two layers:
 
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -1722,8 +1723,9 @@ def test_tt_generator_full_forward_torch_stft_fallback_pcc(device):
         tt_mod = TTGenerator(
             device,
             params,
-            use_torch_stft_fallback=True,
+            use_torch_stft_fallback=False,
             use_torch_phase_fallback=True,
+            activations_in_l1=True,
         )
 
     x_nlc = x.transpose(1, 2).contiguous()
@@ -1784,7 +1786,8 @@ def test_tt_generator_full_forward_smoke(device):
     torch.rand = _fake_rand
     torch.randn_like = _fake_randn_like
     try:
-        tt_mod = TTGenerator(device, params)
+        # KOKORO_GEN_L1=1 keeps the upsample/resblock loop L1-resident (opt-in perf path).
+        tt_mod = TTGenerator(device, params, activations_in_l1=os.environ.get("KOKORO_GEN_L1") == "1")
         with torch.no_grad():
             y_ref = ref(x, s, f0)
     finally:

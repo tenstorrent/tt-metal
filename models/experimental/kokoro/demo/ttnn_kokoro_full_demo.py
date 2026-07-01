@@ -67,6 +67,14 @@ def main() -> int:
         help="Use PyTorch float32 SineGen phase fallback for higher numerical parity.",
     )
     parser.add_argument(
+        "--l1-activations",
+        action="store_true",
+        help=(
+            "Keep the generator upsample/resblock loop activations L1-resident (~4%% faster, "
+            "PCC-neutral). Safe for short utterances; may OOM on very long inputs."
+        ),
+    )
+    parser.add_argument(
         "--disable-complex",
         action="store_true",
         help=(
@@ -115,6 +123,7 @@ def main() -> int:
 
         use_stft_fallback = bool(args.torch_stft_fallback)
         use_phase_fallback = bool(args.torch_phase_fallback)
+        activations_in_l1 = bool(args.l1_activations)
 
         model = TTKModel(
             device,
@@ -122,11 +131,12 @@ def main() -> int:
             params,
             use_torch_stft_fallback=use_stft_fallback,
             use_torch_phase_fallback=use_phase_fallback,
+            activations_in_l1=activations_in_l1,
             disable_complex=args.disable_complex,
         )
         logger.info(
             f"use_torch_stft_fallback={use_stft_fallback} use_torch_phase_fallback={use_phase_fallback} "
-            f"disable_complex={args.disable_complex}"
+            f"activations_in_l1={activations_in_l1} disable_complex={args.disable_complex}"
         )
         wave_chunks: list[torch.Tensor] = []
         torch.manual_seed(0)
