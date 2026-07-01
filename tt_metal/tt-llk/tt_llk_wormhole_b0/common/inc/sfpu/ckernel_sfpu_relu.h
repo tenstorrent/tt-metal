@@ -105,44 +105,18 @@ inline void _relu_max_(T threshold)
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, VecType threshold)
+inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, InstrModLoadStore sfpload_instr_mod)
 {
-    // relu_min(x, L) = max(x, L).
     for (int d = 0; d < iterations; d++)
     {
-        if constexpr (std::is_same_v<VecType, sfpi::vInt>)
-        {
-            // int32 is stored in DEST as sign+magnitude; load/store in 2's complement.
-            sfpi::vInt result = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
-            // Signed-int max needs a sign-aware compare: a direct vInt '<' is only
-            // reliable when both operands share a sign (sfpi issue #14598).
-            v_if ((result ^ threshold) >= 0)
-            {
-                // Same sign: the direct compare is valid.
-                v_if (result < threshold)
-                {
-                    result = threshold;
-                }
-                v_endif;
-            }
-            v_elseif (result < 0)
-            {
-                // Different signs and result negative => result < threshold.
-                result = threshold;
-            }
-            v_endif;
-            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = result;
-        }
-        else
-        {
-            sfpi::vFloat result = sfpi::dst_reg[0];
-            v_if (result < threshold)
-            {
-                result = threshold;
-            }
-            v_endif;
-            sfpi::dst_reg[0] = result;
-        }
+        // Load input tensor to lreg0
+        TTI_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, 0);
+        // Copy value param from lreg2 to lreg1
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+        // Swap and store maximum in lreg1, minimum in lreg0 (sign + magnitude format)
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+        // Store the result
+        TTI_SFPSTORE(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, 0);
         sfpi::dst_reg++;
     }
 }
@@ -154,6 +128,14 @@ inline void _relu_min_(T threshold)
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
     VectorType v_threshold;
+    int scalar = threshold;
+    if (scalar < 0)
+    { // To convert from 2's complement to sign+magnitude
+        scalar  = -scalar;
+        int res = 0x80000000 | (scalar & 0x7FFFFFFF);
+        scalar  = res;
+    }
+    InstrModLoadStore sfpload_instr_mod = InstrModLoadStore::DEFAULT;
     if constexpr (std::is_same_v<T, float>)
     {
         v_threshold = threshold;
@@ -162,13 +144,12 @@ inline void _relu_min_(T threshold)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
-            // relu_min int32 threshold is passed as the raw 2's-complement int value.
-            v_threshold = static_cast<int>(threshold);
+            _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
+            sfpload_instr_mod = InstrModLoadStore::INT32_2S_COMP;
         }
         else
         {
-            // Float threshold is passed as fp32 bits; reinterpret them.
-            v_threshold = Converter::as_float(threshold);
+            _sfpu_load_imm32_(p_sfpu::LREG2, threshold);
         }
     }
     else
@@ -176,7 +157,7 @@ inline void _relu_min_(T threshold)
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
-    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold, sfpload_instr_mod);
 }
 
 } // namespace sfpu
