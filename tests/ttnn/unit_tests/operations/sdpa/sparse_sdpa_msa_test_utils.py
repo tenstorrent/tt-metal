@@ -26,9 +26,8 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=F
         indices [B, n_kv, S, topk]      block-ids per (group, query); SENTINEL (-1) = masked, contiguous tail
         -> out  [B, H, S, v_dim]        (v_dim = v.shape[-1])
 
-    Block selection (`indices`) bounds causality to block granularity. With `causal=True` a token-level
-    causal mask is added on top — required for correctness on the diagonal block, whose selected tokens
-    after the query position are future and must not be attended.
+    `causal=True` enables a token-level causality — required for correctness on the diagonal block,
+    whose selected tokens after the query position are future and must not be attended.
 
     Query heads sharing a KV head also share that KV head's block selection. All-masked rows return 0.
     """

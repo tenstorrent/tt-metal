@@ -204,7 +204,8 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAMsaOperation::get_dynamic
         return {};
     }
     // Per-device causal start: chunk_start_idx + rank*S along cluster_axis (rank 0 on a single device).
-    // Mirrors indexer_score_msa so this op's token-level causality matches the indexer's block causality.
+    // Derived exactly as indexer_score_msa's start, so the mask and the indexer's selection share one
+    // global-position frame.
     uint32_t chunk_start_local = 0;
     if (attrs.causal_enabled()) {
         const uint32_t S = t.q.logical_shape()[2];
