@@ -627,15 +627,27 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
     return device_op
 
 
+class PerfCsvIncomplete(Exception):
+    """The C++ cpp_device_perf_report.csv fast path cannot cover every host op.
+
+    Raised when the perf CSV is stale or partial (e.g. a report left in .logs by an
+    earlier run, or a run where the C++ post-process didn't emit every op). It signals
+    append_device_data to fall back to the complete, proven legacy device-log path so
+    the report is built from real device data rather than crashing or silently dropping
+    ops. The fast path stays a pure optimization: correct when whole, deferential when not.
+    """
+
+
 def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        if device_id not in device_perf_by_device:
+            raise PerfCsvIncomplete(
+                f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+            )
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
@@ -663,10 +675,11 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                raise PerfCsvIncomplete(
+                    f"Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                    f"for device {device_id} (trace_id={host_trace_id}); report is stale or partial"
+                )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             # Only top-level keys are added below, and host_op is consumed here (its list
@@ -1221,7 +1234,19 @@ def append_device_data(
                 "device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option."
             )
         device_perf_by_device = load_device_perf_report(device_perf_report)
-        host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+        try:
+            host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+        except PerfCsvIncomplete as e:
+            logger.warning(
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT} is stale or partial ({e}); "
+                f"falling back to complete legacy device-log parsing so device timings stay real."
+            )
+            use_perf_csv = False
+            # The fast path may have mutated host_ops_by_device in place before raising; re-derive a clean copy.
+            host_ops_by_device, _ = get_device_op_data(ops, host_device_op_compare)
+            host_ops_by_device = _enrich_ops_from_device_logs(
+                host_ops_by_device, logFolder, device_analysis_types, traceReplays
+            )
     else:
         if device_perf_report.is_file() and force_legacy_device_logs:
             logger.info(
