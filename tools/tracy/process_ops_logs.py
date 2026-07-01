@@ -1060,6 +1060,23 @@ def _build_trace_ops_mapping(host_ops_by_device: DeviceOpsDict, ops: Dict[int, O
     return trace_ops_by_augmented_id
 
 
+def _op_measured_fw_timing(op) -> Tuple[Optional[float], Optional[float]]:
+    """(device_fw duration_ns, AICLK MHz) from the op's C++ perf row (_device_perf_row).
+
+    Uses the same measured start/end cycles + duration the CSV clock column is built from (via
+    compute_ns_per_cycle), so the BW% denominator is a REAL per-op peak -- never a hardcoded
+    clock. (None, None) when the op carries no device perf row (e.g. a host-only op).
+    """
+    perf_row = op.get("_device_perf_row")
+    if not perf_row:
+        return None, None
+    duration_ns = perf_row.get("DEVICE FW DURATION [ns]")
+    ns_per_cycle = compute_ns_per_cycle(perf_row)
+    if not duration_ns or not ns_per_cycle:
+        return None, None
+    return duration_ns, 1000.0 / ns_per_cycle  # ns/cycle -> MHz
+
+
 def _attach_counter_derived_bw(ops_iter, logFolder: Path) -> int:
     """Attach counter-derived NoC/ETH bytes + BW-util % from the profiler's own noc-trace JSON.
 
@@ -1077,16 +1094,17 @@ def _attach_counter_derived_bw(ops_iter, logFolder: Path) -> int:
     found = 0
     for op in ops_iter:
         run_host_id = op["global_call_count"] & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
-        duration_ns = op.get("DEVICE FW DURATION [ns]")
         nb = noc.get(run_host_id)
         fb = fabric.get(run_host_id)
         if nb is None and fb is None:
             continue
         found += 1
+        # Duration + AICLK from the op's C++ perf row (present at this stage; the CSV-stage
+        # "DEVICE FW DURATION [ns]"/"freq" keys and device_time are not populated yet). Reading
+        # the measured cycles is what makes the % honest -- a real per-op peak, never a hardcoded clock.
+        duration_ns, aiclk_mhz = _op_measured_fw_timing(op)
         if nb is not None:
             op["NOC BYTES FROM COUNTERS"] = nb["bytes"]
-            ns_per_cycle = compute_ns_per_cycle(op)
-            aiclk_mhz = (1000.0 / ns_per_cycle) if ns_per_cycle else op.get("freq")
             port_peak = noc_port_peak_gbps(aiclk_mhz)
             if port_peak:
                 pct = noc_bw_util_pct(nb["bytes"], duration_ns, port_peak * nb["links"])
