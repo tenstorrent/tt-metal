@@ -90,8 +90,14 @@ class TtPrefillRuntime:
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config
-        # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
+        # Per-layer LayerAck callback (single-host mode), built once in
+        # set_layer_ack_channel() after compile. Signature: on_layer_complete(layer_idx).
         self._on_layer_complete = None
+        # Per-layer completion sink (pipelined mode), set by set_layer_completion_sink().
+        # Signature: sink(layer_idx, request_id). prefill() binds the current request_id into
+        # a fresh per-call closure, so there is no shared mutable chunk-index for the callback
+        # to race on (immune even if the threading model changes).
+        self._layer_completion_sink = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -231,6 +237,7 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        request_id: int = 0,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s KV cache.
 
@@ -271,11 +278,24 @@ class TtPrefillRuntime:
             actual_start <= actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
+        # Bind this chunk's request_id into a fresh per-call callback. The pipelined sink needs it to
+        # build a globally-dense key (seq = request_id*num_layers + layer_idx); capturing by value per
+        # call means there is no shared mutable chunk-index for the synchronously-fired callback to race
+        # on. Single-host layer-ack mode ignores request_id.
+        if self._layer_completion_sink is not None:
+            sink = self._layer_completion_sink
+
+            def on_layer_complete(layer_idx: int) -> None:
+                sink(layer_idx, request_id)
+
+        else:
+            on_layer_complete = self._on_layer_complete
+
         out = self.model.forward(
             input_tensor,
             self.kvpe_cache,
             actual_isl=actual_end - actual_start,
-            on_layer_complete=self._on_layer_complete,
+            on_layer_complete=on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
@@ -304,3 +324,19 @@ class TtPrefillRuntime:
             layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined prefill.
+
+        `sink` is called once per layer as `sink(layer_idx, request_id)` — the
+        global layer index plus the current request/chunk id, which prefill()
+        binds per call (so the sink need not read any mutable runtime state). It
+        replaces the direct counter-channel inject used in single-host mode:
+        instead of bumping a counter, the runner pushes a full completion
+        {seq, source_rank, layer_idx, request_id} into the host-local
+        LayerCompletionQueue, and the LayerCompletionRouter routes it to the
+        master host and re-emits it (in seq order) into the scheduler-facing
+        counter channel (see runners/pipelined_prefill/).
+        """
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._layer_completion_sink = sink

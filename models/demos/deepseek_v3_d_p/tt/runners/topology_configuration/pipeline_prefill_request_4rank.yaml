@@ -12,3 +12,8 @@ global_env:
   PREFILL_MAX_SEQ_LEN: "56320"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  PREFILL_MODEL_VARIANT: "kimi_k2_6"
+  PREFILL_PP_D2D_FIFO_BYTES: "4096"
+  # NOTE: PREFILL_CHECK_COMPLETIONS is test-only — the master attaches a stand-in consumer that
+  # drains the scheduler's counter channel, so it must NOT be set in a config a real scheduler runs
+  # against (it would zero the deltas the scheduler polls). Enable it only for bring-up.

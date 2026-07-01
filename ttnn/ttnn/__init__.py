@@ -224,6 +224,7 @@ from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
 )
 
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,

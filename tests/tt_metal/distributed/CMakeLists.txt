@@ -1,3 +1,6 @@
+# Shared layer-completion impl source list (LAYER_COMPLETION_IMPL_SRCS / LAYER_COMPLETION_DIR).
+include(${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill/sources.cmake)
+
 set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_auto_mpi_init.cpp
     test_control_plane_local_mesh_binding.cpp
@@ -13,6 +16,11 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_workload.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
+    test_layer_completion_layout.cpp
+    test_layer_completion_queue.cpp
+    test_layer_completion_queue_mpsc.cpp
+    test_layer_completion_reorder_buffer.cpp
+    test_layer_completion_router.cpp
     test_mesh_sub_device.cpp
     test_mesh_allocator.cpp
     test_mesh_events.cpp
@@ -20,6 +28,9 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_thread_pool.cpp
     test_dispatch_context.cpp
     utils.cpp
+    # The layer-completion impls live with the pipelined-prefill feature (models/demos/...); compile
+    # them in so the queue/reorder/router gtests link without pulling in the feature's standalone .so.
+    ${LAYER_COMPLETION_IMPL_SRCS}
 )
 # MPI sub-context tests require the MPI distributed build (matches tt_metal/distributed USE_MPI).
 if(ENABLE_DISTRIBUTED)
@@ -44,6 +55,8 @@ target_include_directories(
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal/distributed # named_shm.hpp (used by the layer_completion queue impl)
+        ${LAYER_COMPLETION_DIR} # layer-completion feature headers (queue/reorder/router/ring_layout/message)
 )
 
 set_target_properties(
