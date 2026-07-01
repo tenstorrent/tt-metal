@@ -83,6 +83,7 @@ inline std::uint32_t _llk_pack_output_size_bytes_(const std::uint32_t pack_dst_f
 
     return packed_tile_size_bytes;
 }
+
 inline std::uint32_t _llk_pack_output_addr_offset_words_(
     const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {

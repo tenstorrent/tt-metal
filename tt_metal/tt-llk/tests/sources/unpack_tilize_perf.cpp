@@ -211,29 +211,55 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        const bool skip_bh_tilize_workaround = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
-        static constexpr bool TILIZE         = true;
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-            formats.pack_src,
-            formats.pack_dst,
-            16 * 16 * 4 /* tile_size */,
-            FACE_R_DIM,
-            TILE_C_DIM,
-            4 /* num_faces */,
-            false /* partial_face */,
-            false /* narrow_tile */,
-            0 /* relu_config */);
-        _llk_pack_init_with_src_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
-            formats.pack_src,
-            formats.pack_dst,
-            FACE_R_DIM,
-            TILE_C_DIM,
-            4 /* num_faces */,
-            false /* partial_face */,
-            false /* narrow_tile */,
-            1 /* num_tiles */,
-            skip_bh_tilize_workaround);
-        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>();
+        static constexpr bool TILIZE = true;
+        // BH non-8-bit: bug fires, pack must run Tilize. BH 8-bit and WH: pack runs Default.
+        // See unpack_tilize_interleaves_rows in llk_pack_tilize_dispatch.h.
+        if (unpack_tilize_interleaves_rows(formats.unpack_A_src))
+        {
+            _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
+                formats.pack_src,
+                formats.pack_dst,
+                16 * 16 * 4 /* tile_size */,
+                FACE_R_DIM,
+                TILE_C_DIM,
+                4 /* num_faces */,
+                false /* partial_face */,
+                false /* narrow_tile */,
+                0 /* relu_config */);
+            _llk_pack_init_with_src_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
+                formats.pack_src,
+                formats.pack_dst,
+                FACE_R_DIM,
+                TILE_C_DIM,
+                4 /* num_faces */,
+                false /* partial_face */,
+                false /* narrow_tile */,
+                1 /* num_tiles */);
+            _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>();
+        }
+        else
+        {
+            _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+                formats.pack_src,
+                formats.pack_dst,
+                16 * 16 * 4 /* tile_size */,
+                FACE_R_DIM,
+                TILE_C_DIM,
+                4 /* num_faces */,
+                false /* partial_face */,
+                false /* narrow_tile */,
+                0 /* relu_config */);
+            _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
+                formats.pack_src,
+                formats.pack_dst,
+                FACE_R_DIM,
+                TILE_C_DIM,
+                4 /* num_faces */,
+                false /* partial_face */,
+                false /* narrow_tile */,
+                1 /* num_tiles */);
+            _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
+        }
         PROFILER_SYNC();
     }
     {

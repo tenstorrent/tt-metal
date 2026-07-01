@@ -68,6 +68,7 @@ inline void _llk_pack_configure_addrmod_()
             .set(ADDR_MOD_2);
     }
 }
+
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -391,8 +392,7 @@ inline void _llk_pack_init_(
     const std::uint32_t face_r_dim,
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
-    const std::uint32_t num_tiles,
-    const bool skip_bh_tilize_workaround = false)
+    const std::uint32_t num_tiles)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
@@ -405,18 +405,12 @@ inline void _llk_pack_init_(
         LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
     }
 
-    // 8bit datums in the unpack src format are not affected by the blackhole issue,
-    // so we can skip the workaround which involves unswizzling rows in the tile.
-    if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
-    {
-        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
-            pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
-    }
-    else
-    {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
-            pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
-    }
+    // Caller is responsible for choosing PackMode::Default (instead of PackMode::Tilize)
+    // when the unpack-side input is an 8-bit format; the BH whole-tile unswizzle MOP is
+    // only needed for non-8-bit inputs. See llk_pack_tile_api.h (production caller) and
+    // _llk_pack_init_with_src_wrapper_ (test wrapper) for the dispatch logic.
+    llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
+        pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
 inline void _llk_pack_uninit_()

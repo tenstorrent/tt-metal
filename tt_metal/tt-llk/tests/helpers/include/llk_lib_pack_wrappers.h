@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "llk_pack.h"
+#include "llk_pack_tilize_dispatch.h"
 #include "llk_pack_untilize.h"
 
 using ckernel::FACE_R_DIM;
@@ -28,13 +29,6 @@ template <bool untilize>
 inline constexpr PackMode pack_exec_mode_v = untilize ? PackMode::Untilize : PackMode::Default;
 
 #ifdef ARCH_WORMHOLE
-
-inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const std::uint32_t pack_src_format)
-{
-    // Wormhole does not need the Blackhole-specific tilize workaround, so the
-    // source format does not affect pack configuration in these LLK tests.
-    return false;
-}
 
 /// Pack configure/init \ref PackMode for unpack-tilize sweep-style tests. Wormhole B0 pack does not support
 /// \c PackMode::Tilize in \c configure_pack / \c _llk_pack_init_; Blackhole uses \ref llk_test_pack_mode_v.
@@ -91,13 +85,12 @@ template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_with_src_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim                        = FACE_R_DIM,
-    [[maybe_unused]] const std::uint32_t tile_c_dim       = TILE_C_DIM,
-    const std::uint32_t num_faces                         = 4,
-    const bool partial_face                               = false,
-    const bool narrow_tile                                = false,
-    const std::uint32_t num_tiles                         = 1,
-    [[maybe_unused]] const bool skip_bh_tilize_workaround = false)
+    const std::uint32_t face_r_dim                  = FACE_R_DIM,
+    [[maybe_unused]] const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces                   = 4,
+    const bool partial_face                         = false,
+    const bool narrow_tile                          = false,
+    const std::uint32_t num_tiles                   = 1)
 {
     static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack init supports PackMode::Default or PackMode::Untilize only");
     _llk_pack_init_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
@@ -151,13 +144,6 @@ inline void _llk_pack_untilize_uninit_wrapper_([[maybe_unused]] const std::uint3
 }
 
 #elif defined(ARCH_BLACKHOLE)
-
-inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
-{
-    // Blackhole requires the tilize workaround for 8-bit source formats to
-    // keep pack behavior aligned with the unpack tilize path used by LLK tests.
-    return IS_8BIT_FORMAT(pack_src_format);
-}
 
 /// Pack configure/init \ref PackMode for unpack-tilize sweep-style tests (maps legacy untilize/tilize flags).
 template <bool untilize, bool tilize>
@@ -216,10 +202,10 @@ inline void _llk_pack_init_with_src_wrapper_(
     const std::uint32_t num_faces            = 4,
     [[maybe_unused]] const bool partial_face = false,
     [[maybe_unused]] const bool narrow_tile  = false,
-    const std::uint32_t num_tiles            = 1,
-    const bool skip_bh_tilize_workaround     = false)
+    const std::uint32_t num_tiles            = 1)
 {
-    _llk_pack_init_<pack_mode, zero_output>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
+    // Pass-through. Caller picks PackMode via unpack_tilize_interleaves_rows.
+    _llk_pack_init_<pack_mode, zero_output>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en, [[maybe_unused]] PackMode pack_mode = PackMode::Default>

@@ -4,6 +4,7 @@
 
 #pragma once
 #include "llk_pack_common_api.h"
+#include "llk_pack_tilize_dispatch.h"
 
 /*************************************************************************
  * LLK PACK
@@ -27,12 +28,17 @@ inline void llk_pack_init(
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
     }
 
-    // For pack with tilize enabled, check if the original input format is 8-bit.
-    // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
+    // When caller requested Tilize but the BH unpack stride bug does not apply
+    // (8-bit input), fall back to Default. See unpack_tilize_interleaves_rows
+    // in llk_pack_tilize_dispatch.h for the HW background.
     const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
-    const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
-    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
+    if (pack_mode == PackMode::Tilize && !unpack_tilize_interleaves_rows(src_format)) {
+        _llk_pack_init_<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides>(
+            pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles);
+    } else {
+        _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+            pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles);
+    }
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>

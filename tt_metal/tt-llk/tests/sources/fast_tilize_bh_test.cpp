@@ -102,7 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Row-only contract: one row of tiles per call. Multi-row iteration belongs
     // in the caller. See fast_tilize_metal_api_test.cpp for the reference pattern.
 #ifdef SPEED_OF_LIGHT
-    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
+    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only, set BLOCK_RT_DIM=1");
 #endif
 
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
@@ -210,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
 #endif
 #ifdef SPEED_OF_LIGHT
-    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
+    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only, set BLOCK_RT_DIM=1");
 #endif
     constexpr std::uint32_t unit_dim = 4;
 
@@ -264,7 +264,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // Math is completely unchanged — same MOP for all unit_dims.
+            // Math is completely unchanged, same MOP for all unit_dims.
             // Each unit consumes 4 dvalids and fills a full DEST half-bank.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -298,7 +298,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res        = params.buffer_Res;
 #endif
 #ifdef SPEED_OF_LIGHT
-    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
+    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only, set BLOCK_RT_DIM=1");
 #endif
 
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
@@ -335,7 +335,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
             _llk_pack_init_<ckernel::PackMode::Tilize, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
-                formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+                formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
