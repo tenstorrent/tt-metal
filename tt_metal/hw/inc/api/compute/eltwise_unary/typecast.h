@@ -146,7 +146,7 @@ ALWI void typecast_tile(uint32_t idst) {
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_fp32,
-            (APPROX, 8 /* ITERATIONS */),
+            (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Int32) {
@@ -250,7 +250,7 @@ ALWI void typecast_tile(uint32_t idst) {
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_uint32,
-            (APPROX, 8 /* ITERATIONS */),
+            (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Int32) {
@@ -259,7 +259,7 @@ ALWI void typecast_tile(uint32_t idst) {
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_uint32,
-            (APPROX, 8 /* ITERATIONS */),
+            (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::UInt16) {
