@@ -206,6 +206,18 @@ class Ideogram4TransformerBlock(Module):
             k_chunk_size=self.sdpa_k_chunk_size,
             exp_approx_mode=False,
         )
+        # HiFi2 ring-SDPA q_chunk is resolution-adaptive (a standalone HiFi2 SDPA
+        # micro-sweep at these per-device shapes on the (12,9) ring worker grid).
+        # k_chunk=256 is optimal at every resolution (head_dim=256 caps it there),
+        # but the best q_chunk depends on how many q-chunks fill the 108-core grid:
+        #   * short local seq (512/1280 @ 512/1024px): q_chunk=128 keeps enough
+        #     chunks to fill the grid (qc=256 underfills -> ~1.4-2x slower there);
+        #   * long local seq (4352 @ 2048px): q_chunk=256 halves chunk-launch
+        #     overhead and wins ~1.3x (1737us -> 1345us / 34.7% -> 44.8% util).
+        # So pick q_chunk by local_seq_len at forward time (configs cached below).
+        self._ring_sdpa_pc_cache = {}
+        self._ring_sdpa_qc_large = 256  # local_seq_len >= this threshold -> qc=256
+        self._ring_sdpa_large_seq_threshold = 2048
         # ------------------------------------------------------------------
         # MIXED math fidelity (mirrors Wan2.2): HiFi2 for the heavy per-token
         # compute (the four big block matmuls + SDPA), HiFi4 for the
@@ -253,6 +265,28 @@ class Ideogram4TransformerBlock(Module):
         self.matmul_compute_kernel_config = self.mm_hifi2_config
         self.sdpa_compute_kernel_config = self.sdpa_hifi2_config
         self.adaln_compute_kernel_config = self.hifi4_config
+
+    def _get_ring_sdpa_program_config(self, local_seq_len):
+        """Resolution-adaptive ring-SDPA program config (HiFi2-tuned q_chunk).
+
+        A standalone HiFi2 SDPA micro-sweep on the (12,9) ring worker grid found
+        q_chunk=256 wins ~1.3x at long local seq (4352 @ 2048px: 1737->1345us)
+        but underfills the 108-core grid at short seq (512/1280), so pick q_chunk
+        by local_seq_len; k_chunk=256 is optimal at all resolutions.
+        """
+        qc = (
+            self._ring_sdpa_qc_large if local_seq_len >= self._ring_sdpa_large_seq_threshold else self.sdpa_q_chunk_size
+        )
+        pc = self._ring_sdpa_pc_cache.get(qc)
+        if pc is None:
+            pc = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=qc,
+                k_chunk_size=self.sdpa_k_chunk_size,
+                exp_approx_mode=False,
+            )
+            self._ring_sdpa_pc_cache[qc] = pc
+        return pc
 
     def _merge_qkv_for_tp(self, qkv_weight: torch.Tensor) -> torch.Tensor:
         """Rearrange the fused reference QKV weight so column-fracturing shards heads.
@@ -426,7 +460,7 @@ class Ideogram4TransformerBlock(Module):
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.sp_axis),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self.ring_sdpa_program_config,
+                program_config=self._get_ring_sdpa_program_config(q.shape[2]),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
