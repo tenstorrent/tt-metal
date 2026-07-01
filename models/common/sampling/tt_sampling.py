@@ -473,9 +473,16 @@ class TTSampling(LightweightModule):
                 line_all_gather_kwargs["dtype"] = dtype
             return self._line_all_gather(tensor, **line_all_gather_kwargs)
 
-        if self.tt_ccl is None:
-            # Some callers construct sampling with tt_ccl=None and rely on a plain all-gather that
-            # needs no CCL object / semaphores (e.g. gpt_oss on [4,8] meshes, gemma4). Keep that path.
+        # The trace-safe barriered gather below needs the model CCL's persistent, per-iteration
+        # cycled semaphore API (get_and_cycle_ag_semaphore_handles / get_and_cycle_barrier_semaphore_handle).
+        # tt_transformers' TT_CCL exposes it; callers that don't -- tt_ccl=None (gpt_oss on [4,8],
+        # gemma4) and CCLs with a different semaphore API (e.g. DeepSeek's get_gather_sem/get_barrier_sem)
+        # -- stay on the plain ttnn.all_gather path they used before this change.
+        has_cycled_semaphores = self.tt_ccl is not None and all(
+            callable(getattr(self.tt_ccl, method_name, None))
+            for method_name in ("get_and_cycle_ag_semaphore_handles", "get_and_cycle_barrier_semaphore_handle")
+        )
+        if not has_cycled_semaphores:
             return ttnn.all_gather(
                 tensor,
                 dim=dim,
