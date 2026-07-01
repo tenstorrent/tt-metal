@@ -11,11 +11,11 @@ This proves the overlap works and measures arm stall correctly without
 needing LIBERO / MuJoCo installed.
 
 Usage:
-    python models/experimental/pi0_5/eval/test_async_rollout_mock.py
+    python models/experimental/pi0_5/libero_sim/test_async_rollout_mock.py
 """
 import time
 import numpy as np
-from models.experimental.pi0_5.eval.async_rollout import (
+from models.experimental.pi0_5.libero_sim.async_rollout import (
     run_episode_async,
     run_episode_sync,
 )

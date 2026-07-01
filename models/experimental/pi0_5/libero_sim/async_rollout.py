@@ -19,7 +19,7 @@ Usage (same env as the sync rollout):
     PI05_CHECKPOINT_DIR=/.../pi05_libero_upstream PI0_UPSTREAM_MASKS=1 \\
     QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1 QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1 \\
     PYTHONPATH=$PWD python_env/bin/python \\
-      models/experimental/pi0_5/eval/async_rollout.py \\
+      models/experimental/pi0_5/libero_sim/async_rollout.py \\
       --backend ttnn --suite libero_spatial --task 0 --seeds 0
 
 Comparison flags:
@@ -249,7 +249,7 @@ def run_episode_sync(
 
 # ── main ────────────────────────────────────────────────────────────
 def main():
-    from models.experimental.pi0_5.eval.libero_rollout import (
+    from models.experimental.pi0_5.libero_sim.libero_rollout import (
         Pi0_5LiberoAdapter,
         make_libero_env,
         SUITE_MAX_STEPS,

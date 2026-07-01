@@ -20,7 +20,7 @@ Pipeline:
 Run:
   PYTHONPATH=/home/tt-admin/sdawle/pi0/tt-metal:/storage/sdawle/libero_repo \\
   MUJOCO_GL=osmesa python_env/bin/python \\
-  models/experimental/pi0_5/eval/libero_rollout.py --num-episodes 5 --max-steps 200
+  models/experimental/pi0_5/libero_sim/libero_rollout.py --num-episodes 5 --max-steps 200
 """
 
 import argparse
@@ -81,7 +81,7 @@ class Pi0_5LiberoAdapter:
         ),
         backend: str = "pytorch",
         ttnn_device=None,
-        mesh_handles=None,  # ttnn_glx backend only — opened via open_galaxy_mesh()
+        mesh_handles=None,  # ttnn_1x8 backend only — the mesh from open_prefill_tp4_mesh()
         max_action_dim: int = 32,
         max_state_dim: int = 32,
         chunk_size: int = 50,
@@ -167,14 +167,6 @@ class Pi0_5LiberoAdapter:
             self._ttnn = ttnn_mod
             self._Pi0_5ModelTTNN = Pi0_5ModelTTNN
             self.model = Pi0_5ModelTTNN(cfg, loader, ttnn_device)
-        elif backend == "ttnn_glx":
-            assert mesh_handles is not None, "ttnn_glx backend requires mesh_handles from open_galaxy_mesh()"
-            from models.experimental.pi0_5.tt.tt_bh_glx.pipeline import Pi0_5GLXPipeline
-
-            self._ttnn = None
-            self._Pi0_5ModelTTNN = None
-            self.mesh_handles = mesh_handles
-            self.model = Pi0_5GLXPipeline(cfg, loader.categorized_weights, mesh_handles)
         elif backend == "ttnn_1x8":
             # 1×8 mesh pipeline: 8 chips with on-device CCL, num_command_queues=2
             # for H2D overlap, traced + 2CQ replay loop. mesh_handles is the raw
@@ -394,21 +386,6 @@ class Pi0_5LiberoAdapter:
                     state=None,
                 )
             self.model.denoising.config.num_steps = original_steps
-            actions_np = actions[0].float().cpu().numpy()
-        elif self.backend == "ttnn_glx":
-            # 28-chip BH Galaxy host-bounce pipeline. sample_actions takes torch
-            # tensors directly and returns (torch_actions, StageTimings). No trace
-            # or persistent-buffer optimizations in v1.
-            original_steps = self.model.num_denoising_steps
-            self.model.num_denoising_steps = num_denoising_steps
-            with torch.no_grad():
-                actions, _ = self.model.sample_actions(
-                    images=images,
-                    img_masks=img_masks,
-                    lang_tokens=tokens,
-                    lang_masks=lang_mask,
-                )
-            self.model.num_denoising_steps = original_steps
             actions_np = actions[0].float().cpu().numpy()
         elif self.backend == "ttnn_1x8":
             # 1×8 mesh + Trace + 2CQ pipeline. capture_trace rebuilds attention
@@ -968,7 +945,7 @@ def main():
         default=None,
         help="Override env step cap. If unset, uses per-suite default (spatial=220, object=280, goal=300, 10=520).",
     )
-    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn", "ttnn_glx", "ttnn_1x8"])
+    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn", "ttnn_1x8"])
     ap.add_argument(
         "--replan-steps",
         type=int,
@@ -1076,12 +1053,6 @@ def main():
             trace_region_size=134_217_728,
         )
         print(f"   ttnn device opened in {time.time() - t0:.1f}s (device_id={args.device_id})")
-    elif args.backend == "ttnn_glx":
-        from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_galaxy_mesh
-
-        mesh_ctx = open_galaxy_mesh(l1_small_size=24576)
-        mesh_handles = mesh_ctx.__enter__()
-        print(f"   ttnn_glx mesh opened in {time.time() - t0:.1f}s (28 chips on 8x4 BH Galaxy)")
     elif args.backend == "ttnn_1x8":
         # 1×8-specific env vars that the perf test (test_perf_tt_bh_glx_1x8.py)
         # self-applies at module load. These are NOT in pi05_production.env
