@@ -392,8 +392,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 endpoint_info.producers.push_back({&kernel, &dfb_binding});
             } else if (dfb_binding.endpoint_type == DFBEndpointType::CONSUMER) {
                 endpoint_info.consumers.push_back({&kernel, &dfb_binding});
-            } else {
-                TT_FATAL(false, "RELAY endpoints are only used for cross-node DFB, which is not supported yet");
             }
         }
     }
