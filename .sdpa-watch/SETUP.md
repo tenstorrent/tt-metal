@@ -9,7 +9,7 @@ For daily usage, see [`README.md`](README.md).
 
 - All initial setup phases complete: Slack app approved, webhook saved, 7 SDPA-relevant pipelines configured, dry-runs validated, live posts verified, cron installed.
 - Cron currently runs every 3 minutes (test cadence). Switch to a slower production cadence (e.g. `0 */4 * * *`) once you've watched a few ticks and confirmed everything looks right.
-- **Outstanding:** rotate the Anthropic API key and GitHub PAT — both were exposed in the original Claude Code conversation transcript during setup. See "Security cleanup" below.
+- **2026-07 update:** the org retired console API keys — the watcher now authenticates via Claude Enterprise OAuth (`~/.claude/.credentials.json`), not an `api_key` file. See "Claude auth" under Security cleanup below.
 
 ---
 
@@ -88,17 +88,18 @@ Recorded for reference. Phases 1–5 were the setup; Phase 6 (cron) is done; Pha
 
 Both secrets used during setup were pasted into the Claude Code conversation. Rotate them.
 
-### Anthropic API key
+### Claude auth (Enterprise OAuth)
 
-1. https://console.anthropic.com/settings/keys → revoke the old key → create a new one → copy.
-2. Replace the file:
-   ```bash
-   umask 077 && cat > ~/.sdpa-watch/api_key <<'EOF'
-   sk-ant-NEW-KEY-HERE
-   EOF
-   chmod 600 ~/.sdpa-watch/api_key
-   ```
-3. Verify: `~/.sdpa-watch/watch.sh` runs cleanly (agent block produced for any red pipeline).
+The org retired console API keys (2026-07). The watcher no longer uses an
+`api_key` file or `ANTHROPIC_API_KEY`; `watch.sh` unsets that var and relies on
+the Claude Enterprise OAuth credentials in `~/.claude/.credentials.json`.
+
+1. Run `claude` once interactively and log in via your org SSO — this writes
+   `~/.claude/.credentials.json` (`claudeAiOauth` block: access + refresh token).
+2. The token auto-refreshes on every `claude` invocation, so an hourly cron tick
+   keeps it alive on its own. No file to rotate.
+3. Verify: `env -u ANTHROPIC_API_KEY claude --model "$MODEL" -p <<<"say hi"`
+   returns a reply (rc=0), then `~/.sdpa-watch/watch.sh` runs cleanly.
 
 ### GitHub PAT
 
@@ -118,7 +119,7 @@ At a reasonable production cadence (5–7 pipelines, every 4h, ~10–20 new comp
 
 | Model | $/M input | $/M output | Est. monthly cost |
 |---|---|---|---|
-| `claude-opus-4-7` (current) | $15 | $75 | **~$20–40** |
+| `claude-opus-4-8` (current) | $15 | $75 | **~$20–40** |
 | `claude-sonnet-4-6` | $3 | $15 | ~$4–8 |
 | `claude-haiku-4-5-20251001` | $1 | $5 | ~$1–3 |
 
@@ -147,21 +148,26 @@ Install once:
 
 ### Scenario A — copy from a working machine
 
-The 7 files below are the entire watcher. Five are non-secret, two are secrets.
+The files below are the entire watcher. The only secret under `.sdpa-watch/` is
+`slack_webhook`; Claude auth lives in `~/.claude/.credentials.json` (Enterprise
+OAuth) and the GitHub PAT in `gh`'s own store.
 
 ```bash
 # On the NEW machine, create the dir
 mkdir -p ~/.sdpa-watch && chmod 700 ~/.sdpa-watch
 
-# From the OLD machine, transfer all runtime files (secrets included)
+# From the OLD machine, transfer all runtime files (slack_webhook included)
 rsync -av --include='*.sh' --include='*.txt' --include='*.md' \
-          --include='*.json' --include='api_key' --include='slack_webhook' \
+          --include='*.json' --include='slack_webhook' \
           --exclude='*' \
           OLD-HOST:~/.sdpa-watch/  ~/.sdpa-watch/
 
 # Re-tighten secret perms (rsync may not preserve)
-chmod 600 ~/.sdpa-watch/api_key ~/.sdpa-watch/slack_webhook
+chmod 600 ~/.sdpa-watch/slack_webhook
 chmod +x ~/.sdpa-watch/watch.sh
+
+# Log into Claude Enterprise on the new host (not transferable — do it locally)
+claude   # run once, log in via org SSO
 ```
 
 Then jump to "Adjust host-specific bits" below.
@@ -178,14 +184,14 @@ echo '{}' > ~/.sdpa-watch/state.json
 
 # Recreate secrets (you'll need fresh ones — the originals are not in the repo)
 umask 077
-printf 'sk-ant-YOUR-NEW-KEY' > ~/.sdpa-watch/api_key  && chmod 600 ~/.sdpa-watch/api_key
 printf 'https://hooks.slack.com/services/...' > ~/.sdpa-watch/slack_webhook && chmod 600 ~/.sdpa-watch/slack_webhook
 echo 'ghp_YOUR-NEW-PAT' | gh auth login --with-token
+claude   # log in via org SSO — writes ~/.claude/.credentials.json
 ```
 
-You need three secrets you don't get from the repo:
+You need these you don't get from the repo:
 
-- **Anthropic API key** (`sk-ant-...`) — https://console.anthropic.com/settings/keys
+- **Claude Enterprise login** — run `claude` and log in via your org SSO (writes `~/.claude/.credentials.json`; auto-refreshes, nothing to rotate)
 - **GitHub PAT** (`ghp_...`) — https://github.com/settings/tokens, scope `public_repo`, "No expiration"
 - **Slack incoming webhook URL** — reuse the existing `sdpa-watch` app at https://api.slack.com/apps (Incoming Webhooks → copy URL), or create a new Slack app + request workspace-admin install
 
@@ -202,12 +208,12 @@ Some values in the source files are tied to the *previous* host. Update them on 
 ### Verify and install cron
 
 ```bash
-# 1. Sanity-check claude works in a cron-like minimal env
+# 1. Sanity-check claude works in a cron-like minimal env (OAuth, no API key)
 env -i HOME="$HOME" \
-  ANTHROPIC_API_KEY="$(cat ~/.sdpa-watch/api_key)" \
   PATH="$(dirname "$(which claude)"):/usr/bin:/usr/local/bin" \
-  "$(which claude)" --model claude-opus-4-7 -p "say hi" </dev/null
-# Expect a one-line "Hi!" reply.
+  "$(which claude)" --model claude-opus-4-8 -p "say hi" </dev/null
+# Expect a one-line "Hi!" reply. (ANTHROPIC_API_KEY is intentionally NOT set —
+# a stale one would override the Enterprise OAuth token and 401.)
 
 # 2. Dry-run the watcher (no Slack post)
 DRY_RUN=1 ~/.sdpa-watch/watch.sh
@@ -240,7 +246,7 @@ ALIASES
 | `~/.sdpa-watch/watch.sh` | **Required** | The driver. Must be executable. |
 | `~/.sdpa-watch/config.sh` | **Required** | Pipelines + model + `TT_METAL_DIR`. Edit `TT_METAL_DIR` per host. |
 | `~/.sdpa-watch/agent_prompt.txt` | **Required** | LLM policy. Edit only if changing behavior. |
-| `~/.sdpa-watch/api_key` | **Required** | Anthropic key (chmod 600). Per-host or shared at your discretion. |
+| `~/.claude/.credentials.json` | **Required** | Claude Enterprise OAuth token (outside `.sdpa-watch/`; managed by `claude`, per-host, auto-refreshed). |
 | `~/.sdpa-watch/slack_webhook` | **Required** | Slack URL (chmod 600). Reusable across hosts if you want all of them posting to one channel. |
 | `~/.sdpa-watch/state.json` | Optional | Per-pipeline cache. Safe to omit — initialize with `echo '{}' > state.json` (first cron tick will be expensive though, since nothing is cached). |
 | `~/.sdpa-watch/watch.log` | Skip | Local tick log; not portable. |

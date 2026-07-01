@@ -5,10 +5,12 @@ REPO="tenstorrent/tt-metal"
 BRANCH="main"
 TT_METAL_DIR="/localdev/skrstic/tt-metal"
 SLACK_WEBHOOK_FILE="$HOME/.sdpa-watch/slack_webhook"
-API_KEY_FILE="$HOME/.sdpa-watch/api_key"
+# Auth is via Claude Enterprise OAuth (~/.claude/.credentials.json), set up
+# by logging into `claude` once interactively. The org retired console API
+# keys in 2026-07, so there is no api_key file anymore.
 
 # Model for the LLM agent. Heavier = better diagnosis, more $$$.
-MODEL="claude-opus-4-7"
+MODEL="claude-opus-4-8"
 
 # Pin the Claude Code binary so its self-updater can't rewrite claude.exe
 # out from under a cron tick (caused intermittent rc=127 "command not
@@ -30,10 +32,9 @@ export DISABLE_AUTOUPDATER=1
 
 PIPELINES=(
   "sanity-tests.yaml|Sanity|tests/ttnn/unit_tests/operations/sdpa|"
-  "tt-metal-l2-nightly.yaml|L2 Nightly|tests/ttnn/nightly/unit_tests/operations/sdpa|sdpa"
-  "blackhole-e2e-tests.yaml|Blackhole E2E|tests/nightly/blackhole/sdpa|sdpa"
+  "tt-metal-l2-nightly.yaml|L2 Nightly|In-scope = SDPA nightly tests (tests/ttnn/nightly/unit_tests/operations/sdpa, run by the 'ttnn nightly sdpa' jobs) PLUS two experimental ops run inside the 'ttnn nightly experimental' job: tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py and test_topk_large_indices.py (both experimental). Every OTHER experimental test sharing that job (deepseek_prefill, minimal_matmul, mla_wo, moe, etc.) is OUT of scope — ignore it even though its log lives in the same job.|sdpa|experimental"
   "blackhole-post-commit.yaml|Blackhole Post-Commit|tests/ttnn/unit_tests/operations/sdpa (ttnn-unit-tests / ttnn sdpa group only — deepseek blitz / per-core allocation jobs under ops-unit-tests are out-of-scope even if their logs mention test_sdpa_tail)|ttnn sdpa group"
-  "perf-device-models.yaml|Perf Device Models|tests/nightly/blackhole/sdpa (SDPA_PERF_CHECKS=1 gated perf checks)|"
+  "perf-device-models.yaml|Perf Device Models|In-scope = two gated perf checks in the 'ops perf tests' step (blackhole only): the SDPA_PERF_CHECKS=1 check (tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py::test_sdpa_perf_check) and the INDEXER_SCORE_PERF_CHECKS=1 check (tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::test_indexer_score_perf_check). Other ops-perf-tests in that step (conv, etc.) are OUT of scope.|"
   "t3000-e2e-tests.yaml|T3K E2E|t3k_ccl_tests only — in-scope failures are limited to tests/nightly/t3000/ccl/test_ring_joint_attention.py (ring-joint SDPA). Other CCL tests in that job are out-of-scope; DeepSeek MLA / prefill failures are not ours.|t3k_ccl_tests"
   "t3000-integration-tests.yaml|T3K Integration|Any failure in t3k_sd35_large_tests, t3k_flux1_tests, t3k_motif_tests, t3k_wan2.2_tests, t3k_mochi_tests (all exercise ring-joint SDPA indirectly via DiT attention)|t3k_sd35_large|t3k_flux1|t3k_motif|t3k_wan2|t3k_mochi"
 )
