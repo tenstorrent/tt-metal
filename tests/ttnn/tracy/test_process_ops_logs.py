@@ -230,14 +230,17 @@ def test_attach_counter_derived_bw_uses_real_peaks(tmp_path):
         )
     )
 
-    # DEVICE FW cycles -> a measured AICLK of 1350 MHz (1.35 Mcycle over 1 ms), so the NoC port peak
-    # is derived from the real clock: 1350 MHz x 32 B/cycle = 43.2 GB/s.
+    # _device_perf_row cycles -> a measured AICLK of 1350 MHz (1.35 Mcycle over 1 ms), so the NoC
+    # port peak is derived from the real clock: 1350 MHz x 32 B/cycle = 43.2 GB/s. This mirrors the
+    # op["_device_perf_row"] the C++ fast path attaches (CSV-stage keys are not populated yet).
     def _op(gid):
         return {
             "global_call_count": gid,
-            "DEVICE FW DURATION [ns]": 1_000_000,
-            "DEVICE FW START CYCLE": 0,
-            "DEVICE FW END CYCLE": 1_350_000,
+            "_device_perf_row": {
+                "DEVICE FW DURATION [ns]": 1_000_000,
+                "DEVICE FW START CYCLE": 0,
+                "DEVICE FW END CYCLE": 1_350_000,
+            },
         }
 
     ops = [_op(1), _op(2)]
