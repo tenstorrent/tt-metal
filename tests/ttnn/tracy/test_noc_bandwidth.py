@@ -16,10 +16,13 @@ import pytest
 import glob
 
 from tracy.noc_bandwidth import (
+    aggregate_fabric_bytes_per_op,
     aggregate_noc_bytes_per_op,
+    eth_bw_util_pct,
     noc_bw_util_pct,
     noc_bytes_from_trace_dir,
     per_op_noc_bw_pct,
+    read_trained_link_bw_gbps,
 )
 
 
@@ -97,3 +100,49 @@ def test_eltwise_known_bytes_match_analytical():
     events.append(_ev(7, "NOC_0", expected - per_core * 120))  # remainder
     agg = aggregate_noc_bytes_per_op(events)
     assert agg[7]["total"] == expected
+
+
+def test_read_trained_link_bw_takes_min_across_devices(tmp_path):
+    """The captured per-link BW is read from the device sidecars; a mixed-speed
+    mesh must report its slowest link so util% cannot exceed 100%."""
+    import json
+    import math
+
+    for dev, bw in [(0, 50.0), (1, 50.0), (2, 25.0)]:
+        (tmp_path / f"fabric_link_bw_{dev}.json").write_text(json.dumps({"device_id": dev, "per_link_gb_s": bw}))
+    assert read_trained_link_bw_gbps(tmp_path) == 25.0
+    # No sidecar -> None (caller falls back / prints nothing, never a fabricated peak).
+    assert read_trained_link_bw_gbps(tmp_path / "empty") is None
+
+
+def _fab(run_host_id, num_bytes, proc="NCRISC", dx=None, dy=None, sx=0, sy=0):
+    ev = {"run_host_id": run_host_id, "num_bytes": num_bytes, "proc": proc, "sx": sx, "sy": sy, "fabric_send": {}}
+    if dx is not None:
+        ev["dx"], ev["dy"] = dx, dy
+    return ev
+
+
+def test_fabric_bytes_and_link_count():
+    # 3 worker fabric sends to 2 distinct ingress eth cores -> 2 links, summed bytes.
+    events = [
+        _fab(1, 1000, dx=1, dy=9),
+        _fab(1, 1000, dx=1, dy=9),
+        _fab(1, 2000, dx=2, dy=9),
+        _ev(1, "NOC_0", 999),  # local (no fabric_send) -> excluded
+    ]
+    agg = aggregate_fabric_bytes_per_op(events)
+    assert agg[1]["bytes"] == 4000
+    assert agg[1]["links"] == 2
+    # ERISC events, when profiled, give the link count directly (distinct eth cores).
+    erisc = [_fab(2, 500, proc="ERISC", sx=18, sy=0), _fab(2, 500, proc="ERISC", sx=19, sy=0)]
+    agg2 = aggregate_fabric_bytes_per_op(erisc)
+    assert agg2[2]["links"] == 2
+
+
+def test_eth_bw_util_reproduces_allgather_measurement():
+    """Pins the hand-validated stage-2 AllGather number: 39.71 MB injected over 2
+    links in ~0.924 ms against a real 50 GB/s/link peak == ~43% fabric util."""
+    util = eth_bw_util_pct(int(39.71e6), duration_ns=924_000, per_link_gbps=50.0, num_links=2)
+    assert util == pytest.approx(43.0, abs=1.0)
+    # A real peak that doubled (800G link) halves the util for the same traffic.
+    assert eth_bw_util_pct(int(39.71e6), 924_000, per_link_gbps=100.0, num_links=2) == pytest.approx(21.5, abs=0.5)

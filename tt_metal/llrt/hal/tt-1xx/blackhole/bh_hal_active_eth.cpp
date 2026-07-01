@@ -188,6 +188,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->postcode;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::TRAIN_STATUS)] =
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->train_status;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::TRAIN_SPEED)] =
+        (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->train_speed;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::SERDES_RESET_STATUS)] =
         (uint64_t)&((boot_results_t*)MEM_SYSENG_BOOT_RESULTS_BASE)->serdes_results.serdes_reset_status;
 

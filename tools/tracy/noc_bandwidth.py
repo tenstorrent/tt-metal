@@ -67,3 +67,92 @@ def noc_bytes_from_trace_dir(log_folder, op_key="run_host_id"):
         with open(path) as f:
             events.extend(json.load(f))
     return aggregate_noc_bytes_per_op(events, op_key=op_key)
+
+
+def read_trained_link_bw_gbps(log_folder):
+    """Real per-link fabric bandwidth (GB/s) captured on device, or None if absent.
+
+    The device profiler drops one ``fabric_link_bw_<device_id>.json`` per device carrying the
+    per-link bandwidth it read from the eth-FW ``train_speed`` telemetry (falling back to the
+    arch nominal when the arch does not expose train_speed or no link is up). We take the MIN
+    across devices so a mixed-speed mesh is reported at its bottleneck and util% never exceeds
+    100%. This is what makes BW-util stats honest across machines (200/400/800G) instead of a
+    hardcoded per-arch peak.
+    """
+    import glob
+    import json
+    import os
+
+    speeds = []
+    for path in sorted(glob.glob(os.path.join(str(log_folder), "fabric_link_bw_*.json"))):
+        try:
+            with open(path) as f:
+                info = json.load(f)
+        except (OSError, ValueError):
+            continue
+        v = info.get("per_link_gb_s")
+        if v and v > 0:
+            speeds.append(float(v))
+    return min(speeds) if speeds else None
+
+
+def is_fabric_event(ev):
+    """A noc-trace event that crossed the ethernet fabric carries a 'fabric_send' block."""
+    return isinstance(ev, dict) and "fabric_send" in ev
+
+
+def aggregate_fabric_bytes_per_op(events, op_key="run_host_id"):
+    """Per-op ethernet-fabric bytes and the distinct fabric links each op drove.
+
+    Fabric bytes are the payload injected into the fabric by an op's worker cores (events with a
+    'fabric_send' block). ``links`` counts distinct eth links carrying the op's traffic: when the
+    eth cores themselves are profiled we count distinct ERISC cores (proc == 'ERISC'); otherwise
+    we fall back to the distinct fabric-ingress destinations (dx, dy) of the worker sends.
+    Returns {op_id: {"bytes": int, "links": int}}.
+    """
+    by_op_bytes = {}
+    by_op_erisc = {}
+    by_op_dst = {}
+    for ev in events:
+        if not is_fabric_event(ev):
+            continue
+        nbytes = ev.get("num_bytes")
+        if nbytes is None:
+            continue
+        op_id = ev[op_key]
+        by_op_bytes[op_id] = by_op_bytes.get(op_id, 0) + nbytes
+        if str(ev.get("proc", "")).upper().startswith("ERISC"):
+            by_op_erisc.setdefault(op_id, set()).add((ev.get("src_device_id"), ev.get("sx"), ev.get("sy")))
+        if ev.get("dx") is not None and ev.get("dy") is not None:
+            by_op_dst.setdefault(op_id, set()).add((ev.get("src_device_id"), ev.get("dx"), ev.get("dy")))
+
+    out = {}
+    for op_id, nbytes in by_op_bytes.items():
+        links = len(by_op_erisc.get(op_id, ())) or len(by_op_dst.get(op_id, ())) or 1
+        out[op_id] = {"bytes": nbytes, "links": links}
+    return out
+
+
+def eth_bw_util_pct(fabric_bytes, duration_ns, per_link_gbps, num_links):
+    """ETH BW util % = achieved fabric throughput / (per-link peak x links) x 100.
+
+    per_link_gbps is really GB/s (achieved-peak of one link); num_links is how many links the op
+    drove. NaN when any input is missing so a lie is never printed as a number.
+    """
+    if not duration_ns or duration_ns <= 0 or not per_link_gbps or not num_links:
+        return nan
+    achieved_gbps = fabric_bytes / (duration_ns * 1e-9) / 1e9
+    return achieved_gbps / (per_link_gbps * num_links) * 100.0
+
+
+def fabric_bytes_from_trace_dir(log_folder, op_key="run_host_id"):
+    """Per-op fabric bytes + link counts from every noc_trace*.json in a .logs dir."""
+    import glob
+    import json
+    import os
+
+    events = []
+    for path in sorted(glob.glob(os.path.join(str(log_folder), "noc_trace*.json"))):
+        with open(path) as f:
+            events.extend(json.load(f))
+    return aggregate_fabric_bytes_per_op(events, op_key=op_key)

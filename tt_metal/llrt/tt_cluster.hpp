@@ -244,6 +244,16 @@ public:
     void write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
+    struct FabricLinkBw {
+        double per_link_gb_s = 0.0;     // achieved-peak bandwidth of one fabric link (GB/s)
+        uint32_t num_active_links = 0;  // active ethernet links connecting this chip to peers
+        bool from_hw = false;           // true: read from eth-FW train_speed; false: arch fallback
+    };
+    // Real per-link fabric bandwidth for a chip, read from the eth-FW train_speed telemetry so
+    // BW-util stats reflect the speed a link actually trained to (200/400/800G). Falls back to the
+    // arch's nominal per-link BW when the arch does not wire train_speed or no link is up.
+    FabricLinkBw get_trained_fabric_link_bw(ChipId chip_id) const;
+
     void write_sysmem(
         const void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
     void read_sysmem(void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;

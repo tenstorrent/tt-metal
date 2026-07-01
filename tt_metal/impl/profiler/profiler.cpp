@@ -2584,6 +2584,25 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
     dumpDeviceResultsToCSV(
         device_markers_per_core_risc_map, device_arch, device_core_frequency, max_compute_cores, log_path);
 
+    // Persist the real per-link fabric bandwidth (read from eth-FW train_speed) so the offline
+    // post-process can compute ETH BW-util % against the speed the links actually trained to
+    // (200/400/800G) instead of a hardcoded per-arch peak -- otherwise the stat lies when the
+    // machine, cabling, or arch changes.
+    {
+        const auto link_bw = MetalContext::instance(context_id).get_cluster().get_trained_fabric_link_bw(device_id);
+        const nlohmann::json link_bw_json = {
+            {"device_id", device_id},
+            {"arch", get_string_lowercase(device_arch)},
+            {"per_link_gb_s", link_bw.per_link_gb_s},
+            {"num_active_eth_links", link_bw.num_active_links},
+            {"source", link_bw.from_hw ? "eth_fw_train_speed" : "arch_nominal"},
+        };
+        std::ofstream link_bw_file(device_logs_output_dir / fmt::format("fabric_link_bw_{}.json", device_id));
+        if (link_bw_file.is_open()) {
+            link_bw_file << link_bw_json.dump(2);
+        }
+    }
+
     if (MetalContext::instance(context_id).rtoptions().get_profiler_noc_events_enabled()) {
         log_warning(
             tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
