@@ -12,12 +12,9 @@
 #          --> denoised latent
 #          --VAE decode (TTNN, on device, 2x2 H/W-spatial-parallel)--> RGB image
 #
-# The recaption stage reuses the shared text-sampling loop (ref/generate.py, re-exported
-# by tt/generate.py): repetition penalty -> temperature -> top-k -> top-p -> sample, via
-# run_recaption_on_device. It is ON by default (HY_RECAPTION=0 to skip) and rewrites the
-# user prompt into a detailed caption before image generation, mirroring upstream base
-# generate_image. The sampling knobs (temperature/top-k/top-p/repetition penalty) are
-# exposed as env vars below.
+# Optional AR recaption (HY_RECAPTION=1): rewrites the prompt via the text-sampling loop
+# (ref/generate.py / tt/generate.py) before image gen. Upstream base uses bot_task=image
+# and skips recaption by default; enable only when you want recaption/think explicitly.
 #
 # The whole pipeline runs on the TT mesh: the backbone with the model that fits
 # DRAM (bf8 + 4-way expert sharding, first/last 4 layers bf16), and the VAE decode
@@ -29,8 +26,8 @@
 #   HY_STEPS=8 HY_NUM_LAYERS=32 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/demo/demo.py "a photo of a cat"
 #
-# Skip the recaption stage (prompt used verbatim, original fast path):
-#   HY_RECAPTION=0 HY_STEPS=8 python_env/bin/python \
+# Optional recaption (off by default; slow — full forward per AR token):
+#   HY_RECAPTION=1 HY_BOT_TASK=recaption HY_STEPS=8 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/demo/demo.py "a photo of a cat"
 
 import os, sys, json, time
@@ -39,14 +36,15 @@ import torch
 from safetensors import safe_open
 
 ROOT = str(Path(__file__).resolve().parents[4])  # tt-metal repo root (robust to checkout location)
-HUNYUAN = os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/tt-ign/HunyuanImage-3.0")
-for p in (ROOT, HUNYUAN):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
+from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
 
-WEIGHTS = MODEL_DIR
+WEIGHTS = ensure_base_weights()
+HUNYUAN = str(WEIGHTS)
+if HUNYUAN not in sys.path:
+    sys.path.insert(0, HUNYUAN)
 
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
@@ -80,8 +78,8 @@ SEED = int(os.environ.get("HY_SEED", "0"))
 SCALING = 0.562679178327931
 OUT_PNG = os.environ.get("HY_OUT", "/home/iguser/ign-tt/tt-metal/hy_t2i.png")
 
-# AR recaption (text-sampling loop) — ON by default; rewrites the prompt before gen.
-RECAPTION = os.environ.get("HY_RECAPTION", "1") != "0"
+# AR recaption (text-sampling loop) — off by default (upstream base bot_task=image).
+RECAPTION = os.environ.get("HY_RECAPTION", "0") != "0"
 BOT_TASK = os.environ.get("HY_BOT_TASK", "recaption")  # recaption | think | think_recaption
 RECAPTION_LAYERS = int(os.environ.get("HY_RECAPTION_LAYERS", str(NUM_LAYERS)))
 MAX_NEW_TOKENS = int(os.environ.get("HY_MAX_NEW_TOKENS", "512"))
@@ -97,9 +95,8 @@ _INDEX = WEIGHTS / "model.safetensors.index.json"
 if not _INDEX.is_file():
     raise SystemExit(
         f"Base HunyuanImage-3 weights not found at {_INDEX}\n"
-        f"Download tencent/HunyuanImage-3.0 and set HUNYUAN_MODEL_DIR, e.g.:\n"
-        f"  hf download tencent/HunyuanImage-3.0 --local-dir /home/iguser/ign-tt/base\n"
-        f"  HUNYUAN_MODEL_DIR=/home/iguser/ign-tt/base python_env/bin/python ..."
+        f"Download with: hf download tencent/HunyuanImage-3.0\n"
+        f"Or set HUNYUAN_MODEL_DIR to a checkpoint dir containing model.safetensors.index.json"
     )
 _WMAP = json.load(open(_INDEX))["weight_map"]
 _OPEN = {}

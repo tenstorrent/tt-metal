@@ -25,6 +25,8 @@
 #
 # Host recaption fallback (requires NVIDIA CUDA): HY_RECAPTION_DEVICE=0
 # On TT-only systems, host recaption auto-falls back to the on-device path.
+#
+# Debug DiT vs VAE decoder: HY_DIT_HOST=1 runs denoise on host PyTorch, TT VAE decode unchanged.
 
 from __future__ import annotations
 
@@ -40,10 +42,8 @@ from PIL import Image
 from safetensors import safe_open
 
 ROOT = Path(__file__).resolve().parents[4]
-HUNYUAN = Path(os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/ign-tt/hunyan_instruct"))
-for p in (str(ROOT), str(HUNYUAN)):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
@@ -63,8 +63,8 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     build_i2i_cfg_conds,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import (
-    INSTRUCT_DISTIL_MODEL_DIR,
-    INSTRUCT_MODEL_DIR,
+    ensure_instruct_distil_weights,
+    ensure_instruct_weights,
     load_tensors,
 )
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
@@ -99,14 +99,21 @@ SEED = int(os.environ.get("HY_SEED", "42"))
 VIT_LAYERS = int(os.environ.get("HY_VIT_LAYERS", "27"))
 MAX_NEW_TOKENS = int(os.environ.get("HY_MAX_NEW_TOKENS", "512"))
 RECAPTION_ON_DEVICE = os.environ.get("HY_RECAPTION_DEVICE", "1") != "0"
+DIT_ON_HOST = os.environ.get("HY_DIT_HOST", "0") == "1"
 USE_DISTIL = os.environ.get("HY_DISTIL", "0") == "1"
 SCALING = 0.562679178327931
 
 
 def _resolve_model_dir(distil: bool) -> Path:
     if distil:
-        return INSTRUCT_DISTIL_MODEL_DIR
-    return INSTRUCT_MODEL_DIR
+        return ensure_instruct_distil_weights()
+    return ensure_instruct_weights()
+
+
+def _setup_upstream_path(model_dir: Path) -> None:
+    upstream = os.environ.get("HUNYUAN_UPSTREAM", str(model_dir))
+    if upstream not in sys.path:
+        sys.path.insert(0, upstream)
 
 
 def _default_steps(model_dir: Path, *, distil: bool) -> int:
@@ -323,9 +330,15 @@ def main():
     args = parser.parse_args()
 
     model_dir = _resolve_model_dir(args.distil)
+    _setup_upstream_path(model_dir)
     if not (model_dir / "model.safetensors.index.json").is_file():
         label = "Instruct-Distil" if args.distil else "Instruct"
-        raise SystemExit(f"{label} weights not found under {model_dir}")
+        repo = "tencent/HunyuanImage-3.0-Instruct-Distil" if args.distil else "tencent/HunyuanImage-3.0-Instruct"
+        raise SystemExit(
+            f"{label} weights not found under {model_dir}\n"
+            f"Download with: hf download {repo}\n"
+            f"Or set HUNYUAN_INSTRUCT_MODEL_DIR / HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR"
+        )
 
     cfg_distilled, use_meanflow = _model_flags(model_dir)
     if args.distil and not cfg_distilled:
@@ -523,113 +536,146 @@ def main():
     seq_len = bundle.seq_len
     print(f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}")
 
-    print("[demo_i2i] opening denoise mesh (2x2) ...", flush=True)
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
-    try:
-        mesh_device.enable_program_cache()
-        ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    torch.manual_seed(SEED + 1)
+    init_latent = torch.randn(1, LATENT, grid[0], grid[1])
+    mode = "distil" if cfg_distilled else "CFG"
 
-        print("[demo_i2i] building patch_embed + final_layer ...", flush=True)
+    if DIT_ON_HOST:
+        from models.experimental.hunyuan_image_3_0.ref.host_denoise import HostDenoiseRunner, denoise_loop_host
 
-        def rep(t):
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-
-        patch_embed = HunyuanTtUNetDown(
-            mesh_device,
-            {f"patch_embed.{k}": v for k, v in down_sd.items()},
-            in_channels=LATENT,
-            hidden_channels=HID,
-            out_channels=HSZ,
-        )
-        final_layer = HunyuanTtUNetUp(
-            mesh_device,
-            {f"final_layer.{k}": v for k, v in up_sd.items()},
-            in_channels=HSZ,
-            hidden_channels=HID,
-            out_channels=LATENT,
-        )
-        print(f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers) ...", flush=True)
-        t0 = time.time()
-        backbone = _build_backbone(mesh_device, ccl, c, weights, num_layers=NUM_LAYERS, apply_final_norm=False)
-        print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
-        print("[demo_i2i] building timestep embedders ...", flush=True)
-        te1 = HunyuanTtTimestepEmbedder(
-            mesh_device,
-            H,
-            {f"time_embed.{k}": v for k, v in weights.load_prefix("time_embed").items()},
-            "time_embed",
-        )
-        te2 = HunyuanTtTimestepEmbedder(
-            mesh_device,
-            H,
-            {f"time_embed_2.{k}": v for k, v in weights.load_prefix("time_embed_2").items()},
-            "time_embed_2",
-        )
-        step = HunyuanTtDenoiseStep(
-            mesh_device,
-            patch_embed=patch_embed,
-            backbone=backbone,
-            final_layer=final_layer,
-            img_slice=img_slice,
-            grid_hw=grid,
-            seq_len=seq_len,
-        )
-
-        print("[demo_i2i] uploading cond/uncond (device attention masks) ...", flush=True)
-        cond_tt = upload_denoise_cond_mesh(
-            cond_row,
-            seq_len=seq_len,
-            mesh_device=mesh_device,
-            replicate_fn=rep,
-            full_attn_slices=bundle.full_attn_slices[0],
-        )
-        uncond_tt = None
-        if uncond_row is not None:
-            uncond_tt = upload_denoise_cond_mesh(
-                uncond_row,
-                seq_len=seq_len,
-                mesh_device=mesh_device,
-                replicate_fn=rep,
-                full_attn_slices=bundle.full_attn_slices[1],
-            )
-
-        torch.manual_seed(SEED + 1)
-        init_latent = torch.randn(1, LATENT, grid[0], grid[1])
-        sched = HunyuanTtScheduler(mesh_device)
-        sched.set_timesteps(steps)
-        mode = "distil" if cfg_distilled else "CFG"
         print(
-            f"[demo_i2i] denoising {steps} steps ({mode}, guidance={GUIDANCE}, seq_len={seq_len}) ...",
+            f"[demo_i2i] denoising {steps} steps on host PyTorch "
+            f"(HY_DIT_HOST=1, {mode}, guidance={GUIDANCE}, seq_len={seq_len}) ...",
             flush=True,
         )
-        latent = denoise_loop(
-            step,
-            sched,
-            init_latent,
-            time_embed=te1,
-            time_embed_2=te2,
-            cond=cond_tt,
-            uncond=uncond_tt,
+        t0 = time.time()
+        runner = HostDenoiseRunner(
+            weights,
+            model_dir,
+            num_layers=NUM_LAYERS,
+            down_sd=down_sd,
+            up_sd=up_sd,
+        )
+        latent = denoise_loop_host(
+            runner,
+            init_latent=init_latent,
+            cond=cond_row,
+            uncond=uncond_row,
+            img_slice=img_slice,
+            steps=steps,
             guidance_scale=GUIDANCE,
             timestep_emb=timestep_emb_distil,
             guidance_emb=guidance_emb,
             timestep_r_emb=timestep_r_emb,
             cfg_distilled=cfg_distilled,
             use_meanflow=use_meanflow,
-            mesh_device=mesh_device,
         )
-        print(f"[demo_i2i] denoised latent {tuple(latent.shape)}")
-    finally:
-        ttnn.close_mesh_device(mesh_device)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        print(f"[demo_i2i] host denoise done ({time.time() - t0:.0f}s), latent {tuple(latent.shape)}")
+    else:
+        print("[demo_i2i] opening denoise mesh (2x2) ...", flush=True)
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
+        try:
+            mesh_device.enable_program_cache()
+            ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+            print("[demo_i2i] building patch_embed + final_layer ...", flush=True)
+
+            def rep(t):
+                return ttnn.from_torch(
+                    t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+
+            patch_embed = HunyuanTtUNetDown(
+                mesh_device,
+                {f"patch_embed.{k}": v for k, v in down_sd.items()},
+                in_channels=LATENT,
+                hidden_channels=HID,
+                out_channels=HSZ,
+            )
+            final_layer = HunyuanTtUNetUp(
+                mesh_device,
+                {f"final_layer.{k}": v for k, v in up_sd.items()},
+                in_channels=HSZ,
+                hidden_channels=HID,
+                out_channels=LATENT,
+            )
+            print(f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers) ...", flush=True)
+            t0 = time.time()
+            backbone = _build_backbone(mesh_device, ccl, c, weights, num_layers=NUM_LAYERS, apply_final_norm=False)
+            print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
+            print("[demo_i2i] building timestep embedders ...", flush=True)
+            te1 = HunyuanTtTimestepEmbedder(
+                mesh_device,
+                H,
+                {f"time_embed.{k}": v for k, v in weights.load_prefix("time_embed").items()},
+                "time_embed",
+            )
+            te2 = HunyuanTtTimestepEmbedder(
+                mesh_device,
+                H,
+                {f"time_embed_2.{k}": v for k, v in weights.load_prefix("time_embed_2").items()},
+                "time_embed_2",
+            )
+            step = HunyuanTtDenoiseStep(
+                mesh_device,
+                patch_embed=patch_embed,
+                backbone=backbone,
+                final_layer=final_layer,
+                img_slice=img_slice,
+                grid_hw=grid,
+                seq_len=seq_len,
+            )
+
+            print("[demo_i2i] uploading cond/uncond (device attention masks) ...", flush=True)
+            cond_tt = upload_denoise_cond_mesh(
+                cond_row,
+                seq_len=seq_len,
+                mesh_device=mesh_device,
+                replicate_fn=rep,
+                full_attn_slices=bundle.full_attn_slices[0],
+            )
+            uncond_tt = None
+            if uncond_row is not None:
+                uncond_tt = upload_denoise_cond_mesh(
+                    uncond_row,
+                    seq_len=seq_len,
+                    mesh_device=mesh_device,
+                    replicate_fn=rep,
+                    full_attn_slices=bundle.full_attn_slices[1],
+                )
+
+            sched = HunyuanTtScheduler(mesh_device)
+            sched.set_timesteps(steps)
+            print(
+                f"[demo_i2i] denoising {steps} steps ({mode}, guidance={GUIDANCE}, seq_len={seq_len}) ...",
+                flush=True,
+            )
+            latent = denoise_loop(
+                step,
+                sched,
+                init_latent,
+                time_embed=te1,
+                time_embed_2=te2,
+                cond=cond_tt,
+                uncond=uncond_tt,
+                guidance_scale=GUIDANCE,
+                timestep_emb=timestep_emb_distil,
+                guidance_emb=guidance_emb,
+                timestep_r_emb=timestep_r_emb,
+                cfg_distilled=cfg_distilled,
+                use_meanflow=use_meanflow,
+                mesh_device=mesh_device,
+            )
+            print(f"[demo_i2i] denoised latent {tuple(latent.shape)}")
+        finally:
+            ttnn.close_mesh_device(mesh_device)
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
     print("[demo_i2i] VAE decode (TTNN spatial) ...")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)

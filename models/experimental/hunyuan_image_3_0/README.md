@@ -79,15 +79,9 @@ and default to 32 backbone layers (`HY_NUM_LAYERS=32`).
 
 | Variant | Demo | Steps | CFG | Checkpoint env / default path |
 |---|---|---:|---|---|
-<<<<<<< Updated upstream
-| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | hardcoded in `demo.py` → `/home/iguser/ign-tt/base` |
-| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` → `/home/iguser/ign-tt/hunyan_instruct` |
-| **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` → `/home/iguser/ign-tt/hunyan_instruct` |
-=======
-| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | `HUNYUAN_MODEL_DIR` (default `/home/iguser/ign-tt/base`) |
-| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` (default `/home/iguser/ign-tt/hunyan_instruct`) |
-| **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` → `…/HunyuanImage-3-Instruct-Distil` |
->>>>>>> Stashed changes
+| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | `HUNYUAN_MODEL_DIR` (local `/home/iguser/ign-tt/base`, or HF `tencent/HunyuanImage-3.0`) |
+| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` (local `/home/iguser/ign-tt/hunyan_instruct`, or HF `tencent/HunyuanImage-3.0-Instruct`) |
+| **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` (HF `tencent/HunyuanImage-3.0-Instruct-Distil`) |
 
 ### Base text-to-image
 
@@ -97,15 +91,14 @@ HY_STEPS=8 HY_NUM_LAYERS=32 HY_GUIDANCE=5.0 python_env/bin/python \
   "a photo of a cat, studio lighting"
 ```
 
-By default the demo first runs an **AR recaption** stage that rewrites the prompt into a
-detailed caption using the shared text-sampling loop (`ref/generate.py`, re-exported by
-`tt/generate.py`): repetition penalty → temperature → top-k → top-p → sample. The
-recaption text is injected as the assistant turn before the gen-image block, mirroring
-upstream base `generate_image`. Knobs (env vars):
+Base T2I matches upstream `generate_image` with `bot_task=image`: **no recaption** by
+default (prompt used verbatim). Optional AR recaption (`HY_RECAPTION=1`) rewrites the
+prompt via the text-sampling loop (`ref/generate.py`, re-exported by `tt/generate.py`)
+before the gen-image block. Knobs (env vars):
 
 | Env | Default | Meaning |
 |---|---|---|
-| `HY_RECAPTION` | `1` | `0` skips recaption (prompt used verbatim — the original fast path) |
+| `HY_RECAPTION` | `0` | `1` enables optional recaption/think before image gen |
 | `HY_BOT_TASK` | `recaption` | `recaption` / `think` / `think_recaption` |
 | `HY_MAX_NEW_TOKENS` | `512` | AR token budget — caps recaption latency |
 | `HY_TEMPERATURE` | `0.6` | sampling temperature |
@@ -114,9 +107,9 @@ upstream base `generate_image`. Knobs (env vars):
 | `HY_REP_PENALTY` | `1.0` | repetition penalty (1.0 disables) |
 | `HY_DO_SAMPLE` | `1` | `0` = greedy argmax |
 
-> The text-only recaption path has **no KV cache** (it re-runs the full forward per token,
-> unlike the I2I cond path), so it is O(N²) and slow for large `HY_MAX_NEW_TOKENS`. Lower
-> `HY_MAX_NEW_TOKENS` or set `HY_RECAPTION=0` to skip it.
+> When enabled, the text-only recaption path has **no KV cache** (it re-runs the full
+> forward per token, unlike the I2I cond path), so it is O(N²) and slow for large
+> `HY_MAX_NEW_TOKENS`. Leave `HY_RECAPTION=0` (default) for the fast upstream path.
 
 ### Instruct image-to-image (50-step CFG)
 
@@ -269,11 +262,10 @@ HY_NUM_LAYERS=32 python_env/bin/python -m pytest \
   models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline_step.py -v -s
 ```
 
-<<<<<<< Updated upstream
-Checkpoint weights expected at `/home/iguser/ign-tt/base` (sharded safetensors
-+ `*.index.json` + `config.json`).
-=======
-Checkpoint weights: base at `/home/iguser/ign-tt/base`, Instruct at
-`/home/iguser/ign-tt/hunyan_instruct` (override with `HUNYUAN_MODEL_DIR` /
-`HUNYUAN_INSTRUCT_MODEL_DIR`; sharded safetensors + `*.index.json` + `config.json`).
->>>>>>> Stashed changes
+Checkpoint weights (sharded safetensors + `*.index.json` + `config.json`):
+
+- **Base:** `HUNYUAN_MODEL_DIR` — local `/home/iguser/ign-tt/base`, or newest HF hub snapshot for `tencent/HunyuanImage-3.0`
+- **Instruct:** `HUNYUAN_INSTRUCT_MODEL_DIR` — local `/home/iguser/ign-tt/hunyan_instruct`, or HF `tencent/HunyuanImage-3.0-Instruct`
+- **Distil:** `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` — HF `tencent/HunyuanImage-3.0-Instruct-Distil`
+
+Demos call `ensure_*_weights()` in `ref/weights.py`: env override first, then HF hub cache, auto-download on first run.
