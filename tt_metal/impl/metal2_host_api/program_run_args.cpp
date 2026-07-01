@@ -1067,7 +1067,16 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             name);
     }
 
-    // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides).
+    // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides), plus a
+    // partial-path-only guard for borrowed-memory DFBs (below). A resized borrowed DFB must have its
+    // backing TensorParameter supplied in this same update, so AttachBorrowedDFBBuffers re-runs the
+    // per-bank fit check against the new size. The full Set path gets this for free (require_all=true);
+    // on the partial path an invariant backing tensor may be omitted, which would otherwise let a grown
+    // DFB overflow its borrowed buffer's per-bank region unchecked at execution.
+    std::unordered_map<uint32_t, std::string> borrowed_backing;  // dfb_id -> backing TensorParameter name
+    for (const auto& [dfb_id, tp_name] : program_impl.get_dfb_borrowed_bindings()) {
+        borrowed_backing.emplace(dfb_id, tp_name);
+    }
     std::unordered_set<DFBSpecName> dfbs_with_params;
     for (const auto& dfb_params : params.dfb_run_overrides) {
         auto [it, inserted] = dfbs_with_params.insert(dfb_params.dfb);
@@ -1088,6 +1097,22 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
                 "dfb_run_overrides entry for DFB '{}' has num_entries override = 0. num_entries must be set to a "
                 "non-zero value.",
                 dfb_params.dfb);
+        }
+        // A resized borrowed-memory DFB needs its backing tensor supplied here so the per-bank fit check
+        // in AttachBorrowedDFBBuffers re-runs against the new size (see the block comment above).
+        const bool resizes = dfb_params.entry_size.has_value() || dfb_params.num_entries.has_value();
+        if (resizes) {
+            if (auto b = borrowed_backing.find(program_impl.get_dfb_handle(dfb_params.dfb.get()));
+                b != borrowed_backing.end()) {
+                TT_FATAL(
+                    params.tensor_args.contains(TensorParamName{b->second}),
+                    "dfb_run_overrides resizes borrowed-memory DFB '{}', but its backing TensorParameter '{}' was "
+                    "not supplied in this UpdateProgramRunArgs. Resizing a borrowed DFB on the partial-update fast "
+                    "path requires supplying its backing tensor, so the per-bank fit check can re-validate against "
+                    "the new size (the full SetProgramRunArgs path enforces this by requiring all tensors).",
+                    dfb_params.dfb,
+                    b->second);
+            }
         }
     }
 
