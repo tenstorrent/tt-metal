@@ -75,3 +75,21 @@ websocket policy-server protocol — reuse the same `predict_chunk`.
 ## Safety
 `--enable-motion` is required to command the arm; the default is log-only. Always
 dry-run first and keep an e-stop within reach.
+
+## Next steps
+The policy, control loop, and remote server are done and validated on TT kernels with
+`MockRobot` (no hardware). What remains is **hardware bring-up**:
+
+- **Add a concrete `RobotInterface` implementation** to replace `MockRobot`, for the
+  specific target once chosen:
+  - **RealSense / USB cameras** via `pyrealsense2` or OpenCV (`cv2.VideoCapture`) — map
+    each physical camera to the agentview / wrist slot, return upright uint8 frames.
+  - **ROS / ROS2** — subscribe to camera + joint-state topics, publish action chunks.
+  - **Vendor SDK** (e.g. Franka / UR / xArm) — read EEF pose + gripper, send delta-EE
+    commands; build the 8-D state `[eef_pos(3), eef_axis_angle(3), gripper_qpos(2)]`.
+- Wire that implementation into `demo_realrobot.py` in place of `MockRobot`, dry-run
+  log-only, then enable `--enable-motion`.
+- Confirm the arm is **LIBERO-compatible** (7-DoF delta-EE + gripper); a different
+  embodiment needs its own `norm_stats` + a checkpoint trained for it.
+
+Tell me the target (camera stack + arm/SDK) and I'll add the concrete `RobotInterface`.
