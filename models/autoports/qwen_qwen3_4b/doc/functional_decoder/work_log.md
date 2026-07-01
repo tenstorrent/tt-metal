@@ -134,6 +134,7 @@ Result: passed in 25.32s. All 5 tests passed. PCCs printed in this final pre-com
 
 - Repo: `/home/ubuntu/tt-metal`
 - Branch: `agentic-research/fast-models-fast`
-- Commit: `10dd95572ee6971d8203b0f3197b11e20aca99f1`
+- Implementation checkpoint commit: `cac79195a156796e9afb4bd11a1c4c70f817f043`
+- SHA-record follow-up commit: see final stage handoff.
 - Scope: stage-owned files under `models/autoports/qwen_qwen3_4b`
 - Unrelated untracked files excluded: `.agents/prompts/model_bringup_multigoal/01-forge-functional-decoder.txt`, `.agents/skills/forge-functional-decoder/`
