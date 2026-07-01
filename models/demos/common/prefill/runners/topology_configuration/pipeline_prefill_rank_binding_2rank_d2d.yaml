@@ -5,8 +5,8 @@
 # instead of the host/NFS file round-trip. rank 0 (mesh 0) sends to rank 1 (mesh 1); rank 1 receives.
 #
 # Launch on d07u02 + d07u08:
-#   ./run_pipeline_prefill.sh \
-#     models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_rank_binding_2rank_d2d.yaml \
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d.yaml \
 #     bh-glx-d07u02:1,bh-glx-d07u08:1
 
 rank_bindings:
@@ -20,7 +20,7 @@ rank_bindings:
     env_overrides: {}
 
 # Connected 2x 8x4 BH-galaxy MGD: one inter-galaxy fabric link (mesh 0 <-> mesh 1).
-mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
 
 global_env:
   PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop

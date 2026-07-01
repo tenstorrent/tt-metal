@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""DeepSeek-V3 prefill runner — one entry point, two run modes that share the same N-rank pipeline.
+"""Disaggregated prefill runner — one entry point, two run modes that share the same N-rank pipeline.
+
+Model-agnostic: the model is selected by PREFILL_MODEL and driven through a PrefillModelAdapter
+(see ../adapter.py and ADDING_A_PREFILL_MODEL.md). This driver wires rank topology, input,
+transport, and the per-chunk schedule; the adapter supplies how to build the model, allocate the KV
+cache, run a chunk, and validate/migrate it.
 
 The model is split across N ranks under tt-run: each rank owns a contiguous layer slice and builds
 the same TtPrefillRuntime (first_layer_idx / is_first_rank / is_last_rank). With >1 rank the cross-rank
@@ -33,18 +38,15 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
+from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners.migration import publish_table_and_wait_ready
+from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
-    get_variant,
-    load_hf_config,
     load_trace_token_ids,
     open_mesh_device,
     resolve_trace_dir,
-    resolve_weight_cache_path,
 )
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
 
 def _apply_manifest_env():
@@ -58,18 +60,29 @@ def _apply_manifest_env():
 
     with open(manifest_path) as mp:
         manifest = json.load(mp)
-    users = manifest["users"]
-    N = len(users)
 
     def sd(key, val):
         if val is not None:
             os.environ.setdefault(key, str(val))
 
+    # Generic model/run config: a flat PREFILL_* map applied verbatim (setdefault). This lets a
+    # rank-binding stay topology-only (rank_bindings + mesh_graph_desc) and point at a per-model
+    # manifest for all model config — PREFILL_MODEL, fabric mode, chunk count, etc.
+    for key, val in manifest.get("env", {}).items():
+        sd(key, val)
+
+    # The migration/pairwise-validation runs additionally carry a users[] + migration{} block. A
+    # plain model-config manifest omits it (env-only), so it's optional.
+    users = manifest.get("users")
+    if not users:
+        return
+    N = len(users)
+
     model = manifest.get("model", {})
     mig = manifest.get("migration", {})
     paths = manifest.get("paths", {})
 
-    sd("PREFILL_MODEL_VARIANT", model.get("variant"))
+    sd("PREFILL_MODEL", model.get("variant"))
     sd("DEEPSEEK_PREFILL_TRACE_DIR", paths.get("trace_dir"))
     sd("PREFILL_MIGRATION_CLIENT_DIR", paths.get("migration_client_dir"))
     sd("PREFILL_NUM_USERS", 2 * N)
@@ -123,8 +136,8 @@ H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), tt
 D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementShard(3)])
 D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 64 * 1024))
 
-VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
-MODEL_CFG = VARIANT.model_config
+ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+MODEL_CFG = ADAPTER.model_config
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
@@ -138,20 +151,19 @@ NUM_CHUNKS = int(os.environ.get("PREFILL_STANDALONE_NCHUNKS", 4))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * NUM_CHUNKS))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
-_gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
+_gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
-# Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
-# L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
-# requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
-_ROUTING_USE_L1_SMALL_SEMAPHORES = VARIANT.name == "kimi_k2_6"
-_L1_SMALL_SIZE = 512 if _ROUTING_USE_L1_SMALL_SEMAPHORES else 0
+# Some models (e.g. Kimi: single expert group, device gate) route the MoE routing all-gather's global
+# semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
+# CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
+_L1_SMALL_SIZE = ADAPTER.l1_small_size
 
-os.environ.setdefault("PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)
+os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
 _shutdown = False
 
@@ -200,7 +212,7 @@ def _load_token_ids() -> list[int]:
     All ranks load identically so they agree on the chunk schedule."""
     import json
 
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
+    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
     input_override = os.environ.get("PREFILL_STANDALONE_INPUT")
     if input_override:
         with open(input_override) as f:
@@ -217,11 +229,11 @@ def _load_token_ids() -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _first_rank_chunk_tokens(runtime: TtPrefillRuntime, token_ids: list[int], kv_actual: int) -> ttnn.Tensor:
-    """Slice this chunk's tokens and build the SP-sharded input tensor. Delegates to the runtime's own
-    builder so the input format has one source of truth."""
+def _first_rank_chunk_tokens(runtime, token_ids: list[int], kv_actual: int) -> ttnn.Tensor:
+    """Slice this chunk's tokens and build the SP-sharded input tensor. The runtime owns the
+    input format so it has one source of truth."""
     cfg = runtime.config
-    return runtime._make_chunk_input(token_ids[kv_actual : kv_actual + cfg.chunk_size])
+    return runtime.make_chunk_input(token_ids[kv_actual : kv_actual + cfg.chunk_size])
 
 
 def _socket_next(h2d_service) -> tuple:
@@ -343,12 +355,13 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
-def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
-    """Run one chunk: prefill, forward the output downstream (non-last rank) and grant the outbound
-    sender so it ships over fabric, log CHUNK_START. Returns the compute-start epoch (NTP-comparable)."""
+def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
+    """Run one chunk: prefill into the engine-owned kv_cache, forward the output downstream (non-last
+    rank) and grant the outbound sender so it ships over fabric, log CHUNK_START. Returns the
+    compute-start epoch (NTP-comparable)."""
     t_start = time.time()
-    out = runtime.prefill(
-        inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+    out = runtime.prefill_chunk(
+        inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
     if SYNC_PER_CHUNK:
         # Block on device completion before the send so the delta is this rank's forward alone, not the
@@ -363,9 +376,7 @@ def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: d
     return t_start
 
 
-def _drain_and_log_e2e(
-    runtime: TtPrefillRuntime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float
-) -> None:
+def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:
     """Per-rank teardown: drain the last outbound D2D forward, one synchronize so the e2e clock reflects
     device completion, then log E2E_CLOCK (first prefill start + last compute end, NTP-comparable epochs)
     and the chunk count. No teardown barrier across ranks."""
@@ -379,7 +390,7 @@ def _drain_and_log_e2e(
 
 
 def run_request_loop(
-    runtime: TtPrefillRuntime, rank: int, num_ranks: int, *, h2d_service=None, d2d_in=None, d2d_out=None
+    runtime, kv_cache, rank: int, num_ranks: int, *, h2d_service=None, d2d_in=None, d2d_out=None
 ) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until SIGTERM. There is no
@@ -402,14 +413,14 @@ def run_request_loop(
             inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
             inp, meta = _d2d_recv(d2d_in)
-        t = _compute_and_send(runtime, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
         c += 1
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
-def run_standalone_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
+def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
     """Bring-up / benchmark loop — BOUNDED, golden-trace input. rank 0 drives NUM_CHUNKS chunks from the
     trace; downstream ranks receive the same count over D2D. Every rank knows NUM_CHUNKS (propagated via
     global_env), so each loops a fixed range independently — no end-of-stream marker needed. With
@@ -445,7 +456,7 @@ def run_standalone_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, *,
         else:
             inp, meta = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
@@ -459,11 +470,21 @@ def run_standalone_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, *,
     if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
         # Each rank PCC-checks the KV slice it populated against the golden trace (offset by
         # first_layer_idx); all ranks passing == the rank-sliced model reproduces single-rank KV.
-        from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import kv_cache_pcc_check
-
-        trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
-        kv_cache_pcc_check(
-            runtime, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=cfg.first_layer_idx
+        # kv_cache_pcc_check is an OPTIONAL runtime hook (golden-trace bring-up only — never used in
+        # production serving), so a model whose runtime doesn't implement it can't be checked this way.
+        pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
+        if pcc_check is None:
+            raise RuntimeError(
+                f"PREFILL_STANDALONE_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
+                "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
+            )
+        # Pass the raw trace path; the validation helper resolves it (descends the vllm hash subdir).
+        pcc_check(
+            kv_cache,
+            slot_id=slot_id,
+            n_chunks=n_chunks,
+            trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
+            first_layer_idx=cfg.first_layer_idx,
         )
 
 
@@ -477,10 +498,10 @@ def _print_config() -> None:
     rank's config is visible in logs. Values shown are the resolved effective values, not just what was
     set in the environment."""
     rows = [
-        ("PREFILL_MODEL_VARIANT", VARIANT.name),
-        ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", VARIANT.hf_model_default)),
-        ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)),
-        ("resolved weight_cache_path", str(resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE))),
+        ("PREFILL_MODEL", ADAPTER.name),
+        ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)),
+        ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)),
+        ("resolved weight_cache_path", str(ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE))),
         ("PREFILL_SP", str(_sp)),
         ("PREFILL_TP", str(_tp)),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
@@ -496,7 +517,7 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE (pipeline/bring-up mode)", os.environ.get("PREFILL_STANDALONE", "0")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
-        ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default)),
+        ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<trace default>")),
         ("PREFILL_STANDALONE_PCC", os.environ.get("PREFILL_STANDALONE_PCC", "0")),
         ("PREFILL_STANDALONE_CHUNKED_PCC", os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88")),
@@ -544,50 +565,47 @@ def main() -> None:
 
     mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
 
-    hf_config = load_hf_config(VARIANT)
+    hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
 
-    cache_path = resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE)
-    runtime_config = TtPrefillRuntimeConfig(
-        num_layers=num_my_layers,
-        max_seq_len=MAX_SEQ_LEN,
+    params = PrefillRunParams(
         mesh_shape=GLOBAL_MESH_SHAPE,
-        chunk_size=CHUNK_SIZE,
-        num_users=NUM_USERS,
-        num_links=2 if is_blackhole() else 1,  # Blackhole trains 2 fabric routing planes, others 1
-        capacity_factor=CAPACITY_FACTOR,
-        gate_fallback_mode=GateComputeMode[_gate_mode_name],
-        weight_cache_path=cache_path,
-        model_cfg=MODEL_CFG,
+        num_layers=num_my_layers,
         first_layer_idx=first_layer_idx,
         is_first_rank=is_first_rank,
         is_last_rank=is_last_rank,
+        max_seq_len=MAX_SEQ_LEN,
+        chunk_size=CHUNK_SIZE,
+        num_users=NUM_USERS,
+        capacity_factor=CAPACITY_FACTOR,
+        num_links=2 if is_blackhole() else 1,  # Blackhole trains 2 fabric routing planes, others 1
+        gate_mode_name=_gate_mode_name,
         # Chunked prefill never samples (the populated KV cache is the output), so the final stage is
         # headless: its last layer runs KV-only and no norm/LM-head is built. Only the last rank does
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
-        routing_use_l1_small_for_semaphores=_ROUTING_USE_L1_SMALL_SEMAPHORES,
+        weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
     )
 
-    runtime = TtPrefillRuntime(
-        mesh_device=mesh_device,
-        hf_config=hf_config,
-        state_dict={},
-        config=runtime_config,
-    )
-    runtime.compile()
+    runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    # The engine owns the KV cache: allocate it once (the adapter defines the layout), pass it into
+    # every runtime call, and let it free with the mesh at shutdown.
+    kv_cache = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    runtime.compile(kv_cache)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
-        _serve_standalone(runtime, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+        _serve_standalone(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
     else:
-        _serve_request(runtime, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+        _serve_request(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
     logger.info(f"[pp rank {rank}] shutdown complete")
 
 
-def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+def _serve_standalone(
+    runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool
+) -> None:
     """Bring-up / benchmark path: golden-trace input on rank 0, D2D-socket transport between ranks,
     per-rank KV PCC. Self-contained (no external producer); covers num_ranks 1..N."""
     # Warm-up sync — the ONLY barrier. Every rank finishes compile before any chunk enters the
@@ -608,7 +626,7 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
         ttnn.distributed_context_barrier()
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
-    run_standalone_loop(runtime, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
+    run_standalone_loop(runtime, kv_cache, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
 
     if d2d_in is not None or d2d_out is not None:
         # Free the services while the mesh + command queues are still alive (their dtors free a command
@@ -619,7 +637,7 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
         gc.collect()
 
 
-def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     """Production serving: token chunks + PrefillMetadata arrive over the H2D socket from an external
     producer (prefill_h2d_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
     mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
@@ -678,22 +696,16 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
                 logger.warning(f"[migration] removing stale DONE sentinel {_done_file} from a prior run")
                 os.remove(_done_file)
 
-            # Full migration bring-up: publish the KV chunk table + device map, then block on
-            # WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
-            from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import publish_kv_chunk_table_and_wait_ready
-
+            # Full migration bring-up: the runtime builds the model-specific KV chunk table from
+            # its device cache layout; the runner publishes it (+ device map) to the worker and blocks
+            # on WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
             table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
             wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-            publish_kv_chunk_table_and_wait_ready(
+            runtime.build_kv_chunk_table(kv_cache, path=table_path)
+            publish_table_and_wait_ready(
                 mesh_device=mesh_device,
-                kvpe_cache=runtime.kvpe_cache,
-                seq_len=MAX_SEQ_LEN,
-                num_layers=NUM_LAYERS,
                 mesh_shape=GLOBAL_MESH_SHAPE,
-                sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
-                num_users=NUM_USERS,
-                chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
-                path=table_path,
+                table_path=table_path,
                 wait_ready_timeout_ms=wait_ready_ms,
             )
 
@@ -709,7 +721,7 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
+    run_request_loop(runtime, kv_cache, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
