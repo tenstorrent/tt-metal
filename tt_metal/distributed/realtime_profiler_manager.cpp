@@ -921,7 +921,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     });
 }
 
-RealtimeProfilerManager::~RealtimeProfilerManager() { shutdown(); }
+RealtimeProfilerManager::~RealtimeProfilerManager() {
+    MetalContext::instance(context_id_).device_manager()->clear_rt_profiler_shutdown_hook();
+    shutdown();
+}
 
 void RealtimeProfilerManager::shutdown() {
     // Re-write ring_buffer->terminate as a safety net (dispatch_s already set it via the

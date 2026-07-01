@@ -593,9 +593,10 @@ void kernel_main() {
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         if (rt_profiler_enabled) {
-            uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL)
-                                     ? popped_pid
-                                     : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID);
+            bool carries_program_id =
+                (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) || (cmd->base.cmd_id == CQ_DISPATCH_CMD_TERMINATE);
+            uint32_t buffer_id =
+                carries_program_id ? popped_pid : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID);
             write_buffer_id(rt_profiler_msg, buffer_id);
         }
         switch (cmd->base.cmd_id) {

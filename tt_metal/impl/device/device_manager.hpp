@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <tt_stl/span.hpp>
@@ -68,6 +69,11 @@ public:
     void mark_rt_profiler_device_init_complete(ChipId chip_id);
     void clear_rt_profiler_device_init_complete(ChipId chip_id);
 
+    // Registers a shutdown hook that close_devices runs after dispatch teardown, before chips close.
+    void set_rt_profiler_shutdown_hook(std::function<void()> hook);
+    // Cleared by ~RealtimeProfilerManager so the hook can't outlive the profiler (guards against a use-after-free).
+    void clear_rt_profiler_shutdown_hook();
+
 private:
     MetalEnv& env_;
     MetalEnvImpl& env_impl_;
@@ -95,6 +101,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map_;
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map_;
     std::unordered_set<ChipId> rt_profiler_device_init_complete_;
+    std::function<void()> rt_profiler_shutdown_hook_;
     void init_firmware_on_active_devices();
     void activate_device(ChipId id);
     Device* get_active_device_internal(ChipId device_id) const;
