@@ -158,6 +158,7 @@ from ...reference.ideogram4.constants import (
     LLM_TOKEN_INDICATOR,
     OUTPUT_IMAGE_INDICATOR,
     QWEN3_VL_ACTIVATION_LAYERS,
+    SEQUENCE_PADDING_INDICATOR,
 )
 from ...reference.ideogram4.dequant import dequant_fp8_state_dict
 
@@ -377,7 +378,15 @@ class Ideogram4Pipeline:
         return cls(mesh_device=mesh_device, weights_dir=weights_dir, **kw)
 
     def _encode(self, prompt: str):
-        """Tokenize + run the device encoder -> real interleaved llm_features (host) + n_text."""
+        """Tokenize + run the device encoder -> real interleaved llm_features (host) + n_text.
+
+        CONSTANT-SHAPE: the token ids are padded to exactly ``MAX_TEXT_TOKENS`` and the
+        encoder rope is built for that fixed length, so the encoder always sees the same
+        shape regardless of prompt length (no per-length recompile / shape-keyed POBs).
+        The Qwen3-VL encoder is CAUSAL (model_qwen3vl: is_causal=(attention_bias is None),
+        and we pass attention_mask=None), so the real rows [0:n_text] are unaffected by the
+        trailing pad. We slice the taps back to [:, :n_text] and return the real-length feats.
+        """
         text = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
             add_generation_prompt=True,
@@ -390,15 +399,24 @@ class Ideogram4Pipeline:
                 f"prompt tokenizes to {n_text} text tokens; Ideogram 4 supports at most "
                 f"{MAX_TEXT_TOKENS}. Matches the reference pipeline, which raises rather than truncating."
             )
-        cos, sin = create_rope_tensors(1, n_text, None, self._enc_head_dim, self._enc_rope_theta, self._enc_mrope)
+        # Pad ids to the FIXED MAX_TEXT_TOKENS length (causal -> trailing pad is inert).
+        pad_id = self.tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = 0
+        if n_text < MAX_TEXT_TOKENS:
+            ids = torch.nn.functional.pad(ids, (0, MAX_TEXT_TOKENS - n_text), value=int(pad_id))
+        cos, sin = create_rope_tensors(
+            1, MAX_TEXT_TOKENS, None, self._enc_head_dim, self._enc_rope_theta, self._enc_mrope
+        )
         tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
         taps = self.encoder.forward(
             tt_ids,
             attention_mask=None,
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
         )
-        # taps: 13 x [1, n_text, 4096] replicated on TP; interleave to [1, n_text, 53248]
-        taps_t = [tensor.to_torch(t, mesh_axes=[None, None, None]) for t in taps]
+        # taps: 13 x [1, MAX_TEXT_TOKENS, 4096] replicated on TP; slice to real rows [:, :n_text]
+        # (causal => pad rows do not influence the real rows) then interleave to [1, n_text, 53248].
+        taps_t = [tensor.to_torch(t, mesh_axes=[None, None, None])[:, :n_text] for t in taps]
         feats = torch.stack(taps_t, dim=0).permute(1, 2, 3, 0).reshape(1, n_text, -1).to(torch.bfloat16)
         return feats, n_text
 
@@ -432,45 +450,60 @@ class Ideogram4Pipeline:
         return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32)
 
     def _branch(self, n_pre, num_img, grid_h, grid_w, llm_real):
+        """Build the per-branch device tensors with a CONSTANT [image | text | pad] layout.
+
+        The total length ``L = _sp_padded_len(num_img + MAX_TEXT_TOKENS, sp_factor)`` is the
+        same for every prompt (cond/uncond, any n_text), so the per-token tensors are allocated
+        once and reused -> no shape-keyed persistent-output-buffer leak / DRAM fragmentation.
+
+        Layout (image-FIRST):
+          [0 : num_img]              -> image tokens   (OUTPUT_IMAGE_INDICATOR)
+          [num_img : num_img+n_pre]  -> real text      (LLM_TOKEN_INDICATOR)
+          [num_img+n_pre : L]        -> pad            (SEQUENCE_PADDING_INDICATOR -> both masks 0)
+
+        This reorder (text-AFTER-image instead of text-before) is LOSSLESS: the denoiser uses
+        FULL attention + per-token MRoPE (permutation-equivariant), so each token's output is
+        identical regardless of position in the sequence as long as it keeps its own position_ids.
+        The REAL length ``seq = num_img + n_pre`` is returned as ``seq`` and passed to the model
+        as ``spatial_sequence_length`` (ring-SDPA ``logical_n``), masking the trailing pad. We do
+        NOT pass L as spatial_sequence_length.
+        """
         cfg = self.config
-        seq = n_pre + num_img
-        # SP shards the sequence: pad to a k_chunk*sp_factor multiple so each per-device
-        # shard is tile-aligned (ring SDPA requirement), then shard every per-token tensor
-        # on the SP axis. Padding is appended after the image tokens (mask/indicator 0), so
-        # it contributes nothing and is sliced off the velocity output. No-op when SP==1.
-        padded_len = _sp_padded_len(seq, self.sp_factor)
-        pad = padded_len - seq
-        ind = torch.full((1, seq), OUTPUT_IMAGE_INDICATOR, dtype=torch.long)
+        seq = n_pre + num_img  # REAL length (logical_n); image + real text, no pad
+        # Constant total length across all prompts (image + MAX text, SP-aligned).
+        L = _sp_padded_len(num_img + MAX_TEXT_TOKENS, self.sp_factor)
+
+        # Indicator: PAD sentinel everywhere, then stamp image-front + real-text region.
+        ind = torch.full((1, L), SEQUENCE_PADDING_INDICATOR, dtype=torch.long)
+        ind[:, :num_img] = OUTPUT_IMAGE_INDICATOR
         if n_pre:
-            ind[:, :n_pre] = LLM_TOKEN_INDICATOR
-        llm = torch.zeros(1, seq, cfg.llm_features_dim, dtype=torch.bfloat16)
+            ind[:, num_img : num_img + n_pre] = LLM_TOKEN_INDICATOR
+
+        llm = torch.zeros(1, L, cfg.llm_features_dim, dtype=torch.bfloat16)
         if n_pre and llm_real is not None:
-            llm[:, :n_pre] = llm_real
-        pos = torch.zeros(1, seq, 3, dtype=torch.long)
-        if n_pre:
-            tp = torch.arange(n_pre)
-            pos[:, :n_pre] = torch.stack([tp, tp, tp], dim=1)
+            llm[:, num_img : num_img + n_pre] = llm_real
+
+        pos = torch.zeros(1, L, 3, dtype=torch.long)
+        # Image grid-positions occupy the FRONT [0:num_img].
         hh = torch.arange(grid_h).repeat_interleave(grid_w)
         ww = torch.arange(grid_w).repeat(grid_h)
-        pos[:, n_pre:, 0] = IMAGE_POSITION_OFFSET
-        pos[:, n_pre:, 1] = IMAGE_POSITION_OFFSET + hh
-        pos[:, n_pre:, 2] = IMAGE_POSITION_OFFSET + ww
+        pos[:, :num_img, 0] = IMAGE_POSITION_OFFSET
+        pos[:, :num_img, 1] = IMAGE_POSITION_OFFSET + hh
+        pos[:, :num_img, 2] = IMAGE_POSITION_OFFSET + ww
+        # Text positions occupy [num_img : num_img+n_pre]; pad rows keep position 0 (inert).
+        if n_pre:
+            tp = torch.arange(n_pre)
+            pos[:, num_img : num_img + n_pre] = torch.stack([tp, tp, tp], dim=1)
+
         rope = modeling_ideogram4.Ideogram4MRoPE(
             head_dim=cfg.emb_dim // cfg.num_heads, base=cfg.rope_theta, mrope_section=cfg.mrope_section
         )
         cos, sin = rope(pos)
-        llm_mask = (ind == LLM_TOKEN_INDICATOR).float().unsqueeze(-1)  # [1, seq, 1]
-        img_mask = (ind == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1)
-        idx = (ind == OUTPUT_IMAGE_INDICATOR).to(torch.int32)  # [1, seq]
-        cos4 = cos.unsqueeze(1).to(torch.bfloat16)  # [1, 1, seq, head_dim]
+        cos4 = cos.unsqueeze(1).to(torch.bfloat16)  # [1, 1, L, head_dim]
         sin4 = sin.unsqueeze(1).to(torch.bfloat16)
-        if pad:
-            llm = torch.nn.functional.pad(llm, (0, 0, 0, pad))
-            cos4 = torch.nn.functional.pad(cos4, (0, 0, 0, pad))
-            sin4 = torch.nn.functional.pad(sin4, (0, 0, 0, pad))
-            llm_mask = torch.nn.functional.pad(llm_mask, (0, 0, 0, pad))
-            img_mask = torch.nn.functional.pad(img_mask, (0, 0, 0, pad))
-            idx = torch.nn.functional.pad(idx, (0, pad))
+        llm_mask = (ind == LLM_TOKEN_INDICATOR).float().unsqueeze(-1)  # [1, L, 1]
+        img_mask = (ind == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1)
+        idx = (ind == OUTPUT_IMAGE_INDICATOR).to(torch.int32)  # [1, L]
         return dict(
             llm=self._seq_dev(llm, 1),
             cos=self._seq_dev(cos4, 2),
@@ -479,7 +512,7 @@ class Ideogram4Pipeline:
             img_mask=self._seq_dev(img_mask, 1),
             idx=self._idx_dev(idx, 1),
             seq=seq,
-            padded_len=padded_len,
+            padded_len=L,
             n_pre=n_pre,
         )
 
@@ -493,6 +526,7 @@ class Ideogram4Pipeline:
         preset: str = "V4_TURBO_12",
         seed: int = 1234,
         guidance_scale: float | None = None,
+        traced: bool = True,
     ):
         import time as _time
 
@@ -532,8 +566,8 @@ class Ideogram4Pipeline:
             )  # [1, padded_len/sp, in_ch] sequence-sharded
             if self.sp_factor > 1:
                 out = self.ccl.all_gather_persistent_buffer(out, dim=1, mesh_axis=self.sp_axis)
-            start = br["seq"] - num_img  # image-token slice start (drops text prefix + SP pad)
-            return ttnn.slice(out, [0, start, 0], [1, br["seq"], cfg.in_channels])
+            # Image tokens are at the FRONT [0:num_img] (constant [image | text | pad] layout).
+            return ttnn.slice(out, [0, 0, 0], [1, num_img, cfg.in_channels])
 
         # The ENTIRE per-step computation runs in a SINGLE trace: cond forward, uncond
         # forward, the two SP-axis velocity gathers, the asymmetric-CFG blend and the Euler
@@ -546,8 +580,9 @@ class Ideogram4Pipeline:
         # the Tracer copies host inputs into the captured slots, allocating nothing new.
         # x_cond/x_uncond already carry the running latent z (built on host from the previous
         # z), and the trace returns the next z (device) which is read back to host each step.
-        cond_pad = cond_b["padded_len"] - cond_b["seq"]
-        uncond_pad = uncond_b["padded_len"] - uncond_b["seq"]
+        # Constant total length L (same for cond/uncond now that the layout is [image|text|pad]).
+        L = cond_b["padded_len"]
+        assert uncond_b["padded_len"] == L
 
         def step_fn(x_cond, x_uncond, t_sin, z_in, gw, one_minus_gw, smt):
             # t_sin feeds both branches' adaln; share the same per-step embedding.
@@ -585,17 +620,20 @@ class Ideogram4Pipeline:
             )
 
         def _x_inputs(z_host):
-            """Build the cond/uncond image-latent inputs on HOST from the current z."""
-            pos_x = torch.zeros(1, n_text + num_img, cfg.in_channels, dtype=torch.bfloat16)
-            pos_x[:, n_text:] = z_host.to(torch.bfloat16)
-            if cond_pad:
-                pos_x = torch.nn.functional.pad(pos_x, (0, 0, 0, cond_pad))
-            unc_x = z_host.to(torch.bfloat16)
-            if uncond_pad:
-                unc_x = torch.nn.functional.pad(unc_x, (0, 0, 0, uncond_pad))
+            """Build the image-latent input on HOST from the current z.
+
+            Image-first layout: the noise latent z goes at [0:num_img] for BOTH branches; the
+            rest of the constant-length-L sequence is zeros. cond and uncond x are now IDENTICAL
+            (the conditioning difference lives only in llm/masks/idx/logical_n), so we build one
+            tensor and feed it to both branches.
+            """
+            x_full = torch.zeros(1, L, cfg.in_channels, dtype=torch.bfloat16)
+            x_full[:, :num_img] = z_host.to(torch.bfloat16)
             # Shard on the SP axis (host tensors; the tracer moves them onto its captured
-            # device slots). _seq_dev shards-or-replicates exactly as the model expects.
-            return self._host_seq(pos_x, 1), self._host_seq(unc_x, 1)
+            # device slots). _host_seq shards-or-replicates exactly as the model expects.
+            # Build two DISTINCT tensors (same contents) so the traced step keeps independent
+            # input slots for the cond/uncond branches.
+            return self._host_seq(x_full, 1), self._host_seq(x_full, 1)
 
         _td = _time.perf_counter()
         self.step_trace = []
@@ -619,14 +657,19 @@ class Ideogram4Pipeline:
                 _scalar_host(1.0 - gw),
                 _scalar_host(smt),
             )
-            if self._step_tracer is None:
-                self._step_tracer = Tracer(step_fn, device=dev, clone_prep_inputs=False)
-                # ttnn.zeros host-writes for the 0-element ring-SDPA "empty joint" tensor,
-                # which is illegal during capture; substitute a persistent zeros constant.
-                with _patch_zeros_for_trace(dev):
+            if traced:
+                if self._step_tracer is None:
+                    self._step_tracer = Tracer(step_fn, device=dev, clone_prep_inputs=False)
+                    # ttnn.zeros host-writes for the 0-element ring-SDPA "empty joint" tensor,
+                    # which is illegal during capture; substitute a persistent zeros constant.
+                    with _patch_zeros_for_trace(dev):
+                        z_out = self._step_tracer(*args)
+                else:
                     z_out = self._step_tracer(*args)
             else:
-                z_out = self._step_tracer(*args)
+                # Untraced: move the host inputs onto device and run the step eagerly (no
+                # capture/replay). Same device computation, just per-op host dispatch each step.
+                z_out = step_fn(*(a.to(dev) if isinstance(a, ttnn.Tensor) and a.device() is None else a for a in args))
 
             z_host = tensor.to_torch(z_out, mesh_axes=[None, None, None]).float()
             self.step_trace.append((t_val, s_val, gw, 0.0, float(z_host.std()), 0.0))

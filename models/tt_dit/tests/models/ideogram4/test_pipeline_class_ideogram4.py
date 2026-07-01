@@ -231,3 +231,33 @@ def test_pipeline_class(*, mesh_device, submesh_shape, tp_axis, height, width, p
     logger.info(f"pipeline class saved {out} shape={img.shape} std={img.std():.1f} preset={preset}")
     assert img.shape == (height, width, 3)
     assert img.std() > 1.0
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis"),
+    [pytest.param((4, 2), (4, 2), 1, id="sp4tp2")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 65536}], indirect=True
+)
+def test_2048_presets(*, mesh_device, submesh_shape, tp_axis) -> None:
+    """UNTRACED 2048px generation across all 3 sampler presets, saved for manual review.
+
+    Builds the pipeline ONCE and loops the presets (avoids a per-preset model reload).
+    Untraced (traced=False) per the serving plan; 2048px doesn't benefit from tracing.
+    """
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis)
+    for preset in ("V4_TURBO_12", "V4_DEFAULT_20", "V4_QUALITY_48"):
+        img = pipe(PROMPT, height=2048, width=2048, preset=preset, seed=1234, traced=False)
+        out = f"/data/cglagovich/ideogram4_2048_{preset}.png"
+        Image.fromarray(img).save(out)
+        t = pipe.timings
+        logger.info(
+            f"2048px UNTRACED {preset}: saved {out} std={img.std():.1f} | total={t['total']:.1f}s "
+            f"encode={t['encode']:.1f}s denoise={t['denoise']:.1f}s ({t['denoise_per_step']*1000:.0f}ms/step) "
+            f"decode={t['decode']:.1f}s"
+        )
+        assert img.shape == (2048, 2048, 3)
+        assert img.std() > 1.0
