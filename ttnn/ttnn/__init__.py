@@ -174,6 +174,7 @@ from ttnn._ttnn.fabric import (
     get_fabric_config,
     get_tt_fabric_packet_header_size_bytes,
     get_tt_fabric_max_payload_size_bytes,
+    get_physical_mesh_shapes,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
@@ -380,7 +381,6 @@ tile_size = ttnn._ttnn.tensor.tile_size
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
-import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
@@ -440,7 +440,7 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode
+from ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div
 sub = ttnn.subtract

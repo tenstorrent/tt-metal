@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 pytestmark = pytest.mark.use_module_device
 
 
-binary_fns = {
+binary_fns = [
     "ge",
     "gt",
     "le",
@@ -33,7 +33,7 @@ binary_fns = {
     "rsub",
     "mul",
     "bias_gelu",
-}
+]
 
 
 def test_binary_ng_typecast_lt(device):
@@ -822,11 +822,27 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
 
     if ttnn_fn == "divide" and scalar == 0.0:
+        # Golden/device can disagree on NaN vs Inf at a position; compare non-finite
+        # positions, then verify inf signs match where both sides are inf.
         g_nonfinite = ~torch.isfinite(torch_output_tensor)
         d_nonfinite = ~torch.isfinite(tt_output_tensor)
-        torch.testing.assert_close(
-            g_nonfinite, d_nonfinite, msg="Non-finite positions differ between golden and device"
-        )
+        assert torch.equal(g_nonfinite, d_nonfinite), "Non-finite positions differ between golden and device"
+        both_inf = torch.isinf(torch_output_tensor) & torch.isinf(tt_output_tensor)
+        if both_inf.any():
+            assert torch.equal(
+                torch.sign(torch_output_tensor[both_inf]),
+                torch.sign(tt_output_tensor[both_inf]),
+            ), "Inf sign mismatch between golden and device"
+        # ULP on elements where both sides are finite. Device-finite vs golden-non-finite
+        # is already caught by the mask assert above. Not reached today (randn/0.0 is
+        # all non-finite); guards future parametrizations with finite golden elements.
+        finite_mask = torch.isfinite(torch_output_tensor) & torch.isfinite(tt_output_tensor)
+        if finite_mask.any():
+            assert_with_ulp(
+                torch_output_tensor[finite_mask],
+                tt_output_tensor[finite_mask],
+                ulp_threshold=3,
+            )
     else:
         assert_with_ulp(
             torch_output_tensor,

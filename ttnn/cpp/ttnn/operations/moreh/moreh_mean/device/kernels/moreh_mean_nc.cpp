@@ -46,7 +46,7 @@ void kernel_main() {
             }
 
             uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
-            add_tiles_init_with_dt(cb_in0, cb_add);
+            add_tiles_init_with_dt(cb_in0_obj, CircularBuffer(cb_add));
             add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
 
             cb_in0_obj.pop_front(onetile);
@@ -57,7 +57,7 @@ void kernel_main() {
 
             cb_intermed0_obj.reserve_back(onetile);
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_intermed0);
+            pack_tile_with_dt(dst0, cb_intermed0_obj);
             tile_regs_release();
             cb_intermed0_obj.push_back(onetile);
 
@@ -67,13 +67,13 @@ void kernel_main() {
         // output * (1 / number_of_elements)
         tile_regs_acquire();
         cb_intermed0_obj.wait_front(onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0_obj, cb_scalar_obj);
         mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
         tile_regs_commit();
 
         cb_out0_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0);
+        pack_tile_with_dt(dst0, cb_out0_obj);
         tile_regs_release();
         cb_out0_obj.push_back(onetile);
         cb_intermed0_obj.pop_front(onetile);

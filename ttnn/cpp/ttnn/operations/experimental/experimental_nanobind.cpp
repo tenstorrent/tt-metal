@@ -51,7 +51,7 @@
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/h2d_socket_sync/h2d_socket_sync_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
@@ -80,6 +80,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
@@ -149,6 +150,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_group_attn_matmul(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
+    deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     deepseek_prefill::per_token_cast_to_fp8::detail::bind_experimental_per_token_cast_to_fp8_operation(mod);
@@ -159,7 +161,7 @@ void py_module(nb::module_& mod) {
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
     quasar::bind_quasar(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
-    deepseek_prefill::detail::bind_h2d_socket_sync(mod);
+    deepseek_prefill::detail::bind_inbound_socket_service_sync(mod);
     reshape::detail::bind_view(mod);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);

@@ -26,7 +26,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
+from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix, strip_mesh_suffix
 from matrix_runner_config import (
     DEFAULT_MODEL_TRACED_GROUPING_MODE,
     GENERATION_MANIFEST_FILENAME,
@@ -82,16 +82,33 @@ def _log_module_groups(header, modules, groups):
 
 
 def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
-    """Create matrix include entries for a set of batches using a runner config."""
-    return [
-        {
-            **runner_config,
-            "module_selector": batch,
-            "batch_display": f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch,
-            "suite_name": suite_name,
-        }
-        for batch in batches
-    ]
+    """Create matrix include entries for a set of batches using a runner config.
+
+    One include entry per batch (mesh_dims "").
+
+    Multi-device CCL modules whose vectors span both FABRIC_1D/RING and FABRIC_2D
+    meshes (e.g. all_gather) used to be split into per-fabric-family [1D]/[2D] jobs
+    to avoid an in-process FABRIC_1D->FABRIC_2D transition hang on T3K. That hang
+    was the device profiler overflowing the idle-erisc dispatch kernel (cq_prefetch)
+    at FABRIC_2D mesh open; it is now resolved by skipping the profiler for CCL in
+    sweeps_runner (_is_multidevice_ccl_module). With the profiler off, the
+    transition runs cleanly in one process (validated on T3K: 3/3 single-process
+    1D->2D runs passed, 0 hangs), so the split is no longer needed. The runner's
+    --mesh-dims filter remains available for ad-hoc per-fabric-family runs.
+    """
+    entries = []
+    for batch in batches:
+        base_display = f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch
+        entries.append(
+            {
+                **runner_config,
+                "module_selector": batch,
+                "batch_display": base_display,
+                "suite_name": suite_name,
+                "mesh_dims": "",
+            }
+        )
+    return entries
 
 
 def _load_generation_manifest(vectors_path):
@@ -134,7 +151,14 @@ def _group_modules_by_preference(modules, grouping_mode):
 
     for module in modules:
         mesh = get_mesh_shape_string(module)
-        hw = parse_hardware_suffix(module)
+        # Strip the trailing .mesh_NxM before parsing the hardware suffix: vector
+        # files carry BOTH suffixes (e.g. .hw_blackhole_p300a_2c.mesh_1x2), and
+        # parse_hardware_suffix returns None when the .mesh_* tail is still present.
+        # Without this, every hw-suffixed file falls through to mesh routing —
+        # harmless for wormhole (mesh shape maps to its own lane) but it sends
+        # blackhole files (mesh 1x1/1x2) to the wormhole n150/n300 lanes where they
+        # are dropped, so the blackhole lanes never run. Mirrors vector_source.py.
+        hw = parse_hardware_suffix(strip_mesh_suffix(module))
 
         if grouping_mode == "mesh":
             if mesh:

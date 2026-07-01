@@ -183,6 +183,21 @@ Tensor group_norm(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
+    // The non-sharded (interleaved) group_norm only has a correct TILE-input /
+    // TILE-output compute path. See #47972 and #48142
+    if (!input_tensor.is_sharded()) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "group_norm: interleaved (non-sharded) input must be in TILE layout, got ROW_MAJOR. "
+            "Convert the input with ttnn.to_layout(input, ttnn.TILE_LAYOUT) before calling group_norm. "
+            "ROW_MAJOR is supported only for sharded inputs.");
+        TT_FATAL(
+            output_layout.value_or(Layout::TILE) == Layout::TILE,
+            "group_norm: interleaved (non-sharded) output must be in TILE layout, got ROW_MAJOR output_layout. "
+            "Request TILE output and convert it yourself with ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT). "
+            "ROW_MAJOR output is supported only for sharded inputs.");
+    }
+
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());

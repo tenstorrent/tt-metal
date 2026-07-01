@@ -363,7 +363,8 @@ void wait_until_cores_done(
         // In tests, when rtoptions.get_test_mode_enabled() is true, watcher
         // will stop but will not kill the program. This section detects watcher
         // stopping and reports a fatal error so Finish() can return and the test process can tear down.
-        if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled()) {
+        if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled() &&
+            tt::tt_metal::MetalContext::instance().watcher_server()) {
             auto& watcher = *tt::tt_metal::MetalContext::instance().watcher_server();
             if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
                 TT_THROW(

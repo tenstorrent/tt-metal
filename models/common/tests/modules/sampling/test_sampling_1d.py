@@ -26,6 +26,10 @@ QWEN3_32B = "Qwen/Qwen3-32B"
 _slow = pytest.mark.slow
 
 
+def _sub_core_grids_for_32_users():
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+
+
 def _list_collected_sampling_cases() -> list[pytest.param]:
     """
     Collected from TTTv1 demo runs (Phase B of test_case_collection.md).
@@ -675,6 +679,107 @@ def test_sampling1d_argmax_vs_reference(ttnn_mesh_device):
     assert torch.equal(
         tokens_host, expected
     ), f"argmax path mismatch:\n  got:      {tokens_host[:8]}\n  expected: {expected[:8]}"
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_qwen3_32b_uses_compact_tail_mask(ttnn_mesh_device):
+    sampler = Sampling1D(vocab_size=152064, valid_vocab_size=151936, mesh_device=ttnn_mesh_device)
+    sampler.load_device_buffers()
+
+    assert sampler._invalid_vocab_mask is None
+    assert isinstance(sampler._invalid_vocab_tail_mask, ttnn.Tensor)
+    assert sampler._invalid_vocab_tail_width == 128
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_topk_masks_qwen3_32b_padded_tail(ttnn_mesh_device):
+    B = 32
+    valid_vocab_size = 151936
+    padded_vocab_size = 152064
+    sampler = Sampling1D(vocab_size=padded_vocab_size, valid_vocab_size=valid_vocab_size, mesh_device=ttnn_mesh_device)
+
+    logits_host = torch.full((1, 1, B, padded_vocab_size), -1.0, dtype=torch.bfloat16)
+    logits_host[..., valid_vocab_size:] = 0.0
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+    tokens_tt, _ = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+    assert torch.all(tokens_host < valid_vocab_size)
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_padded_tail_with_sub_core_grids_runs(ttnn_mesh_device):
+    B = 32
+    valid_vocab_size = 151936
+    padded_vocab_size = 152064
+    sub_core_grids = _sub_core_grids_for_32_users()
+    sampler = Sampling1D(
+        vocab_size=padded_vocab_size,
+        valid_vocab_size=valid_vocab_size,
+        mesh_device=ttnn_mesh_device,
+        sub_core_grids=sub_core_grids,
+        sub_core_grid_topk=sub_core_grids,
+        start_core=ttnn.CoreCoord(0, 0),
+    )
+    sampler.load_device_buffers()
+
+    logits_host = torch.full((1, 1, B, padded_vocab_size), -1.0, dtype=torch.bfloat16)
+    logits_host[..., valid_vocab_size:] = 0.0
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    worker_sub_device = ttnn.SubDevice([sub_core_grids])
+    sub_device_manager = ttnn_mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    stall_group_set = False
+    manager_loaded = False
+    try:
+        ttnn_mesh_device.load_sub_device_manager(sub_device_manager)
+        manager_loaded = True
+        ttnn_mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+        stall_group_set = True
+
+        tokens_tt, _ = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+        tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+        assert torch.all(tokens_host < valid_vocab_size)
+    finally:
+        if stall_group_set:
+            ttnn_mesh_device.reset_sub_device_stall_group()
+        if manager_loaded:
+            ttnn_mesh_device.clear_loaded_sub_device_manager()
+        ttnn_mesh_device.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_argmax_slices_qwen3_32b_padded_tail(ttnn_mesh_device):
+    B = 32
+    valid_vocab_size = 151936
+    padded_vocab_size = 152064
+    sampler = Sampling1D(
+        vocab_size=padded_vocab_size,
+        valid_vocab_size=valid_vocab_size,
+        mesh_device=ttnn_mesh_device,
+        allow_force_argmax=True,
+    )
+
+    logits_host = torch.full((1, 1, B, padded_vocab_size), -1.0, dtype=torch.bfloat16)
+    logits_host[..., valid_vocab_size:] = 0.0
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    tokens_tt, _ = sampler.decode_forward(logits_tt)
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+    assert torch.all(tokens_host < valid_vocab_size)
 
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)

@@ -194,7 +194,12 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         weights_dtype=weights_dtype,
         weight_cache_path=None,
     )
-    output1_tt = expert_from_weights(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
+    # The unified op writes its FFN results back into the dispatched buffer in
+    # place (no separate output allocation), so each path must run on its own
+    # pristine copy of the input — otherwise path 2/3 would extract from path 1's
+    # already-overwritten rows. Clone per path; the determinism we are checking is
+    # over the weights->cold->warm cache, not the input buffer.
+    output1_tt = expert_from_weights(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)
     output1 = to_torch_expert(output1_tt)
 
     # === Path 2: Cold Cache ===
@@ -235,7 +240,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         cache_name_prefix="routed_expert",
     )
     profiler.end("cold_load")
-    output2_tt = expert_cold(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
+    output2_tt = expert_cold(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)
     output2 = to_torch_expert(output2_tt)
 
     # === Path 3: Warm Cache ===
@@ -253,7 +258,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         cache_name_prefix="routed_expert",
     )
     profiler.end("warm_load")
-    output3_tt = expert_warm(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
+    output3_tt = expert_warm(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)
     output3 = to_torch_expert(output3_tt)
 
     # === Validation ===
