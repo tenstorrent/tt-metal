@@ -80,12 +80,16 @@ ttnn:
     wh_llmbox_civ2_prio: 15
     bh_p150b_civ2_viommu: 45
     bh_p150b_civ2_viommu_prio: 45
+    sim_wormhole_b0: 40
+    sim_blackhole: 40
   sanity:
     wh_n300_civ2: 545
     bh_p100: 545
     bh_p150b_civ2: 545
     bh_quietbox_2: 55
     bh_p300: 15
+    sim_wormhole_b0: 680
+    sim_blackhole: 680
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
@@ -151,6 +155,9 @@ ttsim:
   unit:
     sim_wormhole_b0: 15
     sim_blackhole: 15
+  sanity:
+    sim_wormhole_b0: 30
+    sim_blackhole: 30
 
 shield:
   e2e:
@@ -208,6 +215,10 @@ runtime:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
     bh_loudbox: 5
+    sim_wormhole_b0: 30
+    sim_blackhole: 30
+    sim_wormhole_b0_galaxy: 10
+    sim_blackhole_galaxy: 10
   unit:
     wh_n150_civ2: 226
     wh_n300_civ2: 74

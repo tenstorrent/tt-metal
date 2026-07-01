@@ -247,3 +247,9 @@ skus:
   sim_blackhole:
     runs_on:
       - ubuntu-latest
+  sim_wormhole_b0_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+  sim_blackhole_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable

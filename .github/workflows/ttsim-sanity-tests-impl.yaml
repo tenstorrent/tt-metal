@@ -1,38 +1,22 @@
-name: "[internal] ttsim unit tests impl"
+name: "[internal] ttsim sanity tests impl"
 
 on:
   workflow_call:
     inputs:
-      docker-image:
+      basic-docker-image:
         required: true
         type: string
-      build-artifact-name:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
-      enabled-skus:
-        required: true
-        type: string
-        description: "Comma-separated SKUs (see .github/sku_config.yaml)."
-      additional_test_categories:
+      package-artifact-name:
         required: false
         type: string
-        default: ''
-        description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
-      enable-llk-asserts:
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-categories.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_unit_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_sanity_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -50,25 +34,14 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "unit"
+            "sanity"
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "ALL_SKUS_IN_TESTS" \
             ./.github/sku_config.yaml
-      - name: Filter matrix by additional_test_categories
-        id: filter-categories
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          categories='${{ inputs.additional_test_categories }}'
-          filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
-          {
-            echo "matrix<<EOF"
-            echo "$filtered"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
   fetch-ttsim:
     needs: load-test-matrix
@@ -106,7 +79,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  ttsim-unit-tests:
+  ttsim-sanity-tests:
     needs: [load-test-matrix, fetch-ttsim]
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && needs.fetch-ttsim.result == 'success' }}
     strategy:
@@ -115,47 +88,54 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    permissions:
+      contents: read
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'blackhole') && 'blackhole' || 'wormhole_b0' }}
-        LOGURU_LEVEL: INFO
+      image: ${{ inputs.basic-docker-image || 'docker-image-unresolved!' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
-      options: "--label runner-mode=sim"
+        - ${{ github.workspace }}:/work
     defaults:
       run:
         shell: bash
-        working-directory: /work
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      CC: gcc-12
+      CXX: g++-12
+      # ttsim installs under TT_METAL_HOME; setup-ttsim is invoked with root=$TT_METAL_HOME
+      # so it copies the soc descriptor from the installed package's tt_metal/soc_descriptors/.
+      TT_METAL_HOME: /usr/libexec/tt-metalium
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Checkout actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+          sparse-checkout: |
+            .github/actions/download-artifact-with-retry
+            .github/actions/setup-ttsim
+          sparse-checkout-cone-mode: false
+
+      - name: Download packages artifact
+        uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
         timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+        run: |
+          set -euo pipefail
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+
       - name: ⬇️  Setup TTSim
-        uses: ./docker-job/.github/actions/setup-ttsim
+        uses: ./.github/actions/setup-ttsim
         timeout-minutes: 5
         with:
           sku: ${{ matrix.test-group.sku }}
+          root: ${{ env.TT_METAL_HOME }}
+
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
