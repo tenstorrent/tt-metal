@@ -69,7 +69,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/spec_names.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
     api/tt-metalium/experimental/metal2_host_api/utility/table.hpp

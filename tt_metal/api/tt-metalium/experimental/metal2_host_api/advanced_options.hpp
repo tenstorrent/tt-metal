@@ -9,9 +9,9 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/spec_names.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -35,6 +35,12 @@ namespace tt::tt_metal::experimental {
 // The header comments for each field describe special considerations for use.
 //
 // ============================================================================
+
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
+using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
+// NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
+//       re-declared here for use in AdvancedOptions to avoid circular dependency.
+//       This is legal so long as the declarations are identical, which is compiler-enforced.
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

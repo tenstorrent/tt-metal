@@ -13,12 +13,12 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/spec_names.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
+#include <tt_stl/strong_type.hpp>
 
 // ============================================================================
 //  DataflowBufferSpec API
@@ -68,6 +68,9 @@
 // ============================================================================
 
 namespace tt::tt_metal::experimental {
+
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
+using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 //------------------------------------------------
 // DataflowBufferSpec
@@ -123,6 +126,7 @@ struct DataflowBufferSpec {
     // The bound memory object must have L1-based storage and be large enough to hold the DFB's
     // total size (entry_size * num_entries).
     //
+    // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     //////////////////////////////
