@@ -6,8 +6,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "layernorm_dataflow_utils.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 
 namespace df = norm::layernorm::device::kernels::dataflow;
 
@@ -78,11 +78,11 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
-    experimental::Noc noc;
-    experimental::Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    experimental::Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    experimental::Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
-    experimental::UnicastEndpoint remote_ep;
+    Noc noc;
+    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
+    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
+    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
+    UnicastEndpoint remote_ep;
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
     const uint32_t single_tile_size_bytes = get_tile_size(rms_norm ? cb_ex_partial2 : cb_ex_partial);
@@ -125,11 +125,11 @@ void kernel_main() {
                                              const uint32_t cb_ex_global_id,
                                              const uint32_t cb_reduce_first_stage_id,
                                              const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
-        experimental::CircularBuffer cb_partial_obj(cb_partial_id);
-        experimental::CircularBuffer cb_external_obj(cb_external_id);
-        experimental::CircularBuffer cb_ex_obj(cb_ex_id);
-        experimental::CircularBuffer cb_ex_global_obj(cb_ex_global_id);
-        experimental::CircularBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
+        CircularBuffer cb_partial_obj(cb_partial_id);
+        CircularBuffer cb_external_obj(cb_external_id);
+        CircularBuffer cb_ex_obj(cb_ex_id);
+        CircularBuffer cb_ex_global_obj(cb_ex_global_id);
+        CircularBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
 
         // ============================================================================
         // Partial reduction
@@ -162,7 +162,7 @@ void kernel_main() {
                 cb_external_obj.reserve_back(num_blocks_first_stage * num_tiles_scaler);
                 uint32_t write_offset = 0;
                 for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
-                    noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                         remote_ep,
                         cb_external_obj,
                         num_tiles_scaler * single_tile_size_bytes,
@@ -189,7 +189,7 @@ void kernel_main() {
                         cb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                            noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                            noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                 remote_ep,
                                 cb_external_obj,
                                 num_tiles_scaler * single_tile_size_bytes,
@@ -239,6 +239,11 @@ void kernel_main() {
             reduce_sender_sem.wait_min(block + 2);
             cb_ex_global_obj.push_back(num_tiles * num_tiles_scaler);
         }
+
+        // The partial-reduction buffer is waited up front and read (locally and by remote cores)
+        // during the combine; by here all those reads have completed, so pop it to leave the CB
+        // balanced.
+        cb_partial_obj.pop_front(block_h * num_tiles_scaler);
     };
 
     if constexpr (!rms_norm) {

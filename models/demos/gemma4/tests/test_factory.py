@@ -8,7 +8,9 @@ Uses HF_MODEL env var to determine which model variant to test against.
 All HF reference configs and layers are created from the real checkpoint.
 """
 
+import json
 import os
+from functools import lru_cache
 
 import pytest
 import torch
@@ -19,22 +21,218 @@ from ..config import MeshConfig, ModeConfig
 from ..tt.model_config import Gemma4ModelArgs
 
 _DEFAULT_MODEL_PATH = "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
+_PCC_THRESHOLDS_PATH = os.path.join(os.path.dirname(__file__), "pcc_thresholds.json")
+
+# Canonical prefill length buckets — three lengths chosen to bracket Gemma4's
+# sliding-window attention: 128 (< sliding_window), 1024 (== sliding_window),
+# 4096 (> sliding_window). Tests parametrize over these so each
+# sliding-window regime gets a prefill kernel run. Long lengths are gated by
+# the --max-prefill CLI option (see conftest); tests above the cap are
+# auto-skipped to keep the routine loop fast.
+PREFILL_BUCKETS = [128, 1024, 4096]
 
 
 def _get_model_path():
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", _DEFAULT_MODEL_PATH)
 
 
+def build_hf_prefill_mask(seq_len, sliding_window=None):
+    """Build the HF-format prefill attention mask [1, 1, seq_len, seq_len].
+
+    Always causal. When sliding_window is set, also masks any (i, j) with
+    j < i - sliding_window + 1, matching what HF's Gemma4 mask construction
+    does internally for sliding_attention layers. Without this, an HF
+    reference run with a pure causal mask diverges from the TT prefill
+    once seq_len > sliding_window — TT applies the sliding window via the
+    SDPA op's sliding_window_size, the reference doesn't, and PCC tanks.
+    """
+    mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    if sliding_window is not None and sliding_window > 0 and seq_len > sliding_window:
+        idx = torch.arange(seq_len)
+        outside_window = idx.unsqueeze(0) < (idx.unsqueeze(1) - sliding_window + 1)
+        mask = mask.masked_fill(outside_window.unsqueeze(0).unsqueeze(0), float("-inf"))
+    return mask
+
+
+def find_layer_idx(hf_text_config, layer_type):
+    """Return the first layer index whose type matches.
+
+    layer_type: "sliding_attention" or "full_attention". Raises if no match —
+    callers should pytest.skip when a model lacks a layer of the requested
+    type (e.g. early-layer-only configs that have no global layer in the
+    first N layers).
+    """
+    for i, lt in enumerate(hf_text_config.layer_types):
+        if lt == layer_type:
+            return i
+    raise ValueError(f"No layer of type {layer_type} in layer_types={hf_text_config.layer_types}")
+
+
+def num_layers_for_full_attention_group(hf_text_config):
+    """Smallest prefix of layers that includes one full-attention block.
+
+    Gemma4 stacks N sliding layers followed by one full layer; this helper
+    returns N+1 so that a model truncated to that many layers exercises both
+    the sliding and the full path. The group size depends on the variant:
+    E2B has 4 sliding then full (returns 5); the larger variants have 5
+    sliding then full (returns 6).
+    """
+    return find_layer_idx(hf_text_config, "full_attention") + 1
+
+
+@lru_cache(maxsize=1)
+def _load_pcc_thresholds():
+    """Read the PCC threshold table from disk, once per process."""
+    with open(_PCC_THRESHOLDS_PATH) as f:
+        return json.load(f)
+
+
+def _model_key():
+    """Bucket key matching the top level of pcc_thresholds.json — the
+    basename of the resolved model path (e.g. "gemma-4-E2B-it")."""
+    return os.path.basename(_get_model_path().rstrip("/"))
+
+
+def _lookup_model_entry(table, model_key):
+    """Resolve a model entry from pcc_thresholds.json, case-insensitively.
+
+    HF_MODEL may use ``google/gemma-4-31b-it`` while the table keys use
+    ``gemma-4-31B-it``; basename casing must not force the 0.99 default.
+    """
+    if model_key in table:
+        return table[model_key]
+    key_lower = model_key.lower()
+    for entry_key, entry in table.items():
+        if entry_key.lower() == key_lower:
+            return entry
+    return {}
+
+
+@lru_cache(maxsize=1)
+def _model_key_candidates():
+    """Return possible threshold-table keys for the active HF_MODEL.
+
+    Local runs sometimes point HF_MODEL at a HuggingFace cache/snapshot path
+    whose basename is a hash, not "gemma-4-31B-it". Keep the fast basename path,
+    then infer well-known Gemma4 variants from the loaded config as a fallback.
+    """
+    candidates = [_model_key()]
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+        tc = getattr(config, "text_config", config)
+        hidden = getattr(tc, "hidden_size", None)
+        is_moe = bool(getattr(tc, "enable_moe_block", False))
+        if hidden == 5376 and not is_moe:
+            candidates.append("gemma-4-31B-it")
+        elif hidden == 3840 and not is_moe:
+            candidates.append("gemma-4-12B-it")
+        elif is_moe:
+            candidates.append("gemma-4-26B-A4B-it")
+    except Exception:
+        # Config inference is best-effort; fall back to the HF_MODEL basename.
+        return tuple(dict.fromkeys(candidates))
+    return tuple(dict.fromkeys(candidates))
+
+
+def _mesh_key_from_node_name(node_name):
+    """Extract the mesh-shape suffix (e.g. "1x1") from a pytest node name.
+
+    parametrize_mesh_with_fabric appends an id like "1x1" / "1x2" / "1x8";
+    pytest joins it with "-" as the trailing param. Returns None if no
+    recognisable mesh-shape suffix is found.
+    """
+    if "[" not in node_name:
+        return None
+    inside = node_name[node_name.index("[") + 1 : node_name.rindex("]")]
+    last = inside.rsplit("-", 1)[-1]
+    if "x" in last and last.replace("x", "").isdigit():
+        return last
+    return None
+
+
+def get_pcc_threshold(request, default=0.99):
+    """Look up the PCC threshold for the current pytest node.
+
+    Returns the per-test threshold from pcc_thresholds.json under
+    [<model>][<mesh-shape>][<node-name>]. Falls back to ``default`` (0.99)
+    when the entry is missing — that's the "haven't measured yet" path that
+    new tests / unmeasured (model, system) combinations land on.
+
+    Tests should call this with the pytest ``request`` fixture instead of
+    hardcoding 0.95 / 0.90 inline so the table stays the single source of
+    truth across runs.
+    """
+    table = _load_pcc_thresholds()
+    node_name = request.node.name
+    mesh_key = _mesh_key_from_node_name(node_name)
+    # Try each candidate model key (HF_MODEL basename first, then the canonical
+    # names inferred from the loaded config) so a HF_MODEL that drops the "-it"
+    # suffix (e.g. google/gemma-4-26B-A4B) or points at a hashed cache snapshot
+    # still resolves to the right entry instead of falling back to 0.99.
+    # _lookup_model_entry matches case-insensitively.
+    for model_key in _model_key_candidates():
+        model_entry = _lookup_model_entry(table, model_key)
+        mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
+        if node_name in mesh_entry:
+            return mesh_entry[node_name]
+    return default
+
+
 def is_moe_model():
     """Check if the current model has MoE enabled."""
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    try:
+        config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    except Exception as e:
+        # IMPORTANT: this helper is evaluated at import time (see skip_if_not_moe),
+        # so any failure here breaks *collection* for the whole Gemma4 unit-test suite.
+        #
+        # In environments where the HF checkpoint's `model_type="gemma4"` is not
+        # recognized by the installed Transformers version (or where the model's
+        # remote code isn't available offline), default to "not MoE" so only the
+        # MoE-specific tests are skipped rather than crashing collection.
+        import warnings
+
+        warnings.warn(f"Unable to load HF config for is_moe_model(): {e}. Treating model as non-MoE.")
+        return False
+
     tc = getattr(config, "text_config", config)
     return getattr(tc, "enable_moe_block", False)
 
 
 skip_if_not_moe = pytest.mark.skipif(not is_moe_model(), reason="Model does not use MoE")
+
+_GEMMA4_CONFIGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configs"))
+_CONFIG_ONLY_SKIP_REASON = (
+    "Real HF checkpoint required (weights + tokenizer); "
+    "CI unit job uses config-only HF_MODEL under models/demos/gemma4/configs/"
+)
+
+
+def uses_ci_config_only_checkpoint():
+    """True when HF_MODEL points at a checked-in config stub without weight files."""
+    model_path = _get_model_path()
+    if not os.path.isdir(model_path):
+        return False
+    resolved = os.path.abspath(model_path)
+    if not resolved.startswith(_GEMMA4_CONFIGS_DIR + os.sep):
+        return False
+    if os.path.isfile(os.path.join(resolved, "model.safetensors")):
+        return False
+    if os.path.isfile(os.path.join(resolved, "pytorch_model.bin")):
+        return False
+    if any(name.startswith("model") and name.endswith(".safetensors") for name in os.listdir(resolved)):
+        return False
+    return True
+
+
+def skip_if_config_only_checkpoint():
+    """Skip tests that load HF weights or tokenizers when only config.json is available."""
+    if uses_ci_config_only_checkpoint():
+        pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
 class TestFactory:
@@ -146,6 +344,33 @@ class TestFactory:
         )
         return cos_tt, sin_tt
 
+    @staticmethod
+    def create_tt_rope_cache_2d(device, hf_text_config, max_seq_len, layer_idx):
+        """Create the 2D cos/sin cache used by the decode embedding-lookup RoPE path.
+
+        Returns (cos_cache, sin_cache) each [max_seq_len, head_dim] on device,
+        matching the layout of ``Gemma4Model.rope_caches_2d``. Decode attention
+        detects the 2D shape and gathers per-user cos/sin via ``ttnn.embedding``
+        (one row per user position), which is the path true batched decode takes.
+        """
+        from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+        rope = Gemma4TextRotaryEmbedding(hf_text_config)
+        x_dummy = torch.randn(1, max_seq_len, hf_text_config.hidden_size)
+        pos_ids = torch.arange(max_seq_len).unsqueeze(0)
+        layer_type = hf_text_config.layer_types[layer_idx]
+        cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)  # [1, max_seq_len, head_dim]
+
+        is_mesh = hasattr(device, "shape")
+        replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+        cos_tt = ttnn.from_torch(
+            cos.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
+        sin_tt = ttnn.from_torch(
+            sin.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
+        return cos_tt, sin_tt
+
 
 def compare_tensors(tt_tensor, torch_tensor, mesh_device=None, pcc_threshold=0.99):
     """Compare TT and torch tensors using PCC. Logs the PCC value."""
@@ -165,8 +390,13 @@ def compare_tensors(tt_tensor, torch_tensor, mesh_device=None, pcc_threshold=0.9
 
 
 def parametrize_batch_seq(configs=None, ids=None):
-    """Parametrize test with batch/seq combinations."""
-    configs = configs or [(1, 1), (1, 128)]
+    """Parametrize test with batch/seq combinations.
+
+    Default covers decode (seq=1) plus every PREFILL_BUCKETS length. Prefill
+    lengths above the --max-prefill CLI option are auto-skipped at runtime by
+    the _enforce_max_prefill fixture in conftest.py.
+    """
+    configs = configs or [(1, 1)] + [(1, L) for L in PREFILL_BUCKETS]
     ids = ids or ["decode" if seq_len == 1 else f"prefill_{seq_len}" for _, seq_len in configs]
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
 
@@ -201,7 +431,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     num_devices = ttnn.get_num_devices()
 
     if mesh_shapes is None:
-        all_shapes = [(1, 1), (1, 2), (1, 8)]
+        all_shapes = [(1, 1), (1, 2), (1, 4), (1, 8), (1, 32)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
     else:
         # User-provided shapes: still filter to those that fit, so an explicit

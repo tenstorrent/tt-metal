@@ -235,7 +235,7 @@ void BuildCacheTelemetry::dump_metrics() const {
             continue;
         }
         const double mean_val = snap.total / static_cast<double>(snap.count);
-        log_info(
+        log_trace(
             tt::LogBuildKernels,
             "JIT telemetry [{}]: count={}, total={:.3f}ms, min={:.3f}ms, max={:.3f}ms, mean={:.3f}ms",
             token->name(),

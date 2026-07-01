@@ -2,22 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
-
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -95,6 +96,22 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
+    # Restore memory_config when master recorded it. The function signature
+    # captures memory_config directly (not in **kwargs), so use the local var.
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    if (
+        "memory_config" not in absent_keys
+        and memory_config is not None
+        and memory_config != "__ABSENT__"
+        and "memory_config" not in op_kwargs
+    ):
+        if isinstance(memory_config, dict):
+            parsed_mc = parse_dict_value("memory_config", memory_config)
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+        else:
+            op_kwargs["memory_config"] = memory_config
+
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     if input_a_dtype == ttnn.uint16:
@@ -108,8 +125,12 @@ def run(
     elif input_a_dtype == ttnn.uint32:
         torch_input_tensor_a = torch.randint(0, 2**32, shape, dtype=torch.int64)
     else:
+        # Casting to an unsigned type wraps negatives (2's complement) on device,
+        # which a clamp-to-0 golden can't match. Models only typecast non-negative
+        # data (token ids/indices) to uint, so generate a non-negative input there.
+        _low = 0 if output_dtype in (ttnn.uint8, ttnn.uint16, ttnn.uint32) else -100
         torch_input_tensor_a = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+            partial(torch_random, low=_low, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
 
     if output_dtype == ttnn.float32:
@@ -118,13 +139,18 @@ def run(
         torch_output_tensor = torch_input_tensor_a.to(torch.bfloat16).to(torch.float32)
     elif output_dtype == ttnn.bfloat8_b:
         torch_output_tensor = torch_input_tensor_a.to(torch.float32)
+    elif output_dtype == ttnn.uint8:
+        torch_output_tensor = torch_input_tensor_a.clamp(0, 255).to(torch.int32)
     elif output_dtype == ttnn.uint16:
         torch_output_tensor = torch_input_tensor_a.clamp(0, 65535).to(torch.int32)
     elif output_dtype == ttnn.uint32:
         if input_a_dtype == ttnn.uint32:
             torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1)
         else:
-            torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1).to(torch.int64)
+            # Widen to int64 BEFORE clamping: a narrower input (e.g. torch.int32)
+            # can't hold the 2**32-1 clamp bound and torch raises "value cannot be
+            # converted to type int without overflow".
+            torch_output_tensor = torch_input_tensor_a.to(torch.int64).clamp(0, 2**32 - 1)
     elif output_dtype == ttnn.int32:
         # Input is already torch.int32 for uint16 (values 0-65535), so direct cast is fine.
         torch_output_tensor = torch_input_tensor_a.to(torch.int32)

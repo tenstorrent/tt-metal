@@ -29,6 +29,7 @@ struct Config {
         bool throw_exception_on_fallback = false;
         bool enable_logging = false;
         bool enable_graph_report = false;
+        bool enable_graph_python_stack_traces = false;
         bool enable_detailed_buffer_report = false;
         bool enable_detailed_tensor_report = false;
         bool enable_comparison_mode = false;

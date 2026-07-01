@@ -51,7 +51,6 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& output_mem_config,
     bool use_multicore,
     bool fp32_dest_acc_en,
-    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids);
 

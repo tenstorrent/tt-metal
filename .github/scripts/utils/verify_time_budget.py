@@ -4,11 +4,18 @@ import os
 from collections import defaultdict
 
 
-def verify_timeouts(tests_file, time_budget_file, workflow_name):
+def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None):
     """
     Verifies that the SUM of all test timeouts for each (Team, SKU) pair in tests_file
     is within the total time budget defined in time_budget_file for the given workflow.
+
+    When `tier` is provided, only the SKU entries whose `tier` matches are summed, and
+    the budget is looked up under the per-tier key "<workflow_name>_tier<tier>" (e.g.
+    "unit_tier1"). When `tier` is None the behaviour is unchanged: every SKU entry is
+    summed and the budget is looked up under the plain "<workflow_name>" key.
     """
+    budget_workflow = workflow_name if tier is None else f"{workflow_name}_tier{tier}"
+
     print(f"Loading time budgets from: {time_budget_file}")
     with open(time_budget_file, "r") as f:
         budgets = yaml.safe_load(f)
@@ -16,6 +23,9 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
     print(f"Loading tests from: {tests_file}")
     with open(tests_file, "r") as f:
         tests = yaml.safe_load(f)
+
+    if tier is not None:
+        print(f"Filtering tests to tier '{tier}'; budgets looked up under workflow key '{budget_workflow}'.")
 
     errors_found = False
 
@@ -56,6 +66,10 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
                 errors_found = True
                 continue
 
+            # When verifying a specific tier, only count SKU entries belonging to it.
+            if tier is not None and str(sku_config.get("tier")) != str(tier):
+                continue
+
             test_timeout = sku_config["timeout"]
 
             # Use a tuple (team, sku) as the key for summation
@@ -72,8 +86,8 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
 
     for (team, sku), total_time_requested in budget_totals.items():
         try:
-            # Navigate the budgets config using team, workflow, and sku
-            total_time_budget = budgets[team][workflow_name][sku]
+            # Navigate the budgets config using team, workflow (or per-tier key), and sku
+            total_time_budget = budgets[team][budget_workflow][sku]
 
             print(
                 f"Checking total for Team '{team}', SKU '{sku}': Requested = {total_time_requested} min, Budget = {total_time_budget} min"
@@ -90,7 +104,7 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
 
         except (KeyError, TypeError):
             print(
-                f"  [ERROR] Configuration FAILED! Could not find a 'time_budget' for Team '{team}', Workflow '{workflow_name}', SKU '{sku}' in {time_budget_file}."
+                f"  [ERROR] Configuration FAILED! Could not find a 'time_budget' for Team '{team}', Workflow '{budget_workflow}', SKU '{sku}' in {time_budget_file}."
             )
             errors_found = True
             continue
@@ -105,8 +119,15 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python verify_time_budget.py <path_to_tests.yaml> <path_to_time_budget.yaml> <workflow_name>")
+    if len(sys.argv) not in (4, 5):
+        print(
+            "Usage: python verify_time_budget.py <path_to_tests.yaml> <path_to_time_budget.yaml> "
+            "<workflow_name> [<tier>]"
+        )
         sys.exit(1)
 
-    verify_timeouts(sys.argv[1], sys.argv[2], sys.argv[3])
+    # Optional tier arg: when given (and non-empty) budgets are checked per tier
+    # under the "<workflow_name>_tier<tier>" key.
+    tier_arg = sys.argv[4].strip() if len(sys.argv) == 5 and sys.argv[4].strip() else None
+
+    verify_timeouts(sys.argv[1], sys.argv[2], sys.argv[3], tier_arg)

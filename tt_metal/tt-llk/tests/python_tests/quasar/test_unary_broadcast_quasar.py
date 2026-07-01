@@ -30,6 +30,8 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -60,6 +62,10 @@ def get_valid_dest_acc_unary_broadcast(formats):
             # DataFormat.Float32, Buggy functionality for Float32 (unpack_to_dest=True) tbd
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
         same=True,
     ),
@@ -69,7 +75,11 @@ def get_valid_dest_acc_unary_broadcast(formats):
         BroadcastType.Column,
         BroadcastType.Row,
     ],
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    implied_math_format=lambda formats: (
+        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
 )
@@ -148,6 +158,8 @@ def test_unary_broadcast_quasar(
                 output_num_blocks=output_num_blocks,
             ),
             TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim),
         ],
         variant_stimuli=StimuliConfig(
             src_A,

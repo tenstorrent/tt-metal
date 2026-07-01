@@ -283,10 +283,10 @@ void kernel_main() {
                                         slice_row, col_in_slice, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     const uint32_t input_tile_id = global_tile_idx + batch_offset;
                                     noc_async_read(
-                                        get_noc_addr(input_tile_id, input_tensor_addrgen), l1_write_addr, page_size);
+                                        input_tensor_addrgen.get_noc_addr(input_tile_id), l1_write_addr, page_size);
                                     if (do_reduce) {
                                         noc_async_read(
-                                            get_noc_addr(global_tile_idx, intermediate_tensor_addrgen),
+                                            intermediate_tensor_addrgen.get_noc_addr(global_tile_idx),
                                             intermediate_l1_write_addr,
                                             page_size);
                                     }
@@ -301,11 +301,11 @@ void kernel_main() {
                                             b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
 #endif
                                         noc_async_read(
-                                            get_noc_addr(a_tile_idx, addcmul_a_addrgen),
+                                            addcmul_a_addrgen.get_noc_addr(a_tile_idx),
                                             addcmul_a_l1_write_addr,
                                             page_size);
                                         noc_async_read(
-                                            get_noc_addr(b_gate_idx, addcmul_b_addrgen),
+                                            addcmul_b_addrgen.get_noc_addr(b_gate_idx),
                                             addcmul_b_l1_write_addr,
                                             page_size);
                                     }

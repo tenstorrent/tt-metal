@@ -277,3 +277,18 @@ def hf_model_path():
 def hf_state_dict(hf_model_path):
     """Session-scoped LazyStateDict over the HuggingFace model for real-weights tests."""
     return LazyStateDict(hf_model_path)
+
+
+def _group_collected_items_by_file(items: list[pytest.Item]) -> list[pytest.Item]:
+    grouped_items: dict[Path, list[pytest.Item]] = {}
+    for item in items:
+        grouped_items.setdefault(item.path, []).append(item)
+    return [item for group in grouped_items.values() for item in group]
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_finish(session: pytest.Session) -> None:
+    # Keep DeepSeek unit tests grouped by file. A/B testing with this hook removed
+    # showed pytest's fixture-based interleaving can run the suite in a bad order
+    # for shared Blackhole fabric/device state.
+    session.items[:] = _group_collected_items_by_file(session.items)

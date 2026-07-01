@@ -2196,14 +2196,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
     receiver_channel_pointers_ch0.reset();
 
-#if defined(FABRIC_2D_VC1_ACTIVE)
-    // VC1 receiver channel pointer for inter-mesh routing
+#if defined(FABRIC_2D_VC1_SERVICED)
+    // VC1 receiver channel pointer for inter-mesh routing. Gated on _SERVICED (not _ACTIVE) because
+    // these locals are only consumed inside the FABRIC_2D_VC1_SERVICED block further down; on routers
+    // that have VC1 channels (ACTIVE) but do not service them (e.g. inter-mesh routers without
+    // pass-through), defining them here trips -Wunused-but-set-variable in the kernel JIT compile.
     auto outbound_to_receiver_channel_pointer_ch1 =
         outbound_to_receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
 
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
     receiver_channel_pointers_ch1.reset();
-#endif  // FABRIC_2D_VC1_ACTIVE
+#endif  // FABRIC_2D_VC1_SERVICED
 
 #if defined(FABRIC_2D_VC2_SERVICED)
     auto outbound_to_receiver_channel_pointer_ch2 =
@@ -2280,17 +2283,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
-                auto check_connection_status =
-                    !channel_connection_established[0] ||
-                    local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
-                if (check_connection_status) {
-                    check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-                        local_sender_channel_worker_interfaces.template get<0>(),
-                        channel_connection_established[0],
-                        local_sender_channel_free_slots_stream_ids[0]);
-                }
-            }
 #if defined(FABRIC_2D_VC2_SERVICED)
             if constexpr (is_sender_channel_serviced[VC2_SENDER_CHANNEL_START]) {
                 auto check_connection_status =
@@ -2313,7 +2305,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         tx_progress |= run_sender_channel_step_speedy<
                             0,
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                            SENDER_CREDIT_AMORTIZATION_FREQUENCY>(
+                            SENDER_CREDIT_AMORTIZATION_FREQUENCY,
+                            true /*MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER*/>(
                             local_sender_channels.template get<0>(),
                             local_sender_channel_worker_interfaces.template get<0>(),
                             outbound_to_receiver_channel_pointer_ch0,
@@ -2537,7 +2530,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         tx_progress |= run_sender_channel_step_speedy<
                             VC2_SENDER_CHANNEL_START,
                             to_receiver_packets_sent_streams[VC2_RECEIVER_CHANNEL],
-                            SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL_VC2>(
+                            SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL_VC2,
+                            false /*MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER*/>(
                             local_sender_channels.template get<VC2_SENDER_CHANNEL_START>(),
                             local_sender_channel_worker_interfaces.template get<VC2_SENDER_CHANNEL_START>(),
                             outbound_to_receiver_channel_pointer_ch2,
@@ -2692,7 +2686,7 @@ void
         std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
         volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
-        if (!sender_ch_live_check_skip[sender_channel_idx]) {
+        if (!sender_ch_wait_static_connection[sender_channel_idx]) {
             return;
         }
         uint32_t count = 0;

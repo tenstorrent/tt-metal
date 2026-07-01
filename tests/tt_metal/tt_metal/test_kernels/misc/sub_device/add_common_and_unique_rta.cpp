@@ -19,7 +19,6 @@ void kernel_main() {
     volatile tt_l1_ptr std::uint32_t* result = (tt_l1_ptr uint32_t*)(l1_address);
 
     // Sample print statement
-    //  DPRINT << 123;
-    //  DEVICE_PRINT("123\n");
+    //  DPRINT("123\n");
     result[0] = arg_a[0] + arg_b[0];
 }

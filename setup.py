@@ -335,6 +335,8 @@ class CMakeBuild(build_ext):
             "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/**/kernels_dfb/**/*",
+            "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",

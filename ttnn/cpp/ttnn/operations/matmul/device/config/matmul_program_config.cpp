@@ -1043,6 +1043,23 @@ MatmulProgramConfig get_program_config(
                     program_config.per_core_N % program_config.out_subblock_w == 0,
                     "per_core_N must be divisible by out_subblock_w!");
             }
+            if constexpr (requires { program_config.allowed_worker_cores; }) {
+                if (program_config.allowed_worker_cores.has_value()) {
+                    const auto& awc = program_config.allowed_worker_cores.value();
+                    TT_FATAL(awc.num_cores() > 0, "allowed_worker_cores must be non-empty!");
+                    auto bbox = awc.bounding_box();
+                    TT_FATAL(
+                        awc.num_cores() == bbox.size(),
+                        "allowed_worker_cores must form a dense rectangle (got {} cores in a {} bounding box)",
+                        awc.num_cores(),
+                        bbox);
+                    auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                    CoreRangeSet device_cores({CoreRange({0, 0}, {device_grid.x - 1, device_grid.y - 1})});
+                    TT_FATAL(
+                        device_cores.contains(awc),
+                        "allowed_worker_cores must be a subset of the device compute grid!");
+                }
+            }
         },
         config);
     return config;
@@ -1165,19 +1182,24 @@ MatmulProgramConfig create_simple_matmul_program_config(
             }
         }
 
+        // A batch=1, B batch>1: force mcast_in0=false so in0_reuse can keep A in L1 across all
+        // B batches. mcast_in0=true has no batch-reuse path and would FATAL in the validator.
+        const bool a_batch_broadcast =
+            all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1;
+
         bool use_mcast_1d_in0_config =
-            is_wide or
+            (is_wide and not a_batch_broadcast) or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or block_sharded_on_1d_row_grid));
         bool use_mcast_1d_in1_config =
-            is_tall or
+            is_tall or a_batch_broadcast or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
             all_dram_interleaved or (core_range.y == 0 and mem_config.is_sharded() and
                                      mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
                                      not block_sharded_on_1d_column_grid and not block_sharded_on_1d_row_grid);
-        if (core_range.y == 1 or use_mcast_1d_in0_config) {
+        if ((core_range.y == 1 and not a_batch_broadcast) or use_mcast_1d_in0_config) {
             // Pass user's shard_spec when BLOCK_SHARDED on 1D row grid
             std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
                 (block_sharded_on_1d_row_grid && mem_config.shard_spec().has_value())

@@ -1692,7 +1692,7 @@ Take note where data is tilized and untilized. Do NOT tilize or untilize data on
 ```python
 tt_out_tiled = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
 tt_out_row_major = ttnn.untilize(tt_out_tiled, use_multicore=True)
-tt_tok = ttnn.argmax(tt_out_row_major, dim=3, use_multicore=True)
+tt_tok = ttnn.argmax(tt_out_row_major, dim=3)
 torch_tok = ttnn.to_torch(tt_tok)
 ```
 

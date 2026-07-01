@@ -6,80 +6,71 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
-#include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
-struct ComputeConfiguration {
-    // Tensix hardware resource configuration (configured by compute kernels)
-    // Gen1 and Gen2 configurations are currently identical.
-
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-    bool fp32_dest_acc_en = false;
-    bool dst_full_sync_en = false;
-    bool bfp8_pack_precise = false;
-    bool math_approx_mode = false;
-
-    // "Unpack to dest" mode must be specified on a per-DFB basis
-    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
-    using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
-};
-
-struct DataMovementConfiguration {
-    // The DM configuration is different for Gen1 and Gen2.
-    // You can provide either a Gen1 config, a Gen2 config, or both.
-    // If your host code is intended to be architecture-agnostic, provide both.
-
-    struct Gen1DataMovementConfig {
-        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
-        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
-        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-    };
-    std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
-
-    struct Gen2DataMovementConfig {
-        // Currently, no configuration is needed for Gen2!
-        // The empty struct is still used to express a Gen2 DM kernel.
-    };
-    std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
-};
-
-// A name identifying a KernelSpec within a ProgramSpec.
+// ============================================================================
+//  KernelSpec API
+// ============================================================================
 //
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* READER_KERNEL = "reader";
-//   KernelSpec{.unique_id = READER_KERNEL, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
-using KernelSpecName = std::string;
-
-// A KernelSpec is a descriptor for a Tenstorrent kernel:
-// A single computational task compiled into one or more executable files that work
-// collaboratively on a single node.
+// A *kernel* is a function — a kernel_main() — that runs on a node's baby RISC-V
+// cores: device code, in the GPU-programming-model sense. A Tenstorrent kernel is
+// specifically either a *compute* kernel or a *data-movement* kernel.
 //
-// The KernelSpec describes the properties of a compute or data movement kernel:
+// A KernelSpec describes a *compiled kernel*: it specializes a kernel for
+// compilation, baking in the kernel's compile-time arguments and compiler options.
+//
+// A compiled kernel may run as multiple threads (see num_threads), following the
+// SPMD (single-program, multiple-data) model: a small number of independent
+// threads that each run the whole kernel function, each with its own thread
+// index, coordinating explicitly. How those threads map onto the node's physical
+// RISC-V cores — and how many binaries the kernel compiles to — is an implementation
+// detail the programming model hides.
+//
+// The KernelSpec describes all the properties of a kernel:
 //  - Source code
-//  - Compiler options for generating the kernel binary/binaries
+//  - Compiler options for generating the kernel binary(ies)
 //  - Resource bindings (access to DFBs, semaphores, etc.)
 //  - Kernel argument schema (for arguments specified when the Program is enqueued)
 //  - Kernel argument bindings (for compile-time constant arguments)
 //  - The configuration of any hardware resources controlled by the kernel
 //
-// Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
-// instance runs on each node where the kernel is placed, with its own runtime arguments.
+// SPECIALIZATION: A single kernel source may be represented by multiple KernelSpecs
+//   in the same ProgramSpec — for example with different CTA bindings, different DFB
+//   endpoint bindings, different semaphore bindings, etc. Each KernelSpec compiles
+//   independently and is placed independently, via its WorkUnitSpec membership.
 //
-// Placement: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+// INSTANCING: At runtime, one *kernel instance* runs on each node where the kernel
+//   is placed. Each instance is a copy of the compiled kernel, fed its own per-node
+//   runtime arguments (see ProgramRunArgs) — so sibling instances can do different
+//   work from the same binary.
 //
+// PLACEMENT: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+//
+// ============================================================================
+
+// A name identifying a KernelSpec within a ProgramSpec.
+using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
+
+//------------------------------------------------
+// KernelSpec
+//------------------------------------------------
+
 struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     // Basic kernel info
@@ -89,41 +80,34 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // (Force callers to choose explicitly between path and inline code.)
-    struct SourceFilePath {
-        std::filesystem::path path;
-    };
+    // To pass inline source code, wrap it in KernelSpec::SourceCode{...}.
+    // (A string literal binds directly to the path variant alternative.)
     struct SourceCode {
         std::string code;
     };
-    std::variant<SourceFilePath, SourceCode> source;
+    std::variant<std::filesystem::path, SourceCode> source;
 
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
 
-    // Kernel threading:
-    // Number of kernel threads
-    uint8_t num_threads = 1;
-
-    // (Optional) Per-node thread count specification
-    // The default threading is num_threads. However, you may override this on a per-node basis.
-    // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
-    //       Here as a placeholder; specifying it will trigger a runtime error.
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node_set, num_threads}
-    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
-    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
+    // Kernel threading: the number of SPMD threads this kernel has.
+    //
+    // The legality rules for num_threads are architecture and kernel-type dependent:
+    //  - Gen1 architectures (Wormhole, Blackhole) support single-threaded kernels only.
+    //  - Gen2 architectures (Quasar) support num_threads > 1.
+    //    Different rules apply for compute vs data-movement kernels.
+    uint32_t num_threads = 1;
 
     // Kernel type (methods)
-    bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
-    bool is_compute_kernel() const { return std::holds_alternative<ComputeConfiguration>(config_spec); }
+    bool is_data_movement_kernel() const { return std::holds_alternative<DataMovementHardwareConfig>(hw_config); }
+    bool is_compute_kernel() const { return std::holds_alternative<ComputeHardwareConfig>(hw_config); }
 
     ///////////////////////////////////////////////////////////////////
     // Kernel compiler options
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
-        using IncludePaths = std::vector<std::string>;
-        using Defines = std::vector<std::pair<std::string, std::string>>;
+        using IncludePaths = std::vector<std::filesystem::path>;
+        using Defines = Table<std::string, std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths;         // -I <path>
@@ -138,88 +122,164 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////
 
     // DFB bindings
-    enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
+    // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<accessor_name>)
     struct DFBBinding {
-        DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
-        std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
-        DFBEndpointType endpoint_type;    // producer, consumer, or relay
-        DFBAccessPattern access_pattern;  // strided, all, or blocked
+        // Endpoint role this binding plays for the DFB.
+        enum class EndpointType { PRODUCER, CONSUMER };
+        // How the kernel's threads iterate over the DFB's entries. (Only meaningful
+        // for multi-threaded kernels; at num_threads == 1 all patterns are equivalent.)
+        //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
+        //   ALL:     each kernel thread accesses every DFB entry
+        //   BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
+        //            (NOT YET SUPPORTED — currently rejected at runtime)
+        enum class AccessPattern { STRIDED, ALL, BLOCKED };
+
+        DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
+        std::string accessor_name;   // DFB accessor name (used in the kernel source code)
+        EndpointType endpoint_type;  // producer or consumer
+        AccessPattern access_pattern = AccessPattern::STRIDED;
     };
-    std::vector<DFBBinding> dfb_bindings;
+    Group<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
+    // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via SemaphoreAccessor(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
-    std::vector<SemaphoreBinding> semaphore_bindings;
+    Group<SemaphoreBinding> semaphore_bindings;
 
-    // TODO -- GlobalSemaphore bindings
-    // TODO -- GlobalDataflowBuffer bindings
+    // Tensor bindings
+    // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
+    struct TensorBinding {
+        TensorParamName tensor_parameter_name;      // identify the TensorParameter within the ProgramSpec
+        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+    };
+    Group<TensorBinding> tensor_bindings;
+
+    // Additional resource binding types:
+    //  - Scratchpad bindings (Program-local memory resource)
+    //  - Buffer bindings (User-managed memory resource)
+    //  - GlobalSemaphore bindings (User-managed resource)
+    //  - GlobalDataflowBuffer bindings (User-managed resource)
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
     //////////////////////////////////////////////////////////////////////////////
 
     //----------------------------------------------------------------------------
-    // Compile time argument bindings
+    // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgBindings = std::vector<std::pair<std::string, uint32_t>>;
-    CompileTimeArgBindings compile_time_arg_bindings;
+    using CompileTimeArgs = Table<std::string, uint32_t>;
+    CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)
 
-    // Schema for runtime arguments (RTA) and common runtime arguments (CRTA)
-    // (The VALUES of these arguments are set as ProgramRunParams.)
-    //
-    // Two mechanisms are supported per kernel:
-    //   - Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
-    //     (Currently, only uint32_t type is supported.)
-    //   - Vararg RTAs/CRTAs: positional, variable-count, always uint32_t.
-    //     Indexed from 0 in kernel code via `get_vararg(idx)` / `get_common_vararg(idx)`.
-    //     Vararg indices are stable across schema changes (e.g., moving a named arg from RTA→CRTA).
+    // Schema (names) for the runtime arguments declared by this kernel.
+    // (The values of these arguments are set as ProgramRunArgs.)
+    // Currently, only arguments of uint32_t are supported.
+
     struct RuntimeArgSchema {
-        // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_runtime_args;
+        // Runtime argument names (must be unique, valid C++ identifiers.)
+        Group<std::string> runtime_arg_names;
 
-        // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
-        std::vector<std::string> named_common_runtime_args;
-
-        //----------------------
-        // Advanced options
-
-        // Runtime varargs: dynamic RTAs
-        // Some kernels are designed to take a variable number of arguments.
-        //  e.g. N arguments representing the dimensions of an N-dimensional tensor,
-        //       where N is passed to the kernel as a CTA.
-        // Varargs are accessed positionally, since the kernel does not know how many to expect.
-        // The vararg schema specifies the number of RTA varargs for this kernel.
-        // Use ProgramRunParams to set the vararg values (per node).
-        size_t num_runtime_varargs = 0;
-
-        // Per-node vararg number override: different per-node vararg counts
-        // In very rare cases, the kernel running on different nodes requires a DIFFERENT
-        // number of varargs on different nodes.
-        // Use num_runtime_varargs_per_node to override the number of varargs.
-        // Any kernel target node not specified in the override defaults to num_runtime_varargs.
-        using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;  // {nodes, num_varargs}
-        std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
-        // TODO: This feature is truly bizarre. Investigate removing it from the API.
-
-        // Common runtime varargs: dynamic number of CRTAs
-        // These are similar to runtime varargs. However, when specifying the argument values
-        // (in ProgramRunParams), all nodes of the kernel receive the common values.
-        size_t num_common_runtime_varargs = 0;
+        // Common runtime argument names (must be unique, valid C++ identifiers.)
+        Group<std::string> common_runtime_arg_names;
     };
-    RuntimeArgSchema runtime_arguments_schema{};
+    RuntimeArgSchema runtime_arg_schema{};
+
+    // For vararg-style positional arguments, see KernelAdvancedOptions.
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel-controlled hardware resource configuration
     //////////////////////////////////////////////////////////////////////////////
-    using ConfigSpec = std::variant<DataMovementConfiguration, ComputeConfiguration>;
-    ConfigSpec config_spec;
+    std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////////////////////////////////////////////////////
+    KernelAdvancedOptions advanced_options;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+//------------------------------------------------
+// Convenience aliases
+//------------------------------------------------
+
+// These aliases lift commonly-used nested enums to the namespace level
+using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
+using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
+
+// These aliases lift the kernel resource-binding types to the namespace level
+using DFBBinding = KernelSpec::DFBBinding;
+using TensorBinding = KernelSpec::TensorBinding;
+using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+
+//------------------------------------------------
+// Convenience factories for DFBBinding
+//------------------------------------------------
+
+// Ergonomic alternatives to writing a designated-initializer DFBBinding{...}
+
+// Creates a DFB producer binding with a STRIDED access pattern
+// (All DFB producers are STRIDED)
+inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::STRIDED};
+}
+
+// Creates a DFB consumer binding (with a default-STRIDED access pattern)
+// Use this for single-threaded kernels, where the access pattern doesn't matter.
+// For multi-threaded kernels (Quasar), prefer the explicit access pattern
+// helper factories below.
+inline DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        // access pattern defaults to STRIDED
+    };
+}
+
+// Creates a DFB consumer binding with a STRIDED access pattern
+// (The common case for multi-threaded DFB consumers)
+inline DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::STRIDED,
+    };
+}
+
+// Creates a DFB consumer binding with an ALL access pattern
+inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::ALL,
+    };
+}
+
+// Creates a DFB consumer binding with a BLOCKED access pattern
+// Uncomment when BLOCKED support is added (currently TT_FATALs)
+/*
+inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+    };
+}
+*/
+
+}  // namespace tt::tt_metal::experimental

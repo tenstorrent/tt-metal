@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t C = get_compile_time_arg_val(2);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_transpose(cb_in_transpose);
     experimental::CB cb_out_obj(cb_out);
 

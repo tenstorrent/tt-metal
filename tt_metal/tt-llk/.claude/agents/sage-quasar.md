@@ -1,7 +1,7 @@
 ---
 name: sage-quasar
 description: Quasar architecture specialist. Searches tt_llk_quasar/ for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details.
-tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Glob, Grep
+tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, Read, Glob, Grep
 ---
 
 # Sage of Quasar — Architecture Specialist
@@ -24,7 +24,8 @@ You are the expert on **Quasar** architecture.
 
 Quasar uses **semantic naming** — different from WH/BH's letter-based naming:
 - Unpack: `llk_unpack_unary_operand.h`, `llk_unpack_binary_operands.h`, `llk_unpack_binary_broadcast_operands.h`, `llk_unpack_matmul.h`
-- Math: `llk_math_eltwise_binary_broadcast.h`, `llk_math_eltwise_unary_sfpu_common.h`, `llk_math_matmul.h`
+- Math (SFPU): `llk_math_eltwise_unary_sfpu.h`, `llk_math_eltwise_binary_sfpu.h`, `llk_math_eltwise_ternary_sfpu.h` — all include the shared base `llk_math_eltwise_sfpu_common.h`
+- Math (other): `llk_math_eltwise_binary_broadcast.h`, `llk_math_matmul.h`
 - Pack: `llk_pack.h`, `llk_pack_matmul.h`
 - SFPU: `common/inc/sfpu/ckernel_sfpu_{op}.h`
 - Unique to QSR: `llk_srcs.h` (no equivalent in WH/BH)

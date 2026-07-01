@@ -8,12 +8,16 @@
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 namespace ttnn::prim {
+
+using namespace tt::tt_metal;
 
 namespace {
 
@@ -57,7 +61,7 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
 
 }  // namespace
 
-MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
+ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
@@ -65,7 +69,6 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
 
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
@@ -83,25 +86,39 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
     const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
 
-    // CB is being used as temp L1 buffer to copy src data into before writing to dst
-    uint32_t cb_index = 0;
-    const uint32_t aligned_page_size = round_up_to_mul32(page_size);
-    const tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
-            .set_page_size(cb_index, aligned_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-
-    auto semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
+
+    ProgramDescriptor desc;
+
+    // CB is being used as temp L1 buffer to copy src data into before writing to dst
+    const uint32_t cb_index = 0;
+    const uint32_t aligned_page_size = round_up_to_mul32(page_size);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = size_per_l1_bank,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_index),
+            .data_format = cb_data_format,
+            .page_size = aligned_page_size,
+        }}},
+    });
+
+    // Semaphore used by the controller core to coordinate multicast.
+    const uint32_t semaphore_id = 0;
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
 
     std::vector<uint32_t> compile_time_args = {cb_index};
     if (!tilized) {
         compile_time_args.push_back(page_size);
     }
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
     const std::string kernel_path =
         tilized
@@ -109,14 +126,19 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
             : "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/"
               "move_stick_layout_interleaved_with_overlap.cpp";
 
-    const tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
-        program, kernel_path, all_cores, tt::tt_metal::DataMovementConfig{.compile_args = compile_time_args});
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kernel_path;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(compile_time_args);
+    reader_desc.config = DataMovementConfigDescriptor{};
 
     const CoreCoord logical_controller = CoreCoord{0, 0};
     const CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
     std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(all_cores, logical_controller);
 
     std::vector<CoreRange> noc_multicast_regions;
+    noc_multicast_regions.reserve(logical_multicast_regions.size());
     for (const auto& logical_cr : logical_multicast_regions) {
         const CoreRange noc_cr(
             device->worker_core_from_logical_core(logical_cr.start_coord),
@@ -140,70 +162,45 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
         }
 
         const bool is_controller = (i == 0);
-        std::vector<uint32_t> runtime_args = {
-            src_buffer->address(),
-            dst_buffer->address(),
-            pages_handled_per_core,
-            num_pages_per_core,
-            semaphore_id,
-            (uint32_t)noc_controller.x,
-            (uint32_t)noc_controller.y,
-            /*control_value=*/(num_cores - 1),
-            (uint32_t)is_controller,
-            (uint32_t)range_0_noc.start_coord.x,
-            (uint32_t)range_0_noc.start_coord.y,
-            (uint32_t)range_0_noc.end_coord.x,
-            (uint32_t)range_0_noc.end_coord.y,
-            (uint32_t)logical_multicast_regions[0].size(),
-            (uint32_t)range_1_noc.start_coord.x,
-            (uint32_t)range_1_noc.start_coord.y,
-            (uint32_t)range_1_noc.end_coord.x,
-            (uint32_t)range_1_noc.end_coord.y,
-            (uint32_t)logical_multicast_regions[1].size(),
-            (uint32_t)noc_multicast_regions.back().start_coord.x,
-            (uint32_t)noc_multicast_regions.back().start_coord.y,
-            (uint32_t)noc_multicast_regions.back().end_coord.x,
-            (uint32_t)noc_multicast_regions.back().end_coord.y,
-            (uint32_t)logical_multicast_regions.back().size(),
-            (uint32_t)do_third_multicast};
+        // Buffer* entries register BufferBindings for src/dst addresses (positions 0/1);
+        // the framework patches them on cache hits without rebuilding the descriptor.
+        KernelDescriptor::RTArgList runtime_args;
+        runtime_args.reserve(tilized ? 25 : 26);
+        runtime_args.push_back(src_buffer);
+        runtime_args.push_back(dst_buffer);
+        runtime_args.push_back(pages_handled_per_core);
+        runtime_args.push_back(num_pages_per_core);
+        runtime_args.push_back(semaphore_id);
+        runtime_args.push_back(static_cast<uint32_t>(noc_controller.x));
+        runtime_args.push_back(static_cast<uint32_t>(noc_controller.y));
+        runtime_args.push_back(num_cores - 1);  // control_value
+        runtime_args.push_back(static_cast<uint32_t>(is_controller));
+        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.x));
+        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.y));
+        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.x));
+        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.y));
+        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[0].size()));
+        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.x));
+        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.y));
+        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.x));
+        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.y));
+        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[1].size()));
+        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x));
+        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y));
+        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x));
+        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y));
+        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions.back().size()));
+        runtime_args.push_back(static_cast<uint32_t>(do_third_multicast));
         if (!tilized) {
             runtime_args.push_back(aligned_page_size);
         }
-        SetRuntimeArgs(program, kernel_id, core, runtime_args);
+        reader_desc.emplace_runtime_args(core, runtime_args);
         pages_handled_per_core += num_pages_per_core;
     }
 
-    return {
-        std::move(program),
-        MoveOverlapProgramFactory::shared_variables_t{.reader_kernel_id = kernel_id, .num_cores = num_cores}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
 
-void MoveOverlapProgramFactory::override_runtime_arguments(
-    MoveOverlapProgramFactory::cached_program_t& cached_program,
-    const MoveOperationAttributes& /*operation_attributes*/,
-    const MoveTensorArgs& tensor_args,
-    Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-
-    auto& program = cached_program.program;
-    const Tensor& input = tensor_args.input_tensor;
-    Tensor& output = tensor_return_value;
-
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-    const uint32_t num_cores = cached_program.shared_variables.num_cores;
-    const tt::tt_metal::KernelHandle reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-
-    const CoreCoord compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
-
-    for (const CoreCoord& core : cores) {
-        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        runtime_args[0] = src_buffer->address();
-        runtime_args[1] = dst_buffer->address();
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

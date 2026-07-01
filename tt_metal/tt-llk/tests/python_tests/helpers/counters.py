@@ -11,20 +11,11 @@ from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_devi
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .test_config import TestConfig
 
-# ============================================================================
-# Constants and Configuration
-# ============================================================================
+# Constants and Configuration (derived from TestConfig).
 
-# Derive all constants from TestConfig (single source of truth)
-COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 137 config slots
-COUNTER_DATA_WORD_COUNT = (
-    TestConfig._PERF_COUNTERS_DATA_WORDS
-)  # 274 data words (137 * 2)
-PERF_COUNTERS_STARTER_MASK = 0x3  # 2 bits for thread ID 0-3
-PERF_COUNTERS_STOPPER_MASK = 0x3
+COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
+COUNTER_DATA_WORD_COUNT = TestConfig._PERF_COUNTERS_DATA_WORDS
 
-# Single shared buffer addresses (all threads use the same location)
-# These are already computed in TestConfig - use them directly
 PERF_COUNTERS_CONFIG_ADDR = TestConfig.PERF_COUNTERS_CONFIG_ADDR
 PERF_COUNTERS_DATA_ADDR = TestConfig.PERF_COUNTERS_DATA_ADDR
 PERF_COUNTERS_SYNC_CTRL_ADDR = TestConfig.PERF_COUNTERS_SYNC_CTRL_ADDR
@@ -38,9 +29,6 @@ PERF_COUNTERS_STOP_ELECT_ADDR = PERF_COUNTERS_STOP_COUNTER_ADDR + (
     PERF_COUNTERS_THREAD_COUNT * 4
 )
 
-# TRISC id -> name. BH uses ids 0–2; Quasar uses 0–3. Same mapping for missing-thread errors and starter/stopper.
-PERF_COUNTER_TRISC_NAMES = {0: "UNPACK", 1: "MATH", 2: "PACK", 3: "SFPU"}
-
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
     1: "FPU",
@@ -52,16 +40,16 @@ COUNTER_BANK_NAMES = {
 # Reverse lookup: bank name -> bank id (computed once at module load)
 _BANK_NAME_TO_ID = {v: k for k, v in COUNTER_BANK_NAMES.items()}
 
-# ============================================================================
-# Per-arch counter inventories — mirrors tt_metal/hw/inc/internal/tt-1xx/
-# {wormhole,blackhole}/hw_counters.h (source of truth in tt-metal).
-#
-# WH and BH share register addresses but differ in:
-#   • TDMA_PACK: WH has 4 packer engines (14 IDs), BH has 1 (5 IDs)
-#   • L1 mux:    WH 1-bit (banks 0..1), BH 3-bit (banks 0..4)
-#   • INSTRN_THREAD waits: WH uses gap IDs (27,30,33,36 + 39..65),
-#                          BH contiguous (27..57)
-# ============================================================================
+# Config word layout (must match counters.h:
+# PERF_CFG_VALID_BIT / PERF_CFG_L1_MUX_SHIFT / PERF_CFG_COUNTER_SHIFT / PERF_CFG_BANK_MASK).
+PERF_CFG_VALID_BIT = 1 << 31
+PERF_CFG_L1_MUX_SHIFT = 17
+PERF_CFG_L1_MUX_MASK = 0x7
+PERF_CFG_COUNTER_SHIFT = 8
+PERF_CFG_COUNTER_MASK = 0x1FF
+PERF_CFG_BANK_MASK = 0xFF
+
+# Per-arch counter inventories. WH/BH differ in TDMA_PACK count, L1 mux width, INSTRN_THREAD wait layout.
 
 # Banks shared between WH and BH (identical IDs).
 _FPU_COUNTERS = {
@@ -395,16 +383,22 @@ _BLACKHOLE_COUNTER_NAMES = {
     "L1": _BH_L1_COUNTERS,
 }
 
-# Dispatch on current chip architecture. Mirrors the C++ pattern in
-# tt_metal/tools/profiler/perf_counters.hpp:
-#   #if defined(ARCH_BLACKHOLE) #include "blackhole/hw_counters.h"
-#   #else #include "wormhole/hw_counters.h" #endif
+# Quasar inventory is empty for now — counter layout not yet finalized.
+_QUASAR_COUNTER_NAMES = {
+    "INSTRN_THREAD": {},
+    "FPU": {},
+    "TDMA_UNPACK": {},
+    "TDMA_PACK": {},
+    "L1": {},
+}
+
 _arch = get_chip_architecture()
 if _arch == ChipArchitecture.WORMHOLE:
     COUNTER_NAMES = _WORMHOLE_COUNTER_NAMES
-else:
-    # BLACKHOLE (and QUASAR while it inherits BH counter layout).
+elif _arch == ChipArchitecture.BLACKHOLE:
     COUNTER_NAMES = _BLACKHOLE_COUNTER_NAMES
+else:
+    COUNTER_NAMES = _QUASAR_COUNTER_NAMES
 
 # Reverse lookups for O(1) counter name -> id resolution (computed once at module load)
 _L1_NAME_TO_ID = {(name, mux): cid for (cid, mux), name in COUNTER_NAMES["L1"].items()}
@@ -447,35 +441,23 @@ def _build_all_counters() -> List[Dict]:
     return counters
 
 
-# Pre-built list of all counters (computed once at module load).
-# WH = 130 counters (59 INSTRN + 3 FPU + 22 TDMA_UNPACK + 14 TDMA_PACK + 32 L1)
-# BH = 169 counters (59 INSTRN + 3 FPU + 22 TDMA_UNPACK + 5 TDMA_PACK + 80 L1)
+# Pre-built list of all counters (WH=130, BH=169).
 ALL_COUNTERS = _build_all_counters()
 
 
 def configure_counters(location: str = "0,0") -> None:
-    """
-    Configure performance counters in the shared buffer for all threads (UNPACK, MATH, PACK, and in Quasar, isolated SFPU).
-
-    Writes counter configuration to L1 memory that all threads access. Configures all 137
-    Wormhole hardware counter definitions (82 INSTRN_THREAD + 3 FPU + 22 TDMA_UNPACK + 14 TDMA_PACK + 16 L1).
-
-    The counters are started/stopped by all threads via MEASURE_PERF_COUNTERS("name"),
-    but only the last thread to finish (last stopper) reads the hardware and writes results.
-
-    Args:
-        location: Tensix core coordinates (e.g., "0,0").
-    """
-    # Encode counter configurations. l1_mux is 3 bits (bits 19:17) — supports
-    # WH (mux 0..1) and BH (mux 0..4). Upper bits unused on WH (always 0).
+    """Write the per-arch counter inventory into the shared L1 config buffer."""
     config_words = []
     for counter in ALL_COUNTERS:
-        valid_bit = 1 << 31
-        l1_mux = counter.get("l1_mux", 0) & 0x7
-        l1_mux_shifted = l1_mux << 17
-        counter_id_shifted = (counter["counter_id"] & 0x1FF) << 8
-        bank_id = _BANK_NAME_TO_ID[counter["bank"]] & 0xFF
-        config_words.append(valid_bit | l1_mux_shifted | counter_id_shifted | bank_id)
+        l1_mux = counter.get("l1_mux", 0) & PERF_CFG_L1_MUX_MASK
+        l1_mux_shifted = l1_mux << PERF_CFG_L1_MUX_SHIFT
+        counter_id_shifted = (
+            counter["counter_id"] & PERF_CFG_COUNTER_MASK
+        ) << PERF_CFG_COUNTER_SHIFT
+        bank_id = _BANK_NAME_TO_ID[counter["bank"]] & PERF_CFG_BANK_MASK
+        config_words.append(
+            PERF_CFG_VALID_BIT | l1_mux_shifted | counter_id_shifted | bank_id
+        )
 
     # Pad config words to full slot count
     config_words.extend([0] * (COUNTER_SLOT_COUNT - len(config_words)))
@@ -535,28 +517,24 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         return []
 
     sync_word = sync_ctrl[0]
-    logger.info(
+    logger.debug(
         f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
     )
 
     # Zone was never used (BRISC clears sync to 0 before each run)
     if sync_word == 0:
-        logger.info(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
+        logger.debug(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
         return []
 
-    # Lightweight stop writes SYNC_ZONE_COMPLETE (0xFF) in low byte + stopper thread ID.
+    # Lightweight stop writes only SYNC_ZONE_COMPLETE (0xFF); the high bytes are
+    # unused under the current protocol. Any other low-byte value signals
+    # corrupted or partially-written sync state.
     if (sync_word & 0xFF) != _SYNC_ZONE_COMPLETE:
         logger.warning(
             f"Zone {zone}: unexpected sync word 0x{sync_word:08x} "
             f"(expected SYNC_ZONE_COMPLETE=0xFF in low byte)"
         )
         return []
-
-    # Extract stopper thread ID
-    thread_count = len(TestConfig.KERNEL_COMPONENTS)
-    stopper_shift = 2 * thread_count + 2 + 2  # SYNC_STOPPER_SHIFT from counters.h
-    stopper_id = (sync_word >> stopper_shift) & PERF_COUNTERS_STOPPER_MASK
-    stopper_thread = PERF_COUNTER_TRISC_NAMES.get(stopper_id, f"UNKNOWN_{stopper_id}")
 
     # Shared config (same for all zones) — read once metadata layout.
     config_addr = _zone_config_addr(zone)
@@ -566,7 +544,7 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
     if not metadata:
         return []
 
-    valid_count = sum(1 for m in metadata if (m & 0x80000000) != 0)
+    valid_count = sum(1 for m in metadata if (m & PERF_CFG_VALID_BIT) != 0)
     if valid_count == 0:
         return []
 
@@ -576,7 +554,7 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
     data = read_words_from_device(
         location=location, addr=data_addr, word_count=bank_cycles_words + valid_count
     )
-    if not data or len(data) < bank_cycles_words + valid_count:
+    if len(data) < bank_cycles_words + valid_count:
         return []
 
     # Bank cycles are the first 5 words: indexed by bank_id (0..4).
@@ -588,12 +566,12 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
     count_idx = 0
     for i in range(COUNTER_SLOT_COUNT):
         config_word = metadata[i]
-        if (config_word & 0x80000000) == 0:
+        if (config_word & PERF_CFG_VALID_BIT) == 0:
             continue
 
-        bank_id = config_word & 0xFF
-        counter_id = (config_word >> 8) & 0x1FF
-        l1_mux = (config_word >> 17) & 0x7
+        bank_id = config_word & PERF_CFG_BANK_MASK
+        counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
+        l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
 
         bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
 
@@ -613,8 +591,6 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         results.append(
             {
                 "zone": zone_name,
-                "starter_thread": "N/A",
-                "stopper_thread": stopper_thread,
                 "bank": bank_name,
                 "counter_name": counter_name,
                 "counter_id": counter_id,
@@ -639,7 +615,7 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
 
     Returns:
         DataFrame with columns:
-        zone, starter_thread, stopper_thread, bank, counter_name, counter_id, cycles, count, l1_mux
+        zone, bank, counter_name, counter_id, cycles, count, l1_mux
     """
     all_results = []
 

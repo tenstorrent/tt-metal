@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.abspath(".."))
 MetalSphinxConfig = collections.namedtuple("MetalSphinxConfig", ["fullname", "shortname"])
 
 config_lookup = {
-    "tt-metalium": MetalSphinxConfig(fullname="TT-Metalium", shortname="tt-metalium"),
-    "ttnn": MetalSphinxConfig(fullname="TT-NN", shortname="ttnn"),
+    "tt-metalium": MetalSphinxConfig(fullname="TT-Metalium&trade;", shortname="tt-metalium"),
+    "ttnn": MetalSphinxConfig(fullname="TT-NN&trade;", shortname="ttnn"),
 }
 
 if "REQUESTED_DOCS_PKG" not in os.environ:

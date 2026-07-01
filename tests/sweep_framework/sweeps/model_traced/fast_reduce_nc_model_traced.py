@@ -90,6 +90,13 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
 
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    # Re-add memory_config kwarg when the master recorded it. Validation-vector
+    # runs deliver memory_config as a serialized dict, so parse it back to a
+    # ttnn.MemoryConfig before forwarding to the op binding.
+    if memory_config is not None and "memory_config" not in op_kwargs:
+        if isinstance(memory_config, dict):
+            memory_config = parse_dict_value("memory_config", memory_config)
+        op_kwargs["memory_config"] = memory_config
 
     # Extract dims from op_kwargs for golden computation
     dims = op_kwargs.get("dims", [0, 1])
@@ -174,12 +181,22 @@ def run(
     # chip-0 slice and leaves the rest of the global tensor empty).
     if is_mesh_device:
         output_tensor = mesh_tensor_to_torch(output_tensor, device)
+        # mesh_tensor_to_torch returns the device tensor with reduced dims still
+        # tile-padded (a reduced dim of logical size 1 comes back as 32). Slice
+        # back to the logical reduced shape — mirrors the single-device
+        # unpad_from_tile path; otherwise the tile-padding rows (garbage) tank
+        # the PCC (e.g. a (1,1,1,16384) reduce read back as (1,1,32,16384)).
+        if output_tensor.ndim == len(output_shape) and all(
+            output_tensor.shape[d] >= output_shape[d] for d in range(len(output_shape))
+        ):
+            output_tensor = output_tensor[tuple(slice(0, s) for s in output_shape)]
     else:
         output_tensor = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC - use 0.999 threshold like unit test
-    if is_mesh_device:
+    # Check with PCC - use 0.999 threshold like unit test. Only reconcile if the
+    # gathered shape still differs (genuine shard tiling) after unpadding.
+    if is_mesh_device and tuple(torch_output_tensor.shape) != tuple(output_tensor.shape):
         torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 

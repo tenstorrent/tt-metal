@@ -5,12 +5,15 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#ifdef SFPU_ACTIVATION
+#include "bmm_fused_activation.hpp"
+#endif
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -23,7 +26,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
@@ -34,8 +37,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
@@ -190,7 +193,7 @@ void kernel_main() {
     constexpr uint32_t in1_num_subblocks =
         get_compile_time_arg_val(4);  // outer column block size (in inner column blocks)
     constexpr uint32_t in1_block_num_tiles =
-        get_compile_time_arg_val(5);                                  // out_subblock_w*in0_block_w* in1_num_subblocks;
+        get_compile_time_arg_val(5);  // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_size_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t in1_tensor_size_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t in1_per_core_w = get_compile_time_arg_val(8);           // out_subblock_w*in1_num_subblocks
@@ -209,9 +212,17 @@ void kernel_main() {
     constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
     constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
 
-    experimental::CircularBuffer in1_cb(in1_cb_id);
-    experimental::CircularBuffer sync_buf(sync_cb);
-    experimental::CircularBuffer sync2_buf(sync_cb2);
+#ifdef SFPU_ACTIVATION
+    constexpr KernelActivation activation_type =
+        static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
+    constexpr uint32_t activation_param0 = get_named_compile_time_arg_val("activation_param0");
+    constexpr uint32_t activation_param1 = get_named_compile_time_arg_val("activation_param1");
+    constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
+#endif
+
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer sync_buf(sync_cb);
+    CircularBuffer sync2_buf(sync_cb2);
 
     constexpr std::array<uint32_t, batch> mm_out_cb_ids = fill_named_cb_array<batch>(mm_out_cb_names);
     constexpr std::array<uint32_t, batch> mm_partials_cb_ids = fill_named_cb_array<batch>(mm_partials_cb_names);
@@ -231,8 +242,8 @@ void kernel_main() {
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-#ifdef SFPU_OP_INIT_ACTIVATION
-    SFPU_OP_INIT_ACTIVATION
+#ifdef SFPU_ACTIVATION
+    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -243,8 +254,8 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
 #ifdef ENABLE_GLOBAL_CB
         uint32_t in1_cb_start_addr = 0;
@@ -262,8 +273,8 @@ void kernel_main() {
 #endif
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
-        experimental::CircularBuffer mm_out_cb(mm_out_cb_id);
-        experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
+        CircularBuffer mm_out_cb(mm_out_cb_id);
+        CircularBuffer mm_partials_cb(mm_partials_cb_id);
 
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -271,7 +282,7 @@ void kernel_main() {
 #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
         if constexpr (batch > 1) {
-            PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+            PACK((llk_pack_relu_config(ReluConfig::none())));
         }
 #endif
 
@@ -293,13 +304,13 @@ void kernel_main() {
             }
 
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
-            experimental::CircularBuffer input0_cb(input0_cb_id);
+            CircularBuffer input0_cb(input0_cb_id);
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
             if (last_out) {
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+                PACK((llk_pack_relu_config(ReluConfig::zero())));
             }
 #endif
 
@@ -373,19 +384,22 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                     if (last_out) {
-// If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
-#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
-#endif
                         if constexpr (untilize_out) {
                             pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_cb_id);
                         }
                         tile_regs_commit();
                         // Pack out to output buffer
                         mm_out_cb.reserve_back(out_subblock_num_tiles);
+
+#if not defined FUSE_BIAS and defined SFPU_ACTIVATION
+                        apply_activation_from_pack<
+                            activation_type,
+                            activation_param0,
+                            activation_param1,
+                            activation_param2>(out_subblock_num_tiles);
+#else
                         tile_regs_wait();
+#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));

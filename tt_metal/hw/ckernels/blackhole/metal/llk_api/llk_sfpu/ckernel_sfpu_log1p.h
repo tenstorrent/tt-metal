@@ -54,22 +54,22 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
 
     v_if(u >= 0.0f) {
         sfpi::vFloat three_quarters = 0.75f;
-        sfpi::vInt e = sfpi::reinterpret<sfpi::vInt>(three_quarters);
+        sfpi::vInt e = sfpi::as<sfpi::vInt>(three_quarters);
         sfpi::vFloat e_float;
 
         // Subtracting the encoding of 0.75 and then zeroing the mantissa isolates
         // the exponent-bit offset e = k << 23 for the unique k with
         // 2^(-k) * u in [0.75, 1.5).
-        e = sfpi::reinterpret<sfpi::vInt>(u) - e;
-        e = sfpi::reinterpret<sfpi::vInt>(sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(e), 0));
+        e = sfpi::as<sfpi::vInt>(u) - e;
+        e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
 
         // Reinterpreting a - e applies the same 2^(-k) scaling to a.
         // Affine correction below reconstructs
         //   m <- 2^(-k) * a + (2^(-k) - 1) = 2^(-k) * (1 + a) - 1.
-        sfpi::vFloat m = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - e);
+        sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
         sfpi::vFloat neg_four = -4.0f;
         // Use s' = -4 * 2^(-k) instead of 4 * 2^(-k); see -0.25 for explanation.
-        sfpi::vFloat s = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(neg_four) - e);
+        sfpi::vFloat s = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(neg_four) - e);
 
         // Use -0.25 (instead of 0.25) so we can reuse it in the bf16 Horner step later.
         sfpi::vFloat neg_quarter = -0.25f;
@@ -77,7 +77,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
         // t = -s' / 4 - 1 = 2^(-k) - 1
         sfpi::vFloat t = __builtin_rvtt_sfpmad(neg_quarter.get(), s.get(), neg1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-        sfpi::vInt abs_e = sfpi::abs(e);
+        sfpi::vMag abs_e = sfpi::abs(e);
 
         // Minimax approximations for log1p(m) on [-0.25, 0.5]. Both paths keep the
         // exact linear term m explicit and approximate only the nonlinear
@@ -97,7 +97,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             r = r * m + 0x1.274p-3f;
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
-            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = r * m + sfpi::vConstFloatPrgm1;
             s = m * m;
             r = r * m + sfpi::vConstFloatPrgm2;
@@ -106,20 +106,20 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
 
             m = m + t;
-            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = neg_quarter * m + sfpi::vConstFloatPrgm1;
             s = m * m;
             r = r * m + sfpi::vConstFloatPrgm2;
         }
-        // int32_to_float returns |e| as a real number in exponent-bit units;
+        // convert<vFloat> returns |e| as a real number in exponent-bit units;
         // restore sign and multiply by log(2) * 2^(-23) to recover k * log(2).
-        e_float = sfpi::setsgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
+        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
         r = r * s + m;
         sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
         r = e_float * sfpi::vConstFloatPrgm0 + r;
 
         // since u>=0, safely checks for u == NaN or u == inf
-        v_if(sfpi::reinterpret<sfpi::vInt>(u) >= sfpi::reinterpret<sfpi::vInt>(infinity)) { r = u; }
+        v_if(sfpi::as<sfpi::vInt>(u) >= sfpi::as<sfpi::vInt>(infinity)) { r = u; }
         v_endif;
     }
     v_endif;
@@ -139,7 +139,7 @@ inline void calculate_log1p() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

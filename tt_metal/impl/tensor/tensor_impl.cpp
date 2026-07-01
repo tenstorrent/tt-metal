@@ -5,6 +5,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/float8.hpp>
 
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
@@ -43,6 +44,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
         case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
         case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
+        case DataType::FP8_E4M3: return HostBuffer(std::vector<float8_e4m3>(size_bytes / sizeof(float8_e4m3)));
         case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
         case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
         case DataType::BFLOAT4_B:
@@ -266,6 +268,20 @@ template std::vector<uint16_t> encode_tensor_data<uint16_t>(
     ttsl::Span<const uint16_t> logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
+
+// Referenced from tensor_apis.cpp; explicit instantiations ensure symbols survive Release --gc-sections linking.
+template std::vector<bfloat16> to_tile_major_layout<bfloat16>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const bfloat16> data_to_convert);
+template std::vector<float> to_tile_major_layout<float>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const float> data_to_convert);
+template std::vector<int32_t> to_tile_major_layout<int32_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const int32_t> data_to_convert);
+template std::vector<uint32_t> to_tile_major_layout<uint32_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const uint32_t> data_to_convert);
+template std::vector<uint16_t> to_tile_major_layout<uint16_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const uint16_t> data_to_convert);
+template std::vector<uint8_t> to_tile_major_layout<uint8_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const uint8_t> data_to_convert);
 
 template <typename T>
 std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec) {

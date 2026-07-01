@@ -34,8 +34,8 @@ from helpers.test_variant_parameters import (
 
 _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Abs,
-    MathOperation.Acosh,
-    MathOperation.Asinh,
+    # Acosh/Asinh now select their log1p polynomial precision from the dest-accum
+    # (is_fp32_dest_acc_en) flag, so both modes are exercised.
     MathOperation.Celu,
     MathOperation.Cos,
     MathOperation.Elu,
@@ -43,6 +43,7 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Exp,
     MathOperation.Fill,
     MathOperation.Gelu,
+    MathOperation.GeluTanh,
     MathOperation.Hardsigmoid,
     MathOperation.Log,
     MathOperation.Neg,
@@ -105,6 +106,7 @@ def _get_stable_sort_modes(mathop):
         MathOperation.Rsqrt,
         MathOperation.Silu,
         MathOperation.Gelu,
+        MathOperation.GeluTanh,
         MathOperation.Exp,
         MathOperation.TopKLocalSort,
         MathOperation.TopKMerge,

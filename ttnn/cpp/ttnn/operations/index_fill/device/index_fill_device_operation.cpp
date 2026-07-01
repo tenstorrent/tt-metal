@@ -63,9 +63,9 @@ void IndexFillOperation::validate_on_program_cache_miss(
 
 IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& old_spec = tensor_args.input.tensor_spec();
     return TensorSpec(
-        tensor_args.input.logical_shape(),
-        tensor_args.input.tensor_spec().tensor_layout().with_memory_config(operation_attributes.memory_config));
+        old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(operation_attributes.memory_config));
 }
 IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

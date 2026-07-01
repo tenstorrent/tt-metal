@@ -18,6 +18,7 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_rms_norm
 
 TEST_PADDING_VALUE = -42
 
@@ -79,13 +80,13 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 
         if test_id == 0:
             logger.info("Running RMSN_NOGB")
-            ttz = ttnn.rms_norm(ttx, epsilon=epsf, memory_config=out_mem_config)
+            ttz = ttnn_rms_norm(ttx, epsilon=epsf, memory_config=out_mem_config)
         elif test_id == 1:
             logger.info("Running RMSN_G")
-            ttz = ttnn.rms_norm(ttx, epsilon=epsf, weight=ttgamma, memory_config=out_mem_config)
+            ttz = ttnn_rms_norm(ttx, epsilon=epsf, weight=ttgamma, memory_config=out_mem_config)
         elif test_id == 2:
             logger.info("Running RMSN_GB")
-            ttz = ttnn.rms_norm(ttx, epsilon=epsf, weight=ttgamma, bias=ttbeta, memory_config=out_mem_config)
+            ttz = ttnn_rms_norm(ttx, epsilon=epsf, weight=ttgamma, bias=ttbeta, memory_config=out_mem_config)
         else:
             assert False
         logger.info("Done")
@@ -162,7 +163,13 @@ def test_llama_4D_rms_norm(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight.reshape(1, 1, w // 32, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    output_tensor = ttnn_rms_norm(input_tensor, weight=weight, compute_kernel_config=compute_config)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -212,7 +219,7 @@ def test_large_tensor_rms_norm(device, batch_size, w):
             packer_l1_acc=True,
         )
 
-        output_tensor = ttnn.rms_norm(
+        output_tensor = ttnn_rms_norm(
             input_tensor,
             weight=weight,
             epsilon=epsilon,

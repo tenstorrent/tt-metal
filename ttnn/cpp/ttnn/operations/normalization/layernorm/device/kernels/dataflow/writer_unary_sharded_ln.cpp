@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
-#include "experimental/tensor.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
@@ -44,11 +44,11 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_out_resharded = get_named_compile_time_arg_val("cb_out_resharded");
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+    Noc noc;
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_out_resharded_obj(cb_out_resharded);
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
@@ -61,17 +61,14 @@ void kernel_main() {
 
         constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
         const uint32_t eps = get_arg_val<uint32_t>(2);
-        generate_bcast_col_scalar(eps_cb_id, eps);
+        generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
         if constexpr (is_all_to_all_worker) {
             constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");
             const uint32_t scalar_c_bits = get_arg_val<uint32_t>(0);
             float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
-            dataflow_kernel_lib::prepare_reduce_scaler<
-                cb_in_4,
-                ckernel::PoolType::AVG,
-                ckernel::ReduceDim::REDUCE_ROW,
-                /*compute_uses_reduce_tile=*/true>(scalar_c_f);
+            dataflow_kernel_lib::prepare_reduce_scaler<cb_in_4, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
+                scalar_c_f);
         }
     }
 

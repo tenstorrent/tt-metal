@@ -8,6 +8,7 @@
 #include <random>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/constants.hpp>
 #include "impl/data_format/blockfloat_common.hpp"
 #include <vector>
 #include <tt_stl/assert.hpp>
@@ -27,7 +28,7 @@ auto create_random_vector_of_bfp(uint32_t num_bytes, bool is_exp_a, int rand_max
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
     int packed_data_size = num_bytes / sizeof(float);
-    int num_float_in_tile = 1024;
+    int num_float_in_tile = tt::constants::TILE_HW;
     int float_data_size = num_tiles * num_float_in_tile;
 
     std::vector<float> fp32_vec(float_data_size, 0);
@@ -67,7 +68,7 @@ inline std::vector<uint32_t> create_constant_vector_of_bfp8(uint32_t num_bytes, 
     uint32_t num_tiles = num_bytes / single_bfp8_tile_size;
 
     int packed_data_size = num_bytes / sizeof(float);
-    int num_float_in_tile = 1024;
+    int num_float_in_tile = tt::constants::TILE_HW;
     int float_data_size = num_tiles * num_float_in_tile;
 
     std::vector<float> fp32_vec(float_data_size, 0);

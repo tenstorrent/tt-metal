@@ -8,14 +8,40 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+
+// Anonymous-namespace helper unique to reshard same-height to avoid unity-build collisions.
+void push_reshard_same_height_cb_pair(
+    ProgramDescriptor& desc,
+    uint32_t cb_index,
+    tt::DataFormat data_format,
+    uint32_t total_size,
+    uint32_t page_size,
+    const CoreRangeSet& core_ranges,
+    Buffer* bound_buffer) {
+    CBDescriptor cb;
+    cb.total_size = total_size;
+    cb.core_ranges = core_ranges;
+    cb.format_descriptors.push_back(CBFormatDescriptor{
+        .buffer_index = static_cast<uint8_t>(cb_index),
+        .data_format = data_format,
+        .page_size = page_size,
+    });
+    cb.buffer = bound_buffer;
+    desc.cbs.push_back(std::move(cb));
+}
+
+}  // namespace
+
 template <bool local_is_output>
-ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFactory<local_is_output>::create(
+ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     const auto& output = output_tensor;
@@ -25,7 +51,6 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
 
     auto* device = input.device();
-    tt::tt_metal::Program program{};
 
     const auto remote_core_type = remote_tensor.buffer()->core_type();
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
@@ -37,30 +62,42 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
     const uint32_t element_size = tt::datum_size(data_format);
 
     TT_FATAL(local_tensor.layout() == Layout::ROW_MAJOR, "Expected row major tensor");
-    const uint32_t unit_size = local_shard_spec.shape[1] * local_tensor.element_size();  // width * element size
+    const uint32_t unit_size =
+        static_cast<uint32_t>(local_shard_spec.shape[1] * local_tensor.element_size());  // width * element size
     const uint32_t remote_units_per_shard = remote_shard_spec.shape[0];                  // height
     const uint32_t total_size = remote_units_per_shard * unit_size;
 
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, unit_size)
-            .set_globally_allocated_address(*local_tensor.buffer());
-    auto cb_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+
+    auto* local_buffer = local_tensor.buffer();
+    auto* remote_buffer = remote_tensor.buffer();
+
+    ProgramDescriptor desc;
+
+    // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
+    push_reshard_same_height_cb_pair(
+        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
 
     const std::string kernel_name =
         local_is_output
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_writer.cpp";
 
-    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
-        program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
+    KernelDescriptor reader_desc;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.kernel_source = kernel_name;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.compile_time_args = {cb_index, static_cast<uint32_t>(interface_with_dram)};
 
-    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
-        program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
+    KernelDescriptor writer_desc;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.kernel_source = kernel_name;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.compile_time_args = {cb_index, static_cast<uint32_t>(interface_with_dram)};
 
-    uint32_t remote_address = remote_tensor.buffer()->address();
-    auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
+    auto remote_buffer_type = remote_buffer->buffer_type();
 
     // Generate all read/write offsets for each core
     auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =
@@ -81,60 +118,46 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
     // Here all we do is convert pre-computed offsets into vectors so they can be passed as runtime arguments
     for (uint32_t core_idx = 0; core_idx < local_cores.size(); core_idx++) {
         const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
-        std::vector<uint32_t> runtime_args_0 = {
-            total_num_sticks_kernel_0,
-            local_stride_bytes,
-            remote_stride_bytes,
-            remote_address,
-            args_for_all_segments.size()};
-        std::vector<uint32_t> runtime_args_1 = {
-            total_num_sticks_kernel_1,
-            local_stride_bytes,
-            remote_stride_bytes,
-            remote_address,
-            args_for_all_segments.size()};
+
+        // arg 3 is remote-buffer base address (binding via Buffer*).
+        KernelDescriptor::RTArgList runtime_args_0;
+        runtime_args_0.push_back(total_num_sticks_kernel_0);
+        runtime_args_0.push_back(local_stride_bytes);
+        runtime_args_0.push_back(remote_stride_bytes);
+        runtime_args_0.push_back(remote_buffer);
+        runtime_args_0.push_back(static_cast<uint32_t>(args_for_all_segments.size()));
+
+        KernelDescriptor::RTArgList runtime_args_1;
+        runtime_args_1.push_back(total_num_sticks_kernel_1);
+        runtime_args_1.push_back(local_stride_bytes);
+        runtime_args_1.push_back(remote_stride_bytes);
+        runtime_args_1.push_back(remote_buffer);
+        runtime_args_1.push_back(static_cast<uint32_t>(args_for_all_segments.size()));
+
         for (const auto& args : args_for_all_segments) {
-            const std::vector<uint32_t> segment_kernel_0 = {
-                args.write_size, args.read_offset, args.bank_id, args.write_offset};
-            runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
+            runtime_args_0.push_back(args.write_size);
+            runtime_args_0.push_back(args.read_offset);
+            runtime_args_0.push_back(args.bank_id);
+            runtime_args_0.push_back(args.write_offset);
 
             // Adjust read and write offsets to the correct stick address because we are splitting work across 2 kernels
             const uint32_t adjusted_read_offset = args.read_offset + (total_num_sticks_kernel_0 * local_stride_bytes);
             const uint32_t adjusted_write_offset =
                 args.write_offset + (total_num_sticks_kernel_0 * remote_stride_bytes);
 
-            const std::vector<uint32_t> segment_kernel_1 = {
-                args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
-            runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
+            runtime_args_1.push_back(args.write_size);
+            runtime_args_1.push_back(adjusted_read_offset);
+            runtime_args_1.push_back(args.bank_id);
+            runtime_args_1.push_back(adjusted_write_offset);
         }
-        SetRuntimeArgs(program, kernel_id_0, local_cores[core_idx], runtime_args_0);
-        SetRuntimeArgs(program, kernel_id_1, local_cores[core_idx], runtime_args_1);
+        reader_desc.emplace_runtime_args(local_cores[core_idx], runtime_args_0);
+        writer_desc.emplace_runtime_args(local_cores[core_idx], runtime_args_1);
     }
 
-    return {std::move(program), {kernel_id_0, kernel_id_1, cb_0, local_cores}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-template <bool is_reader>
-void ReshardSameHeightFactory<is_reader>::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ReshardParams& /*operation_attributes*/,
-    const ReshardInputs& tensor_args,
-    Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    const auto& output = output_tensor;
-    const auto& local_tensor = is_reader ? output : input;
-    const auto& remote_tensor = is_reader ? input : output;
-    uint32_t remote_address = remote_tensor.buffer()->address();
-    auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
-    auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
-    for (auto core : cached_program.shared_variables.local_cores) {
-        auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
-        auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
-        runtime_args_0[3] = remote_address;
-        runtime_args_1[3] = remote_address;
-    }
-    UpdateDynamicCircularBufferAddress(
-        cached_program.program, cached_program.shared_variables.cb_0, *local_tensor.buffer());
+    return desc;
 }
 
 // Explicit template instantiations

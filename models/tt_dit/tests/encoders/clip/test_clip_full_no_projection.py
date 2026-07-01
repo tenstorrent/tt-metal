@@ -115,7 +115,7 @@ def test_clip_encoder(
 
     # times TT model inference only
     tt_start_time = time.time()
-    tt_sequence_output, tt_pooled_output = tt_clip(tt_prompt, encoder_submesh)
+    tt_sequence_output, tt_pooled_output = tt_clip(tt_prompt)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 

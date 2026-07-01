@@ -49,29 +49,36 @@ uint32_t _start() {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     mark_stack_usage();
     wait_for_go_message();
-    DPRINT << "DEBUG_NULL_KERNELS got go message" << ENDL();
-    DEVICE_PRINT("DEBUG_NULL_KERNELS got go message\n");
+    DPRINT("DEBUG_NULL_KERNELS got go message\n");
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
 #else
     extern uint32_t __tdata_lma[];
-    // for now this works for legacy kernels, we need to revisit this for new kernels
-    // if (hartid == /* leading core */ 0) {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
+    uint32_t neo_id = internal_::get_neo_id();
+    uint32_t trisc_id = internal_::get_trisc_id();
 
     // Obtain launch message from mailbox.
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
 
-    do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-    // }
+    // NEO0 initializes shared .bss/.data (do_crt1) for this TRISC role, then publishes GO. All NEOs must wait
+    // before do_thread_crt1: running TLS init on non-NEO0 before NEO0 finishes do_crt1 races the shared LDM image.
+    if (neo_id == 0) {
+        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+        (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] =
+            SHARED_GLOBALS_READY_GO;
+    }
     do_thread_crt1(__tdata_lma);
+    // Wait until first thread in the group has set its slot to GO.
+    while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
+           SHARED_GLOBALS_READY_GO) {
+    }
 
     // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
-    uint32_t neo_id = csr_read<CSR::NEO_ID>();
     uint32_t config_index = MaxDMProcessorsPerCoreType + neo_id;
     num_sw_threads = launch_msg->kernel_config.num_sw_threads[config_index];
     my_thread_id = launch_msg->kernel_config.kernel_thread_id[config_index];

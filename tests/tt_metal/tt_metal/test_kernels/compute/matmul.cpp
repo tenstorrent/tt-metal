@@ -6,7 +6,8 @@
 
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
-#include "experimental/circular_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
@@ -17,13 +18,14 @@ void kernel_main() {
     uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
 
-    acquire_dst();
+    tile_regs_acquire();
     for (uint32_t b = 0; b < block_cnt; ++b) {
         cb0.wait_front(in0_block_tile_cnt);
         cb1.wait_front(in1_block_tile_cnt);
@@ -49,6 +51,9 @@ void kernel_main() {
         cb1.pop_front(in1_block_tile_cnt);
     }
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     // Pack out
     cb16.reserve_back(out_block_tile_cnt);
     for (uint32_t i = 0; i < out_block_tile_cnt; ++i) {
@@ -57,5 +62,5 @@ void kernel_main() {
 
     cb16.push_back(out_block_tile_cnt);
 
-    release_dst();
+    tile_regs_release();
 }

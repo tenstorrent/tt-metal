@@ -4,9 +4,14 @@
 
 #include <tt_stl/fmt.hpp>
 #include "data_collector.hpp"
+#include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
+#include <exception>
+#include <filesystem>
+#include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt-metalium/program.hpp"
 
@@ -126,6 +131,154 @@ void DataCollector::RecordKernelGroup(
 
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
+void DataCollector::TieRuntimeIdToProgramId(ProgramImpl& program) {
+    // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
+    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
+    uint64_t program_id = program.get_id();
+    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
+    runtime_id_to_program_id_[runtime_id] = program_id;
+}
+
+void DataCollector::RecordKernelSourceMap(ProgramImpl& program) {
+    uint64_t program_id = program.get_id();
+    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
+    if (program_id_to_kernel_sources_.contains(program_id)) {
+        return;
+    }
+    const auto& hal = MetalContext::instance().hal();
+    std::vector<std::string_view> kernel_sources;
+    for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
+        for (const auto& [handle, kernel] : program.get_kernels(i)) {
+            // insert(const string&) allocates only on a miss; on a hit it just returns the
+            // existing node, so this allocation is only done once per unique source.
+            const std::string& stored_path = *unique_kernel_sources_.insert(kernel->kernel_source().source_).first;
+            kernel_sources.emplace_back(stored_path);
+        }
+    }
+    program_id_to_kernel_sources_.emplace(program_id, std::move(kernel_sources));
+}
+
+std::span<const std::string_view> DataCollector::GetKernelSourcesForRuntimeId(uint16_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
+    auto rid_it = runtime_id_to_program_id_.find(runtime_id);
+    if (rid_it == runtime_id_to_program_id_.end()) {
+        return {};
+    }
+    auto it = program_id_to_kernel_sources_.find(rid_it->second);
+    if (it == program_id_to_kernel_sources_.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+void DataCollector::RecordProgramSubDevice(
+    tt::ChipId device_id,
+    uint64_t sub_device_manager_id,
+    uint64_t runtime_id,
+    SubDeviceId sub_device_id,
+    uint32_t num_available_worker_cores) {
+    std::lock_guard<std::mutex> lock(runtime_id_to_sub_device_mutex_);
+    runtime_id_to_sub_device[std::make_pair(device_id, static_cast<uint16_t>(runtime_id))] =
+        tt::ProgramSubDeviceInfo{*sub_device_id, sub_device_manager_id, num_available_worker_cores};
+}
+
+std::optional<tt::ProgramSubDeviceInfo> DataCollector::GetProgramSubDevice(
+    tt::ChipId device_id, uint64_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(runtime_id_to_sub_device_mutex_);
+    auto it = runtime_id_to_sub_device.find(std::make_pair(device_id, static_cast<uint16_t>(runtime_id)));
+    if (it == runtime_id_to_sub_device.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtimeProfilerCallback(
+    tt::ProgramRealtimeProfilerCallback callback) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    auto handle = next_callback_handle_++;
+    program_realtime_profiler_callbacks_.push_back(
+        {handle, std::move(callback), std::make_shared<RealtimeCallbackState>()});
+    return handle;
+}
+
+void DataCollector::UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle) {
+    std::unique_lock<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    auto it = std::find_if(
+        program_realtime_profiler_callbacks_.begin(),
+        program_realtime_profiler_callbacks_.end(),
+        [handle](const auto& entry) { return entry.handle == handle; });
+    if (it == program_realtime_profiler_callbacks_.end()) {
+        return;
+    }
+
+    auto state = it->state;
+    state->unregistering = true;
+    program_realtime_profiler_callbacks_.erase(it);
+
+    // Wait until all in-flight callback invocations that already captured this
+    // registration have completed.
+    state->drained_cv.wait(lock, [&state]() { return state->in_flight_invocations == 0; });
+}
+
+void DataCollector::InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record) {
+    using ActiveCallback = std::pair<tt::ProgramRealtimeProfilerCallback, std::shared_ptr<RealtimeCallbackState>>;
+    std::vector<ActiveCallback> active_callbacks;
+    {
+        std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+        active_callbacks.reserve(program_realtime_profiler_callbacks_.size());
+        for (auto& registration : program_realtime_profiler_callbacks_) {
+            if (registration.state->unregistering) {
+                continue;
+            }
+            registration.state->in_flight_invocations++;
+            active_callbacks.emplace_back(registration.callback, registration.state);
+        }
+    }
+
+    std::exception_ptr callback_exception;
+    for (const auto& [callback, state] : active_callbacks) {
+        (void)state;
+        try {
+            callback(record);
+        } catch (...) {
+            if (!callback_exception) {
+                callback_exception = std::current_exception();
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+        for (const auto& [callback, state] : active_callbacks) {
+            (void)callback;
+            TT_ASSERT(state->in_flight_invocations > 0, "In-flight callback accounting underflow");
+            state->in_flight_invocations--;
+            if (state->unregistering && state->in_flight_invocations == 0) {
+                state->drained_cv.notify_all();
+            }
+        }
+    }
+
+    if (callback_exception) {
+        std::rethrow_exception(callback_exception);
+    }
+}
+
+void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    realtime_profiler_active_chips_.insert(chip_id);
+}
+
+void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    realtime_profiler_active_chips_.erase(chip_id);
+}
+
+bool DataCollector::IsRealtimeProfilerActive() const {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    return !realtime_profiler_active_chips_.empty();
+}
+
 void DataCollector::DumpData() {
     if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
         program_id_to_call_count.empty()) {
@@ -174,7 +327,9 @@ void DataCollector::DumpData() {
     for (const auto& type_data : cross_program_data) {
         type_data.DumpStats(outfile);
     }
+
     outfile.close();
+    log_info(tt::LogMetal, "Dispatch data dumped to {}", std::filesystem::absolute("dispatch_data.txt").string());
 }
 
 }  // namespace tt::tt_metal

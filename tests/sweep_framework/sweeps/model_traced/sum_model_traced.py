@@ -18,7 +18,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value, extract_positional_args
 
 TIMEOUT = 300
 
@@ -67,8 +67,19 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
+    # Re-add memory_config kwarg when the master recorded it. Validation-vector
+    # runs deliver memory_config as a serialized dict, so parse it back to a
+    # ttnn.MemoryConfig before forwarding to the op binding.
+    if memory_config is not None and "memory_config" not in op_kwargs:
+        if isinstance(memory_config, dict):
+            memory_config = parse_dict_value("memory_config", memory_config)
+        op_kwargs["memory_config"] = memory_config
 
     pos_args = extract_positional_args(kwargs)
+    # Reproduce the master's dim call form: named `dim=` vs positional (arg1).
+    # Master traced most configs with dim positional; passing it named then is
+    # an arg1/dim extra_key diff vs master.
+    dim_was_named = dim is not None and dim != "__ABSENT__"
     if dim is None:
         dim = pos_args.get(1, None)
     # Read keepdim from op_kwargs (from traced config), defaulting to False (TTNN default)
@@ -115,8 +126,10 @@ def run(
     start_time = start_measuring_time()
     if dim is None:
         output_tensor = ttnn.sum(input_tensor_a, **op_kwargs)
-    else:
+    elif dim_was_named:
         output_tensor = ttnn.sum(input_tensor_a, dim=dim, **op_kwargs)
+    else:
+        output_tensor = ttnn.sum(input_tensor_a, dim, **op_kwargs)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)

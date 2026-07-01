@@ -6,7 +6,8 @@
 
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
-#include "experimental/circular_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
 // #include "tools/profiler/kernel_profiler.hpp"
 void kernel_main() {
@@ -24,12 +25,13 @@ void kernel_main() {
 
     bool spill = num_blocks > uint32_t(1);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb24(tt::CBIndex::c_24);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb24(tt::CBIndex::c_24);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     bool enable_reload = false;
 
     for (uint32_t block = 0; block < num_blocks; block++) {
@@ -41,7 +43,7 @@ void kernel_main() {
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                acquire_dst();
+                tile_regs_acquire();
 
                 if (enable_reload) {
                     copy_tile_to_dst_init_short(tt::CBIndex::c_24);
@@ -50,7 +52,7 @@ void kernel_main() {
                         copy_tile(tt::CBIndex::c_24, i, i);
                     }
                     cb24.pop_front(out_subblock_num_tiles);
-                    mm_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1);
+                    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
                 }
 
                 // Compute output sub-block from in0_subblock x in1_subblock
@@ -70,6 +72,9 @@ void kernel_main() {
                     in0_index_h_offset += in0_block_w;
                 }
 
+                tile_regs_commit();
+                tile_regs_wait();
+
                 if (last_out) {
                     // Pack out to output buffer
                     cb16.reserve_back(out_subblock_num_tiles);
@@ -86,7 +91,7 @@ void kernel_main() {
                     cb24.push_back(out_subblock_num_tiles);
                 }
 
-                release_dst();
+                tile_regs_release();
                 in1_index_subblock_offset += out_subblock_w;
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;

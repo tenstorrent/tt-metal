@@ -7,7 +7,12 @@
 #include <device.hpp>
 #include <host_api.hpp>
 #include <stdint.h>
+#include <functional>
 #include <optional>
+#include <span>
+#include <string_view>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "program/program_impl.hpp"
 
 namespace tt {
@@ -22,6 +27,11 @@ enum data_collector_t {
     DISPATCH_DATA_RTARGS,
     DISPATCH_DATA_BINARY,
 };
+
+// Aliases to the public experimental types for internal use.
+using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
+using ProgramRealtimeProfilerCallback = tt::tt_metal::experimental::ProgramRealtimeProfilerCallback;
+using ProgramRealtimeProfilerCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
  * per program (if a program is enqueued multiple times, don't call this multiple times).
@@ -47,5 +57,56 @@ void RecordKernelGroup(
 
 // Update stats with an enqueue of given program.
 void RecordProgramRun(uint64_t program_id);
+
+// Record this program's kernel source paths.
+void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
+
+struct ProgramSubDeviceInfo {
+    uint8_t sub_device_id = 0;
+    uint64_t sub_device_manager_id = 0;
+    // Tensix worker cores in this sub-device when recorded at dispatch; 0 means unset (use full device grid).
+    uint32_t num_available_worker_cores = 0;
+};
+
+// Record which sub-device a program executes on. Should be called at dispatch time when runtime_id is set.
+void RecordProgramSubDevice(
+    tt::ChipId device_id,
+    uint64_t sub_device_manager_id,
+    uint64_t runtime_id,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    uint32_t num_available_worker_cores = 0);
+
+// Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
+std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id);
+
+// Tie the program's current runtime ID to its program ID.
+void TieRuntimeIdToProgramId(tt_metal::detail::ProgramImpl& program);
+
+// Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
+// The returned span is valid until MetalContext teardown or reinitialization.
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id);
+
+// Register a callback to be invoked when real-time profiler data arrives.
+// Multiple callbacks can be registered; they are called in order of registration.
+// Returns a handle that can be used to unregister the callback.
+ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
+
+// Unregister a previously registered callback by its handle.
+void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
+
+// Invoke all registered real-time profiler callbacks with the given record.
+// Called internally by the real-time profiler receiver thread.
+void InvokeProgramRealtimeProfilerCallbacks(const ProgramRealtimeRecord& record);
+
+// Returns true if the real-time profiler is currently active on at least one chip,
+// i.e. at least one MeshDevice finished the init+sync handshake and has a receiver
+// thread delivering records. Callers can use this to distinguish "RT profiler is
+// disabled on this configuration" (e.g. ETH dispatch) from "RT profiler is on but
+// has not produced records yet".
+bool IsProgramRealtimeProfilerActive();
+
+// Internal lifecycle hooks wired by MeshDevice (not for end-user calls).
+void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id);
+void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id);
 
 }  // end namespace tt

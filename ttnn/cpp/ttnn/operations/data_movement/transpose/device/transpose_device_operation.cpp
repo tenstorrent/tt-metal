@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_device_operation.hpp"
+#include "transpose_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -10,37 +11,125 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using ttnn::operations::data_movement::transpose::adjust_shard_spec_to_shape;
+using ttnn::operations::data_movement::transpose::generate_transpose_shard_spec;
+using ttnn::operations::data_movement::transpose::is_native_transpose_sharding;
 
 namespace ttnn::prim {
+
+namespace {
+
+// Output logical+padded shapes per transpose dim. HC TILE: dim[1] = logical H (slot 1 isn't
+// tile-padded), dim[2] = round_up(logical C, TILE_HEIGHT). Shared by
+// derive_effective_output_memory_config and compute_output_specs.
+struct TransposedShapes {
+    ttnn::Shape logical;
+    ttnn::Shape padded;
+};
+
+TransposedShapes transposed_shapes(const Tensor& input_tensor, TransposeOpDim dim) {
+    auto output_shape = input_tensor.logical_shape();
+    auto output_padded_shape = input_tensor.padded_shape();
+    switch (dim) {
+        case TransposeOpDim::CN:
+            std::swap(output_shape[0], output_shape[1]);
+            std::swap(output_padded_shape[0], output_padded_shape[1]);
+            break;
+        case TransposeOpDim::HC:
+            if (input_tensor.layout() == Layout::ROW_MAJOR) {
+                std::swap(output_shape[1], output_shape[2]);
+                std::swap(output_padded_shape[1], output_padded_shape[2]);
+            } else {
+                const uint32_t C = output_shape[1];
+                const uint32_t C_p = tt::round_up(C, input_tensor.tensor_spec().tile().get_height());
+                const uint32_t H = output_shape[2];
+                output_shape[1] = H;
+                output_shape[2] = C;
+                output_padded_shape[1] = H;
+                output_padded_shape[2] = C_p;
+            }
+            break;
+        case TransposeOpDim::WH:
+            std::swap(output_shape[2], output_shape[3]);
+            std::swap(output_padded_shape[2], output_padded_shape[3]);
+            break;
+        default: TT_THROW("Unsupported transpose dim"); break;
+    }
+    return {output_shape, output_padded_shape};
+}
+
+// Synthesize a shard_spec when the user asks for sharded output without one, so downstream
+// (select_program_factory, compute_output_specs) sees a fully-specified config. Falls back to a
+// fresh full-grid spec when input shard can't be scaled exactly.
+MemoryConfig derive_effective_output_memory_config(
+    const TransposeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TransposeDeviceOperation::tensor_args_t& tensor_args) {
+    auto output_mem_config = operation_attributes.output_mem_config;
+    if (!output_mem_config.is_sharded() || output_mem_config.shard_spec().has_value()) {
+        return output_mem_config;
+    }
+    const auto& input_tensor = tensor_args.input;
+    const auto output_padded_shape = transposed_shapes(input_tensor, operation_attributes.dim).padded;
+    // adjust_shard_spec_to_shape preserves the sharding style — only reuse input geometry when
+    // requested output layout matches input's; otherwise generate_transpose_shard_spec builds fresh.
+    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+        input_tensor.memory_config().memory_layout() == output_mem_config.memory_layout()) {
+        auto adjusted = adjust_shard_spec_to_shape(
+            input_tensor.shard_spec().value(), input_tensor.padded_shape(), output_padded_shape);
+        if (adjusted.has_value()) {
+            // TILE sharded factories need tile-aligned shards; adjust_shard_spec_to_shape may now
+            // produce sub-tile when transpose legitimately shrinks a dim → fall through to
+            // generate_transpose_shard_spec rather than feeding an unusable spec.
+            const bool tile_layout = input_tensor.layout() == Layout::TILE;
+            const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
+                                      adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
+            if (!tile_layout || tile_aligned) {
+                return MemoryConfig(
+                    output_mem_config.memory_layout(), output_mem_config.buffer_type(), std::move(adjusted));
+            }
+        }
+    }
+    auto shard_spec =
+        generate_transpose_shard_spec(input_tensor, output_padded_shape, output_mem_config.memory_layout());
+    return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
+}
+
+}  // namespace
 
 TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& output_memory_config = operation_attributes.output_mem_config;
+    const auto output_memory_config = derive_effective_output_memory_config(operation_attributes, tensor_args);
     const auto& dim = operation_attributes.dim;
     bool is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
 
-    uint32_t N = input_tensor.logical_shape()[0], C = input_tensor.logical_shape()[1];
-    uint32_t output_width =
-        (dim == TransposeOpDim::WH) ? input_tensor.logical_shape()[-2] : input_tensor.logical_shape()[-1];
-    uint32_t output_height =
-        (dim == TransposeOpDim::WH)
-            ? input_tensor.logical_shape()[-1]
-            : ((dim == TransposeOpDim::HC) ? input_tensor.logical_shape()[-3] : input_tensor.logical_shape()[-2]);
-    bool input_height_sharded = input_tensor.is_sharded() && input_tensor.buffer()->is_l1() &&
-                                input_tensor.shard_spec()->shape[1] == input_tensor.logical_shape()[-1];
+    // !native → fall through to interleaved factories (TensorAccessorArgs handles sharded buffers
+    // transparently via NOC).
+    bool native = is_native_transpose_sharding(input_tensor.tensor_spec(), output_memory_config);
+
+    // shard_spec.shape is in padded terms; comparisons below use padded dims.
+    const auto& input_padded_shape = input_tensor.padded_shape();
+    const auto output_padded_shape = transposed_shapes(input_tensor, dim).padded;
+    uint32_t N = input_padded_shape[0], C = input_padded_shape[1];
+    uint32_t output_width = output_padded_shape[-1];
+    uint32_t output_height = output_padded_shape[-2];
+
+    bool input_height_sharded = native && input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+                                input_tensor.shard_spec()->shape[1] == input_padded_shape[-1];
     bool input_width_and_height_fully_in_shard =
-        input_height_sharded && input_tensor.shard_spec()->shape[0] % input_tensor.logical_shape()[-2] == 0;
-    bool output_height_sharded = output_memory_config.is_sharded() && output_memory_config.is_l1() &&
+        input_height_sharded && input_tensor.shard_spec()->shape[0] % input_padded_shape[-2] == 0;
+    bool output_height_sharded = native && output_memory_config.is_sharded() &&
+                                 output_memory_config.shard_spec().has_value() &&
                                  output_memory_config.shard_spec()->shape[1] == output_width;
-    bool output_width_sharded = output_memory_config.is_sharded() && output_memory_config.is_l1() &&
+    bool output_width_sharded = native && output_memory_config.is_sharded() &&
+                                output_memory_config.shard_spec().has_value() &&
                                 output_memory_config.shard_spec()->shape[0] == output_height;
     bool output_width_and_height_fully_in_shard =
         output_height_sharded && output_memory_config.shard_spec()->shape[0] % output_height == 0;
     bool use_sharded_wh =
-        ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
-         (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
-    bool use_sharded_hc = input_height_sharded && output_height_sharded && is_row_major;
+        native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
+                   (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
+    bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
 
     auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);
 
@@ -119,40 +208,8 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
 TensorSpec TransposeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& dim = operation_attributes.dim;
-    const auto& output_mem_config = operation_attributes.output_mem_config;
-
-    // TODO: Remove usage of input/output padded shape
-    // - Get output alignment from input alignment and output dtype, layout, mem_config
-    // - Get shard spec from output strides (logical shape + alignment)?
-    auto output_shape = input_tensor.logical_shape();
-    auto output_padded_shape = input_tensor.padded_shape();
-
-    switch (dim) {
-        case TransposeOpDim::CN:
-            std::swap(output_shape[0], output_shape[1]);
-            std::swap(output_padded_shape[0], output_padded_shape[1]);
-            break;
-        case TransposeOpDim::HC:
-            if (input_tensor.layout() == Layout::ROW_MAJOR) {
-                std::swap(output_shape[1], output_shape[2]);
-                std::swap(output_padded_shape[1], output_padded_shape[2]);
-            } else {
-                uint32_t C = output_shape[1];
-                uint32_t C_p = tt::round_up(C, input_tensor.tensor_spec().tile().get_height());
-                uint32_t H = output_shape[2];
-                output_shape[1] = H;
-                output_shape[2] = C;
-                output_padded_shape[1] = H;
-                output_padded_shape[2] = C_p;
-            }
-            break;
-        case TransposeOpDim::WH:
-            std::swap(output_shape[2], output_shape[3]);
-            std::swap(output_padded_shape[2], output_padded_shape[3]);
-            break;
-        default: TT_THROW("Unsupported transpose dim"); break;
-    }
+    const auto output_mem_config = derive_effective_output_memory_config(operation_attributes, tensor_args);
+    const auto [output_shape, output_padded_shape] = transposed_shapes(input_tensor, operation_attributes.dim);
 
     return TensorSpec(
         output_shape,

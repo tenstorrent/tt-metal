@@ -6,7 +6,10 @@ This script:
 1. Loads test definitions from a YAML file
 2. Filters tests based on enabled SKUs (comma-separated string)
 3. Adds runs_on labels from the SKU configuration
-4. Outputs the filtered matrix as JSON
+4. Annotates each entry with weights-cache-mode from sku_config.yaml
+   (used by the Blackhole demo pipeline so the per-job container volume mount can
+   pick the right cache source)
+5. Outputs the filtered matrix as JSON
 
 Usage:
     python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>
@@ -14,9 +17,13 @@ Usage:
 enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
 key that appears under any test entry's skus mapping in the tests YAML.
 
+`weights-cache-mode` is an optional per-SKU field in sku_config.yaml; when present,
+it is copied into each output matrix entry.
+
 Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
+    python prepare_test_matrix.py tests/pipeline_reorg/blackhole_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
 """
 
 import yaml
@@ -126,7 +133,8 @@ def build_test_matrix(tests, enabled_skus, sku_config):
 
     Each test entry may define multiple SKUs in its 'skus' dict. This function
     expands each test into one matrix entry per enabled SKU, with the appropriate
-    timeout and runs_on labels.
+    timeout and runs_on labels. If the SKU entry in sku_config carries a weights-cache-mode
+    field, it is copied into the output entry.
 
     Args:
         tests: List of test dictionaries (with 'skus' dict)
@@ -183,6 +191,9 @@ def build_test_matrix(tests, enabled_skus, sku_config):
             for key, value in sku_test_config.items():
                 if key != "timeout" and value is not None:
                     entry[key] = value
+            sku_entry = sku_config[sku_name]
+            if "weights-cache-mode" in sku_entry:
+                entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
             substitute_cmd_placeholders(entry)
             filtered_tests.append(entry)
 

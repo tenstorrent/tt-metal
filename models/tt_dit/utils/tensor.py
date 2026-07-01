@@ -8,6 +8,7 @@ import math
 from typing import TYPE_CHECKING
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -160,6 +161,17 @@ def from_torch(
     )
 
 
+def from_torch_to_devices(
+    x: torch.Tensor,
+    *,
+    devices: Sequence[ttnn.MeshDevice],
+    mesh_axes: Sequence[int | None] | None = None,
+    on_host: bool = False,
+) -> list[ttnn.Tensor]:
+    """Replicate a torch tensor across submesh devices, returning one ttnn.Tensor per device."""
+    return [from_torch(x, device=d, mesh_axes=mesh_axes, on_host=on_host) for d in devices]
+
+
 def to_torch(
     x: ttnn.Tensor,
     /,
@@ -242,6 +254,45 @@ def _invert_placements(placements: Sequence[int | None], *, output_rank: int) ->
             out[p] = i
 
     return tuple(out)
+
+
+def pad_single(
+    x: ttnn.Tensor,
+    /,
+    *,
+    dim: int,
+    front: int = 0,
+    back: int = 0,
+    value: float = 0.0,
+) -> ttnn.Tensor:
+    """Pad a tensor along a single dimension, working around the `ttnn.pad` dimension restriction."""
+    shape = list(x.shape)
+    rank = len(shape)
+
+    if dim < 0:
+        dim += rank
+
+    if dim < 0 or dim >= rank:
+        msg = f"padding dimension {dim} is out of bounds for tensor with rank {rank}"
+        raise ValueError(msg)
+
+    # From ttnn: "ttnn::pad only supports padding on the lowest 3 dimensions for tensors with rank > 4."
+    # With the way we count, the last three dimensions are supported.
+    if rank <= 4 or dim >= rank - 3:
+        padding = [(0, 0)] * rank
+        padding[dim] = (front, back)
+        return ttnn.pad(x, padding, value=value)
+
+    # The reshapes should be fast, since they preserve the last two dimensions.
+
+    before = math.prod(shape[:dim])
+    x = ttnn.reshape(x, [before, -1, *shape[-2:]])  # reshape to 4d
+
+    v = math.prod(shape[dim + 1 : -2])
+    x = ttnn.pad(x, [(0, 0), (front * v, back * v), (0, 0), (0, 0)], value=value)
+
+    shape[dim] += front + back
+    return ttnn.reshape(x, shape)
 
 
 def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
@@ -511,12 +562,24 @@ def fast_device_to_host(
                 use_hyperparams=True,
                 use_persistent_buffer=True,
             )
+
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
+                # mesh_partition's internal slice asserts per-chip W is
+                # tile-aligned in TILE layout. Predict the per-chip shape
+                # after the upcoming repeat (× n_hosts on inter_dim) and
+                # mesh_partition (÷ inter_axis_size on inter_dim), then drop
+                # to ROW_MAJOR if W won't be tile-aligned.
+                post_shape = list(gathered_tensor.shape)
+                post_shape[inter_dim] = post_shape[inter_dim] * n_hosts // mesh_shape[inter_host_axis]
+                if post_shape[-1] % ttnn.TILE_SIZE != 0:
+                    gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
                 repeat_dims = [1] * len(gathered_tensor.shape)
                 repeat_dims[inter_dim] = n_hosts
                 gathered_tensor = ttnn.repeat(gathered_tensor, repeat_dims)
                 gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
+
             if pre_transfer_fn is not None:
                 gathered_tensor = pre_transfer_fn(gathered_tensor)
             else:
@@ -641,3 +704,128 @@ def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
     else:
         new_shape[dim : dim + 1] = sizes
     return ttnn.reshape(x, new_shape)
+
+
+def full(
+    size: ttnn.Shape | Sequence[int],
+    fill_value: float,
+    *,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    device: ttnn.MeshDevice,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.full` that supports tracing."""
+    if not isinstance(size, ttnn.Shape):
+        size = ttnn.Shape(size)
+
+    result = ttnn.allocate_tensor_on_device(size, dtype, layout, device, memory_config)
+    ttnn.fill(result, fill_value, output_tensor=result)
+    return result
+
+
+def arange(
+    start: float,
+    end: float,
+    step: float = 1.0,
+    *,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    device: ttnn.MeshDevice,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.arange` that supports tracing."""
+    x = full(
+        [math.ceil((end - start) / step)],
+        fill_value=step,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    return ttnn.cumsum(x, 0) + (start - step)
+
+
+_tril_cache: dict[tuple, ttnn.Tensor] = {}
+_triu_cache: dict[tuple, ttnn.Tensor] = {}
+
+
+def tril(
+    x: ttnn.Tensor,
+    /,
+    diagonal: int = 0,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    output_tensor: ttnn.Tensor | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.tril` that supports tracing."""
+    device = x.device()
+
+    if device is None:
+        msg = "tril is not supported for host tensors"
+        raise ValueError(msg)
+
+    mask_shape = tuple(x.shape)[-2:]
+
+    cache_key = (mask_shape, device.id(), diagonal)
+    if cache_key in _tril_cache:
+        mask = _tril_cache[cache_key]
+    else:
+        mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+        mask = ttnn.tril(mask, diagonal=diagonal)
+        _tril_cache[cache_key] = mask
+
+    return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
+
+
+def triu(
+    x: ttnn.Tensor,
+    /,
+    diagonal: int = 0,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    output_tensor: ttnn.Tensor | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.triu` that supports tracing."""
+    device = x.device()
+
+    if device is None:
+        msg = "triu is not supported for host tensors"
+        raise ValueError(msg)
+
+    mask_shape = tuple(x.shape)[-2:]
+
+    cache_key = (mask_shape, device.id(), diagonal)
+    if cache_key in _triu_cache:
+        mask = _triu_cache[cache_key]
+    else:
+        mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+        mask = ttnn.triu(mask, diagonal=diagonal)
+        _triu_cache[cache_key] = mask
+
+    return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
+
+
+def print_tensor_mem_info(tt: ttnn.Tensor):
+    logger.info("storage_type:", tt.storage_type())
+    logger.info("global shape:", tt.shape)
+    logger.info("global padded:", tt.padded_shape)
+    logger.info("global layout:", tt.layout)
+    logger.info("global dtype:", tt.dtype)
+    logger.info("global memory_config:", tt.memory_config())
+
+    topo = tt.tensor_topology()
+    logger.info("distribution_shape:", list(topo.distribution_shape()))
+    logger.info("placements:", [str(p) for p in topo.placements()])  # Replicate vs Shard(dim)
+    logger.info("mesh_coords:", list(topo.mesh_coords()))
+
+    # Per-device shard view
+    shards = ttnn.get_device_tensors(tt)
+    for i, s in enumerate(shards):
+        logger.info(f"\nshard[{i}]")
+        logger.info("  shape:", s.shape)
+        logger.info("  padded_shape:", s.padded_shape)
+        logger.info("  layout:", s.layout)
+        logger.info("  dtype:", s.dtype)
+        logger.info("  memory_config:", s.memory_config())

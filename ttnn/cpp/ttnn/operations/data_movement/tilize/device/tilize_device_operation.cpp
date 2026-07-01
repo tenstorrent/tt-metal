@@ -109,8 +109,17 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT16,
-        "data type must be bfloat16, float32, uint32, int32, or uint16");
+            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
+        "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+    // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
+    // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
+    {
+        const DataType out_dt = operation_attributes.output_dtype;
+        // Valid TILE float output = a float dtype other than FP8_E4M3 (which is itself ROW_MAJOR-only).
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::FP8_E4M3 || (is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3),
+            "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+    }
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 

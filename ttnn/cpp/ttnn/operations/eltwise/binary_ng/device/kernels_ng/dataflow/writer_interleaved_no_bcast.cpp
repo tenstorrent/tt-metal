@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -26,12 +26,12 @@ void kernel_main() {
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_dst(cb_id_dst);
+    Noc noc;
+    CircularBuffer cb_dst(cb_id_dst);
 
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
-    const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
+    const uint32_t dst_tile_bytes = cb_dst.get_tile_size();
     const auto dst = TensorAccessor(dst_args, dst_addr);
 #endif
 

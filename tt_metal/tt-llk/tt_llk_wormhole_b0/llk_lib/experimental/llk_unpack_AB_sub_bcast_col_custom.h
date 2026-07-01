@@ -19,11 +19,8 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // Custom init for the blocked sub+bcast(col) unpack flow.
-template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_sub_bcast_col_init_custom_(
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, [[maybe_unused]] const bool narrow_tile = false)
+inline void _llk_unpack_AB_sub_bcast_col_init_custom_()
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face
 
     // Force both unpackers to unpack the full 32x32 tile for the blocked path.
@@ -32,7 +29,6 @@ inline void _llk_unpack_AB_sub_bcast_col_init_custom_(
 }
 
 // Custom blocked unpack: one SrcB tile + ct_dim SrcA tiles.
-template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t ct_dim = 1)
 {
     // Start from a clean A/B tile index for each blocked sub call.
@@ -68,7 +64,4 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
 
 inline void _llk_unpack_AB_sub_bcast_col_uninit_custom_()
 {
-    // Restore the default full-face unpack X span used by the generic unpack
-    // helpers. The custom blocked path forces both unpackers to full 32x32.
-    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }

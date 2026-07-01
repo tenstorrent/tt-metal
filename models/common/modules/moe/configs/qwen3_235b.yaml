@@ -1,0 +1,27 @@
+# qwen3_235b
+mesh_shape: [8, 4]
+cluster_axis: 0
+batch_per_device: 32
+hidden_size: 4096
+select_experts_k: 8
+num_routed_experts: 128
+num_shared_experts: 0
+has_bias: false
+
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# Qwen3 MoE = softmax over all experts → top-k → renormalize (≡ softmax over selected, the global Z
+# cancels), no bias, no scaling. 128 experts → padded to the op's 256-face in TTMoEGate.forward.
+n_group: 1
+score_func: softmax
+routed_scaling_factor: 1.0
+gate_notes: "Qwen3 235B: softmax kept POST-topk (softmax-over-selected, the default softmax_position) — mathematically ≡ the model's softmax-over-all→top-8→renorm (global Z cancels, no bias). Set softmax_position: pre for the literal front softmax (numerically-stable exp over all experts)."
+
+compute:
+  intermediate_size: 1536
+  activation_type: SILU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential

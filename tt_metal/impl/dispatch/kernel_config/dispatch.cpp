@@ -8,6 +8,7 @@
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <map>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "fabric/fabric_context.hpp"
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -63,12 +65,18 @@ DispatchKernel::DispatchKernel(
     TT_FATAL(
         noc_selection.downstream_noc == tt_metal::k_dispatch_downstream_noc,
         "Invalid downstream NOC specified for Dispatcher kernel");
-    TT_FATAL(
-        noc_selection.upstream_noc != noc_selection.downstream_noc,
-        "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
+    // Quasar only has a single NOC
+    if (descriptor.cluster().arch() != tt::ARCH::QUASAR) {
+        TT_FATAL(
+            noc_selection.upstream_noc != noc_selection.downstream_noc,
+            "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
+    }
+
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
+
+    static_config_.dispatch_telemetry_disabled = descriptor.rtoptions().get_dispatch_telemetry_disabled();
 
     DispatchWorkerType type = DISPATCH;
     if (h_variant && d_variant) {
@@ -83,6 +91,7 @@ DispatchKernel::DispatchKernel(
         type = DISPATCH_D;
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
+    this->send_to_brisc_ = true;
     // Log dispatch core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
@@ -99,6 +108,12 @@ void DispatchKernel::GenerateStaticConfigs() {
     static_config_.fabric_header_rb_entries = DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
+    static_config_.realtime_profiler_msg_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
+    static_config_.dispatch_telemetry_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+    static_config_.dispatch_telemetry_control_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -521,6 +536,10 @@ void DispatchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
+        {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
+        {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
+        {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
         {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
         {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},
         {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL",
@@ -571,11 +590,24 @@ void DispatchKernel::CreateKernel() {
 
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
-    configure_kernel_variant(
-        dispatch_kernel_file_names[DISPATCH], compile_args, defines, false, true, false, optimization_level);
+    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH], compile_args, defines, optimization_level);
 }
 
 void DispatchKernel::ConfigureCore() {
+    TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
+    TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
+    DispatchCoreTelemetry zero_dispatch_telemetry{};
+    if (static_config_.dispatch_telemetry_disabled.value()) {
+        zero_dispatch_telemetry.signature = INVALID_TELEMETRY_SIGNATURE;
+    }
+    detail::WriteToDeviceL1(
+        device_,
+        logical_core_,
+        static_config_.dispatch_telemetry_addr.value(),
+        std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry), sizeof(zero_dispatch_telemetry)),
+        GetCoreType());
+
     // For all dispatchers, need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
     const auto& my_dispatch_constants = *this->dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();

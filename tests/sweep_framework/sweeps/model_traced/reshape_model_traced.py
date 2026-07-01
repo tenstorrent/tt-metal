@@ -41,8 +41,19 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    import os as _os
+
     mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
+    # Prefer WORKER COL: every traced config of this op runs on COL, but the
+    # auto-detect over-routes the whole module to ROW from a single x=7/8-8 master
+    # config, breaking the COL-only configs in single-pass (no-env) runs. Defer to
+    # TTNN_DISPATCH_AXIS when set so CI's two-pass (row+col) is unchanged.
+    _axis = (
+        None
+        if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
+        else ttnn.DispatchCoreAxis.COL
+    )
+    device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -132,7 +143,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"arg1", "arg2", "input_a_storage_type"}, output_memory_config=output_memory_config
+    )
 
     # v2 tracer puts target shape in arg1 or shape; arg2 may hold a
     # secondary shape (e.g. padded output shape) used by some internal paths.
@@ -189,11 +202,37 @@ def run(
     if arg2 is not None and not isinstance(arg2, tuple):
         arg2 = None
 
-    in_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    import json as _json_r
+
+    in_shape = (
+        tuple(input_a_shape)
+        if isinstance(input_a_shape, (list, tuple))
+        else (
+            tuple(_json_r.loads(input_a_shape.replace("(", "[").replace(")", "]")))
+            if isinstance(input_a_shape, str) and len(input_a_shape) < 200
+            else input_a_shape
+        )
+    )
 
     # Ensure shape is at least 2D for TILE_LAYOUT compatibility
     if len(in_shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
         in_shape = (1, in_shape[0])
+
+    # Parse string dtype/layout if needed
+    if isinstance(input_a_dtype, str):
+        from tests.sweep_framework.master_config_loader_v2 import parse_dtype
+
+        input_a_dtype = parse_dtype(input_a_dtype) or ttnn.bfloat16
+    if isinstance(input_a_layout, str):
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        input_a_layout = parse_dict_value("layout", {"type": "Layout", "repr": input_a_layout}) or ttnn.TILE_LAYOUT
+
+    # Parse memory_config dict if needed
+    if isinstance(input_a_memory_config, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        input_a_memory_config = dict_to_memory_config(input_a_memory_config) or ttnn.DRAM_MEMORY_CONFIG
 
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         in_shape
@@ -215,6 +254,14 @@ def run(
             out = torch.reshape(per_chip_input, arg2)
             slices = tuple(slice(0, sz) for sz in tgt_shape)
             return out[slices]
+        # reshape-with-pad: target is LARGER than the input (e.g. (1,1,1,1024) ->
+        # (1,1,32,1024)). ttnn.reshape packs the input row-major into the first
+        # numel positions and zero-pads the rest (verified on device: row 0 = data,
+        # rows 1..31 = 0). Mirror that instead of a numel-mismatch torch.reshape.
+        if per_chip_tgt_numel > per_chip_numel:
+            out = torch.zeros(per_chip_tgt_numel, dtype=per_chip_input.dtype)
+            out[:per_chip_numel] = per_chip_input.reshape(-1)
+            return out.reshape(tgt_shape)
         return torch.reshape(per_chip_input, tgt_shape)
 
     try:
@@ -222,7 +269,10 @@ def run(
     except RuntimeError:
         torch_output = torch_input  # placeholder; trace still captured even if PCC fails
 
-    is_host = storage_type and "HOST" in str(storage_type)
+    _st = kwargs.get("input_a_storage_type", storage_type)
+    if _st == "__ABSENT__":
+        _st = storage_type
+    is_host = _st and "HOST" in str(_st)
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
@@ -254,7 +304,16 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+            try:
+                apply_tensor_placement_topology(input_tensor, input_a_tensor_placement, (1, 2))
+            except Exception:
+                pass  # Intentionally ignored: topology application is best-effort, fallback to default
+        else:
+            input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     # If master traced arg2 as a Shape object, wrap it back so the tracer
@@ -265,13 +324,27 @@ def run(
             arg2_to_pass = ttnn.Shape(list(arg2))
         except Exception:
             arg2_to_pass = arg2
+    # Reproduce master's call form: 20/92 configs used the `shape=` kwarg
+    # (vector has `shape` populated), 72/92 used positional `arg1`.  Detect
+    # per-vector and reproduce.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    _used_named_shape = "arg1" in _absent and "shape" not in _absent
     if arg2 is not None:
         try:
-            output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2_to_pass, **op_kwargs)
+            if _used_named_shape:
+                output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, pad_value=arg2_to_pass, **op_kwargs)
+            else:
+                output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2_to_pass, **op_kwargs)
         except (TypeError, RuntimeError):
-            output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
+            if _used_named_shape:
+                output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+            else:
+                output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     else:
-        output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
+        if _used_named_shape:
+            output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+        else:
+            output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

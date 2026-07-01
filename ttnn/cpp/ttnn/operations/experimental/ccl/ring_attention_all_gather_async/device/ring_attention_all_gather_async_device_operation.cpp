@@ -80,17 +80,32 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
                     "Output tensor {} memory config should match output_mem_config",
                     i);
 
-                // Check output tensor shape
+                // Check output tensor shape. The gather dimension may be larger than the populated prefix.
                 auto output_shape = output_tensor.logical_shape();
                 auto expected_output_shape = input_tensors[i].logical_shape();
                 expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
 
-                TT_FATAL(
-                    output_shape == expected_output_shape,
-                    "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
-                    i,
-                    operation_attributes.dim,
-                    operation_attributes.ring_size);
+                for (int d = 0; d < static_cast<int>(output_shape.rank()); ++d) {
+                    if (d == operation_attributes.dim) {
+                        TT_FATAL(
+                            output_shape[d] >= expected_output_shape[d],
+                            "Output tensor {} gather dim {} too small: got {}, expected >= {} "
+                            "(= input_dim * ring_size {})",
+                            i,
+                            d,
+                            output_shape[d],
+                            expected_output_shape[d],
+                            operation_attributes.ring_size);
+                    } else {
+                        TT_FATAL(
+                            output_shape[d] == expected_output_shape[d],
+                            "Output tensor {} non-gather dim {} mismatch: got {}, expected {}",
+                            i,
+                            d,
+                            output_shape[d],
+                            expected_output_shape[d]);
+                    }
+                }
             }
         }
     }
@@ -137,25 +152,6 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
         output_tensors.emplace_back(create_device_tensor(output_spec, input_tensors[0].device()));
     }
     return output_tensors;
-}
-
-ttsl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.at(0).device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsyncDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
 }
 
 std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>

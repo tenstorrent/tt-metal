@@ -13,7 +13,6 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -151,25 +150,25 @@ void kernel_main() {
     constexpr bool use_negative_mask = false;
 #endif
 
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_eps(cb_eps_id);
-    experimental::CircularBuffer cb_ex(cb_ex_id);
-    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    experimental::CircularBuffer cb_ex_external(cb_ex_external_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_in_negative_mask(cb_in_negative_mask_id);
-    experimental::CircularBuffer cb_inbeta(cb_inbeta_id);
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_ones(cb_ones_id);
-    experimental::CircularBuffer cb_out(cb_out_id);
-    experimental::CircularBuffer cb_outbeta(cb_outbeta_id);
-    experimental::CircularBuffer cb_outgamma(cb_outgamma_id);
-    experimental::CircularBuffer cb_scaler(cb_scaler_id);
-    experimental::CircularBuffer cb_scaler_global(cb_scaler_global_id);
-    experimental::CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_ex(cb_ex_id);
+    CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    CircularBuffer cb_ex_external(cb_ex_external_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_in_negative_mask(cb_in_negative_mask_id);
+    CircularBuffer cb_inbeta(cb_inbeta_id);
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_ones(cb_ones_id);
+    CircularBuffer cb_out(cb_out_id);
+    CircularBuffer cb_outbeta(cb_outbeta_id);
+    CircularBuffer cb_outgamma(cb_outgamma_id);
+    CircularBuffer cb_scaler(cb_scaler_id);
+    CircularBuffer cb_scaler_global(cb_scaler_global_id);
+    CircularBuffer cb_x(cb_x_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -279,18 +278,19 @@ void kernel_main() {
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
             // mcast reader). Same applies to the second REDUCE_SCALAR pack into
             // cb_ex_partial later in this kernel (variance).
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
+            compute_kernel_lib::
+                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);
@@ -381,19 +381,20 @@ void kernel_main() {
             // The sharded reader's "single-tile-overwrite trick" depends on
             // this pack also clearing every non-result datum of cb_ex_partial
             // to exact zero (documented packer behavior for REDUCE_SCALAR).
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
+            compute_kernel_lib::
+                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
 
             cb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);

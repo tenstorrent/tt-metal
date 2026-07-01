@@ -4,12 +4,13 @@
 
 #include <cstdint>
 
-#include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose.h"
+#include "api/dataflow/circular_buffer.h"
 
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(
-    uint32_t cb_in_id, uint32_t cb_out_id, experimental::CircularBuffer& cb_in, experimental::CircularBuffer& cb_out) {
+    uint32_t cb_in_id, uint32_t cb_out_id, CircularBuffer& cb_in, CircularBuffer& cb_out) {
     cb_in.wait_front(BatchSize);
 
     tile_regs_acquire();
@@ -17,9 +18,9 @@ FORCE_INLINE void transpose(
 
     cb_out.reserve_back(BatchSize);
 
-    transpose_wh_init_short(cb_in_id);
+    transpose_init(cb_in_id);
     for (uint32_t i = 0; i < BatchSize; i++) {
-        transpose_wh_tile(cb_in_id, i, i);
+        transpose_tile(cb_in_id, i, i);
         pack_tile(i, cb_out_id);
     }
 
@@ -48,15 +49,16 @@ void kernel_main() {
     constexpr uint32_t groups = get_compile_time_arg_val(12);
     constexpr uint32_t MAX_BATCH_SIZE = get_compile_time_arg_val(13);
 
-    experimental::CircularBuffer input0_cb(input0_cb_id);
-    experimental::CircularBuffer input1_cb(input1_cb_id);
-    experimental::CircularBuffer input0_transpose_cb(input0_transpose_cb_id);
-    experimental::CircularBuffer input1_transpose_cb(input1_transpose_cb_id);
-    experimental::CircularBuffer concat_cb(concat_cb_id);
-    experimental::CircularBuffer output_transpose_cb(output_transpose_cb_id);
-    experimental::CircularBuffer output_cb(output_cb_id);
+    CircularBuffer input0_cb(input0_cb_id);
+    CircularBuffer input1_cb(input1_cb_id);
+    CircularBuffer input0_transpose_cb(input0_transpose_cb_id);
+    CircularBuffer input1_transpose_cb(input1_transpose_cb_id);
+    CircularBuffer concat_cb(concat_cb_id);
+    CircularBuffer output_transpose_cb(output_transpose_cb_id);
+    CircularBuffer output_cb(output_cb_id);
 
-    transpose_wh_init(input0_cb_id, input0_transpose_cb_id);
+    compute_kernel_hw_startup(input0_cb_id, input0_transpose_cb_id);
+    transpose_init(input0_cb_id);
 
     constexpr uint32_t output_num_tiles_width = input0_num_tiles_width + input1_num_tiles_width;
 

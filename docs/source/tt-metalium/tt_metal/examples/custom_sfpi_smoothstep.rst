@@ -103,7 +103,7 @@ The reader kernel reads tiles from a single source DRAM buffer and pushes them i
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_reserve_back(cb_in0, 1);
             uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-            noc_async_read_tile(i, in0, cb_in0_addr);
+            noc_async_read_page(i, in0, cb_in0_addr);
             noc_async_read_barrier();
             cb_push_back(cb_in0, 1);
         }
@@ -121,7 +121,7 @@ The writer kernel is straightforward: it reads result tiles from the output circ
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_out0, 1);
             uint32_t cb_out0_addr = get_read_ptr(cb_out0);
-            noc_async_write_tile(i, out0, cb_out0_addr);
+            noc_async_write_page(i, out0, cb_out0_addr);
             noc_async_write_barrier();
             cb_pop_front(cb_out0, 1);
         }
@@ -173,29 +173,34 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp
+    // tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_smoothstep.h
 
     #ifdef TRISC_MATH
+    namespace ckernel::sfpu {
 
     // Low-level function operating on a tile face
-    void my_smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
+    void smoothstep_tile_face(float edge0, [[maybe_unused]] float edge1, float inv_delta) {
         constexpr size_t vectors_per_face = 8;
         for (size_t i = 0; i < vectors_per_face; i++) {
-            vFloat x = dst_reg[i];
-            vFloat t = (x - edge0) * inv_delta;
+            sfpi::vFloat x = sfpi::dst_reg[i];
+            sfpi::vFloat t = (x - edge0) * inv_delta;
             v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
             v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
             v_endif;
-            vFloat result = t * t * (3.0f - 2.0f * t);
-            dst_reg[i] = result;
+            sfpi::vFloat result = t * t * (3.0f - 2.0f * t);
+            sfpi::dst_reg[i] = result;
         }
     }
+
+    }  // namespace ckernel::sfpu
     #endif // TRISC_MATH
 
     // High-level API function
     // Accepts `edge0`, `edge1` and `inv_delta` as parameters
-    inline void my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-        MATH(_llk_math_eltwise_unary_sfpu_params_(
+    inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
+        MATH(SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
             smoothstep_tile_face,
             idx_dst0,
             VectorMode::RC, // Apply on all 4 faces of the tile
@@ -207,17 +212,17 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
 Parameter Passing
 ~~~~~~~~~~~~~~~~~
 
-The `smoothstep` function needs two scalar parameters: ``edge0`` and ``edge1``. These are passed to the SFPI kernel using the ``_llk_math_eltwise_unary_sfpu_params_`` helper function.
+The `smoothstep` function needs two scalar parameters: ``edge0`` and ``edge1``. These are passed to the SFPI kernel through the ``SFPU_UNARY_CALL_NO_TEMPLATE_ARGS`` macro wrapper.
 
 .. code-block:: cpp
 
     // Passes edge0 and edge1 as arguments to the SFPI kernel
-    my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
+    my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
     // ↓
     // Use the parameters for all elements in the tile face
-    my_smoothstep_tile_face(float edge0, float edge1, float inv_delta);
+    smoothstep_tile_face(float edge0, [[maybe_unused]] float edge1, float inv_delta);
 
-The helper function is a template that takes the low-level face function as its first argument, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.
+The macro wrapper takes the low-level face function, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.
 
 Vector Predicates
 ~~~~~~~~~~~~~~~~~
@@ -291,6 +296,6 @@ Conclusion
 
 This example demonstrates the implementation of a custom SFPI kernel with parameter passing and conditional logic. Key takeaways are:
 
-*   **Parameter Passing:** The ``_llk_math_eltwise_*_sfpu_params_`` family of functions is used to pass scalar arguments to a custom SFPI kernel.
+*   **Parameter Passing:** The ``SFPU_UNARY_CALL_NO_TEMPLATE_ARGS`` macro wrapper is used to pass scalar arguments to a custom SFPI kernel.
 *   **Vector Predicates:** The ``v_if``, ``v_elseif``, and ``v_endif`` instructions provide a mechanism for element-wise conditional logic within an SFPI kernel.
 *   **Unary Operations:** Unary SFPI kernels can be implemented efficiently by performing the computation in-place in the destination registers.

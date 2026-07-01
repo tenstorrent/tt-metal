@@ -16,6 +16,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       build-artifact-name:
         required: true
         type: string
@@ -23,7 +27,7 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       gtest_filter:
@@ -31,6 +35,7 @@ on:
         default: "*"
         type: string
         description: "Filter for gtest"
+
 jobs:
   data-movement-tests:
     strategy:
@@ -44,7 +49,7 @@ jobs:
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
-      image: ${{ ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150') && 'harbor.ci.tenstorrent.net/') || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150') && inputs.harbor-prefix) || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -70,7 +75,8 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -88,9 +94,9 @@ jobs:
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            mkdir -p generated/test_reports
-            GTEST_FILTER="${{inputs.gtest_filter}}"
-            ${{ matrix.test-group.cmd }}
+          mkdir -p generated/test_reports
+          GTEST_FILTER="${{inputs.gtest_filter}}"
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

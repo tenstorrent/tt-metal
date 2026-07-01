@@ -109,10 +109,10 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 78_106_452 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 76_894_779 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 82_300_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 81_200_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
@@ -133,19 +133,19 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_encode_1024x1024": {
         "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 143_563_697,
+        "blackhole": 141_175_333,
     },
     "vae_encode_512x512": {
         "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 40_995_000,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 19_377_824,
+        "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
+        "blackhole": 11_927_000,  # Average of 3 main CI runs (Jun 22, 2026)
     },
     "clip_encoder_2": {
-        "wormhole": 125_300_000,
-        "blackhole": 60_903_932,
+        "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 43_810_000,  # Average of 3 main CI runs (Jun 22, 2026)
     },
 }
 

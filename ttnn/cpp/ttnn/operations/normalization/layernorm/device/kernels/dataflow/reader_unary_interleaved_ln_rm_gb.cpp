@@ -7,10 +7,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -29,16 +29,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
 #ifdef FUSE_PRE_ADD
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in1(cb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+    CircularBuffer cb_gamma(cb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    experimental::CircularBuffer cb_beta(cb_id_beta);
+    CircularBuffer cb_beta(cb_id_beta);
 #endif
 
     // ublocks size defined in tiles
@@ -47,7 +47,7 @@ void kernel_main() {
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
-    [[maybe_unused]] constexpr uint32_t W = get_compile_time_arg_val(2);
+    constexpr uint32_t W = get_compile_time_arg_val(2);
     constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
@@ -75,12 +75,19 @@ void kernel_main() {
             cb_in_2,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-            /*compute_uses_reduce_tile=*/true>();
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        if constexpr (partial_last_tile_cols > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_in_2,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
+        }
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
@@ -124,7 +131,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
                 {
                     cb_gamma.reserve_back(block.full_block_size());
-                    experimental::UnicastEndpoint local_ep;
+                    UnicastEndpoint local_ep;
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -152,7 +159,7 @@ void kernel_main() {
 #ifdef FUSE_BETA
                 {
                     cb_beta.reserve_back(block.full_block_size());
-                    experimental::UnicastEndpoint local_ep;
+                    UnicastEndpoint local_ep;
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(

@@ -39,7 +39,8 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_release_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Install dependencies
@@ -109,7 +110,8 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -122,24 +124,32 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          # PERF jobs (tracy profiler on) need a wider hang-detection window because
+          # the heavy traffic (e.g. layer3 isl_6k4 combine) can stall the NOC for >5s
+          # under genuine bandwidth pressure without being deadlocked. Other jobs
+          # keep the default 5s.
+          hang-detection-timeout: ${{ contains(matrix.test-group.name, 'PERF') && '20.0' || '5.0' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          # Store command safely using heredoc
-          CMD=$(cat << 'EOF'
-          ${{ matrix.test-group.cmd }}
-          EOF
-          )
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            # Store command safely using heredoc
+            CMD=$(cat << 'EOF'
+            ${{ matrix.test-group.cmd }}
+            EOF
+            )
 
-          # Source T3K test scripts if needed (for run_t3000_* functions)
-          if [[ "$CMD" == *"run_t3000"* ]]; then
-            source tests/scripts/t3000/run_t3000_demo_tests.sh
-            source tests/scripts/t3000/run_t3000_perf_tests.sh
-            source tests/scripts/t3000/run_t3000_integration_tests.sh
-          fi
+            # Source T3K test scripts if needed (for run_t3000_* functions)
+            if [[ "$CMD" == *"run_t3000"* ]]; then
+              source tests/scripts/t3000/run_t3000_demo_tests.sh
+              source tests/scripts/t3000/run_t3000_perf_tests.sh
+              source tests/scripts/t3000/run_t3000_integration_tests.sh
+            fi
 
-          echo "$CMD"
-          eval "$CMD"
+            echo "$CMD"
+            eval "$CMD"
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() && matrix.test-group.save-perf-data }}
@@ -165,6 +175,21 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -172,3 +197,40 @@ jobs:
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [load-test-matrix, demo-sp-release-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
+          run-result: ${{ needs.demo-sp-release-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

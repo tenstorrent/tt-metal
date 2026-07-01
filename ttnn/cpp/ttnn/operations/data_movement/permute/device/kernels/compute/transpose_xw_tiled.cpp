@@ -5,12 +5,11 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // X = output width
@@ -31,8 +30,8 @@ void kernel_main() {
     constexpr auto cb_tilize = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer cb_tilize_exp(cb_tilize);
-    experimental::CircularBuffer cb_out_exp(cb_out);
+    CircularBuffer cb_tilize_exp(cb_tilize);
+    CircularBuffer cb_out_exp(cb_out);
 
     unary_op_init_common(cb_in, cb_out);
 
@@ -49,11 +48,11 @@ void kernel_main() {
         // transpose input
         cb_tilize_exp.wait_front(1);
 
-        transpose_wh_init_short(cb_tilize);
+        transpose_init(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);
 
         tile_regs_acquire();
-        transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
+        transpose_tile(cb_tilize, 0, 0);  // transpose call
         tile_regs_commit();
 
         // pack and untilize

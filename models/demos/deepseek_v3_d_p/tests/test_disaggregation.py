@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table,
+    create_kv_chunk_address_table_ds,
     init_kvpe_cache,
 )
 
@@ -64,7 +64,7 @@ def test_kv_cache_address_table(mesh_device, seq_len):
     config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
-    lookup_table = create_kv_chunk_address_table(
+    lookup_table = create_kv_chunk_address_table_ds(
         config=config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,

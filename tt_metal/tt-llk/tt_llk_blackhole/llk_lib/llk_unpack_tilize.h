@@ -18,11 +18,18 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-inline void _llk_unpack_tilize_mop_config_(
-    [[maybe_unused]] const bool narrow_tile = false, const bool unpack_to_dest = false, const bool skip_bh_workaround = false)
+/**
+ * @brief Program the unpacker MOP for a tilize operation.
+ *
+ * Selects between unpacking to SrcA (with a SrcB dvalid NOP) or straight to dest, and applies the
+ * Blackhole tilize workaround unless skipped (8-bit formats fall back to the Wormhole path).
+ *
+ * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @param unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param skip_bh_workaround: Skip the Blackhole tilize workaround (e.g. for 8-bit formats).
+ */
+inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const bool unpack_to_dest = false, const bool skip_bh_workaround = false)
 {
-    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
-
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_to_dest =
@@ -48,6 +55,23 @@ inline void _llk_unpack_tilize_mop_config_(
     tmp.program();
 }
 
+/**
+ * @brief Initialize the unpacker for a tilize operation.
+ *
+ * Disables face transpose, configures the unpacker into tileize mode (throttle, shift amount,
+ * per-tile X/Z dims) for the given block column dimension, decides whether 32-bit datums must be
+ * unpacked to dest, and programs the tilize MOP.
+ *
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @param ct_dim: Number of column tiles in the block, used to size the column dimension.
+ * @param face_r_dim: Rows per face, valid values = <2, 4, 8, 16>.
+ * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
+ * @note Call @ref _llk_unpack_tilize_uninit_ to restore the modified tile-descriptor state.
+ * @ref _llk_unpack_tilize_ is the matching execute call.
+ * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D, PackMode::Tilize) is the matching init on the math thread.
+ */
 inline void _llk_unpack_tilize_init_(
     const std::uint32_t unpack_src_format = 0,
     const std::uint32_t unpack_dst_format = 0,
@@ -113,17 +137,32 @@ inline void _llk_unpack_tilize_init_(
     _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest, is_8bit_format);
 }
 
+/**
+ * @brief Unpack and tilize a tile from L1 into SrcA or the dest register.
+ *
+ * Computes per-face L1 addresses for the selected column tile and runs the tilize MOP. For 8-bit
+ * formats it loops over face groups using the Wormhole-style path; otherwise it runs a single pass
+ * and, when unpacking 32-bit datums, manages the dest write address and completion handshake.
+ *
+ * @param base_address: L1 base address of the source tile buffer.
+ * @param tile_index: Column tile index selecting which tile to unpack.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @param face_r_dim: Rows per face.
+ * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
+ * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @note Call @ref _llk_unpack_tilize_init_ before this function, and
+ *       @ref _llk_unpack_tilize_uninit_ after it to restore modified state.
+ */
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
-    std::uint32_t unpack_src_format                 = 0,
-    std::uint32_t unpack_dst_format                 = 0,
-    [[maybe_unused]] std::uint32_t block_ct_dim     = 0,
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
-    [[maybe_unused]] const std::uint32_t num_faces  = 4,
-    const bool narrow_tile                          = false)
+    std::uint32_t unpack_src_format = 0,
+    std::uint32_t unpack_dst_format = 0,
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool narrow_tile          = false)
 {
-    LLK_ASSERT(block_ct_dim == 0, "block_ct_dim: this parameter is unused");
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
@@ -238,14 +277,21 @@ inline void _llk_unpack_tilize_(
     }
 }
 
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, const std::uint32_t face_r_dim)
+/**
+ * @brief Restore unpacker state after a tilize operation.
+ *
+ * Reverts the tile descriptor Z-dimension to default and rewrites the unpack config (clearing
+ * tilize mode) so subsequent ops see a normal tile layout. x-start/x-end is transient and
+ * reprogrammed by the next operation's init (see tt-llk#1036), so it is not restored here.
+ *
+ * @param unpack_dst_format: Destination data format to restore in the unpack config.
+ * @param num_faces: Number of faces, used to restore the Z dimension, valid values = <1, 2, 4>.
+ * @note Call @ref _llk_unpack_tilize_init_ before this function.
+ */
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    // Revert X dim value to default.
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
     // Revert Z dim value back to default.
     const std::uint32_t Tile_z_dim = num_faces;
@@ -269,9 +315,21 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B
  *************************************************************************/
 
+/**
+ * @brief Program the unpacker MOP/replay buffer for tilize-A-with-unpack-B.
+ *
+ * Builds a replay buffer that unpacks one 1x16 row of SrcA at a time and advances the SrcA L1
+ * base address (per config context) by the programmed column stride.
+ *
+ * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
+ * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
+ * @tparam zero_srcA: Clear SrcA to zero before unpacking.
+ * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
+ * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ */
 // TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
-inline void _llk_unpack_tilizeA_B_mop_config_(const bool narrow_tile = false, const std::uint32_t num_faces = 4)
+inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t replay_buf_run_len  = 6;
@@ -312,14 +370,31 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const bool narrow_tile = false, co
     tmp.program();
 }
 
+/**
+ * @brief Initialize the unpacker to tilize operand A while unpacking operand B.
+ *
+ * Programs the column stride used to advance SrcA's L1 address (via the CFGSHIFTMASK scratch
+ * register), sets per-unpacker datum counts (one row for SrcA, full face for SrcB) and SrcA's Y
+ * stride, disables face transpose, and programs the tilize-A-B MOP.
+ *
+ * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
+ * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
+ * @tparam zero_srcA: Clear SrcA to zero before unpacking.
+ * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
+ * @param unpack_src_format: Source data format of operand A in L1.
+ * @param unpack_dst_format: Destination data format operand A is converted to.
+ * @param ct_dim: Number of column tiles in the block, used to size the column stride.
+ * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param unpB_face_r_dim: Rows per face for operand B.
+ * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to restore the modified stride/datum-count state.
+ * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
+ */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_init_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
-    const bool narrow_tile,
     const std::uint32_t ct_dim,
     const std::uint32_t num_faces       = 4,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -342,18 +417,37 @@ inline void _llk_unpack_tilizeA_B_init_(
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
+    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
+/**
+ * @brief Tilize operand A and unpack operand B, face by face, into SrcA and SrcB.
+ *
+ * Loops over the faces, computing each face's SrcA L1 address, optionally clearing SrcA to
+ * neginf/zero, unpacking the SrcB face, then unpacking the face's rows into SrcA (row by row via
+ * the MOP) and setting data-valid, synchronizing through the unpack semaphore each iteration.
+ *
+ * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
+ * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
+ * @tparam zero_srcA: Clear SrcA to zero before unpacking.
+ * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
+ * @param unpA_src_format: Source data format of operand A in L1.
+ * @param face_r_dim: Rows per face.
+ * @param base_address_a: L1 base address of operand A's tile buffer.
+ * @param address_b: L1 address of operand B's face data.
+ * @param tile_index_a: Column tile index into operand A.
+ * @param block_ct_dim: Number of column tiles in the block, used to compute face strides.
+ * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @note Call @ref _llk_unpack_tilizeA_B_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_tilizeA_B_uninit_ after it to restore modified state.
+ */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_(
     std::uint32_t unpA_src_format,
     std::uint32_t face_r_dim,
-    std::uint32_t narrow_tile,
     std::uint32_t base_address_a,
     std::uint32_t address_b,
     std::uint32_t tile_index_a,
-    std::uint32_t tile_index_b,
     std::uint32_t block_ct_dim,
     std::uint32_t num_faces = 4)
 {
@@ -425,13 +519,19 @@ inline void _llk_unpack_tilizeA_B_(
     }
 }
 
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
+/**
+ * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
+ *
+ * Reverts the SrcA Y counter and rewrites the unpack config and tile X-dim back to the default
+ * 16x16 face layout. x-start/x-end is transient and reprogrammed by the next operation's init
+ * (see tt-llk#1036), so it is not restored here.
+ *
+ * @param unpack_dst_format: Destination data format to restore in the unpack config.
+ * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
+ */
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
 {
-    // Revert X dim value to default.
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
     // _llk_unpack_tilizeA_B uses y-stride and updates y counter
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);

@@ -56,19 +56,23 @@ ATGETM:
     arguments:
         - name: mutex_index
           start_bit: 0
-          size: 24
+          size: 16
           field_type: HEX
           description: &mutex_index >
               Mutex index
                 0 - math
-                2 - unpack0
-                3 - unpack1
+                1 - unpack0
+                2 - unpack1
+                3 - unpack2
                 4 - pack0
+                5 - pack1
           fcov_point_bins:
             bins: [ {name: "math",     value: "0x0"},
-                    {name: "unpack0",  value: "0x2"},
-                    {name: "unpack1",  value: "0x3"},
-                    {name: "pack0",    value: "0x4"}]
+                    {name: "unpack0",  value: "0x1"},
+                    {name: "unpack1",  value: "0x2"},
+                    {name: "unpack2",  value: "0x3"},
+                    {name: "pack0",    value: "0x4"},
+                    {name: "pack1",    value: "0x5"}]
     description: >
         Acquires mutex with index `mutex_index' for the issuing
         thread. At most one thread can hold the mutex at any time.
@@ -87,14 +91,16 @@ ATRELM:
     arguments:
         - name: mutex_index
           start_bit: 0
-          size: 24
+          size: 16
           field_type: HEX
           description: *mutex_index
           fcov_point_bins:
             bins: [ {name: "math",     value: "0x0"},
-                    {name: "unpack0",  value: "0x2"},
-                    {name: "unpack1",  value: "0x3"},
-                    {name: "pack0",    value: "0x4"}]
+                    {name: "unpack0",  value: "0x1"},
+                    {name: "unpack1",  value: "0x2"},
+                    {name: "unpack2",  value: "0x3"},
+                    {name: "pack0",    value: "0x4"},
+                    {name: "pack1",    value: "0x5"}]
     description: >
         Releases mutex with index `mutex_index' if it is held by
         issuing thread. Otherwise, has no effect.
@@ -640,7 +646,7 @@ MOVD2B:
         field_type: BIN
         start_bit: 11
         size: 1
-        description: Indicates the data should be transposed when writing into srcB
+        description: Indicates the data should be transposed when writing into srcB. SrcB address must be aligned to face.
         fcov_point_bool:
       - name: instr_mod
         field_type: DEC
@@ -987,32 +993,33 @@ MOVDBGB2D:
 #    arguments: 0
 #    description: "XY transpose SRCB main registers rows[16:32]"
 
-SHIFTXA:
-    op_binary: 0x17
-    ex_resource: MATH
-    ttsync_resource: OTHERS
-    instrn_type: COMPUTE
-    src_mask: 0x1
-    fcov:
-    arguments: &SRCA_SHIFTX
-        - name: shift_mode
-          field_type: DEC
-          start_bit: 0
-          size: 2
-          description: 11 = combined row shift left towards column 0, 10 = combined row shift right away from column 0, 01 = reserved, 00 = reserved
-          fcov_point_bins:
-            bins: [ {name: "reserved1",                                        value: "0x0"},
-                    {name: "reserved2",                                        value: "0x1"},
-                    {name: "combined_row_shift_right_from_col0",              value: "0x2"},
-                    {name: "combined_row_shift_left_to_col0",                 value: "0x3"} ]
-        - name: log2_amount2
-          field_type: DEC
-          start_bit: 2
-          size: 22
-          description: Log2 of the shift amount - allowed only shift by 1
-          fcov_point_bins:
-            bins: [ {name: "shift_1", value: "0x0"} ]
-    description: "horizontal SRCA shift"
+# This instruction was deprecated for Quasar.
+# SHIFTXA:
+    # op_binary: 0x17
+    # ex_resource: MATH
+    # ttsync_resource: OTHERS
+    # instrn_type: COMPUTE
+    # src_mask: 0x1
+    # fcov:
+    # arguments: &SRCA_SHIFTX
+        # - name: shift_mode
+          # field_type: DEC
+          # start_bit: 0
+          # size: 2
+          # description: 11 = combined row shift left towards column 0, 10 = combined row shift right away from column 0, 01 = reserved, 00 = reserved
+          # fcov_point_bins:
+            # bins: [ {name: "reserved1",                                        value: "0x0"},
+                    # {name: "reserved2",                                        value: "0x1"},
+                    # {name: "combined_row_shift_right_from_col0",              value: "0x2"},
+                    # {name: "combined_row_shift_left_to_col0",                 value: "0x3"} ]
+        # - name: log2_amount2
+          # field_type: DEC
+          # start_bit: 2
+          # size: 22
+          # description: Log2 of the shift amount - allowed only shift by 1
+          # fcov_point_bins:
+            # bins: [ {name: "shift_1", value: "0x0"} ]
+    # description: "horizontal SRCA shift"
 
 SHIFTXB:
     op_binary: 0x18
@@ -1048,22 +1055,6 @@ SHIFTXB:
           description: 3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
     description: "horizontal SRCB shift"
 
-
-SETASHRMV:  #FIXME can we delete this?
-    op_binary: 0x1C
-    ex_resource: MATH
-    ttsync_resource: OTHERS
-    instrn_type: COMPUTE
-    src_mask: 0x1
-    fcov:
-    arguments: &SRCSHRV_MASK
-        - name: reg_mask2
-          field_type: HEX
-          start_bit: 0
-          size: 24
-          description: 20bit wide register mask
-    description: "SRCA right shift vertical mask, covering main reg_array and central_sr"
-
 HALT:
     op_binary: 0x23
     ex_resource: NONE
@@ -1091,14 +1082,14 @@ MVMULDI:
         - name: addr_mode
           field_type: BIN
           start_bit: 8
-          size: 2
+          size: 3
           description: 3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
           fcov_point_bin_interval:
             bins: [ {name: "am_0_3", slice: "4",  interval: ["0x0","0x3"]},
                     {name: "am_4_7", slice: "4",  interval: ["0x4","0x7"]} ]
         - name: srca_addr
           field_type: DEC
-          start_bit: 10
+          start_bit: 11
           size: 4
           description: srca_addr
           fcov_point_bin_interval:
@@ -1106,7 +1097,7 @@ MVMULDI:
 
         - name: srcb_addr
           field_type: DEC
-          start_bit: 14
+          start_bit: 15
           size: 4
           description: srcb_addr
           fcov_point_bin_interval:
@@ -1114,7 +1105,7 @@ MVMULDI:
 
         - name: ins_mod
           field_type: DEC
-          start_bit: 18
+          start_bit: 19
           size: 3
           description: instruction modifier
           fcov_point_bins:
@@ -1146,7 +1137,7 @@ MVMUL:
         - name: dst
           field_type: DEC
           start_bit: 0
-          size: 14 # This field is unnecessarily large
+          size: 11
           description: Dest address spec
           fcov_point_bin_interval:
             bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
@@ -1154,7 +1145,7 @@ MVMUL:
         - name: addr_mode
           field_type: BIN
           start_bit: 14
-          size: 5
+          size: 3
           description: 3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
           fcov_point_bin_interval:
             bins: [ {name: "am_0_3", slice: "4",  interval: ["0x0","0x3"]},
@@ -1191,7 +1182,7 @@ ELWMUL:
         - name: dst
           field_type: DEC
           start_bit: 0
-          size: 14 # This field is unnecessarily large
+          size: 11
           description: Dest address spec
           fcov_point_bin_interval:
             bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
@@ -1199,7 +1190,7 @@ ELWMUL:
         - name: addr_mode
           field_type: BIN
           start_bit: 14
-          size: 5
+          size: 3
           description: 3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
           fcov_point_bin_interval:
             bins: [ {name: "am_0_3", slice: "4",  interval: ["0x0","0x3"]},
@@ -1252,7 +1243,7 @@ ELWSUB:
     src_mask: 0x3
     instrn_type: COMPUTE
     arguments: *ELW_ARGS
-    description: "Elementwise subtract operation (A-B)"
+    description: "Elementwise subtract operation (A-B). NOTE: Src zero flags must be disabled for this instruction to work correctly."
 #ELWADDDI (dest[7:0], addr_mod[2:0], srcb_addr[3:0], srca_addr[3:0],  ins_mod[1:0], /*dest_accum[0]=0*/, clear_dvalid[1:0], switch_state_id) //24-bit
 ELWADDDI:
     op_binary: 0x31
@@ -1273,14 +1264,14 @@ ELWADDDI:
         - name: addr_mode
           field_type: BIN
           start_bit: 8
-          size: 2
+          size: 3
           description: 3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
           fcov_point_bin_interval:
             bins: [ {name: "am_0_3", slice: "4",  interval: ["0x0","0x3"]},
                     {name: "am_4_7", slice: "4",  interval: ["0x4","0x7"]} ]
         - name: srca_addr
           field_type: DEC
-          start_bit: 10
+          start_bit: 11
           size: 4
           description: srca_addr
           fcov_point_bin_interval:
@@ -1288,7 +1279,7 @@ ELWADDDI:
 
         - name: srcb_addr
           field_type: DEC
-          start_bit: 14
+          start_bit: 15
           size: 4
           description: srcb_addr
           fcov_point_bin_interval:
@@ -1296,7 +1287,7 @@ ELWADDDI:
 
         - name: ins_mod
           field_type: DEC
-          start_bit: 18
+          start_bit: 19
           size: 3
           description: instruction modifier - 0 - no broadcast; 1 - broadcast col0; 2 - broadcast row0; 3 - broadcast both
           fcov_point_bins:
@@ -1329,7 +1320,7 @@ ELWSUBDI:
     src_mask: 0x3
     fcov:
     arguments: *ELWDI_ARGS
-    description: "ELWSUB with direct indexed srca and srcb"
+    description: "ELWSUB with direct indexed srca and srcb. NOTE: Src zero flags must be disabled for this instruction to work correctly."
 
 GMPOOL:
     op_binary: 0x33
@@ -1342,21 +1333,21 @@ GMPOOL:
       - name: dst
         field_type: DEC
         start_bit: 0
-        size: 14 # This field is unnecessarily large
+        size: 11
         description: Dest address spec
         fcov_point_bin_interval:
           bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0xFF"]},
                   {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
-      - name: max_pool_index_en
+      - name: rsvd
         field_type: DEC
         start_bit: 14
         size: 1
-        description: Enable index computation for max pooling
+        description: Reserved for future use. Must be 0.
         fcov_point_bool:
       - name: pool_addr_mode
         field_type: BIN
         start_bit: 15
-        size: 4
+        size: 3
         description: 3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
         fcov_point_bin_interval:
           bins: [ {name: "am_0_3", slice: "4",  interval: ["0x0","0x3"]},
@@ -1450,13 +1441,7 @@ RV_PACR:
     description: "PACK instruction which passes 3 GPR configuration registers with it
                   this instruction works only on the granularity of a whole tile;
                   GPR contents specifications are (format is {bit[31, bit[30...., bit[0]}):
-                  GPR0 = { 3-bits   : Rows to untilize -> 3'b000 =  64
-                                                          3'b001 =  32
-                                                          3'b010 =  16
-                                                          3'b011 =  8
-                                                          3'b100 =  4
-                                                          3'b101 =  2
-                           18-bits  : L1 Addr of Tile (16B addr); for untilize this is 16-datum offset from Buffer base
+                  GPR0 = { 18-bits  : L1 Addr of Tile (16B addr); for untilize this is 16-datum offset from Buffer base
                            10-bits  : Input (Dst/SrcS Regs) Addr (row addr)
                            1-bit    : Clear Dvalid
                          }
@@ -1576,7 +1561,10 @@ CLEARDVALID:
           start_bit: 0
           size: 2
           description: "bit 0: When set, clears all data valid bits, and reset write and read IDs to 0. Bit 1: Clear dvalid but dont switch bank"
-          fcov_point_bool:
+          fcov_point_bins:
+            bins: [ {name: "reset_none", value: "0x0"},
+                    {name: "reset_full", value: "0x1"},
+                    {name: "clear_no_bank_switch", value: "0x2"}]
         - name: dest_pulse_last
           field_type: BIN
           start_bit: 2
@@ -1586,12 +1574,12 @@ CLEARDVALID:
             field has four bits, one per client (bit 0 = unpack-to-dest, bit 1 = math, bit 2 = sfpu, bit 3 = packer).
             Issue a CLEARDVALID instruction with some subset of these bits set to 1 to trigger the dvalid updates
             that would normally happen if an instruction of the corresponding type had set its `last` (or `done`)
-            bit.
+            bit. For more details, see https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/113017320/RTL-INSTISSUE-45+Dest+data+valid+scheme
           fcov_point_bins:
-            bins: [ {name: "unpack_to_dest",  value: "0x0"},
-                    {name: "math",            value: "0x1"},
-                    {name: "sfpu",            value: "0x2"},
-                    {name: "packer",          value: "0x3"}]
+            bins: [ {name: "unpack_to_dest",  value: "0x1"},
+                    {name: "math",            value: "0x2"},
+                    {name: "sfpu",            value: "0x4"},
+                    {name: "packer",          value: "0x8"}]
         # The predecode is pulling bits 17:15 for the addr_mode index,
         # but CLEARDVALID doesn't use addr_mods
         - name: dest_dvalid_client_bank_reset
@@ -1600,10 +1588,10 @@ CLEARDVALID:
           size: 4
           description: Reset dest bank ID to 0 for given client bitmask (bit 0 = unpack-to-dest, bit 1 = math, bit 2 = sfpu, bit 3 = packer)
           fcov_point_bins:
-            bins: [ {name: "unpack_to_dest",  value: "0x0"},
-                    {name: "math",            value: "0x1"},
-                    {name: "sfpu",            value: "0x2"},
-                    {name: "packer",          value: "0x3"}]
+            bins: [ {name: "unpack_to_dest",  value: "0x1"},
+                    {name: "math",            value: "0x2"},
+                    {name: "sfpu",            value: "0x4"},
+                    {name: "packer",          value: "0x8"}]
         - name: dest_dvalid_reset
           field_type: BIN
           start_bit: 10
@@ -1635,7 +1623,7 @@ CLEARDVALID:
 
 SETRWC:
     op_binary: 0x37
-    ex_resource: MATH # Might make sense for this to be MATH
+    ex_resource: INSTISSUE
     ttsync_resource: OTHERS
     instrn_type: COMPUTE
     src_mask: 0x0
@@ -1646,11 +1634,11 @@ SETRWC:
           size: 6
           description: "bit mask (SFPU SP, fidelity_phase_clear,rwc_d,rwc_b,rwc_a)"
           fcov_point_bins:
-            bins: [ {name: "srcA",            value: "0x1"},
-                    {name: "srcB",            value: "0x2"},
-                    {name: "dest",            value: "0x4"},
-                    {name: "fidelity_clear",  value: "0x8"},
-                    {name: "sfpu_sp",         value: "0x10"}]
+            bins: [ {name: "srcA",            wildcard_value: "0bxxxxx1"},
+                    {name: "srcB",            wildcard_value: "0bxxxx1x"},
+                    {name: "dest",            wildcard_value: "0bxxx1xx"},
+                    {name: "fidelity_clear",  wildcard_value: "0bxx1xxx"},
+                    {name: "sfpu_sp",         wildcard_value: "0bx1xxxx"}]
         - name: rwc_val
           field_type: DEC
           start_bit: 6
@@ -1664,7 +1652,8 @@ SETRWC:
           field_type: BIN
           start_bit: 18
           size: 4
-          description: "bit mask (apply values specified to RWC CR counters (Dest CToCRMode,Dest,SrcB,srcA) (Dest CToCrMode: 1: CR <= Counter + inc, 0: CR <= CR + inc)"
+          description: "bit mask (apply values specified to RWC CR counters (Dest CToCRMode,Dest,SrcB,srcA) (Dest CToCrMode: 1: CR <= Counter + inc, 0: CR <= CR + inc). DestCToCRMode is not a valid feature when sfpu_sp is in the bit-mask,
+          in which case it will do a regular carriage-return: CR <= CR + inc"
           fcov_point_bins:
             bins: [ {name: "DestCToCRMode", value: "0x8"},
                     {name: "Dest",          value: "0x4"},
@@ -1684,7 +1673,7 @@ SETRWC:
 
 INCRWC:
     op_binary: 0x38
-    ex_resource: MATH # Might make sense for this to be MATH
+    ex_resource: INSTISSUE
     ttsync_resource: OTHERS
     instrn_type: COMPUTE
     src_mask: 0x0
@@ -1764,13 +1753,7 @@ RV_UNPACR:
     description: "Unpack instruction that passes 3 GPR configuration registers with it;
                   this instruction works only on the granularity of a whole tile;
                   GPR contents specifications are (format is {bit[31, bit[30...., bit[0]}):
-                  GPR0 = { 3-bits   : Rows to tilize -> 3'b000 =  64
-                                                        3'b001 =  32
-                                                        3'b010 =  16
-                                                        3'b011 =  8
-                                                        3'b100 =  4
-                                                        3'b101 =  2
-                           18-bits  : L1 Addr of Tile (16B addr); for tilize this is 16-datum offset from Buffer base
+                  GPR0 = { 18-bits  : L1 Addr of Tile (16B addr); for tilize this is 16-datum offset from Buffer base
                            10-bits  : Output (Src/Dst Regs) Addr (row addr)
                            1-bit    : Set Dvalid
 
@@ -2178,7 +2161,7 @@ PACR0_ROW_INC:
           description: "4-bit Dst Tile Row Idx Increment"
           fcov_point_bin_interval:
             bins: [ {name: "val", slice: "1",  interval: ["0x0","0xF"]} ]
-    description: "Pack into L1 single row with optional increments using Packer[1]"
+    description: "Pack into L1 single row with optional increments using Packer[0]"
 
 PACR1_TILE:
     op_binary: 0x2C
@@ -2607,19 +2590,11 @@ PACR_UNTILIZE:
           description: " 2-bit Counter Reset Mask :
                          { Dst-Z-Cntr Reset,
                            Src-Z-Cntr Reset }"
-        - name : Row_Cnt_Enc
+        - name : Reserved
           field_type: BIN
           start_bit: 14
-          size: 3
-          fcov_point_bin_interval:
-            bins: [ {name: "val", slice: "1",  interval: ["0x0","0x7"]} ]
-          description: " Number of rows to unpack :
-                         3'b000 =  64
-                         3'b001 =  32
-                         3'b010 =  16
-                         3'b011 =  8
-                         3'b100 =  4
-                         3'b101 =  2"
+          size: 10
+          description: "Reserved"
     description: "Untilizes faces in Dest Regs and write as flat layout in L1 - untilizes 4 16x16 faces in Dest;
                   This instruction is supported only in Packer[0]; This is not supported for Dest Strided Read Mode"
 
@@ -4627,19 +4602,11 @@ UNPACR_TILIZE:
           description: " 2-bit Counter Reset Mask :
                          { Dst-Z-Cntr Reset,
                            Src-Z-Cntr Reset }"
-        - name : Row_Cnt_Enc
+        - name : Reserved
           field_type: BIN
           start_bit: 15
-          size: 3
-          fcov_point_bin_interval:
-            bins: [ {name: "val", slice: "1",  interval: ["0x0","0x7"]} ]
-          description: " Number of rows to unpack :
-                         3'b000 =  64
-                         3'b001 =  32
-                         3'b010 =  16
-                         3'b011 =  8
-                         3'b100 =  4
-                         3'b101 =  2"
+          size: 9
+          description: "Reserved"
     description: "Tilizes 16x16x4 blocks/tiles in L1"
 
 
@@ -4773,7 +4740,10 @@ LOADIND:
           field_type: DEC
           start_bit: 0
           size: 6
-          description: "Address register index. Address is a L1 16B address"
+          description: >
+            Index of the GPR containing the L1 "base" address. The final L1 address accessed by
+            LOADIND will be this "base" address plus an "offset" determined by other fields in this
+            instruction. This is a 32-bit granular GPR index.
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
@@ -4781,7 +4751,7 @@ LOADIND:
           field_type: DEC
           start_bit: 6
           size: 6
-          description: "Destination data register index"
+          description: "Index (32-bit granular) of GPR in which to place the L1 read data"
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
@@ -4789,7 +4759,11 @@ LOADIND:
           field_type: DEC
           start_bit: 12
           size: 2
-          description: "Autoincrement spec: 0 - no autoinc, 1 - autoinc by 2(B)ytes, 2 - autoinc by 4B, 3 - autoinc by 16B"
+          description: >
+            A side effect of this instruction is to (optionally) increment the "offset". In
+            other words, the GPR value selected by the OffsetIndex field of this instruction
+            will be incremented according to this field's value.
+            Autoincrement spec: 0 - no autoinc, 1 - autoinc by 2(B)ytes, 2 - autoinc by 4B, 3 - autoinc by 16B
           fcov_point_bins:
             bins: [ {name: "no_autoinc",     value: "0x0"},
                     {name: "autoinc_by_2B",  value: "0x1"},
@@ -4799,8 +4773,15 @@ LOADIND:
           field_type: DEC
           start_bit: 14
           size: 8
-          description: "Offset address register index, in 16b quants (i.e. double the normal R value). Offset is in Bytes
-                        Value of 0 indicates no offset addition"
+          description: >
+            Index of the GPR containing the L1 "offset" address. The final L1 address accessed by
+            LOADIND will be the "base" address (determined by Addr_GPR_Index) plus this "offset".
+            This is a 16-bit granular index. In other words, the LSB of this index selects whether
+            to use the top or bottom 16-bits of the GPR value indexed by the remaining MSBs of this
+            index. Something like:
+              uint32_t *GPR = 0x....;
+              uint16_t *GPR_16 = reinterpret_cast<uint16_t *>(GPR);
+              final_l1_addr = GPR[Addr_GPR_Index] + GPR_16[OffsetIndex]
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0xFF","0xFF"]} ]
@@ -4814,7 +4795,7 @@ LOADIND:
                     {name: "32b", value: "0x1"},
                     {name: "16b", value: "0x2"},
                     {name: "8b",  value: "0x3"}]
-    description: "Load indirect from address specified in a GPR, with offset specified in GPR to a GPR. Supports autoincrementing offset;
+    description: "Load indirect: L1 memory (at GPR[addr_reg] + GPR[offset_index]) → GPR[data_reg]. Supports autoincrementing offset;
                   Addresses have to be aligned to access sizes"
 
 SET_SRC_TILE_FACE_ROW_IDX:
@@ -4831,7 +4812,7 @@ SET_SRC_TILE_FACE_ROW_IDX:
           size: 18
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",     interval: ["0x00","0x00"]},
-                    {name: "mid", slice: "0x100", interval: ["0x01","0x3FFFE"]},
+                    {name: "mid", slice: "0x10000", interval: ["0x01","0x3FFFE"]},
                     {name: "top", slice: "0x100000", interval: ["0x80","0x3FFFF"]}]
           description: "18-bit Set Value"
         - name: EngineSel
@@ -4877,7 +4858,7 @@ INC_SRC_TILE_FACE_ROW_IDX:
           size: 18
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",     interval: ["0x00","0x00"]},
-                    {name: "mid", slice: "0x100", interval: ["0x01","0x3FFFE"]},
+                    {name: "mid", slice: "0x10000", interval: ["0x01","0x3FFFE"]},
                     {name: "top", slice: "0x100000", interval: ["0x80","0x3FFFF"]}]
           description: "18-bit Increment Value"
         - name: EngineSel
@@ -4906,7 +4887,7 @@ INC_SRC_TILE_FACE_ROW_IDX:
                         2'b01 - Face
                         2'b10 - Row
                         2'b11 - Select all 3 of Tile, Face and Row"
-    description: "Set Src Tile/Face/Row Indices;
+    description: "Increment Src Tile/Face/Row Indices;
                   For Untilize/Tilize instructions, Face Idx is used as Z-Cntr"
 
 SET_DST_TILE_FACE_ROW_IDX:
@@ -4923,7 +4904,7 @@ SET_DST_TILE_FACE_ROW_IDX:
           size: 18
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",     interval: ["0x00","0x00"]},
-                    {name: "mid", slice: "0x100", interval: ["0x01","0x3FFFE"]},
+                    {name: "mid", slice: "0x10000", interval: ["0x01","0x3FFFE"]},
                     {name: "top", slice: "0x100000", interval: ["0x80","0x3FFFF"]}]
           description: "18-bit Set Value"
         - name: EngineSel
@@ -4969,7 +4950,7 @@ INC_DST_TILE_FACE_ROW_IDX:
           size: 18
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",     interval: ["0x00","0x00"]},
-                    {name: "mid", slice: "0x100", interval: ["0x01","0x3FFFE"]},
+                    {name: "mid", slice: "0x10000", interval: ["0x01","0x3FFFE"]},
                     {name: "top", slice: "0x100000", interval: ["0x80","0x3FFFF"]}]
           description: "18-bit Increment Value"
         - name: EngineSel
@@ -4998,7 +4979,7 @@ INC_DST_TILE_FACE_ROW_IDX:
                         2'b01 - Face
                         2'b10 - Row
                         2'b11 - Select all 3 of Tile, Face and Row"
-    description: "Set Dst Tile/Face/Row Indices;
+    description: "Increment Dst Tile/Face/Row Indices;
                   For Untilize/Tilize instructions, Face Idx is used as Z-Cntr"
 
 
@@ -5029,7 +5010,7 @@ ADDGPR:
         - name: Result_GPR_Index
           field_type: DEC
           start_bit: 12
-          size: 11
+          size: 6
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",  interval: ["0x00","0x00"]},
                     {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
@@ -5267,12 +5248,6 @@ ATINCGET:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0xF","0xF"]} ]
           description: "Wrap the targeted address value at 1 << WrapVal[4:0]"
-        - name: MemHierSel
-          field_type: BIN
-          start_bit: 23
-          size: 1
-          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
-          fcov_point_bool:
     description: "Atomic increment and get - will read value in targeted memory location and return it to GPR and post-increment it atomically with the value pointed by Data_GPR_Index field"
 
 ATINCGETPTR:
@@ -5331,12 +5306,6 @@ ATINCGETPTR:
           size: 1
           description: "Disable pointer increment"
           fcov_point_bool:
-        - name: MemHierSel
-          field_type: BIN
-          start_bit: 23
-          size: 1
-          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
-          fcov_point_bool:
     description: >
         Atomic increment and get pointer - will access a memory location designated as a FIFO pointer location (contains a 32b read pointer and a 32b write pointer), return the
         pointer value to GPR and post-increment it unless the FIFO condition precludes that. For example, write pointer will not be incremented if FIFO is full. Read pointer
@@ -5375,13 +5344,8 @@ ATSWAP:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0xFF","0xFF"]} ]
           description: "Swap mask at 16b granularity (8b of mask for 16B words)"
-        - name: MemHierSel
-          field_type: BIN
-          start_bit: 23
-          size: 1
-          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
-          fcov_point_bool:
-    description: "Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones provided on write data bus."
+    description: "Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones provided on write data bus.
+                  Returned data from L1 is not written back to the GPR data operand."
 
 ATCAS:
     op_binary: 0x64
@@ -5399,14 +5363,6 @@ ATCAS:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
           description: "Address register index (16B word address)"
-        - name: Data_GPR_Index  # FIXME: unused and to be removed. Issue #434
-          field_type: DEC
-          start_bit: 6
-          size: 6
-          fcov_point_bin_interval:
-            bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                    {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
-          description: "Destination data register index"
         - name: Sel32b
           field_type: DEC
           start_bit: 12
@@ -5428,21 +5384,16 @@ ATCAS:
         - name: SwapVal
           field_type: DEC
           start_bit: 18
-          size: 5
+          size: 4
           fcov_point_bin_interval:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
           description: "Swap value provided as an immediate (4 bits)"
-        - name: MemHierSel
-          field_type: BIN
-          start_bit: 23
-          size: 1
-          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
-          fcov_point_bool:
     description: >
-        Atomic compare-and-swap. If value at selected memory location matches that provided by programmer it is swapped to a new one, also provided by
-        programmer. Otherwise, instruction will be retried until it does match at which time it will swap.  This instruction is implemented for
-        implementations of mutual exclusion between Tensix cores and threads
+        Atomic compare-and-swap operation. Compares the value at the specified memory location with the provided compare value. If they match,
+        the memory location is atomically updated with the swap value. If they don't match, the operation fails and must be retried.
+        This instruction is designed for implementing mutual exclusion primitives between Tensix cores and threads.
+        The instruction does not block Tensix instruction issue, so it should be followed by a STALLWAIT instruction if blocking behavior is required.
 
 STOREIND:
     op_binary: 0x66
@@ -5502,7 +5453,7 @@ STOREIND:
                         2'b10 = 16b access  (for L1 only)
                         2'b11 = 8b access (for L1 only)"
           fcov_point_bool:
-    description: "Store indirect. Stores data from GPR to memory location specified by a combination of base+offset provided in other GPRs. Supports auto-increment on offset value;
+    description: "Store indirect: GPR[data_reg] → L1 memory or MMIO space (at GPR[addr_reg] + GPR[offset_index]) based on instruction field. Supports auto-increment on offset value;
                   Addresses have to be aligned to access sizes"
 
 STOREREG:
@@ -5528,7 +5479,7 @@ STOREREG:
                     {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
           size: 6
           description: "Source data register index"
-    description: "Stores data from GPR to local RISC register space. Final register address is computed as 0xFFB0_0000 | (RegAddr<<2)"
+    description: "Store: GPR[data_reg] → local_reg space"
 
 LOADREG:
     op_binary: 0x68
@@ -5544,7 +5495,11 @@ LOADREG:
             bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
                     {name: "top", slice: "1",  interval: ["0x3FFFF","0x3FFFF"]} ]
           size: 18
-          description: "18-bit register index aligned to 32-bit"
+          description: >
+            Word index (i.e. 32-bit granularity) of register, relative to LOCAL_REGS_BASE.
+            In other words, the final byte address would be calculated as:
+              RegAddr * 4 + LOCAL_REGS_BASE
+            (where LOCAL_REGS_BASE is defined in tensix.h)
         - name: Data_GPR_Index
           field_type: DEC
           start_bit: 18
@@ -5553,8 +5508,11 @@ LOADREG:
                     {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
           size: 6
           description: "Dest data register index"
-    description: "Loads data from local RISC register space to GPR"
+    description: "Load: local_reg space → GPR[data_reg]"
 
+################################################################################
+# SFPU Memory Access Instructions
+################################################################################
 SFPLOAD:
     op_binary: 0x70
     ex_resource: SFPU
@@ -5562,58 +5520,70 @@ SFPLOAD:
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: &SFPU_MEM
+    arguments:
       - name: dest_reg_addr
         field_type: DEC
         start_bit: 0
         size: 11
-        description: dest regs addr
+        description: "Register file read address.  Bit 10 is the SrcS (1) vs. Dest (0) select.  Bit 1 is the even (0) vs. odd (1) column select.  Bit 0 is reserved and must be 0."
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},    # 3FF
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]  # 400
+          bins: [ {name: "bot_half", slice: "0x10000", interval: ["0x000", "0x3FF"]},   # 3FF
+                  {name: "top_half", slice: "0x10000", interval: ["0x400", "0x7FF"]} ]  # 400
+
       - name: done
         field_type: DEC
         start_bit: 11
         size: 1
-        description: "For LOAD opcodes, switches the read bank for SRCS for subsequent LOADS. For STORE opcodes, switches the write bank for SRCS for subsequent STOREs. This bit should not be set when using Dest."
+        description: >
+          If this bit is set and this instruction targets SrcS, the SrcS read bank ID and dvalid will toggle when this instruction is issued.
+          If this bit is set and this instruction targets Dest, setting this bit does nothing.
         fcov_point_bool:
+
       - name: sfpu_addr_mode
         field_type: BIN
         start_bit: 13
         size: 3
-        description: 3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        description: "3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode.  ADDR_MOD_REG updates are only applied for accesses targeting Dest."
         fcov_point_bin_interval:
           bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x3"]},
                   {name: "top_half", slice: "0x10000",  interval: ["0x4","0x7"]} ]
+
       - name: instr_mod0
         field_type: DEC
         start_bit: 16
         size: 4
         description: >
-            instruction modifier:
-              DEFAULT       4'b0000
-              FP16A         4'b0001
-              FP16B         4'b0010
-              FP32          4'b0011
-              INT32         4'b0100
-              INT32_COMP    4'b1100
-              INT8          4'b0101
-              INT8_COMP     4'b1101
-              LO16          4'b0110
-              LO16_ONLY     4'b1110
-              HI16          4'b0111
-              HI16_ONLY     4'b1111
-        fcov_point_bins:  # fixme: filter at p2
+          SrcS/Dest Register file format:
+            DEFAULT       4'b0000
+            FP16A         4'b0001
+            FP16B         4'b0010
+            FP32          4'b0011
+            INT32         4'b0100
+            INT8          4'b0101
+            UINT16        4'b0110
+            HI16          4'b0111
+            INT16         4'b1000
+            LO16          4'b1001
+            STACK_MODE    4'b1010
+            UINT8         4'b1011
+            LO16_ONLY     4'b1110
+            HI16_ONLY     4'b1111
+        fcov_point_bins:
           bins: [ {name: "def",         value: "0b0000"},
                   {name: "fp16a",       value: "0b0001"},
                   {name: "fp16b",       value: "0b0010"},
                   {name: "fp32",        value: "0b0011"},
                   {name: "int32",       value: "0b0100"},
-                  {name: "int32_comp",  value: "0b1100"},
                   {name: "int8",        value: "0b0101"},
-                  {name: "int8_comp",   value: "0b1101"},
+                  {name: "uint16",      value: "0b0111"},
+                  {name: "hi16",        value: "0b0111"},
+                  {name: "int16",       value: "0b0110"},
                   {name: "lo16",        value: "0b0110"},
-                  {name: "hi16",        value: "0b1111"} ]
+                  {name: "stack",       value: "0b0110"},
+                  {name: "uint8",       value: "0b0110"},
+                  {name: "lo16_only",   value: "0b1111"},
+                  {name: "hi16_only",   value: "0b1111"} ]
+
       - name: lreg_ind
         field_type: DEC
         start_bit: 20
@@ -5622,7 +5592,8 @@ SFPLOAD:
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
                   {name: "top", value: "0xF"} ]
-    description: "sFPU load from dest regs"
+
+    description: "sFPU load from SrcS or Dest regs"
 
 SFPLOADI:
     op_binary: 0x71
@@ -5631,20 +5602,36 @@ SFPLOADI:
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: &SFPU_MEMI
+    arguments:
       - name: imm16
         field_type: DEC
         start_bit: 0
         size: 16
         description: immediate op
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0000","0x7FFF"]},
                   {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+
       - name: instr_mod0
         field_type: DEC
         start_bit: 16
         size: 4
-        description: instruction modifier   # FIXME: fcov
+        description: >
+          Immediate format:
+            FP16B         4'b0000
+            FP16A         4'b0001
+            UINT16        4'b0010
+            INT16         4'b0100
+            HI16_ONLY     4'b1000
+            LO16_ONLY     4'b1010
+        fcov_point_bins:
+          bins: [ {name: "fp16b",       value: "0b0000"},
+                  {name: "fp16a",       value: "0b0001"},
+                  {name: "uint16",      value: "0b0010"},
+                  {name: "int16",       value: "0b0100"},
+                  {name: "hi16_only",   value: "0b1000"},
+                  {name: "lo16_only",   value: "0b1010"} ]
+
       - name: lreg_ind
         field_type: DEC
         start_bit: 20
@@ -5653,7 +5640,8 @@ SFPLOADI:
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
                   {name: "top", value: "0xF"} ]
-    description: "sFPU load immediate operand in half-float format"
+
+    description: "sFPU load immediate operand"
 
 SFPSTORE:
     op_binary: 0x72
@@ -5662,31 +5650,70 @@ SFPSTORE:
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: *SFPU_MEM
-    description: "sFPU store to dest"
-
-SFPLUT:
-    op_binary: 0x73
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: &SFPU_LUT
+    arguments:
       - name: dest_reg_addr
         field_type: DEC
         start_bit: 0
-        size: 16
-        description: dest regs addr
+        size: 11
+        description: "Register file write address.  Bit 10 is the SrcS (1) vs. Dest (0) select.  Bit 1 is the even (0) vs. odd (1) column select.  Bit 0 is reserved and must be 0."
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+          bins: [ {name: "bot_half", slice: "0x10000", interval: ["0x000", "0x3FF"]},   # 3FF
+                  {name: "top_half", slice: "0x10000", interval: ["0x400", "0x7FF"]} ]  # 400
+
+      - name: done
+        field_type: DEC
+        start_bit: 11
+        size: 1
+        description: >
+          If this bit is set and this instruction targets SrcS, the SrcS write bank ID and dvalid will toggle when this instruction is issued.
+          If this bit is set and this instruction targets Dest, the Dest bank ID and dvalids will toggle when this instruction is issued.
+        fcov_point_bool:
+
+      - name: sfpu_addr_mode
+        field_type: BIN
+        start_bit: 13
+        size: 3
+        description: "3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode.  ADDR_MOD_REG updates are only applied for accesses targeting Dest."
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x3"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x4","0x7"]} ]
+
       - name: instr_mod0
         field_type: DEC
         start_bit: 16
         size: 4
-        # fixme: fcov
-        description: instruction modifier
+        description: >
+            SrcS/Dest Register file format:
+              DEFAULT       4'b0000
+              FP16A         4'b0001
+              FP16B         4'b0010
+              FP32          4'b0011
+              INT32         4'b0100
+              INT8          4'b0101
+              UINT16        4'b0110
+              HI16          4'b0111
+              INT16         4'b1000
+              LO16          4'b1001
+              STACK_MODE    4'b1010
+              UINT8         4'b1011
+              LO16_ONLY     4'b1110
+              HI16_ONLY     4'b1111
+        fcov_point_bins:
+          bins: [ {name: "def",         value: "0b0000"},
+                  {name: "fp16a",       value: "0b0001"},
+                  {name: "fp16b",       value: "0b0010"},
+                  {name: "fp32",        value: "0b0011"},
+                  {name: "int32",       value: "0b0100"},
+                  {name: "int8",        value: "0b0101"},
+                  {name: "uint16",      value: "0b0111"},
+                  {name: "hi16",        value: "0b0111"},
+                  {name: "int16",       value: "0b0110"},
+                  {name: "lo16",        value: "0b0110"},
+                  {name: "stack",       value: "0b0110"},
+                  {name: "uint8",       value: "0b0110"},
+                  {name: "lo16_only",   value: "0b1111"},
+                  {name: "hi16_only",   value: "0b1111"} ]
+
       - name: lreg_ind
         field_type: DEC
         start_bit: 20
@@ -5695,314 +5722,120 @@ SFPLUT:
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
                   {name: "top", value: "0xF"} ]
-    description: "sFPU table look-up instruction; this is a two cycle operation "
 
-SFPMULI:
-    op_binary: 0x74
+    description: "sFPU store to SrcS or Dest regs"
+
+SFPLOADMACRO:
+    op_binary: 0x93
     ex_resource: SFPU
     ttsync_resource: OTHERS
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: &SFPU_MATHI16
-      - name: instr_mod1 # FIXME: fcov
+    arguments:
+      - name: lreg_ind_hi
         field_type: DEC
         start_bit: 0
-        size: 4
-        description: instruction modifier
-      - name: lreg_dest
-        field_type: DEC
-        start_bit: 4
-        size: 4
-        description: lreg dest index
+        size: 1
+        description: lreg index bit 2 (bit 3 tied to 0)
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: imm16_math
+                  {name: "top", value: "0x1"} ]
+
+      - name: dest_reg_addr
         field_type: DEC
-        start_bit: 8
-        size: 16
-        description: immediate 16bit operand
+        start_bit: 1
+        size: 10
+        description: "Register file read address bits [10:1].  Bit 10 is the SrcS (1) vs. Dest (0) select.  Bit 1 is the even (0) vs. odd (1) column select.  Bit 0 is implied to be 0."
         fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
-    description: "sFPU math instruction multiply-add with immediate operand in 12bit (exp/man) format; this is a two cycle operation "
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x1FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x200","0x3FF"]} ]
 
-SFPADDI:
-    op_binary: 0x75
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI16  # fixme: fcov fixme from import
-    description: "sFPU math instruction add with immediate 16bit operand; this is a two cycle operation "
-
-SFPDIVP2:
-    op_binary: 0x76
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: &SFPU_MATHI12
-      - name: instr_mod1 # FIXME: fcov
+      - name: done
         field_type: DEC
-        start_bit: 0
-        size: 4
-        description: instruction modifier; for SFPAND and SPFOR when instrn_mod1[0] is set imm12_math[3:0] specifies lreg_b
-      - name: lreg_dest
-        field_type: DEC
-        start_bit: 4
-        size: 4
-        description: lreg dest index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: lreg_c
-        field_type: DEC
-        start_bit: 8
-        size: 4
-        description: lreg src_c index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: imm12_math
-        field_type: DEC
-        start_bit: 12
-        size: 12
-        description: immediate 12bit operand
-        # fixme: fcov
-    description: "sFPU math instruction ??"
+        start_bit: 11
+        size: 1
+        description: >
+          If this bit is set and this instruction targets SrcS, the SrcS read bank ID and dvalid will toggle when this instruction is issued.
+          If this bit is set and this instruction targets Dest, the Dest bank ID and dvalids will toggle when the selected LOADMACRO sequence completes.
+        fcov_point_bool:
 
-SFPEXEXP:
-    op_binary: 0x77
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12  # fixme: fcov from import
-    description: "sFPU math instruction extend exponent"
+      - name: sfpu_addr_mode
+        field_type: BIN
+        start_bit: 13
+        size: 3
+        description: "3-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode.  ADDR_MOD_REG updates are only applied for accesses targeting Dest."
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x3"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x4","0x7"]} ]
 
-SFPEXMAN:
-    op_binary: 0x78
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12  # fixme: fcov from import
-    description: "sFPU math instruction extend mantissa"
-
-SFPIADD:
-    op_binary: 0x79
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction ???"
-
-SFPSHFT:
-    op_binary: 0x7A
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    arguments: *SFPU_MATHI12  # fixme: fcov from import
-    description: "sFPU math instruction shift"
-
-SFPSETCC:
-    op_binary: 0x7B
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12  # fixme: fcov from import
-    description: "sFPU math instruction to manipulate conditional code"
-
-SFPMOV:
-    op_binary: 0x7C
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12  # fixme: fcov from import
-    description: "sFPU math instruction move (imod[0]=1: invert sign)"
-
-SFPABS:
-    op_binary: 0x7D
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12  # fixme: fcov from import
-    description: "sFPU math instruction absolute value"
-
-SFPAND:
-    op_binary: 0x7E
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction AND"
-
-SFPOR:
-    op_binary: 0x7F
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction OR"
-
-SFPNOT:
-    op_binary: 0x80
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction NOT"
-
-SFPLZ:
-    op_binary: 0x81
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import # fixme: fcov from import
-    description: "sFPU math instruction find leading zeros"
-
-SFPSETEXP:
-    op_binary: 0x82
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction find leading zeros"
-
-SFPSETMAN:
-    op_binary: 0x83
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction find leading zeros"
-
-SFPMAD:
-    op_binary: 0x84
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: &SFPU_MATH
-      - name: instr_mod1
-        field_type: DEC
-        start_bit: 0
-        size: 4
-        description: "instruction modifier :
-                          bit[3] : use value in lreg[7][3:0] as a pointer to the destination lreg
-                          bit[2] : use value in lreg[7][3:0] as a pointer to the src_a       lreg"
-        # fixme: fcov
-      - name: lreg_dest
-        field_type: DEC
-        start_bit: 4
-        size: 4
-        description: lreg dest index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: lreg_src_c
-        field_type: DEC
-        start_bit: 8
-        size: 4
-        description: lreg src_c index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: lreg_src_b
-        field_type: DEC
-        start_bit: 12
-        size: 4
-        description: lreg src_b index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: lreg_src_a
+      - name: instr_mod0
         field_type: DEC
         start_bit: 16
-        size: 8
-        description: lreg src_a index
+        size: 4
+        description: >
+            SrcS/Dest Register file format:
+              DEFAULT       4'b0000
+              FP16A         4'b0001
+              FP16B         4'b0010
+              FP32          4'b0011
+              INT32         4'b0100
+              INT8          4'b0101
+              UINT16        4'b0110
+              HI16          4'b0111
+              INT16         4'b1000
+              LO16          4'b1001
+              STACK_MODE    4'b1010
+              UINT8         4'b1011
+              LO16_ONLY     4'b1110
+              HI16_ONLY     4'b1111
+        fcov_point_bins:
+          bins: [ {name: "def",         value: "0b0000"},
+                  {name: "fp16a",       value: "0b0001"},
+                  {name: "fp16b",       value: "0b0010"},
+                  {name: "fp32",        value: "0b0011"},
+                  {name: "int32",       value: "0b0100"},
+                  {name: "int8",        value: "0b0101"},
+                  {name: "uint16",      value: "0b0111"},
+                  {name: "hi16",        value: "0b0111"},
+                  {name: "int16",       value: "0b0110"},
+                  {name: "lo16",        value: "0b0110"},
+                  {name: "stack",       value: "0b0110"},
+                  {name: "uint8",       value: "0b0110"},
+                  {name: "lo16_only",   value: "0b1111"},
+                  {name: "hi16_only",   value: "0b1111"} ]
+
+      - name: lreg_ind_lo
+        field_type: DEC
+        start_bit: 20
+        size: 2
+        description: lreg index bits 1:0
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-    description: "sFPU math instruction multiply-add; this is a two cycle operation "
+                  {name: "top", value: "0x3"} ]
 
-SFPADD:
-    op_binary: 0x85
+      - name: seq_id
+        field_type: DEC
+        start_bit: 22
+        size: 2
+        description: LOADMACRO sequence ID to run
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0x3"} ]
+
+    description: "sFPU load from SrcS or Dest regs and then run the macro specified in seq_id"
+
+################################################################################
+# SFPU Condition Code Manipulation Instructions
+################################################################################
+SFPCOMPC:
+    op_binary: 0x8B
     ex_resource: SFPU
     ttsync_resource: OTHERS
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: *SFPU_MATH # fixme: fcov from import
-    description: "sFPU math instruction add; this is a two cycle operation  "
-
-SFPMUL:
-    op_binary: 0x86
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATH # fixme: fcov from import
-    description: "sFPU math instruction multiply; this is a two cycle operation  "
-
-SFPPUSHC:
-    op_binary: 0x87
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU instruction to push CC flag to stack"
-
-SFPPOPC:
-    op_binary: 0x88
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU instruction to pop CC flag from stack and make it active"
-
-SFPSETSGN:
-    op_binary: 0x89
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction set sign"
+    description: "sFPU complement or clear CC Result register"
 
 SFPENCC:
     op_binary: 0x8A
@@ -6011,38 +5844,207 @@ SFPENCC:
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction to manipulate enable/disable"
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Bit 3 acts as the CC Result source select: (0) constant 1, (1) imm12_math[1].
+          Bits 1:0 acts as the CC Enable source select: (0) retain previous value, (1) inverse of previous value, (2) imm12_math[0], (3) Reserved.
+        fcov_point_bins:
+          bins: [ {name: "one_keep", value: "0x0"},
+                  {name: "one_inv",  value: "0x1"},
+                  {name: "ome_imm",  value: "0x2"},
+                  {name: "imm_keep", value: "0x8"},
+                  {name: "imm_inv",  value: "0x9"},
+                  {name: "imm_imm",  value: "0xA"} ]
 
-SFPCOMPC:
-    op_binary: 0x8B
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: Optional immediate source for CC Result/Enable.
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x1"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x2","0x3"]} ]
+
+    description: "sFPU enable/disable Conditional Execution mode"
+
+SFPPOPC:
+    op_binary: 0x88
     ex_resource: SFPU
     ttsync_resource: OTHERS
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction to manipulate enable/disable"
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier
+            0x0: normal pop from the top of stack
+            0x1: peek from the top of the stack
+            0x2: peek from the top of the stack, inverting CC Result
+            0x3: peek from the top of the stack, AND-ing     stack CC Result to     current CC Result
+            0x4: peek from the top of the stack, OR-ing      stack CC Result to     current CC Result
+            0x5: peek from the top of the stack, AND-ing     stack CC Result to NOT current CC Result
+            0x6: peek from the top of the stack, OR-ing      stack CC Result to NOT current CC Result
+            0x7: peek from the top of the stack, AND-ing NOT stack CC Result to     current CC Result
+            0x8: peek from the top of the stack, OR-ing  NOT stack CC Result to     current CC Result
+            0x9: peek from the top of the stack, AND-ing NOT stack CC Result to NOT current CC Result
+            0xA: peek from the top of the stack, OR-ing  NOT stack CC Result to NOT current CC Result
+            0xB: peek from the top of the stack, XOR-ing     stack CC Result to     current CC Result
+            0xC: peek from the top of the stack, XNOR-ing    stack CC Result to     current CC Result
+            0xD: set current CC enable to 0 and CC Result to 0
+            0xE: set current CC enable to 1 and CC Result to 1
+            0xF: set current CC enable to 1 and CC Result to 0
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
 
-SFPTRANSP:
-    op_binary: 0x8C
+    description: "sFPU pop from CC stack"
+
+SFPPUSHC:
+    op_binary: 0x87
     ex_resource: SFPU
     ttsync_resource: OTHERS
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction transpose registers"
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier
+            0x0: normal push to the top of stack
+            0x1: replace the top of the stack with the current CC Enable and     current CC Result
+            0x2: replace the top of the stack with the current CC Enable and NOT current CC Result
+            0x3: replace the top of the stack with the current CC Enable and     stack CC Result AND     current CC Result
+            0x4: replace the top of the stack with the current CC Enable and     stack CC Result OR      current CC Result
+            0x5: replace the top of the stack with the current CC Enable and     stack CC Result AND NOT current CC Result
+            0x6: replace the top of the stack with the current CC Enable and     stack CC Result OR  NOT current CC Result
+            0x7: replace the top of the stack with the current CC Enable and NOT stack CC Result AND     current CC Result
+            0x8: replace the top of the stack with the current CC Enable and NOT stack CC Result OR      current CC Result
+            0x9: replace the top of the stack with the current CC Enable and NOT stack CC Result AND NOT current CC Result
+            0xA: replace the top of the stack with the current CC Enable and NOT stack CC Result OR  NOT current CC Result
+            0xB: replace the top of the stack with the current CC Enable and     stack CC Result XOR     current CC Result
+            0xC: replace the top of the stack with the current CC Enable and     stack CC Result XNOR    current CC Result
+            0xD: replace the top of the stack with the current CC Enable and NOT current CC Result, additionally invert the current CC Result
+            0xE: replace the CC enable and CC Result at the top of the stack with 1 and 1, respectively
+            0xF: replace the CC enable and CC Result at the top of the stack with 1 and 0, respectively
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
 
-SFPXOR:
-    op_binary: 0x8D
+    description: "sFPU push to CC stack"
+
+SFPSETCC:
+    op_binary: 0x7B
     ex_resource: SFPU
     ttsync_resource: OTHERS
     instrn_type: SFPU
     src_mask: 0x0
     fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction XOR"
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier
+            0x0: Set CC Result to 1 if src_c is negative, 0 otherwise
+            0x1: Set CC Result to imm12_math[0]
+            0x2: Set CC Result to 1 if src_c is not zero, 0 otherwise
+            0x4: Set CC Result to 1 if src_c is positive, 0 otherwise
+            0x6: Set CC Result to 1 if src_c is zero, 0 otherwise
+            0x8: Invert the current CC Result value
+        fcov_point_bins:
+          bins: [ {name: "neg_test",   value: "0x0"},
+                  {name: "imm_set",    value: "0x1"},
+                  {name: "nzero_test", value: "0x2"},
+                  {name: "pos_test",   value: "0x4"},
+                  {name: "zero_test",  value: "0x6"},
+                  {name: "invert",     value: "0x8"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: >
+          Bit 0 can be used to set the CC result when instr_mod1 is 0x1.
+          Bit 11 is an extension of the instr_mod1 field and indicates if src_c should be interpreted as (0) an INT32 (two's-complement) value or (1) a FP32/SMAG32 value.
+        fcov_point_bins:
+          bins: [ {name: "z_z", value: "0x000"},
+                  {name: "z_o", value: "0x001"},
+                  {name: "o_z", value: "0x800"},
+                  {name: "o_o", value: "0x801"} ]
+
+    description: "sFPU manipulate CC Result based on LREG state"
+
+################################################################################
+# SFPU Format Conversion Instructions
+################################################################################
+SFPCAST:
+    op_binary: 0x90
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier
+            0x0: int32 -> fp32 (nearest even)
+            0x1: int32 -> fp32 (stochastically)
+            0x2: int322s-> Sign Mag
+            0x3: int sign mag -> int32 2s
+            0x4: fp32 -> int32 (nearest even)
+            0x5: fp32 -> int32 (stochastically)
+        fcov_point_bins:
+          bins: [ {name: "int32_to_fp32_neven",  value: "0x0"},
+                  {name: "int32_to_fp32_stoch",  value: "0x1"},
+                  {name: "int32_to_fsm",         value: "0x2"},
+                  {name: "int32_sm_to_int32",    value: "0x3"},
+                  {name: "fp32_to_int32_neven",  value: "0x4"},
+                  {name: "fp32_to_int32_stoch",  value: "0x5"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index - src_c provides the value to be cast
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU typecast LREGs between various 32-bit formats"
 
 SFP_STOCH_RND:
     op_binary: 0x8E
@@ -6058,24 +6060,27 @@ SFP_STOCH_RND:
         size: 4
         description: >
             instruction modifier bits [2:0]:
-                fp32->fp16_a          - 0x0;
-                fp32->fp16_b          - 0x1;
-                fp32->unsigned  int8  - 0x2;
-                fp32->signed    int8  - 0x3;
-                int32->unsigned int8  - 0x4;
-                int32->signed   int8  - 0x5;
-                fp32->unsigned  int16 - 0x6;
-                fp32->signed    int16 - 0x7;
-                instruction modifier bit 3 : use immediate in place of srcb
+              0x0: fp32->fp16_a
+              0x1: fp32->fp16_b
+              0x2: fp32->unsigned  int8
+              0x3: fp32->signed    int8
+              0x4: int32->unsigned int8
+              0x5: int32->signed   int8
+              0x6: fp32->unsigned  int16
+              0x7: fp32->signed    int16
+            instruction modifier bit 3 : use immediate in place of srcb for int descaling
         fcov_point_bins:
-            bins: [ {name: "fp32_to_fp16_a",     value: "0x0"},
-                    {name: "fp32_to_fp16_b",  value: "0x1"},
-                    {name: "fp32_to_uint8",  value: "0x2"},
-                    {name: "fp32_to_sint8", value: "0x3"},
-                    {name: "int32_to_uint8", value: "0x4"},
-                    {name: "int32_to_sint8", value: "0x5"},
-                    {name: "fp32_to_uint16", value: "0x6"},
-                    {name: "fp32_to_sint16", value: "0x7"}]
+            bins: [ {name: "fp32_to_fp16_a",      value: "0x0"},
+                    {name: "fp32_to_fp16_b",      value: "0x1"},
+                    {name: "fp32_to_uint8",       value: "0x2"},
+                    {name: "fp32_to_sint8",       value: "0x3"},
+                    {name: "int32_to_uint8_srcb", value: "0x4"},
+                    {name: "int32_to_sint8_srcb", value: "0x5"},
+                    {name: "fp32_to_uint16",      value: "0x6"},
+                    {name: "fp32_to_sint16",      value: "0x7"},
+                    {name: "int32_to_uint8_imm",  value: "0xC"},
+                    {name: "int32_to_sint8_imm",  value: "0xD"} ]
+
       - name: lreg_dest
         field_type: DEC
         start_bit: 4
@@ -6084,7 +6089,8 @@ SFP_STOCH_RND:
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
                   {name: "top", value: "0xF"} ]
-      - name: lreg_src_c
+
+      - name: lreg_c
         field_type: DEC
         start_bit: 8
         size: 4
@@ -6092,32 +6098,1461 @@ SFP_STOCH_RND:
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
                   {name: "top", value: "0xF"} ]
-      - name: lreg_src_b
+
+      - name: lreg_b
         field_type: DEC
         start_bit: 12
         size: 4
-        description: lreg src_b index - src_b[4:0] provides 5-bit descale value for rounding to int8
+        description: lreg src_b index - src_b[4:0] provides 5-bit descale value for rounding to int8 from int32
         fcov_point_bins:
           bins: [ {name: "bot", value: "0x0"},
                   {name: "top", value: "0xF"} ]
+
       - name: imm8_math
         field_type: DEC
         start_bit: 16
         size: 5
-        description: immediate 8bit operand to provide descale value in place of src_b when instr_mod bit 3 is set
+        description: immediate 5-bit operand to provide descale value in place of src_b when instr_mod bit 3 is set
         fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
+          bins: [ {name: "bot", value: "0x00"},
+                  {name: "top", value: "0x1F"} ]
+
       - name: rnd_mode
         field_type: BIN
         start_bit: 21
         size: 3
-        description: "Select the rounding mode - 0: Round to Nearest even; 1: Round Stochastically; 2: Round to zero"
+        description: >
+          Rounding mode select
+            0x0: Round to Nearest, Ties to Even
+            0x1: Round Stochastically
+            0x2: Round to Zero
         fcov_point_bins:
           bins: [ {name: "ne", value: "0x0"},
                   {name: "st", value: "0x1"},
                   {name: "tz", value: "0x2"} ]
-    description: "sFPU math instruction to stochastically round a given value"
+
+    description: "sFPU convert an LREG value to a smaller format and round"
+
+################################################################################
+# SFPU Simple Arithmetic Instructions
+################################################################################
+SFPABS:
+    op_binary: 0x7D
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bits 3:1:
+            Reserved, must always be 0
+
+          Instruction Modifier bit 0:
+            0: Take the absolute value for 2's complement data
+            1: Take the absolute value for sign-magnitude/floating-point data
+        fcov_point_bins:
+          bins: [ {name: "int32", value: "0x0"},
+                  {name: "fp32",  value: "0x1"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index - src_c provides the value to be cast
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU compute absolute value"
+
+SFPGT:
+    op_binary: 0x97
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_CMP
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Do not write anything to lreg_dest
+            1: Fill lreg_dest with all 1s if the comparison is true, and 0s otherwise
+
+          Instruction Modifier bit 2:
+            0: If updating the top of the CC stack, the comparison result is AND-ed with the current Result bit on the top of the stack
+            1: If updating the top of the CC stack, the comparison result is OR-ed  with the current Result bit on the top of the stack
+
+          Instruction Modifier bit 1:
+            0: Do not update the CC Stack
+            1: modify the top of the CC Stack with the result of the comparison
+
+          Instruction Modifier bit 0:
+            0: Do not update the current CC Result
+            1: Replace the current CC Result with the result of the comparison
+        fcov_point_bins:
+          bins: [ {name: "kd_dc_ks_kr",  value: "0x0"},
+                  {name: "kd_dc_ks_ur",  value: "0x1"},
+                  {name: "kd_and_us_kr", value: "0x2"},
+                  {name: "kd_and_us_ur", value: "0x3"},
+                  {name: "kd_or_us_kr",  value: "0x6"},
+                  {name: "kd_or_us_ur",  value: "0x7"},
+                  {name: "ud_dc_ks_kr",  value: "0x8"},
+                  {name: "ud_dc_ks_ur",  value: "0x9"},
+                  {name: "ud_and_us_kr", value: "0xA"},
+                  {name: "ud_and_us_ur", value: "0xB"},
+                  {name: "ud_or_us_kr",  value: "0xE"},
+                  {name: "ud_or_us_ur",  value: "0xF"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: >
+          Extension of the instr_mod1 field.
+          bits 11:1:
+            Reserved, must always be 0
+
+          bit 0:
+            0: Perform the comparison interpreting the source registers as 2's complement int32 values
+            1: Perform the comparison interpreting the source registers as fp32 values
+        fcov_point_bins:
+          bins: [ {name: "int32", value: "0x0"},
+                  {name: "fp32",  value: "0x1"} ]
+
+    description: "sFPU test for B greater than C"
+
+SFPIADD:
+    op_binary: 0x79
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: CC Result sense is preserved
+            1: CC Result sense is inverted
+
+          Instruction Modifier bit 2:
+            0: CC Result is updated based on the sign of the operation result
+            1: CC Result is not modified based on the operation result
+
+          Instruction Modifier bit 1:0:
+            0x0: lreg_dest = lreg_c + lreg_b
+            0x1: lreg_dest = lreg_c + imm12_math
+            0x2: lreg_dest = lreg_c - lreg_b
+        fcov_point_bins:
+          bins: [ {name: "ps_kr_rra", value: "0x0"},
+                  {name: "ps_kr_ria", value: "0x1"},
+                  {name: "ps_kr_rrs", value: "0x2"},
+                  {name: "ps_ur_rra", value: "0x4"},
+                  {name: "ps_ur_ria", value: "0x5"},
+                  {name: "ps_ur_rrs", value: "0x6"},
+                  {name: "is_kr_rra", value: "0x8"},
+                  {name: "is_kr_ria", value: "0x9"},
+                  {name: "is_kr_rrs", value: "0xA"},
+                  {name: "is_ur_rra", value: "0xC"},
+                  {name: "is_ur_ria", value: "0xD"},
+                  {name: "is_ur_rrs", value: "0xE"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: 2's complement immediate operand
+
+    description: "sFPU 2's complement integer addition"
+
+SFPLE:
+    op_binary: 0x96
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_CMP
+    description: "sFPU test for B less than or equal to C"
+
+SFPNONLINEAR:
+    op_binary: 0x99
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier:
+            0x0: Compute the approximate reciprocal of lreg_c
+            0x1: Compute the approximate reciprocal of lreg_c when lreg_c is negative, otherwise return lreg_c
+            0x2: Compute ReLU(lreg_c)
+            0x3: Compute the approximate square root of lreg_c
+            0x4: Compute the approximate exponential (exp) of lreg_c
+            0x5: Compute the approximate hyperbolic tangent (tanh) of lreg_c
+        fcov_point_bins:
+          bins: [ {name: "recip",     value: "0x0"},
+                  {name: "recip_neg", value: "0x1"},
+                  {name: "relu",      value: "0x2"},
+                  {name: "sqrt",      value: "0x3"},
+                  {name: "exp",       value: "0x4"},
+                  {name: "tanh",      value: "0x5"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU math instruction nonlinear estimators"
+
+SFPSHFT:
+    op_binary: 0x7A
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            Reserved, must always be 0
+
+          Instruction Modifier bit 2:
+            0: Use lreg_b as the input data
+            1: Use lreg_c as the input data
+
+          Instruction Modifier bit 1:
+            0: Perform a logical shift
+            1: Perform an arithmetic shift
+
+          Instruction Modifier bit 0:
+            0: Shift amount is specified by lreg_c
+            1: Shift amount is specified by imm12_math
+        fcov_point_bins:
+          bins: [ {name: "db_ls_ac", value: "0x0"},
+                  {name: "db_ls_ai", value: "0x1"},
+                  {name: "db_as_ac", value: "0x2"},
+                  {name: "db_as_ai", value: "0x3"},
+                  {name: "dc_ls_ac", value: "0x4"},
+                  {name: "dc_ls_ai", value: "0x5"},
+                  {name: "dc_as_ac", value: "0x6"},
+                  {name: "dc_as_ai", value: "0x7"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: 2's complement shift amount
+
+    description: "sFPU bit shift - positive values shift to the left and negative values shift to the right"
+
+SFPSWAP:
+    op_binary: 0x92
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier:
+            0x0: Unconditional swap
+            0x1: Conditional swap
+            0x2: Conditional swap with swap direction inverted on rows 2 and 3
+            0x3: Conditional swap with swap direction inverted on rows 1 and 3
+            0x4: Conditional swap with swap direction inverted on rows 1 and 2
+            0x5: Conditional swap with swap direction inverted on rows 1, 2 and 3
+            0x6: Conditional swap with swap direction inverted on rows 0, 2 and 3
+            0x7: Conditional swap with swap direction inverted on rows 0, 1 and 3
+            0x8: Conditional swap with swap direction inverted on rows 0, 1 and 2
+        fcov_point_bins:
+          bins: [ {name: "m0", value: "0x0"},
+                  {name: "m1", value: "0x1"},
+                  {name: "m2", value: "0x2"},
+                  {name: "m3", value: "0x3"},
+                  {name: "m4", value: "0x4"},
+                  {name: "m5", value: "0x5"},
+                  {name: "m6", value: "0x6"},
+                  {name: "m7", value: "0x7"},
+                  {name: "m8", value: "0x8"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: >
+          Extension of the instr_mod1 field.
+          bits 11:1:
+            Reserved, must always be 0
+
+          bit 0:
+            0: Perform the comparison interpreting the source registers as 2's complement int32 values
+            1: Perform the comparison interpreting the source registers as fp32 values
+        fcov_point_bins:
+          bins: [ {name: "int32", value: "0x0"},
+                  {name: "fp32",  value: "0x1"} ]
+
+    description: "sFPU math instruction to swap the values in two registers, placing the smaller operand in lreg_dest and the larger operand in lreg_c ; this is a two cycle operation"
+
+################################################################################
+# SFPU Bit Manipulation Instructions
+################################################################################
+SFPAND:
+    op_binary: 0x7E
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU bitwise AND"
+
+SFPDIVP2:
+    op_binary: 0x76
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier:
+            0: Replace the exponent of src_c with imm12_math[7:0]
+            1: Add imm12_math[8:0], interpreted as a 2's complement signed value to the exponent of src_c
+        fcov_point_bins:
+          bins: [ {name: "rpl", value: "0x0"},
+                  {name: "add", value: "0x1"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: immediate 12bit operand
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x0FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x100","0x1FF"]} ]
+
+    description: "sFPU divide floating point number by a power of 2"
+
+SFPEXEXP:
+    op_binary: 0x77
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Preserve CC Result Sense
+            1: Invert CC Result Sense
+
+          Instruction Modifier bit 2:
+            Reserved, must always be 0
+
+          Instruction Modifier bit 1:
+            0: CC Result is updated based on the sign of the extracted exponent
+            1: CC Result is not modified based on the operation result
+
+          Instruction Modifier bit 0:
+            0: Extracts the exponent in unbiased form
+            1: Extracts the exponent in biased form
+        fcov_point_bins:
+          bins: [ {name: "psv_mod_ub",  value: "0x0"},
+                  {name: "psv_mod_b",   value: "0x1"},
+                  {name: "psv_keep_ub", value: "0x2"},
+                  {name: "psv_keep_b",  value: "0x3"},
+                  {name: "inv_mod_ub",  value: "0x8"},
+                  {name: "inv_mod_b",   value: "0x9"},
+                  {name: "inv_keep_ub", value: "0xA"},
+                  {name: "inv_keep_b",  value: "0xB"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU extract floating-point exponent field"
+
+SFPEXMAN:
+    op_binary: 0x78
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bits 3:1:
+
+          Instruction Modifier bit 0:
+            0: Include hidden mantissa bit in the extracted value
+            1: Exclude hidden mantissa bit in the extracted value
+        fcov_point_bins:
+          bins: [ {name: "unhide", value: "0x0"},
+                  {name: "hide",   value: "0x1"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU extract floating-point mantissa field"
+
+SFPLZ:
+    op_binary: 0x81
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Preserve CC Result Sense
+            1: Invert CC Result Sense
+
+          Instruction Modifier bit 2:
+            0: Include MSB when counting zeros
+            1: Mask the MSB to 0 before counting zeros
+
+          Instruction Modifier bit 1:
+            0: CC Result is not modified based on the operation result
+            1: CC Result is updated based on the zero count
+
+          Instruction Modifier bit 0:
+            Reserved, must always be 0
+        fcov_point_bins:
+          bins: [ {name: "psv_keep_ret", value: "0x0"},
+                  {name: "psv_keep_upd", value: "0x2"},
+                  {name: "psv_mask_ret", value: "0x4"},
+                  {name: "psv_mask_upd", value: "0x6"},
+                  {name: "inv_keep_ret", value: "0x8"},
+                  {name: "inv_keep_upd", value: "0xA"},
+                  {name: "inv_mask_ret", value: "0xC"},
+                  {name: "inv_mask_upd", value: "0xE"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU count leading zeros"
+
+SFPNOT:
+    op_binary: 0x80
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU bitwise NOT"
+
+SFPOR:
+    op_binary: 0x7F
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU bitwise OR"
+
+SFPSETEXP:
+    op_binary: 0x82
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bits 3:2:
+            Reserved, must always be 0
+
+          Instruction Modifier bits 1:0:
+            0x0: new exponent is taken from src_b bits 7:0
+            0x1: new exponent is taken from imm12_math bits 7:0
+            0x2: new exponent is taken from the exponent of src_b (bits 30:23)
+
+        fcov_point_bins:
+          bins: [ {name: "srcb_lo",  value: "0x0"},
+                  {name: "imm",      value: "0x1"},
+                  {name: "srcb_exp", value: "0x2"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: Immediate source for new exponent
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+
+    description: "sFPU set floating-point exponent field"
+
+SFPSETMAN:
+    op_binary: 0x83
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bits 3:1:
+            Reserved, must always be 0
+
+          Instruction Modifier bit 0:
+            0: new mantissa is taken from the mantissa of src_b
+            1: new mantissa MSBs are taken from the imm12_math, LSBs are zero filled
+
+        fcov_point_bins:
+          bins: [ {name: "srcb", value: "0x0"},
+                  {name: "imm",  value: "0x1"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: Immediate source for new mantissa
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+
+    description: "sFPU set floating-point mantissa field"
+
+SFPSETSGN:
+    op_binary: 0x89
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bits 3:1:
+            Reserved, must always be 0
+
+          Instruction Modifier bit 0:
+            0: new sign is taken from the sign bit of src_b
+            1: new sign is taken from imm12_math[0]
+
+        fcov_point_bins:
+          bins: [ {name: "srcb", value: "0x0"},
+                  {name: "imm",  value: "0x1"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: Immediate source for new sign
+        fcov_point_bins:
+          bins: [ {name: "pos", value: "0x0"},
+                  {name: "neg", value: "0x1"} ]
+
+    description: "sFPU set floating-point sign field"
+
+SFPXOR:
+    op_binary: 0x8D
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU bitwise XOR"
+
+################################################################################
+# SFPU MAD Instructions
+################################################################################
+SFPADD:
+    op_binary: 0x85
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_MAD
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Result is written to the LREG with index lreg_dest
+            1: Result is written to the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bit 2:
+            0: src_a is read from the LREG with index lreg_a
+            1: src_a is read from the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bit 1:
+            0: Preserve the sign of src_c before adding
+            1: Invert the sign of src_c before adding
+
+          Instruction Modifier bit 0:
+            0: Preserve the sign of src_a before multiplying
+            1: Invert the sign of src_a before multiplying
+        fcov_point_bins:
+          bins: [ {name: "dd_da_pc_pa", value: "0x0"},
+                  {name: "dd_da_pc_ia", value: "0x1"},
+                  {name: "dd_da_ic_pa", value: "0x2"},
+                  {name: "dd_ia_ic_ia", value: "0x3"},
+                  {name: "dd_ia_pc_pa", value: "0x4"},
+                  {name: "dd_ia_pc_ia", value: "0x5"},
+                  {name: "dd_ia_ic_pa", value: "0x6"},
+                  {name: "dd_da_ic_ia", value: "0x7"},
+                  {name: "id_da_pc_pa", value: "0x8"},
+                  {name: "id_da_pc_ia", value: "0x9"},
+                  {name: "id_da_ic_pa", value: "0xA"},
+                  {name: "id_da_ic_ia", value: "0xB"},
+                  {name: "id_ia_pc_pa", value: "0xC"},
+                  {name: "id_ia_pc_ia", value: "0xD"},
+                  {name: "id_ia_ic_pa", value: "0xE"},
+                  {name: "id_ia_ic_ia", value: "0xF"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_b
+        field_type: DEC
+        start_bit: 12
+        size: 4
+        description: lreg src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_a
+        field_type: DEC
+        start_bit: 16
+        size: 8
+        description: lreg src_a index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU FP32 multiply-add - This is an alias of SFPMAD intended to convey intent that the operation is a pure addition"
+
+
+SFPADDI:
+    op_binary: 0x75
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Result is written to the LREG with index lreg_dest
+            1: Result is written to the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bit 2:
+            0: src_c is read from the LREG with index lreg_dest
+            1: src_c is read from the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bits 1:0:
+            Reserved, must always be 0
+        fcov_point_bins:
+          bins: [ {name: "dd_dc", value: "0x0"},
+                  {name: "dd_ic", value: "0x4"},
+                  {name: "id_dc", value: "0x8"},
+                  {name: "id_ic", value: "0xC"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm16_math
+        field_type: DEC
+        start_bit: 8
+        size: 16
+        description: immediate 16bit operand in FP16_B format
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0000","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+
+    description: "sFPU FP32 add with immediate"
+
+SFPLUT:
+    op_binary: 0x73
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod0
+        field_type: DEC
+        start_bit: 16
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Result is written to the LREG with index lreg_ind
+            1: Result is written to the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bit 2:
+            0: sign of the result is kept from the LUT operation
+            1: sign of the result is overridden with the sign of the input
+
+          Instruction Modifier bits 1:0:
+            Reserved, must always be 0
+        fcov_point_bins:
+          bins: [ {name: "dd_ls", value: "0x0"},
+                  {name: "dd_is", value: "0x4"},
+                  {name: "id_ls", value: "0x8"},
+                  {name: "id_is", value: "0xC"} ]
+
+      - name: lreg_ind
+        field_type: DEC
+        start_bit: 20
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU piecewise linear lookup-table interpolation"
+
+SFPLUTFP32:
+    op_binary: 0x95
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+            0x0: Compute piece-wise linear approximation using FP32 table format                | keep sign from the interpolated result | write result to the LREG at index lreg_dest
+            0x2: Compute piece-wise linear approximation using FP16 6-entry mode 1 table format | keep sign from the interpolated result | write result to the LREG at index lreg_dest
+            0x3: Compute piece-wise linear approximation using FP16 6-entry mode 2 table format | keep sign from the interpolated result | write result to the LREG at index lreg_dest
+            0x4: Compute piece-wise linear approximation using FP32 table format                | replace the sign with the input sign   | write result to the LREG at index lreg_dest
+            0x6: Compute piece-wise linear approximation using FP16 6-entry mode 1 table format | replace the sign with the input sign   | write result to the LREG at index lreg_dest
+            0x7: Compute piece-wise linear approximation using FP16 6-entry mode 2 table format | replace the sign with the input sign   | write result to the LREG at index lreg_dest
+            0xA: Compute piece-wise linear approximation using FP16 3-entry table format        | keep sign from the interpolated result | write result to the LREG at index LREG7[3:0]
+            0xE: Compute piece-wise linear approximation using FP16 3-entry table format        | replace the sign with the input sign   | write result to the LREG at index LREG7[3:0]
+        fcov_point_bins:
+          bins: [ {name: "fp32_ks_dd",     value: "0x0"},
+                  {name: "fp16e6m1_ks_dd", value: "0x2"},
+                  {name: "fp16e6m2_ks_dd", value: "0x3"},
+                  {name: "fp32_rs_dd",     value: "0x4"},
+                  {name: "fp16e6m1_rs_dd", value: "0x6"},
+                  {name: "fp16e6m2_rs_dd", value: "0x7"},
+                  {name: "fp16e3_ks_id",   value: "0xA"},
+                  {name: "fp16e3_rs_id",   value: "0xE"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU piecewise linear lookup-table interpolation with extended precision"
+
+SFPMAD:
+    op_binary: 0x84
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MAD
+    description: "sFPU FP32 multiply-add"
+
+SFPMUL:
+    op_binary: 0x86
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MAD
+    description: "sFPU FP32 multiply-add - This is an alias of SFPMAD intended to convey intent that the operation is a pure multiplication"
+
+SFPMULI:
+    op_binary: 0x74
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Result is written to the LREG with index lreg_dest
+            1: Result is written to the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bit 2:
+            0: src_a is read from the LREG with index lreg_dest
+            1: src_a is read from the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bits 1:0:
+            Reserved, must always be 0
+        fcov_point_bins:
+          bins: [ {name: "dd_da", value: "0x0"},
+                  {name: "dd_ia", value: "0x4"},
+                  {name: "id_da", value: "0x8"},
+                  {name: "id_ia", value: "0xC"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_a index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: imm16_math
+        field_type: DEC
+        start_bit: 8
+        size: 16
+        description: immediate 16bit operand in FP16_B format
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0000","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+
+    description: "sFPU FP32 multiply with immediate"
+
+SFPMUL24:
+    op_binary: 0x98
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Result is written to the LREG with index lreg_dest
+            1: Result is written to the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bit 2:
+            0: src_a is read from the LREG with index lreg_a
+            1: src_a is read from the LREG with index equal to the current value of LREG7 bits 3:0
+
+          Instruction Modifier bit 1:
+            Reserved, must always be 0
+
+          Instruction Modifier bit 0:
+            0: Return the low 23 bits of the multiplication result
+            1: Return the high 23 bits of the multiplication result
+        fcov_point_bins:
+          bins: [ {name: "dd_da_lo", value: "0x0"},
+                  {name: "dd_da_hi", value: "0x1"},
+                  {name: "dd_ia_lo", value: "0x4"},
+                  {name: "dd_ia_hi", value: "0x5"},
+                  {name: "id_da_lo", value: "0x8"},
+                  {name: "id_da_hi", value: "0x9"},
+                  {name: "id_ia_lo", value: "0xC"},
+                  {name: "id_ia_hi", value: "0xD"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_b
+        field_type: DEC
+        start_bit: 12
+        size: 4
+        description: lreg src_b index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_a
+        field_type: DEC
+        start_bit: 16
+        size: 8
+        description: lreg src_a index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU 23-bit integer multiply"
+
+################################################################################
+# SFPU Data Movement Instructions
+################################################################################
+SFPMOV:
+    op_binary: 0x7C
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          0x0: Copy lreg_c to lreg_dest
+          0x1: Copy lreg_c to lreg_dest, inverting the sign bit (MSB)
+          0x2: Copy lreg_c to lreg_dest unconditionally, ignoring the current LaneEnable state
+          0x8: Debug read of a control register to lreg_dest, using the same config_dest index mapping as SFPCONFIG for lreg_c
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bins:
+          bins: [ {name: "bot", value: "0x0"},
+                  {name: "top", value: "0xF"} ]
+
+    description: "sFPU move register"
+
+SFPSHFT2:
+    op_binary: 0x94
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          0x0: shift LREGs[3:0] all rows in parallel left towards LREG[0]                       within the SFPU instance with all four rows of LREG[3] being written with zeros (type 0)
+          0x1: shift LREGs[3:0] all rows in series   left towards LREG[0] and up towards ROW[0] within the SFPU instance with only ROW[3]      LREG[3] being written with zeros (type 1)
+          0x2: shift LREGs[3:0] all rows in parallel left towards LREG[0] locally within the SFPU and globally shift a single LREG from each row away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[3] of SFPU column X+1
+          0x3: shift a single LREG from each row globally across SFPUs away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[lreg_dest] of SFPU column X+1 with rotation
+          0x4: shift a single LREG from each row globally across SFPUs away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[lreg_dest] of SFPU column X+1 with zero fill on column 0
+          0x5: normal bitwise shift within the LREG specified by lreg_dest by the amount specified in src_c
+          0x6: normal bitwise shift within the LREG specified by lreg_dest by the amount specified in imm12_math
+        fcov_point_bins:
+          bins: [ {name: "m0", value: "0x0"},
+                  {name: "m1", value: "0x1"},
+                  {name: "m2", value: "0x2"},
+                  {name: "m3", value: "0x3"},
+                  {name: "m4", value: "0x4"},
+                  {name: "m5", value: "0x5"},
+                  {name: "m6", value: "0x6"} ]
+
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: lreg dest and src_b index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
+                  {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
+
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        size: 4
+        description: lreg src_c index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
+                  {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
+
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        size: 12
+        description: immediate 12bit operand
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+
+    description: "sFPU shift2 instruction to shift LREGS across and within instances of the SFPU"
+
+SFPTRANSP:
+    op_binary: 0x8C
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+
+    description: "sFPU transpose 4x4 LREG grids"
+
+################################################################################
+# SFPU Misc Instructions
+################################################################################
+SFPCONFIG:
+    op_binary: 0x91
+    ex_resource: SFPU
+    ttsync_resource: OTHERS
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        size: 4
+        description: >
+          Instruction Modifier bit 3:
+            0: Config register update is applied to all SFPU columns
+            1: Config register update is applied only to SFPU columns where the corresponding position in imm16_math is set.  Odd numbered bits are unused when the SFPU only has 8 columns.
+
+          Instruction Modifier bits 2:1 (must be 0 if config_dest != 0x8 or 0xF):
+            0: Write the specified configuration register with the source directly
+            1: Compute the bitwise OR  of the current register value and the new source, and write that to config_dest
+            2: Compute the bitwise AND of the current register value and the new source, and write that to config_dest
+            3: Compute the bitwise XOR of the current register value and the new source, and write that to config_dest
+
+          Instruction Modifier bit 0:
+            0: Use Row0, LREG0 as the source for the configuration data
+            1: Use either imm16_math or the constant LREG default value for the configuration data
+        fcov_point_bins:
+          bins: [ {name: "ucond_dir_lreg", value: "0x0"},
+                  {name: "ucond_dir_imm",  value: "0x1"},
+                  {name: "ucond_or_lreg",  value: "0x2"},
+                  {name: "ucond_or_imm",   value: "0x3"},
+                  {name: "ucond_and_lreg", value: "0x4"},
+                  {name: "ucond_and_imm",  value: "0x5"},
+                  {name: "ucond_xor_lreg", value: "0x6"},
+                  {name: "ucond_xor_imm",  value: "0x7"},
+                  {name: "mask_dir_lreg",  value: "0x8"},
+                  {name: "mask_dir_imm",   value: "0x9"},
+                  {name: "mask_or_lreg",   value: "0xA"},
+                  {name: "mask_or_imm",    value: "0xB"},
+                  {name: "mask_and_lreg",  value: "0xC"},
+                  {name: "mask_and_imm",   value: "0xD"},
+                  {name: "mask_xor_lreg",  value: "0xE"},
+                  {name: "mask_xor_imm",   value: "0xF"} ]
+
+      - name: config_dest
+        field_type: DEC
+        start_bit: 4
+        size: 4
+        description: >
+            SFPU configuration register index:
+              Load Macro Instruction 0       : 0x0
+              Load Macro Instruction 1       : 0x1
+              Load Macro Instruction 2       : 0x2
+              Load Macro Instruction 3       : 0x3
+              Load Macro Sequence    0       : 0x4
+              Load Macro Sequence    1       : 0x5
+              Load Macro Sequence    2       : 0x6
+              Load Macro Sequence    3       : 0x7
+              Load Macro Control             : 0x8
+              LUT constant          lreg[ 9] : 0x9
+              LUT constant          lreg[10] : 0xA
+              Programmable constant lreg[11] : 0xB
+              Programmable constant lreg[12] : 0xC
+              Programmable constant lreg[13] : 0xD
+              Programmable constant lreg[14] : 0xE
+              SFPU Control Register          : 0xF
+        fcov_point_bins:
+          bins: [ {name: "lm_instr0",   value: "0x0"},
+                  {name: "lm_instr1",   value: "0x1"},
+                  {name: "lm_instr2",   value: "0x2"},
+                  {name: "lm_instr3",   value: "0x3"},
+                  {name: "lm_seq0",     value: "0x4"},
+                  {name: "lm_seq1",     value: "0x5"},
+                  {name: "lm_seq2",     value: "0x6"},
+                  {name: "lm_seq3",     value: "0x7"},
+                  {name: "lm_ctrl",     value: "0x8"},
+                  {name: "lut_const9",  value: "0x9"},
+                  {name: "lut_const10", value: "0xA"},
+                  {name: "const11",     value: "0xB"},
+                  {name: "const12",     value: "0xC"},
+                  {name: "const13",     value: "0xD"},
+                  {name: "const14",     value: "0xE"},
+                  {name: "sfpu_ctrl",   value: "0xF"} ]
+
+      - name: imm16_math
+        field_type: DEC
+        start_bit: 8
+        size: 16
+        description: immediate 16bit operand
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+
+    description: "sFPU math instruction to program one of the configuration registers - hard-coded to read from LREG[0] on SFPU row[0] when not using the immediate field"
 
 SFPNOP:
     op_binary: 0x8F
@@ -6133,288 +7568,22 @@ SFPNOP:
         size: 1
         fcov_point_bool:
         description: indicates that SFPU operations for the current dest bank are done and the bank can be reused by the unpacker
+
       - name: srcs_rd_done
         field_type: DEC
         start_bit: 1
         size: 1
         fcov_point_bool:
         description: indicates that SFPU load operations for the current srcs bank are done and the bank can be reused by the unpacker
+
       - name: srcs_wr_done
         field_type: DEC
         start_bit: 2
         size: 1
         fcov_point_bool:
         description: indicates that SFPU store operations for the current srcs bank are done and the bank can be read by the packer
-    description: "sFPU math instruction NOP"
 
-SFPCAST:
-    op_binary: 0x90
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments:
-      - name: instr_mod1
-        field_type: DEC
-        start_bit: 0
-        size: 4
-        description: "instruction modifier :
-                      int32 -> fp32 (nearest even)         - 0x0;
-                      int32 -> fp32 (stochastically)       - 0x1;
-                      int322s-> Sign Mag                   - 0x2;
-                      int sign mag -> int32 2s             - 0x3;
-                      RESERVED                             - 0xf : 0x4;"
-        fcov_point_bins:
-          bins: [ {name: "int32_to_fp32_neven",  value: "0x0"},
-                  {name: "int32_to_fp32_stoch",  value: "0x1"},
-                  {name: "int32_to_fsm",         value: "0x2"},
-                  {name: "int32_sm_to_int32",    value: "0x3"} ]
-      - name: lreg_dest
-        field_type: DEC
-        start_bit: 4
-        size: 4
-        description: lreg dest index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: lreg_src_c
-        field_type: DEC
-        start_bit: 8
-        size: 16
-        description: lreg src_c index - src_c provides the value to be cast
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-    description: "sFPU math instruction to cast a given value into another format"
-
-SFPCONFIG:
-    op_binary: 0x91
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments:
-      - name: instr_mod1  # fixme: fcov
-        field_type: DEC
-        start_bit: 0
-        size: 4
-        description: >
-            instruction modifier :
-              [0]        : if config_dest is     one of the constant_lregs, then setting this bit means to reset to the default value (write input is not used)
-              [0]        : if config_dest is NOT one of the constant_lregs, then setting this bit means to use the imm16_math field as the write input value instead of lreg[0] as write input value
-              [2:1] == 0 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as a normal write
-              [2:1] == 1 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as an OR  MASK with the existing bits in the register (useful if you only want to SET    the values in specific bits while retaining whatever is in other bits)
-              [2:1] == 2 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as an AND MASK with the existing bits in the register (useful if you only want to CLEAR  the values in specific bits while retaining whatever is in other bits)
-              [2:1] == 3 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as an XOR MASK with the existing bits in the register (useful if you only want to INVERT the values in specific bits while retaining whatever is in other bits)
-              [3]        : treat the imm16_math field as a column mask which will only enable the config update on the columns corresponding to bit positions which are 1 in the imm16_math field (note: bits [0] and [3] mean different uses for imm16_math)
-      - name: config_dest  # fixme: fcov
-        field_type: DEC
-        start_bit: 4
-        size: 4
-        description: >
-            SFPU configuration register index:
-              Load Macro Instruction 0       : 0x0
-              Load Macro Instruction 1       : 0x1
-              Load Macro Instruction 2       : 0x2
-              Load Macro Instruction 3       : 0x3
-              Load Macro Sequence    0       : 0x4
-              Load Macro Sequence    1       : 0x5
-              Load Macro Sequence    2       : 0x6
-              Load Macro Sequence    3       : 0x7
-              Load Macro Control             : 0x8
-              RESERVED                       : 0xA - 0x9
-              Programmable constant lreg[11] : 0xB
-              Programmable constant lreg[12] : 0xC
-              Programmable constant lreg[13] : 0xD
-              Programmable constant lreg[14] : 0xE
-              SFPU Control Register          : 0xF
-      - name: imm16_math
-        field_type: DEC
-        start_bit: 8
-        size: 16
-        description: immediate 16bit operand
-        fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
-    description: "sFPU math instruction to program one of the configuration registers - hard-coded to read from LREG[0] on SFPU row[0] when not using the immediate field"
-
-SFPSWAP:
-    op_binary: 0x92  # fixme: fcov
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments:
-      - name: instr_mod1
-        field_type: DEC
-        start_bit: 0
-        size: 4
-        description: >
-            instruction modifier :
-              Unconditionally swap the values in SRCC and DST                                                                  - 0x0
-              DST will be written with the smaller value and SRCC with the larger value on all rows                            - 0x1
-              DST will be written with the smaller value and SRCC with the larger value on rows 0 & 1 (opposite on other rows) - 0x2
-              DST will be written with the smaller value and SRCC with the larger value on rows 0 & 2 (opposite on other rows) - 0x3
-              DST will be written with the smaller value and SRCC with the larger value on rows 0 & 3 (opposite on other rows) - 0x4
-              DST will be written with the smaller value and SRCC with the larger value on row  0     (opposite on other rows) - 0x5
-              DST will be written with the smaller value and SRCC with the larger value on row  1     (opposite on other rows) - 0x6
-              DST will be written with the smaller value and SRCC with the larger value on row  2     (opposite on other rows) - 0x7
-              DST will be written with the smaller value and SRCC with the larger value on row  3     (opposite on other rows) - 0x8
-              RESERVED                                                                                                         - 0xf : 0x9
-      - name: lreg_dest
-        field_type: DEC
-        start_bit: 4
-        size: 4
-        description: lreg dest index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: lreg_src_c
-        field_type: DEC
-        start_bit: 8
-        size: 4
-        description: lreg src_c index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-      - name: imm12_math
-        field_type: DEC
-        start_bit: 12
-        size: 12
-        description: immediate 12bit operand
-        fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x7FF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
-    description: "sFPU math instruction to swap the values in two registers ; this is a two cycle operation"
-
-SFPLOADMACRO:
-    op_binary: 0x93
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MEM
-    description: "sFPU load from dest regs and then run the macro specified in lreg_dest index[3:2]"
-
-SFPSHFT2:
-    op_binary: 0x94
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments:
-      - name: instr_mod1  # FIXME: fcov
-        field_type: DEC
-        start_bit: 0
-        size: 4
-        description: >
-            instruction modifier :
-              (One cycle) shift LREGs[3:0] all rows in parallel left towards LREG[0]                       within the SFPU instance with all four rows of LREG[3] being written with zeros (type 0)                                                      - 0x0
-              (One cycle) shift LREGs[3:0] all rows in series   left towards LREG[0] and up towards ROW[0] within the SFPU instance with only ROW[3]      LREG[3] being written with zeros (type 1)                                                      - 0x1
-              (Two cycle) shift LREGs[3:0] all rows in parallel left towards LREG[0] locally within the SFPU and globally shift a single LREG from each row away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[3] of SFPU column X+1 - 0x2
-              (Two cycle) shift a single LREG from each row globally across SFPUs away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[lreg_dest] of SFPU column X+1 with rotation                                                     - 0x3
-              (Two cycle) shift a single LREG from each row globally across SFPUs away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[lreg_dest] of SFPU column X+1 with zero fill on column 0                                        - 0x4
-              (One cycle) normal bitwise shift within the LREG specified by lreg_dest by the amount specified in src_c                                                                                                                                   - 0x5
-              (One cycle) normal bitwise shift within the LREG specified by lreg_dest by the amount specified in imm12_math                                                                                                                              - 0x6
-              RESERVED                                                                                                                                                                                                                                   - 0xf : 0x7
-      - name: lreg_dest
-        field_type: DEC
-        start_bit: 4
-        size: 4
-        description: lreg dest index (doubles as src_b)
-        fcov_point_bin_interval:
-          bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                  {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
-      - name: lreg_src_c
-        field_type: DEC
-        start_bit: 8
-        size: 4
-        description: lreg src_c index
-        fcov_point_bin_interval:
-          bins: [ {name: "bot", slice: "1",  interval: ["0x0","0x0"]},
-                  {name: "top", slice: "1",  interval: ["0x3F","0x3F"]} ]
-      - name: imm12_math
-        field_type: DEC
-        start_bit: 12
-        size: 12
-        description: immediate 12bit operand
-        fcov_point_bin_interval:
-          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x7FF"]},
-                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
-    description: "sFPU shift2 instruction to shift LREGS across and within instances of the SFPU"
-
-SFPLUTFP32:
-    op_binary: 0x95
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: &SFPU_LUTFP32
-      - name: instr_mod1  # fixme: fcov
-        field_type: DEC
-        start_bit: 0
-        size: 4
-        description: "instruction modifier :
-                          4'b0000 : force lreg3 sign to zero on input to the MAD
-                          4'b0100 : use lreg3 sign as the sign of the result on the MAD          "
-        fcov_point_bins:
-          bins: [ {name: "v0", value: "0b0000"},
-                  {name: "v4", value: "0b0100"} ]
-      - name: lreg_dest
-        field_type: DEC
-        start_bit: 4
-        size: 20
-        description: lreg dest index
-        fcov_point_bins:
-          bins: [ {name: "bot", value: "0x0"},
-                  {name: "top", value: "0xF"} ]
-    description: "sFPU table look-up instruction with FP32 precision; this is a two cycle operation "
-
-SFPLE:
-    op_binary: 0x96
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction less than b<=c "
-
-SFPGT:
-    op_binary: 0x97
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction less than b>c "
-
-SFPMUL24:
-    op_binary: 0x98
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATH # fixme: fcov from import
-    description: "sFPU math instruction integer MUL24"
-
-SFPARECIP:
-    op_binary: 0x99
-    ex_resource: SFPU
-    ttsync_resource: OTHERS
-    instrn_type: SFPU
-    src_mask: 0x0
-    fcov:
-    arguments: *SFPU_MATHI12 # fixme: fcov from import
-    description: "sFPU math instruction approximate reciprocal"
+    description: "sFPU NOP"
 
 
 WRCFG:
@@ -6561,7 +7730,7 @@ RMWCIB2_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE:
 RMWCIB3:
   instrn_type: LOCAL_CREGS
   ex_resource: CFG
-  ttsync_resource: OTHERS
+  ttsync_resource: CFG
   op_binary: 0xb8
   src_mask: 0x0
   fcov:

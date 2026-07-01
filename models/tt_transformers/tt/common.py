@@ -141,7 +141,13 @@ def rope_scaling_model_factory(
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.PHI3:
-        return RopeScalingPhi3(original_max_position_embeddings=original_max_context_len, **rope_scaling_params)
+        # transformers 5.x includes original_max_position_embeddings in the rope dict,
+        # which collides with the explicit kwarg; merge so the caller value wins and the
+        # key is only passed once.
+        phi3_params = dict(rope_scaling_params)
+        if original_max_context_len is not None:
+            phi3_params["original_max_position_embeddings"] = original_max_context_len
+        return RopeScalingPhi3(**phi3_params)
     elif rope_scaling_type in ["default", "mrope"]:
         logger.warning(
             f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
@@ -149,6 +155,48 @@ def rope_scaling_model_factory(
         return None
     else:
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
+
+
+# transformers 5.x consolidated the RoPE config: the top-level `rope_theta` /
+# `rope_local_base_freq` / `rope_scaling` keys were replaced by a single nested
+# `rope_parameters` dict (flat for Qwen/Llama; per-attention-type sub-dicts —
+# `full_attention` / `sliding_attention` — for Gemma-style models). The helpers
+# below read from either layout so configs from transformers <5 and >=5 work.
+def get_rope_theta(config: dict, default=None):
+    """RoPE base period (global / full-attention)."""
+    if config.get("rope_theta") is not None:
+        return config["rope_theta"]
+    rope_parameters = config.get("rope_parameters") or {}
+    if rope_parameters.get("rope_theta") is not None:  # flat (Qwen/Llama)
+        return rope_parameters["rope_theta"]
+    return (rope_parameters.get("full_attention") or {}).get("rope_theta", default)  # Gemma-style
+
+
+def get_rope_local_base_freq(config: dict, default=None):
+    """Gemma sliding-window local RoPE base (was top-level `rope_local_base_freq`)."""
+    if config.get("rope_local_base_freq") is not None:
+        return config["rope_local_base_freq"]
+    rope_parameters = config.get("rope_parameters") or {}
+    return (rope_parameters.get("sliding_attention") or {}).get("rope_theta", default)
+
+
+def get_rope_scaling(config: dict):
+    """RoPE scaling params (factor, original_max_position_embeddings, rope_type, ...).
+
+    transformers <5 put these under `rope_scaling`; >=5 merges them into
+    `rope_parameters` (flat, or `full_attention` for Gemma-style). Returns the
+    holding dict, or None when no non-default scaling is configured.
+    """
+    rope_scaling = config.get("rope_scaling")
+    if rope_scaling:
+        return rope_scaling
+    rope_parameters = config.get("rope_parameters") or {}
+    if "full_attention" in rope_parameters:  # Gemma-style nesting
+        rope_parameters = rope_parameters.get("full_attention") or {}
+    # Only a non-default rope_type carries scaling (factor, etc.).
+    if rope_parameters.get("rope_type") not in (None, "default"):
+        return rope_parameters
+    return None
 
 
 # Minimal addition for Mistral vision support
@@ -300,6 +348,31 @@ def preprocess_inputs_prefill(
     )
 
 
+def _chat_template_ids(encoded):
+    """Normalize apply_chat_template(tokenize=True) output to a flat List[int].
+
+    transformers <5 returned a plain List[int]; transformers 5.x defaults
+    apply_chat_template to ``return_dict=True`` and returns a ``BatchEncoding``
+    (a ``UserDict`` — NOT a ``dict`` subclass, so ``isinstance(x, dict)`` is
+    False), or a `tokenizers.Encoding` (exposes ``.ids``). Iterating a
+    ``BatchEncoding``/``UserDict`` yields its *keys* ("input_ids", ...), so we
+    must extract ``input_ids`` via mapping membership rather than ``isinstance``.
+    """
+    # dict / BatchEncoding / UserDict — use mapping membership, since BatchEncoding
+    # is a UserDict and fails isinstance(x, dict).
+    if hasattr(encoded, "keys") and "input_ids" in encoded:
+        encoded = encoded["input_ids"]
+    if hasattr(encoded, "ids"):  # tokenizers.Encoding
+        return list(encoded.ids)
+    if hasattr(encoded, "tolist"):  # torch tensor / np array
+        encoded = encoded.tolist()
+    # apply_chat_template(return_dict=True) on a single conversation can nest the
+    # ids in a 1-element batch dim ([[ids]]); unwrap it.
+    if isinstance(encoded, (list, tuple)) and len(encoded) == 1 and isinstance(encoded[0], (list, tuple)):
+        encoded = encoded[0]
+    return list(encoded)  # already a List[int]
+
+
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
@@ -308,9 +381,10 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
             chat.append({"role": "system", "content": system_prompt_text})
         if prompt_text:
             chat.append({"role": "user", "content": prompt_text})
-        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+        encoded = tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
     else:
-        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+        encoded = tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+    return _chat_template_ids(encoded)
 
 
 def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):

@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 import ttnn
 
 torch.manual_seed(0)
@@ -134,7 +134,7 @@ def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value
 
     assert output_tensor.shape == torch_output_tensor.shape
     if dtype == ttnn.bfloat8_b:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+        assert_allclose(torch_output_tensor, output_tensor, rtol=0.05, atol=0.025)
     else:
         assert torch.equal(torch_output_tensor, output_tensor)
 
@@ -166,6 +166,28 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
         )
     expected_cache_entries = 3 if dtype == ttnn.bfloat8_b else 1  # due to composite logic
     assert device.cache_entries_counter.total == expected_cache_entries
+
+
+def test_pad_program_cache_hit_updates_pad_value_buffer(device):
+    """Regression for #44565: pad must update its pad-value buffer on cache hits.
+
+    A minimal pad-only reproducer did not trigger the stale pad-value buffer bug; it
+    only reproduced through prepare_conv3d_weights, which exercises pad after
+    from_torch, to_device, and permute.
+    """
+    torch.manual_seed(42)
+    weights = torch.randn(32, 12, 3, 3, 3, dtype=torch.float32)
+
+    outputs = []
+    for _ in range(5):
+        tt_weight = ttnn.from_torch(weights, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+        prepared_weight = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=tt_weight, groups=1, C_in_block=32, alignment=32, device=device
+        )
+        outputs.append(ttnn.to_torch(prepared_weight).to(torch.float32))
+
+    max_diff = max((output - outputs[0]).abs().max().item() for output in outputs[1:])
+    assert max_diff < 1e-3, f"pad output is non-deterministic across cache hits: max diff = {max_diff}"
 
 
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type):
@@ -542,7 +564,7 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
     output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
     if in_dtype == ttnn.bfloat8_b:
-        assert_with_pcc(output_torch, output_tt, 0.99)
+        assert_allclose(output_torch, output_tt, rtol=0.05, atol=0.025)
     else:
         assert torch.equal(output_tt, output_torch)
 

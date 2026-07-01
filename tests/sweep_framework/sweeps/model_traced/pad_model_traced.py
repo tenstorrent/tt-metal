@@ -49,8 +49,19 @@ def invalidate_vector(test_vector) -> tuple:
 
 
 def mesh_device_fixture():
+    import os as _os
+
     mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
+    # Prefer WORKER COL: every traced config of this op runs on COL, but the
+    # auto-detect over-routes the whole module to ROW from a single x=7/8-8 master
+    # config, breaking the COL-only configs in single-pass (no-env) runs. Defer to
+    # TTNN_DISPATCH_AXIS when set so CI's two-pass (row+col) is unchanged.
+    _axis = (
+        None
+        if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
+        else ttnn.DispatchCoreAxis.COL
+    )
+    device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -89,6 +100,15 @@ def run(
     # Master may have called ttnn.pad(t, padding) (positional → arg1) or
     # ttnn.pad(t, padding=padding) (kwarg). The two produce different traces.
     pad_was_positional = False
+
+    # JSON cannot represent inf/-inf; they're stored as huge numbers.
+    _golden_value = value
+    # Detect and convert back to float("inf") / float("-inf").
+    import math
+
+    if isinstance(value, (int, float)) and not math.isinf(value):
+        if abs(value) > 1e38:
+            _golden_value = float("-inf") if value < 0 else float("inf")
 
     if padding is None and arg1 is not None:
         is_nested = isinstance(arg1, list) and arg1 and isinstance(arg1[0], (list, tuple))
@@ -129,7 +149,7 @@ def run(
     for i in range(len(padding) - 1, -1, -1):
         for p in padding[i]:
             torch_padding.append(p)
-    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=_golden_value)
 
     if isinstance(padding, list):
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)

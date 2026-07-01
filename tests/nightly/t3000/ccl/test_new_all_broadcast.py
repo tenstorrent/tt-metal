@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 def run_with_trace(
@@ -83,6 +84,8 @@ def run_all_broadcast_impl(
         )
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(

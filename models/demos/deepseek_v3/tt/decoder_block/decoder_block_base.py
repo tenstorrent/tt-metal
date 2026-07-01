@@ -46,7 +46,12 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
             "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            "mlp": cls.prefill_mlp_config(hf_config, mesh_device, fabric_config),
+            "mlp": cls.prefill_mlp_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
         }
 
     @classmethod
@@ -99,12 +104,14 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         logger.info(f"Creating {cls.__name__} shared state...")
         mlp_start = perf_counter()
         mlp_shared_state = cls.create_mlp_shared_state(
             hf_config,
             mesh_device,
+            fabric_config,
         )
         logger.info(f"Created {cls.__name__} MLP shared state in {perf_counter() - mlp_start:.2f}s")
         state = {
@@ -135,6 +142,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """
         Prefill configuration for the MLP component of the decoder layer.
@@ -193,6 +201,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         """
         Create the shared state for the MLP component of the decoder layer.

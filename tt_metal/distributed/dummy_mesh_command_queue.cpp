@@ -49,7 +49,9 @@ void DummyMeshCommandQueue::read_shard_from_device(
 }
 
 void DummyMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/, bool /*blocking*/) {
+    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/,
+    bool /*blocking*/,
+    std::vector<MemoryPin> /*memory_pins*/) {
     // No-op for inactive rank
 }
 
@@ -83,6 +85,14 @@ void DummyMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& /*sync_event
     // No-op for inactive rank
 }
 
+void DummyMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> /*targets*/,
+    uint32_t /*value*/,
+    bool /*blocking*/,
+    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    // No-op for inactive rank: no local device to signal.
+}
+
 void DummyMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
     // No-op for inactive rank
 }
@@ -91,7 +101,8 @@ void DummyMeshCommandQueue::reset_worker_state(
     bool /*reset_launch_msg_state*/,
     uint32_t /*num_sub_devices*/,
     const vector_aligned<uint32_t>& /*go_signal_noc_data*/,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& /*core_go_message_mapping*/) {
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& /*core_go_message_mapping*/,
+    tt::stl::Span<const uint32_t> /*workers_per_sub_device*/) {
     // No-op for inactive rank
 }
 

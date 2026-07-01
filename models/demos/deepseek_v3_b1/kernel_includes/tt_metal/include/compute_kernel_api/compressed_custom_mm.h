@@ -53,11 +53,11 @@ ALWI void compressed_custom_mm_block_init(
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_compressed_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_compressed_custom_mm_init<transpose, false, dense_packing>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_dest_init<fp32_dest_acc_en, false>()));
+    PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>()));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
-    PACK((llk_pack_init<false, false>(out_cb_id)));
+    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
     if constexpr (dense_packing) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
@@ -97,9 +97,8 @@ ALWI void compressed_custom_mm_block_init_short(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t out_cb_id) {
     UNPACK((llk_unpack_AB_compressed_custom_mm_init<transpose>(in0_cb_id, in1_cb_id)));
 
-    MATH((llk_math_compressed_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_compressed_custom_mm_init<transpose, false, dense_packing>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_init<false, false>(out_cb_id)));
     if constexpr (dense_packing) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
@@ -148,7 +147,7 @@ ALWI void compressed_custom_mm_block(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_compressed_custom_mm<clear_src>(in0_cb_id, in1_cb_id, base_address_meta, kt_dim, ct_dim)));
-    MATH((llk_math_compressed_custom_mm<finalize>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_compressed_custom_mm<false>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -227,7 +226,7 @@ ALWI void compressed_custom_mm_block_math(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_compressed_custom_mm<finalize>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_compressed_custom_mm<false>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off

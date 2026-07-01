@@ -13,13 +13,17 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
+#include "tt-metalium/experimental/internal/blitz_decode_pipeline.hpp"
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 namespace ttnn::pipeline_module {
 
 void bind_blitz_decode_pipeline(nb::module_& mod) {
-    using tt::tt_metal::experimental::blitz::BlitzDecodePipelineStage;
+    using tt::tt_metal::internal::blitz::BlitzDecodeEndpointPlacement;
+    using tt::tt_metal::internal::blitz::BlitzDecodePipelineStage;
+    using tt::tt_metal::internal::blitz::BlitzDecodeStageHostBinding;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodePipelineAllocation;
+    using tt::tt_metal::internal::blitz::ResolvedBlitzDecodeStageAllocation;
 
     nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage")
         .def_ro("stage_index", &BlitzDecodePipelineStage::stage_index)
@@ -33,10 +37,66 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
             return repr.str();
         });
 
+    nb::class_<BlitzDecodeStageHostBinding>(mod, "BlitzDecodeStageHostBinding")
+        .def_ro("rank", &BlitzDecodeStageHostBinding::rank)
+        .def_ro("mesh_host_rank", &BlitzDecodeStageHostBinding::mesh_host_rank)
+        .def("__repr__", [](const BlitzDecodeStageHostBinding& host_binding) {
+            std::ostringstream repr;
+            repr << "BlitzDecodeStageHostBinding(rank=" << host_binding.rank
+                 << ", mesh_host_rank=" << host_binding.mesh_host_rank << ")";
+            return repr.str();
+        });
+
+    nb::class_<BlitzDecodeEndpointPlacement>(mod, "BlitzDecodeEndpointPlacement")
+        .def_ro("host_binding", &BlitzDecodeEndpointPlacement::host_binding)
+        .def_ro("mesh_coord", &BlitzDecodeEndpointPlacement::mesh_coord)
+        .def("__repr__", [](const BlitzDecodeEndpointPlacement& endpoint) {
+            std::ostringstream repr;
+            repr << "BlitzDecodeEndpointPlacement(host_binding=BlitzDecodeStageHostBinding(rank="
+                 << endpoint.host_binding.rank << ", mesh_host_rank=" << endpoint.host_binding.mesh_host_rank
+                 << "), mesh_coord=" << endpoint.mesh_coord << ")";
+            return repr.str();
+        });
+
+    nb::class_<ResolvedBlitzDecodeStageAllocation>(mod, "ResolvedBlitzDecodeStageAllocation")
+        .def_ro("logical_stage_index", &ResolvedBlitzDecodeStageAllocation::logical_stage_index)
+        .def_ro("mesh_id", &ResolvedBlitzDecodeStageAllocation::mesh_id)
+        .def_ro("host_bindings", &ResolvedBlitzDecodeStageAllocation::host_bindings)
+        .def_ro("entry_endpoint", &ResolvedBlitzDecodeStageAllocation::entry_endpoint)
+        .def_ro("exit_endpoint", &ResolvedBlitzDecodeStageAllocation::exit_endpoint)
+        .def("__repr__", [](const ResolvedBlitzDecodeStageAllocation& stage) {
+            std::ostringstream repr;
+            repr << "ResolvedBlitzDecodeStageAllocation(logical_stage_index=" << stage.logical_stage_index
+                 << ", mesh_id=" << stage.mesh_id << ", host_bindings=" << stage.host_bindings.size()
+                 << ", entry_endpoint_mesh_coord=" << stage.entry_endpoint.mesh_coord
+                 << ", exit_endpoint=" << (stage.exit_endpoint.has_value() ? "set" : "None") << ")";
+            return repr.str();
+        });
+
+    nb::class_<ResolvedBlitzDecodePipelineAllocation>(mod, "ResolvedBlitzDecodePipelineAllocation")
+        .def_ro("initialize_loopback", &ResolvedBlitzDecodePipelineAllocation::initialize_loopback)
+        .def_ro("stages", &ResolvedBlitzDecodePipelineAllocation::stages)
+        .def_ro("loopback_entry_stage_index", &ResolvedBlitzDecodePipelineAllocation::loopback_entry_stage_index)
+        .def_ro("loopback_entry_endpoint", &ResolvedBlitzDecodePipelineAllocation::loopback_entry_endpoint)
+        .def_ro("host_egress_stage_index", &ResolvedBlitzDecodePipelineAllocation::host_egress_stage_index)
+        .def_ro("host_egress_endpoint", &ResolvedBlitzDecodePipelineAllocation::host_egress_endpoint)
+        .def("__repr__", [](const ResolvedBlitzDecodePipelineAllocation& pipeline) {
+            std::ostringstream repr;
+            repr << "ResolvedBlitzDecodePipelineAllocation(initialize_loopback=" << pipeline.initialize_loopback
+                 << ", stages=" << pipeline.stages.size() << ", loopback_entry_stage_index=";
+            if (pipeline.loopback_entry_stage_index.has_value()) {
+                repr << *pipeline.loopback_entry_stage_index;
+            } else {
+                repr << "None";
+            }
+            repr << ", host_egress_stage_index=" << pipeline.host_egress_stage_index << ")";
+            return repr.str();
+        });
+
     mod.def(
         "generate_blitz_decode_pipeline",
         [](bool initialize_loopback) {
-            return tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(initialize_loopback);
+            return tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(initialize_loopback);
         },
         nb::arg("initialize_loopback") = true,
         R"doc(
@@ -51,6 +111,29 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
 
             Returns:
                 List[BlitzDecodePipelineStage]: Ordered pipeline stages for Blitz decode.
+        )doc");
+
+    mod.def(
+        "resolve_blitz_decode_pipeline_allocation",
+        [](bool initialize_loopback) {
+            return tt::tt_metal::internal::blitz::resolve_blitz_decode_pipeline_allocation(initialize_loopback);
+        },
+        nb::arg("initialize_loopback") = true,
+        R"doc(
+            Resolve the Blitz decode pipeline allocation.
+
+            Returns the logical stage-to-host bindings plus the chosen entry/exit endpoint
+            placements for each stage. The legacy `generate_blitz_decode_pipeline()` API is a
+            projection of this richer resolved allocation.
+
+            Args:
+                initialize_loopback: When True (default), includes the loopback entry and host
+                    egress placements for the return path onto stage 0. When False, resolves a
+                    linear pipeline with host egress on the last stage.
+
+            Returns:
+                ResolvedBlitzDecodePipelineAllocation: Resolved stage allocations and pipeline-level
+                endpoint placements for Blitz decode.
         )doc");
 }
 

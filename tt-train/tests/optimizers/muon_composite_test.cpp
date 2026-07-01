@@ -78,15 +78,20 @@ void PrintTo(const MuonTestCase& tc, std::ostream* os) {
 }
 
 class MuonCorrectnessTest : public ::testing::TestWithParam<MuonTestCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
-        ttml::autograd::ctx().set_seed(42);
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
     }
 
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().set_seed(42);
+    }
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 

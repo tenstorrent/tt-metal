@@ -9,6 +9,9 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
+  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
@@ -19,30 +22,22 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-  # OOM-kills ttsim runner (exit code 137) — stress tests sized for real HW, not ttsim
-  # https://github.com/tenstorrent/tt-metal/commit/067854964f01d6070d138f1b93c034ec453bd053
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
+  # (sparse_sdpa is Blackhole-only via run_for_blackhole, so it is skipped on WH already -- see blackhole section.)
 
-  # Numeric mismatches, likely caused by issue #41163
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
+  # Likely OOM killer related failures -- probably need to run these tests serially
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
-  # ERROR: UndefinedBehavior: tensix_execute_pacr: intermediate_format=5 mismatches late_from_format=0
-  # https://github.com/tenstorrent/tt-metal/issues/42525
-  # https://github.com/tenstorrent/tt-metal/pull/42112
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
+  # MOVD2B failures
+  # https://github.com/tenstorrent/tt-metal/issues/47164
+  - tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py::test_windowed_sdpa_smoke
+
+  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
+  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
 
 blackhole:
   # Job-level timeouts
@@ -50,6 +45,8 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
@@ -59,10 +56,19 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-  # OOM-kills ttsim runner (exit code 137) — stress tests sized for real HW, not ttsim
-  # https://github.com/tenstorrent/tt-metal/commit/067854964f01d6070d138f1b93c034ec453bd053
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
+
+  # tensix_cfg_wr32 reg=119 (THCON_SEC1_REG1, the fp8/LF8 SEC1 config)
+  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_fp8_input_to_tile
+
+  # Two ttsim gaps (op runs correctly on silicon): (1) BH fast tilize unpacks into src_a row 64 -- FIXED in
+  # ttsim releases newer than the pinned v1.8.2 (ttsim-private c753f3bc); (2) tensix_cfg_wr32 reg=119
+  # (THCON_SEC1_REG1, the fp8/LF8 SEC1 config) is still unimplemented even in latest ttsim, hit on a data-format
+  # reconfig after an fp8 program. The skip stays for (2); remove once a ttsim release with both lands in CI.
+  - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
+
+  # Likely OOM killer related failures -- probably need to run these tests serially
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
   # MOVD2B failures
   # https://github.com/tenstorrent/tt-metal/issues/41286
@@ -80,15 +86,10 @@ blackhole:
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
 
-  # Numeric mismatches, likely caused by issue #41163
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
-
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
+
+  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
+  - tests/ttnn/unit_tests/operations/reduce/test_moe.py

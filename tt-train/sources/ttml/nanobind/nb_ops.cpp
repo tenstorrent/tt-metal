@@ -13,16 +13,21 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/mla_q_rope.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -56,6 +61,7 @@ void py_module_types(nb::module_& m) {
     }
 
     m.def_submodule("matmul");
+    m.def_submodule("mla");
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
@@ -63,6 +69,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("sample");
     m.def_submodule("swiglu");
     m.def_submodule("unary");
+    m.def_submodule("metal");
 }
 
 void py_module(nb::module_& m) {
@@ -144,6 +151,13 @@ void py_module(nb::module_& m) {
             nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "vocab_parallel_cross_entropy_loss",
+            &ttml::ops::distributed::vocab_parallel_cross_entropy_loss,
+            nb::arg("logits"),
+            nb::arg("targets"),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("reduce") = ReduceType::MEAN);
     }
 
     {
@@ -249,6 +263,20 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_mla = static_cast<nb::module_>(m.attr("mla"));
+        py_mla.def(
+            "qkv_assemble",
+            &ttml::ops::mla_qkv_assemble,
+            nb::arg("q_pre"),
+            nb::arg("kv_up"),
+            nb::arg("k_pe"),
+            nb::arg("n_heads"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            nb::arg("v_dim"));
+    }
+
+    {
         auto py_attention = static_cast<nb::module_>(m.attr("attention"));
         // Overload 1: mask as ttml.autograd.Tensor (or None)
         py_attention.def(
@@ -299,6 +327,15 @@ void py_module(nb::module_& m) {
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
         py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
+        py_rope.def(
+            "mla_q_rope",
+            &ttml::ops::mla_q_rope,
+            nb::arg("q_full"),
+            nb::arg("rope_params"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            "MLA Q RoPE with autograd: fused metal mla_q_rope forward and backward (neg cos/sin on backward).\n"
+            "q_full: [B, n_heads, S, qk_nope_dim + qk_rope_dim] TILE bf16. Requires qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,
@@ -452,17 +489,71 @@ void py_module(nb::module_& m) {
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
         py_unary.def(
             "polynorm3",
-            &ttml::ops::polynorm3,
+            [](const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& weight,
+               const ttml::autograd::TensorPtr& bias,
+               const float epsilon,
+               const bool fused_forward,
+               const bool fused_backward) {
+                const auto forward_variant = fused_forward
+                                                 ? ttml::ops::PolyNorm3ForwardVariant::Fused
+                                                 : ttml::ops::PolyNorm3ForwardVariant::CompositeComparisonOnly;
+                const auto backward_variant = fused_backward
+                                                  ? ttml::ops::PolyNorm3BackwardVariant::Fused
+                                                  : ttml::ops::PolyNorm3BackwardVariant::CompositeComparisonOnly;
+                return ttml::ops::polynorm3(tensor, weight, bias, epsilon, forward_variant, backward_variant);
+            },
             nb::arg("tensor"),
             nb::arg("weight"),
             nb::arg("bias"),
-            nb::arg("epsilon") = 1e-5F);
+            nb::arg("epsilon") = 1e-5F,
+            nb::kw_only(),
+            nb::arg("fused_forward") = true,
+            nb::arg("fused_backward") = true);
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));
         py_unary.def("broadcast_batch", &ttml::ops::broadcast_batch, nb::arg("tensor"), nb::arg("new_batch_dim"));
         py_unary.def("log_softmax", &ttml::ops::log_softmax, nb::arg("tensor"), nb::arg("dim"));
         py_unary.def("log_softmax_moreh", &ttml::ops::log_softmax_moreh, nb::arg("tensor"), nb::arg("dim"));
+    }
+
+    {
+        auto py_metal = m.def_submodule("metal");
+        py_metal.def(
+            "moe_group",
+            &ttml::metal::moe_group,
+            nb::arg("dispatched"),
+            nb::arg("metadata"),
+            nb::arg("scores"),
+            nb::arg("local_expert_ids"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            "Group dispatched tokens by local expert.\n"
+            "Returns (grouped         [1,1,T_cap,H]   TILE bf16,\n"
+            "         grouped_scores  [1,1,1,T_cap]   ROW_MAJOR bf16,\n"
+            "         k_slot          [1,1,1,T_cap]   ROW_MAJOR uint16,\n"
+            "         counts          [1,1,1,E_local] uint32,\n"
+            "         offsets         [1,1,1,E_local+1] uint32,\n"
+            "         plan            [1,1,1,T_cap]   uint32).\n"
+            "grouped_scores[i] = scores[plan[i], k_slot[i]]; both are 0/SENTINEL\n"
+            "in pad slots.");
+        py_metal.def(
+            "moe_ungroup",
+            &ttml::metal::moe_ungroup,
+            nb::arg("expert_out"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("grouped_scores"),
+            nb::arg("e_local"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Ungroup expert outputs back to dense [D,B,S,H] ROW_MAJOR bf16,\n"
+            "fused with per-token weight scaling. expert_out is the FFN\n"
+            "output in moe_group's grouped layout; plan/offsets/grouped_scores\n"
+            "are direct outputs of moe_group (grouped_scores already encodes\n"
+            "scores[plan[i], k_slot] per row). Returns ungrouped [D,B,S,H].");
     }
 }
 

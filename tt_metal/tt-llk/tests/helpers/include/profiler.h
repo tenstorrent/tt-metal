@@ -104,7 +104,7 @@ __attribute__((always_inline)) inline void sync_threads()
 
     // wait for all the threads to set the barrier
     barrier[TRISC_ID] = 1;
-    asm volatile("fence" ::: "memory");
+    ckernel::invalidate_data_cache();
     for (std::uint32_t i = 0; i < NUM_CORES; ++i)
     {
         if (i == TRISC_ID)
@@ -113,7 +113,7 @@ __attribute__((always_inline)) inline void sync_threads()
         }
         while (barrier[i] != 1)
         {
-            asm volatile("fence" ::: "memory");
+            ckernel::invalidate_data_cache();
         }
     }
 }
@@ -169,25 +169,25 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
         if (!is_buffer_full())
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
             ++open_zone_cnt;
         }
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
     }
 
     ~zone_scoped()
     {
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
         if (is_opened)
         {
             write_entry(EntryType::ZONE_END, id16);
             --open_zone_cnt;
         }
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
     }
 };
 
@@ -210,6 +210,11 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 } // namespace llk_profiler
 
+// Profiler wall_clock timing stays live regardless of PERF_COUNTERS_COMPILED.
+// Deliberate for the perf-counter overhead investigation (issue #44891): a WC
+// build must capture profiler timing AND hardware counter values together, per
+// zone, in a single run. (Upstream main muted ZONE_SCOPED in WC builds, making
+// timing and counters mutually exclusive; we keep them integrated here.)
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
     const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();

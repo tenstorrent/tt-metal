@@ -6,7 +6,7 @@ import torch
 import ttnn
 import pytest
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_equal
 from math import isnan
 
 
@@ -124,6 +124,41 @@ def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar,
         ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape",
+    [
+        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # multi-batch, tile-aligned
+        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # 5D tensor
+        ((256,), (256,), (256,)),  # 1D flat
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("scalar", [9, 10, 7])
+def test_ttnn_where_uint32(c_shape, t_shape, f_shape, variant, condition, scalar, device):
+    torch.manual_seed(0)
+    C = torch.ones(c_shape, dtype=torch.int32) * condition
+    if variant == "TTS":
+        T = torch.randint(0, 1000, t_shape, dtype=torch.int32)
+        F = scalar
+    elif variant == "TST":
+        T = scalar
+        F = torch.randint(0, 2000, f_shape, dtype=torch.int32)
+    golden = torch.where(C.bool(), T, F).to(torch.int64) & 0xFFFFFFFF
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = scalar
+    elif variant == "TST":
+        ttnn_T = scalar
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+    result = ttnn.to_torch(ttnn_result).to(torch.int64) & 0xFFFFFFFF
 
     assert torch.equal(result, golden)
 
@@ -425,9 +460,9 @@ def test_where_tst(device, dtype, h, w, scalar):
 @pytest.mark.parametrize(
     "scalar1, scalar2",
     [
-        [15.5, 31.2],
+        [15.5, 31.25],
         [15.5, float("nan")],
-        [float("nan"), 31.2],
+        [float("nan"), 31.25],
         [float("inf"), -float("inf")],
         [-float("inf"), float("nan")],
     ],
@@ -453,10 +488,7 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
     ttnn_result = ttnn.where(ttnn_C, T, F)
     result = ttnn.to_torch(ttnn_result)
 
-    if dtype == torch.bfloat16:
-        assert_with_pcc(result, golden)
-    else:
-        assert torch_equal_nan(result, golden)
+    assert torch_equal_nan(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -879,8 +911,8 @@ def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant
 @pytest.mark.parametrize(
     "scalar_true, scalar_false",
     [
-        (15.5, 31.2),
-        (0.0, -11.33),
+        (15.5, 31.25),
+        (0.0, -11.3125),
     ],
 )
 @pytest.mark.parametrize("condition", [1, 0])
@@ -898,10 +930,7 @@ def test_where_tss_subcore_grid(device, shape, sub_core_grid, dtype, scalar_true
     ttnn_result = ttnn.where(ttnn_C, scalar_true, scalar_false, sub_core_grids=sub_core_grid)
     result = ttnn.to_torch(ttnn_result)
 
-    if dtype == torch.bfloat16:
-        assert_with_pcc(result, golden)
-    else:
-        assert torch_equal_nan(result, golden)
+    assert torch_equal_nan(result, golden)
 
 
 # Tests for INT32/UINT32 predicate with sub_core_grids — exercises the typecast path
@@ -1149,5 +1178,5 @@ def test_where_program_cache_different_broadcast_shapes(device, variant):
         false2_ttnn = ttnn.from_torch(false2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         result2 = ttnn.to_torch(ttnn.where(pred2_ttnn, scalar_true, false2_ttnn))
 
-    assert_with_pcc(expected1, result1, 0.9999)
-    assert_with_pcc(expected2, result2, 0.9999)
+    assert_equal(expected1, result1)
+    assert_equal(expected2, result2)

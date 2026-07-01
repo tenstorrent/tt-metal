@@ -121,7 +121,9 @@ def run_var(
     op_output_tensor = ttnn.var(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
-    expected_pcc = 0.999
+    # fp32 input keeps full precision through the Welford reduce.
+    # bf16 / bf8_b inputs are quantization-limited at the input.
+    expected_pcc = 0.9999 if input_a_dtype == ttnn.float32 else 0.999
     tensors = [input_tensor_a, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 

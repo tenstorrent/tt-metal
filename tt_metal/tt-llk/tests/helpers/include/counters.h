@@ -12,14 +12,18 @@
 
 #include "ckernel.h"
 
-// ============================================================================
-// L1 layout — always compiled. Shared config + per-zone data.
-// ============================================================================
+// Quasar gets a 4th compute thread (SFPU) on top of unpack/math/pack, and the
+// arm/freeze barrier below assumes exactly 3 threads (1 arm + 2 followers). The
+// build system is supposed to keep `-DPERF_COUNTERS_COMPILED` off for Quasar
+// (see `test_config.py::build_kernel_part`); this guard catches a silent
+// regression of that gate.
+#ifdef ARCH_QUASAR
+#error \
+    "Perf counters do not support Quasar yet: the entry/exit barrier hardcodes a 3-thread post count and `is_arm_thread`/`is_freeze_thread` have no LLK_TRISC_ISOLATE_SFPU path. Re-enabling for Quasar requires parameterizing PERF_NUM_SPINWAITERS by the active thread count."
+#endif
 
-#define PERF_COUNTERS_BASE_ADDR         0x169000
-#define PERF_COUNTERS_CONFIG_WORDS      200
-#define PERF_COUNTERS_DATA_WORDS        200
-#define PERF_COUNTERS_BANK_CYCLES_WORDS 5
+// L1 region constants (PERF_COUNTERS_BASE_ADDR and friends) live in perf.h next to the
+// stimuli buffer addresses so the disjoint L1 ranges are visible side-by-side.
 
 namespace llk_perf
 {
@@ -43,11 +47,7 @@ constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
     return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_ZONE_DATA_BYTES;
 }
 
-// Per-zone atomic counters used by ATINCGET-gated arm/freeze.
-// Layout in sync_ctrl block (40 bytes available):
-//   +0  : SYNC_ZONE_COMPLETE flag (existing)
-//   +16 : entry atomic counter (16B-aligned for ATINCGET)
-//   +32 : exit  atomic counter (16B-aligned for ATINCGET)
+// sync_ctrl block: +0 SYNC_ZONE_COMPLETE flag, +16 entry atomic, +32 exit atomic (ATINCGET-aligned).
 constexpr std::uint32_t perf_counters_entry_atomic_addr(std::uint32_t zone)
 {
     return perf_counters_sync_ctrl_addr(zone) + 16;
@@ -58,21 +58,23 @@ constexpr std::uint32_t perf_counters_exit_atomic_addr(std::uint32_t zone)
     return perf_counters_sync_ctrl_addr(zone) + 32;
 }
 
-static_assert(PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE <= 0x16AFF4u, "Perf counter L1 layout overflows profiler region");
-
 constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
+constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR    = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
+constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MASK_ADDR + 4;
+
+// Total L1 footprint covers shared config + per-zone blocks + the trailing
+// metadata (enabled flag, bank mask, per-zone valid_count[]) written by
+// PerfCounterManager::validate_and_set_enabled().
+constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
+
+static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF4u, "Perf counter L1 layout overflows profiler region");
 
 } // namespace llk_perf
 
-// ============================================================================
 // BRISC entry points.
-// ============================================================================
 
 namespace llk_perf
 {
-
-constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR   = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
-constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR = PERF_COUNTERS_BANK_MASK_ADDR + 4;
 
 enum class counter_bank : std::uint8_t
 {
@@ -86,6 +88,18 @@ enum class counter_bank : std::uint8_t
 constexpr std::uint32_t COUNTER_BANK_COUNT = 5;
 constexpr std::uint32_t COUNTER_SLOT_COUNT = PERF_COUNTERS_CONFIG_WORDS;
 
+// Config word layout (32-bit). Built by _perf_cfg(); decoded by configure_hardware
+// and freeze_and_read_all_counters; mirrored on the host side in counters.py.
+constexpr std::uint32_t PERF_CFG_VALID_BIT     = 1u << 31; // bit 31: slot active
+constexpr std::uint32_t PERF_CFG_L1_MUX_SHIFT  = 17;       // bits 19:17
+constexpr std::uint32_t PERF_CFG_L1_MUX_MASK   = 0x7u;
+constexpr std::uint32_t PERF_CFG_COUNTER_SHIFT = 8; // bits 16:8 (9-bit counter_sel)
+constexpr std::uint32_t PERF_CFG_COUNTER_MASK  = 0x1FFu;
+constexpr std::uint32_t PERF_CFG_BANK_MASK     = 0xFFu; // bits 7:0
+
+// L1 mux position inside PERF_CNT_MUX_CTRL (bits 6:4).
+constexpr std::uint32_t PERF_CNT_MUX_CTRL_SHIFT = 4;
+
 namespace hw_access
 {
 inline void write_reg(std::uint32_t addr, std::uint32_t value)
@@ -98,32 +112,22 @@ inline std::uint32_t read_reg(std::uint32_t addr)
     return *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr);
 }
 
-// Counter bank base register address. Volatile cast prevents GCC from
-// building a CSWTCH lookup table that would shift GP-offsets.
+// Volatile index cast prevents GCC CSWTCH (would shift GP-offsets and break NC/WC bit-identity).
 inline std::uint32_t get_counter_base_addr(counter_bank bank)
 {
+    static constexpr std::uint32_t base_addrs[COUNTER_BANK_COUNT] = {
+        RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0,
+        RISCV_DEBUG_REG_PERF_CNT_FPU0,
+        RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,
+        RISCV_DEBUG_REG_PERF_CNT_L1_0,
+        RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,
+    };
+    // Guarantees every valid `counter_bank` enumerator is a safe index into base_addrs[],
+    // so the runtime check below is purely defensive against future enum growth.
+    static_assert(
+        static_cast<std::uint32_t>(counter_bank::tdma_pack) == COUNTER_BANK_COUNT - 1, "counter_bank enumerators must be contiguous 0..COUNTER_BANK_COUNT-1");
     volatile auto b = static_cast<std::uint32_t>(bank);
-    if (b == 0)
-    {
-        return RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0;
-    }
-    if (b == 1)
-    {
-        return RISCV_DEBUG_REG_PERF_CNT_FPU0;
-    }
-    if (b == 2)
-    {
-        return RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0;
-    }
-    if (b == 3)
-    {
-        return RISCV_DEBUG_REG_PERF_CNT_L1_0;
-    }
-    if (b == 4)
-    {
-        return RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0;
-    }
-    return 0u;
+    return b < COUNTER_BANK_COUNT ? base_addrs[b] : 0u;
 }
 } // namespace hw_access
 
@@ -152,11 +156,11 @@ private:
         for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
         {
             const std::uint32_t metadata = config_mem[i];
-            if ((metadata & 0x80000000u) == 0)
+            if ((metadata & PERF_CFG_VALID_BIT) == 0)
             {
                 continue;
             }
-            const std::uint8_t bank_id   = static_cast<std::uint8_t>(metadata);
+            const std::uint8_t bank_id   = static_cast<std::uint8_t>(metadata & PERF_CFG_BANK_MASK);
             const std::uint32_t bank_bit = 1u << bank_id;
             if (configured_mask & bank_bit)
             {
@@ -165,9 +169,10 @@ private:
             const counter_bank bank = static_cast<counter_bank>(bank_id);
             if (bank == counter_bank::l1)
             {
-                const std::uint8_t l1_mux = (metadata >> 17) & 0x7;
+                const std::uint8_t l1_mux = (metadata >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
                 std::uint32_t cur         = hw_access::read_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-                hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(0x7u << 4)) | ((l1_mux & 0x7u) << 4));
+                hw_access::write_reg(
+                    RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(PERF_CFG_L1_MUX_MASK << PERF_CNT_MUX_CTRL_SHIFT)) | (l1_mux << PERF_CNT_MUX_CTRL_SHIFT));
             }
             std::uint32_t counter_base = hw_access::get_counter_base_addr(bank);
             hw_access::write_reg(counter_base, 0xFFFFFFFF);
@@ -220,11 +225,11 @@ public:
             for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
             {
                 const std::uint32_t metadata = config_mem[i];
-                if (metadata & 0x80000000u)
+                if (metadata & PERF_CFG_VALID_BIT)
                 {
                     found_valid = true;
                     count++;
-                    bank_mask |= (1u << (metadata & 0xFFu));
+                    bank_mask |= (1u << (metadata & PERF_CFG_BANK_MASK));
                 }
             }
             valid_counts[zone] = count;
@@ -247,15 +252,12 @@ public:
     }
 };
 
-// ============================================================================
-// Per-arch built-in counter inventory.
-// Source: tt_metal/hw/inc/internal/tt-1xx/{wormhole,blackhole}/hw_counters.h
-// Config word: valid(31) | l1_mux<<17 (3b) | counter_id<<8 (9b) | bank_id (8b)
-// ============================================================================
+// Per-arch built-in counter inventory. Config word layout matches the PERF_CFG_* constants above.
 
 constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uint8_t mux = 0)
 {
-    return 0x80000000u | (static_cast<std::uint32_t>(mux & 0x7u) << 17) | (static_cast<std::uint32_t>(cid & 0x1FFu) << 8) | static_cast<std::uint32_t>(bank);
+    return PERF_CFG_VALID_BIT | (static_cast<std::uint32_t>(mux & PERF_CFG_L1_MUX_MASK) << PERF_CFG_L1_MUX_SHIFT) |
+           (static_cast<std::uint32_t>(cid & PERF_CFG_COUNTER_MASK) << PERF_CFG_COUNTER_SHIFT) | static_cast<std::uint32_t>(bank);
 }
 
 // clang-format off
@@ -365,14 +367,18 @@ inline void configure_and_arm_from_brisc()
 
 } // namespace llk_perf
 
-// ============================================================================
 // String-only API: zone name → 32-bit DJB2 → sequential zone id (0..MAX_ZONES-1).
-// ============================================================================
 
 namespace llk_perf
 {
 namespace detail
 {
+// `.bss.perf_counters` is NOBITS (the `.bss.*` prefix is honored by GCC) and is
+// absorbed by the catch-all `*(.bss .bss.* ...)` line in sections.ld, so these
+// symbols live inside [__ldm_bss_start, __ldm_bss_end) and are zero-initialized
+// by do_crt0() on every cold start. The named section also lets the linker
+// script document the WC-only zone allocator and keeps these symbols grouped
+// for objdump inspection.
 __attribute__((section(".bss.perf_counters"))) static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES];
 __attribute__((section(".bss.perf_counters"))) static std::uint32_t next_zone_id;
 
@@ -410,31 +416,31 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
     return 0;
 }
 
-// ============================================================================
-// perf_counter_scoped: RAII arm-at-ctor / freeze+read-at-dtor.
-// LIFO-ordered with zone_scoped: perf_ctor → zone_ctor → body → zone_dtor → perf_dtor.
-// ============================================================================
+// perf_counter_scoped: RAII arm/freeze. LIFO with zone_scoped: perf_ctor → zone_ctor → body → zone_dtor → perf_dtor.
 
 #ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
 #define _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
+// PERF_CNT_ALL is a broadcast command register shared by INSTRN+FPU; TDMA_UNPACK,
+// L1 and TDMA_PACK each have their own command register at the *2 alias. Writing
+// 1 arms (rising-edge start), 2 freezes (rising-edge stop).
 inline __attribute__((always_inline)) void arm_all_counters()
 {
-    asm volatile("" ::: "memory");
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 1u; // PERF_CNT_ALL (INSTRN+FPU)
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 1u; // TDMA_UNPACK
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 1u; // L1
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 1u; // TDMA_PACK
-    asm volatile("" ::: "memory");
+    ckernel::fence_compiler();
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 1u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2, 1u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_L1_2, 1u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2, 1u);
+    ckernel::fence_compiler();
 }
 
 inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uint32_t zone_id)
 {
-    asm volatile("" ::: "memory");
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 2u;
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 2u;
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 2u;
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 2u;
+    ckernel::fence_compiler();
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 2u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2, 2u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_L1_2, 2u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2, 2u);
 
     struct bank_regs
     {
@@ -442,12 +448,14 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         std::uint32_t out_l;
     };
 
+    // Per-bank readout pair: mode_reg drives counter_sel; out_l is the bank's
+    // OUT_L (shared cycles); OUT_H sits at out_l + 4 and is sampled per slot.
     static constexpr bank_regs banks[5] = {
-        {0xFFB12004u, 0xFFB12100u},
-        {0xFFB1201Cu, 0xFFB12120u},
-        {0xFFB12010u, 0xFFB12108u},
-        {0xFFB12034u, 0xFFB12118u},
-        {0xFFB120F4u, 0xFFB12110u},
+        {RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD},
+        {RISCV_DEBUG_REG_PERF_CNT_FPU1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU},
+        {RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK},
+        {RISCV_DEBUG_REG_PERF_CNT_L1_1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1},
+        {RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK},
     };
 
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
@@ -466,20 +474,20 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     for (std::uint32_t i = 0; i < PERF_COUNTERS_CONFIG_WORDS; ++i)
     {
         std::uint32_t cw = cfg[i];
-        if (!(cw & 0x80000000u))
+        if (!(cw & PERF_CFG_VALID_BIT))
         {
             continue;
         }
-        std::uint32_t bank_id    = cw & 0xFFu;
-        std::uint32_t counter_id = (cw >> 8) & 0x1FFu;
-        std::uint32_t l1_mux     = (cw >> 17) & 0x7u;
+        std::uint32_t bank_id    = cw & PERF_CFG_BANK_MASK;
+        std::uint32_t counter_id = (cw >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK;
+        std::uint32_t l1_mux     = (cw >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
         const bank_regs& br      = banks[bank_id];
-        if (bank_id == 3u)
+        if (bank_id == static_cast<std::uint32_t>(counter_bank::l1))
         {
-            volatile std::uint32_t tt_reg_ptr* mux = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12218u);
-            *mux                                   = (*mux & ~(0x7u << 4)) | (l1_mux << 4);
+            volatile std::uint32_t tt_reg_ptr* mux = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
+            *mux                                   = (*mux & ~(PERF_CFG_L1_MUX_MASK << PERF_CNT_MUX_CTRL_SHIFT)) | (l1_mux << PERF_CNT_MUX_CTRL_SHIFT);
         }
-        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.mode_reg) = counter_id << 8;
+        *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.mode_reg) = counter_id << PERF_CFG_COUNTER_SHIFT;
         counter_counts[out_idx]                                            = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(br.out_l + 4u);
         ++out_idx;
     }
@@ -488,11 +496,7 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
 }
 
-// Per-run-type split: arm thread opens the counter window, freeze thread closes it.
-// L1_TO_L1 / L1_CONGESTION: unpack arms (pipeline source), pack freezes (pipeline sink).
-// *_ISOLATE: same isolated thread arms and freezes its own zone.
-// Non-arm/non-freeze threads spinwait on the pc_buf semaphores so zone boundaries
-// stay symmetric across all three threads.
+// L1_TO_L1/L1_CONGESTION: unpack arms (pipeline source), pack freezes (sink). ISOLATE: same thread arms and freezes.
 template <PerfRunType run_type>
 constexpr bool is_arm_thread()
 {
@@ -521,17 +525,9 @@ constexpr bool is_freeze_thread()
 #endif
 }
 
-// pc_buf-semaphore barrier with split arm/freeze:
-//   perf_ctor:
-//     ARM thread:  fence → arm (4 MMIO writes) → sempost ×N → fence
-//     others:      fence → spinwait on entry-sem → semget → fence
-//                  — blocks until arm thread has cleared+started HW.
-//   perf_dtor:
-//     FREEZE thread: fence → freeze + 200-iter read + sync_addr write → sempost ×N → fence
-//     others:        fence → spinwait on exit-sem → semget → fence
-// Counter window = ARM arms → FREEZE freezes. No other thread touches counter regs.
-constexpr std::uint8_t PERF_ENTRY_SEM        = ckernel::semaphore::FPU_SFPU;       // entry barrier
-constexpr std::uint8_t PERF_EXIT_SEM         = ckernel::semaphore::UNPACK_TO_DEST; // exit barrier
+// pc_buf-semaphore barriers: arm/freeze thread sempost ×N, non-active threads spinwait+semget.
+constexpr std::uint8_t PERF_ENTRY_SEM        = ckernel::semaphore::FPU_SFPU;
+constexpr std::uint8_t PERF_EXIT_SEM         = ckernel::semaphore::UNPACK_TO_DEST;
 constexpr std::uint32_t PERF_NUM_SPINWAITERS = 2;
 
 template <PerfRunType run_type>
@@ -546,7 +542,7 @@ struct perf_counter_scoped
 
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
         if constexpr (is_arm_thread<run_type>())
         {
             arm_all_counters();
@@ -563,12 +559,12 @@ struct perf_counter_scoped
             }
             ckernel::semaphore_get(PERF_ENTRY_SEM);
         }
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
     }
 
     inline __attribute__((always_inline)) ~perf_counter_scoped()
     {
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
         if constexpr (is_freeze_thread<run_type>())
         {
             freeze_and_read_all_counters(zone_id);
@@ -585,15 +581,15 @@ struct perf_counter_scoped
             }
             ckernel::semaphore_get(PERF_EXIT_SEM);
         }
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
     }
 };
 #endif // _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
 } // namespace llk_perf
 
-#define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
-#define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define PERF_COUNTER_VAR_CONCAT_(a, b)   a##b
+#define PERF_COUNTER_VAR_(line)          PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
 #define MEASURE_PERF_COUNTERS(zone_name) \
     const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
 
@@ -601,4 +597,20 @@ struct perf_counter_scoped
 
 #define MEASURE_PERF_COUNTERS(zone_name)
 
+// NC build stubs — let callers invoke unconditionally; compiler folds these to nothing.
+namespace llk_perf
+{
+inline void configure_and_arm_from_brisc()
+{
+}
+} // namespace llk_perf
+
 #endif // PERF_COUNTERS_COMPILED
+
+// Convenience macro for the conventional pairing at the top of a measured scope.
+// Expands to MEASURE_PERF_COUNTERS + ZONE_SCOPED with the same `name`, so the
+// counter zone and profiler marker stay in sync. One of the two halves is empty
+// in any given build, so this never emits both timing paths at once.
+#define START_PERF_MEASURE(zone_name) \
+    MEASURE_PERF_COUNTERS(zone_name)  \
+    ZONE_SCOPED(zone_name)

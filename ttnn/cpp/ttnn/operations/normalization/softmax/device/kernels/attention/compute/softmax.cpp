@@ -9,7 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // for scale+mask+softmax:
@@ -19,19 +19,21 @@
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-void calc_numeric_stable(
-    uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {
-    auto cb_in_obj = experimental::CircularBuffer(cb_in);
-    auto cb_max_obj = experimental::CircularBuffer(cb_max);
-    auto cb_out_obj = experimental::CircularBuffer(cb_out);
+template <uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
+void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
+    auto cb_in_obj = CircularBuffer(cb_in);
+    auto cb_max_obj = CircularBuffer(cb_max);
+    auto cb_out_obj = CircularBuffer(cb_out);
 
     // calculate max val per row
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
+        cb_in,
+        cb_max_scaler,
+        cb_max,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -84,24 +86,24 @@ void kernel_main() {
     constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_11;
-    experimental::CircularBuffer cb_max_scaler_obj(cb_max_scaler);
-    experimental::CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
-    experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
-    experimental::CircularBuffer cb_fused_attn_obj(cb_fused_attn);
-    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
-    experimental::CircularBuffer cb_exps_obj(cb_exps);
-    experimental::CircularBuffer cb_scale_mask_obj(cb_scale_mask);
-    experimental::CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
+    CircularBuffer cb_fused_scale_obj(cb_fused_scale);
+    CircularBuffer cb_fused_attn_obj(cb_fused_attn);
+    CircularBuffer cb_mask_padded_obj(cb_mask_padded);
+    CircularBuffer cb_exps_obj(cb_exps);
+    CircularBuffer cb_scale_mask_obj(cb_scale_mask);
+    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_out0_obj(cb_out0);
 #ifdef NUMERIC_STABLE
     constexpr auto cb_max = tt::CBIndex::c_8;
     constexpr auto cb_x = tt::CBIndex::c_10;
-    experimental::CircularBuffer cb_max_obj(cb_max);
+    CircularBuffer cb_max_obj(cb_max);
 #else
     constexpr auto cb_x = cb_exps;
 #endif
-    experimental::CircularBuffer cb_x_obj(cb_x);
+    CircularBuffer cb_x_obj(cb_x);
 
     cb_max_scaler_obj.wait_front(1);  // comes from the reader
     cb_sum_scaler_obj.wait_front(1);  // comes from the reader
@@ -182,7 +184,7 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
+        calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #endif
 
 #ifdef CAUSAL_MASK
@@ -241,14 +243,14 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
+            calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #endif
 
         } else {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_in0, cb_max_scaler, cb_max, cb_exps);
+            calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #else
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
                 tile_regs_acquire();
@@ -275,18 +277,20 @@ void kernel_main() {
 #endif
 
         // SUM reduce with reciprocal post-processing (1/sum)
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                cb_exps,
-                cb_sum_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t) {
-                    recip_tile_init();
-                    recip_tile(0);
-                });
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_exps,
+            cb_sum_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t) {
+                recip_tile_init();
+                recip_tile(0);
+            });
 
         cb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast
 
@@ -314,6 +318,11 @@ void kernel_main() {
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(Wt);
     }  // NCHt loop
-    // cb_pop_front(cb_max_scaler, 1); // we don't actually have to do this
-    // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
+    // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
+    // the end so the CBs are left balanced.
+    cb_max_scaler_obj.pop_front(1);
+    cb_sum_scaler_obj.pop_front(1);
+#if FUSED_SCALE_MASK
+    cb_fused_scale_obj.pop_front(1);
+#endif
 }

@@ -273,6 +273,14 @@ enum class DataFormat : std::uint8_t {
     Invalid = 0xff     // Not a valid HW enum value, but useful to have it here for SW
 };
 
+// True for the 2x-packed, src-register-only DataFormats (one Src register lane holds two packed
+// sub-elements, driving the matmul EN_X2 traversal). These never appear as L1/CB formats — only as
+// an unpack_dst (Src register) format. MxFp4_2x_A/B are Quasar-only; Int8_2x/UInt8_2x are Trinity.
+constexpr inline bool is_2x_format(DataFormat format) {
+    return format == DataFormat::MxFp4_2x_A || format == DataFormat::MxFp4_2x_B || format == DataFormat::Int8_2x ||
+           format == DataFormat::UInt8_2x;
+}
+
 typedef struct {
     unsigned l1_addr_16B : 20 __attribute__((packed));
     unsigned format : 8 __attribute__((packed));

@@ -3,19 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Compile-time arguments
-    constexpr uint32_t sem_id = get_compile_time_arg_val(0);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
-    constexpr uint32_t atomic_inc_value = get_compile_time_arg_val(2);
-    constexpr uint32_t num_dests = get_compile_time_arg_val(3);
-    uint32_t dst_start_x = get_compile_time_arg_val(4);
-    uint32_t dst_start_y = get_compile_time_arg_val(5);
-    uint32_t dst_end_x = get_compile_time_arg_val(6);
-    uint32_t dst_end_y = get_compile_time_arg_val(7);
-    constexpr uint32_t test_id = get_compile_time_arg_val(8);
+    constexpr uint32_t num_of_transactions = get_arg(args::num_of_transactions);
+    constexpr uint32_t atomic_inc_value = get_arg(args::atomic_inc_value);
+    constexpr uint32_t num_dests = get_arg(args::num_dests);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+
+    // varargs: [0]=dst_start_x, [1]=dst_start_y, [2]=dst_end_x, [3]=dst_end_y.
+    uint32_t dst_start_x = get_arg(args::dst_start_x);
+    uint32_t dst_start_y = get_arg(args::dst_start_y);
+    uint32_t dst_end_x = get_arg(args::dst_end_x);
+    uint32_t dst_end_y = get_arg(args::dst_end_y);
 
     // For NOC_1, the coordinate system is inverted, so start/end need to be swapped
     if (noc_index == 1) {
@@ -23,8 +24,8 @@ void kernel_main() {
         std::swap(dst_start_y, dst_end_y);
     }
 
-    experimental::Noc noc(noc_index);
-    experimental::Semaphore semaphore(sem_id);
+    Noc noc(noc_index);
+    Semaphore semaphore(sem::sem_name);
 
     {
         DeviceZoneScopedN("RISCV0");

@@ -37,9 +37,7 @@ def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     return ["INIT", "TILE_LOOP"]  # Counter zone 0 = INIT, zone 1 = TILE_LOOP
 
 
-# Maps each run type to the kernel components whose text section sizes contribute to ELF_SIZE.
-# L1_TO_L1 sums across all three components; isolate run types use their single component.
-# L1_CONGESTION is excluded (no ELF_SIZE column).
+# Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
 _CODE_SIZE_COMPONENTS = {
     PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],
     PerfRunType.UNPACK_ISOLATE: ["unpack"],
@@ -160,11 +158,7 @@ def dump_scatter(testname: str, report: PerfReport):
     dir = create_benchmark_dir(testname)
     output_path = dir / f"{testname}.html"
 
-    # x-axis: sweep values (left to right, zipped for each sweep)
-    # y-axis: stat values (for each run type, for each stat)
-    # stat_names: e.g. mean(L1_TO_L1), mean(UNPACK_ISOLATE), ...
-    # sweep_names: e.g. tile_cnt, param2, ...
-
+    # x: sweep values, y: stat values per (run_type × stat). Names look like mean(L1_TO_L1).
     fig = go.Figure()
 
     mean_columns = [
@@ -207,7 +201,7 @@ def dump_scatter(testname: str, report: PerfReport):
 def get_unique_base_names(input_dir: Path):
     """
     Extract unique base filenames from files matching *.gw*.csv pattern.
-    For example: perf_unpack_untilize.gw0.csv -> perf_unpack_untilize
+    For example: perf_pack_untilize.gw0.csv -> perf_pack_untilize
     """
 
     csv_files = list(input_dir.glob("*.gw*.csv")) + list(
@@ -466,7 +460,10 @@ class PerfConfig(TestConfig):
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
-            results.append(get_stats(ProfilerData.concat(variant_raw_data)))
+            # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
+            stats_df = get_stats(ProfilerData.concat(variant_raw_data))
+            if not stats_df.empty:
+                results.append(stats_df)
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)

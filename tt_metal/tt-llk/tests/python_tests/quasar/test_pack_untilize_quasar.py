@@ -79,6 +79,10 @@ def generate_pack_untilize_combinations(
         if not is_supported_format_conversion(in_fmt, out_fmt):
             continue
 
+        # MX as output format produces flaky results on Quasar.
+        if out_fmt.is_mx_format():
+            continue
+
         for dest_acc in get_dest_acc_modes(in_fmt):
             for dest_sync in dest_sync_modes:
                 for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
@@ -93,6 +97,10 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Int16,
         DataFormat.Int32,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ],
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
@@ -117,7 +125,12 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
     )
 
     generate_golden = get_golden_generator(UntilizeGolden)
-    golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+    golden_tensor = generate_golden(
+        src_A,
+        formats.output_format,
+        input_dimensions,
+        input_format=formats.input_format,
+    )
 
     num_faces = 4
     configuration = TestConfig(
@@ -148,6 +161,10 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=(
+            formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
+        ),
     )
 
     res_from_L1 = configuration.run().result
@@ -159,5 +176,7 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

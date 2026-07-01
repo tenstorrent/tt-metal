@@ -7,6 +7,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
@@ -59,7 +60,7 @@ ttnn::Tensor routed_expert_ffn_bh(
 
     auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
 
-    auto gate_up_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto gate_up_config_no_act = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {GRID_X, gate_up_grid_y},
         .in0_block_w = gate_up_in0_bw,
         .out_subblock_h = 1,
@@ -76,6 +77,9 @@ ttnn::Tensor routed_expert_ffn_bh(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
+    // Gate matmul: leave silu un-fused here so we can fuse it into the
+    // downstream multiply (which lets us collapse silu + multiply + reshard
+    // into a single op).
     auto gate_result = ttnn::matmul(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/gate_proj,
@@ -83,8 +87,8 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::string("silu"),
+        /*program_config=*/gate_up_config_no_act,
+        /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
     auto up_result = ttnn::matmul(
@@ -94,22 +98,31 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
+        /*program_config=*/gate_up_config_no_act,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    // In-place multiply: writes into gate_result's block-sharded L1 buffer.
-    // Reshard to L1 interleaved afterwards so the down matmul sees an unsharded
-    // input A (logical Kt = N_gate_tiles, no divisor constraint on in0_block_w).
-    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
-    up_result.deallocate();
-
-    auto activated = ttnn::to_memory_config(
-        /*tensor=*/gate_result,
+    // Fused silu + multiply + reshard: multiply applies silu to lhs (gate)
+    // before the elementwise product and writes the result directly into L1
+    // interleaved layout — collapsing what used to be three separate ops
+    // (gate-matmul fused-silu, multiply_, to_memory_config) into the single
+    // BinaryNg dispatch. The down matmul reads the L1-interleaved buffer
+    // (no in0_block_w divisor constraint).
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const std::array<EltwiseUnaryWithParam, 1> lhs_silu{
+        EltwiseUnaryWithParam(UnaryOpType::SILU)};
+    auto activated = ttnn::multiply(
+        /*lhs=*/gate_result,
+        /*rhs=*/up_result,
+        /*output_dtype=*/std::nullopt,
         /*memory_config=*/ttnn::L1_MEMORY_CONFIG,
-        /*dtype=*/std::nullopt,
-        /*output_tensor=*/std::nullopt);
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
+        /*lhs_activations=*/lhs_silu,
+        /*rhs_activations=*/{});
     gate_result.deallocate();
+    up_result.deallocate();
 
     // --- Down matmul config ---
     // Input A is L1-interleaved (not sharded) so in0_block_w only needs to

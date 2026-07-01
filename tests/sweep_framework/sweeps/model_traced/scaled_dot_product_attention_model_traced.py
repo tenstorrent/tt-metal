@@ -3,29 +3,68 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    replicate_with_topology,
-    mesh_tensor_to_torch,
-    get_mesh_composer,
-    reconcile_golden_to_actual,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    dispatch_axis_for_grid,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    program_config_grid_bounds,
+    reconcile_golden_to_actual,
+    replicate_with_topology,
+)
+
+# Device is opened per-vector (see _ensure_vector_device) so each vector can use
+# the dispatch axis its traced SDPAProgramConfig grid needs (some touch x=7/ROW,
+# others y=9/COL). Cached and only reopened when the required axis changes.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is None or axis != _CUR_AXIS:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(get_model_traced_mesh_shape(), dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+    return _CUR_DEVICE
+
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            # best-effort teardown — a failed device close must not mask the real test result
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+
+
+def _vector_dispatch_axis(kwargs):
+    pc = kwargs.get("program_config")
+    pc_val = pc.get("value", "") if isinstance(pc, dict) else str(pc or "")
+    return dispatch_axis_for_grid(*program_config_grid_bounds(pc_val))
+
+
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
     extract_named_tensor_kwargs,
     parse_dict_value,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -100,11 +139,9 @@ def invalidate_vector(test_vector) -> tuple:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+    # Device is opened per-vector in run() (see _ensure_vector_device).
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def _sdpa_input_shard_axis_and_factor(placement_dict):
@@ -162,6 +199,10 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Open (or reuse) a mesh device whose dispatch axis matches this vector's
+    # traced program_config grid (fixture yielded None; we own the device here).
+    device = _ensure_vector_device(_vector_dispatch_axis(kwargs))
+
     raw_placement_a = kwargs.get("input_a_tensor_placement", None)
     input_a_tensor_placement = raw_placement_a
     raw_placement_b = kwargs.get("input_b_tensor_placement", None)
@@ -184,7 +225,13 @@ def run(
     if output_memory_config is not None and "SHARDED" in str(output_memory_config):
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
+    # Exclude program_config: build_op_kwargs would parse it (via dict_to_program_config)
+    # with the raw traced grid, which can be a different arch's grid (e.g. Blackhole
+    # 11x10) that overflows this device. The dedicated block below parses it AND clamps
+    # the grid to this device's compute grid, so it must own program_config.
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"is_causal", "program_config"}, output_memory_config=output_memory_config
+    )
 
     # The master trace may record attention_sink and sliding_window_size as explicit kwargs
     # (possibly None). In combined vector files, absent keys from other configs are
@@ -199,19 +246,80 @@ def run(
         if key in kwargs and key not in absent_keys and kwargs[key] is None and key not in op_kwargs:
             op_kwargs[key] = None
 
-    # Clear sharded memory_config from op_kwargs too
+    # Restore memory_config from traced kwargs when master recorded it
+    traced_memory_config = kwargs.get("memory_config")
+    if (
+        "memory_config" not in absent_keys
+        and traced_memory_config is not None
+        and traced_memory_config != "__ABSENT__"
+        and "memory_config" not in op_kwargs
+    ):
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
 
-    # Validate program_config grid fits current device
-    pc = op_kwargs.get("program_config")
-    if pc is not None:
-        try:
-            device_grid = device.compute_with_storage_grid_size()
-            pc_grid = pc.compute_with_storage_grid_size
-            if pc_grid.x > device_grid.x or pc_grid.y > device_grid.y:
-                del op_kwargs["program_config"]
-        except Exception:
-            del op_kwargs["program_config"]
+    # Validate program_config grid fits current device.
+    # Only remove if the grid genuinely exceeds the device; keep it (even if None)
+    # when the master trace had it, to avoid missing_key diffs.
+    # build_op_kwargs strips program_config; parse from raw kwargs if present
+    if "program_config" not in op_kwargs:
+        raw_pc = kwargs.get("program_config")
+        if raw_pc is not None and raw_pc != "__ABSENT__":
+            if isinstance(raw_pc, dict) and raw_pc.get("type") == "SDPAProgramConfig":
+                import re
 
+                val = raw_pc.get("value", "")
+                # Grid recorded as "(x=8,y=8)" or "8-9" (a grid SIZE).
+                gm = re.search(r"compute_with_storage_grid_size=\(x=(\d+),y=(\d+)\)", val) or re.search(
+                    r"compute_with_storage_grid_size=(\d+)-(\d+)", val
+                )
+                qm = re.search(r"q_chunk_size=(\d+)", val)
+                km = re.search(r"k_chunk_size=(\d+)", val)
+                em = re.search(r"exp_approx_mode=(\w+)", val)
+                mcm = re.search(r"max_cores_per_head_batch=(\d+)", val)
+                # sub_core_grids keeps kernels off dispatch cores; preserve it.
+                sub_core_grids = None
+                if "sub_core_grids=std::nullopt" not in val:
+                    ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", val)
+                    if ranges:
+                        sub_core_grids = ttnn.CoreRangeSet(
+                            {
+                                ttnn.CoreRange(ttnn.CoreCoord(int(a), int(b)), ttnn.CoreCoord(int(c), int(d)))
+                                for a, b, c, d in ranges
+                            }
+                        )
+                if gm:
+                    grid_x, grid_y = int(gm.group(1)), int(gm.group(2))
+                    # The traced grid can come from a different arch (e.g. a
+                    # Blackhole 11x10 grid) and overflow this device, tripping
+                    # "num_cores <= compute_with_storage_grid_size.x*.y". The grid
+                    # is only a parallelization hint — SDPA's result is grid-
+                    # independent — so clamp it to this device's actual compute
+                    # grid. When the traced grid overflows, the traced
+                    # sub_core_grids (cores keyed to that larger grid) no longer
+                    # fits either, so drop it and let the op use the clamped grid.
+                    try:
+                        _dg = device.compute_with_storage_grid_size()
+                        _dx, _dy = int(_dg.x), int(_dg.y)
+                    except Exception:
+                        _dx = _dy = None
+                    if _dx is not None and (grid_x > _dx or grid_y > _dy):
+                        grid_x, grid_y = min(grid_x, _dx), min(grid_y, _dy)
+                        sub_core_grids = None
+                    pc_kwargs = dict(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+                        q_chunk_size=int(qm.group(1)) if qm else 0,
+                        k_chunk_size=int(km.group(1)) if km else 0,
+                    )
+                    if em:
+                        pc_kwargs["exp_approx_mode"] = em.group(1).lower() == "true"
+                    if mcm:
+                        pc_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
+                    if sub_core_grids is not None:
+                        pc_kwargs["sub_core_grids"] = sub_core_grids
+                    op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**pc_kwargs)
+            elif not isinstance(raw_pc, dict):
+                op_kwargs["program_config"] = raw_pc
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     # Also check kwargs for shapes in case they're passed as extra kwargs
     if input_b_shape is None or input_b_shape == "__ABSENT__":
@@ -268,24 +376,18 @@ def run(
     torch_k_for_golden = torch_k
     torch_v_for_golden = torch_v
 
-    # Handle GQA (Grouped Query Attention) - if K/V have fewer heads, replicate for golden
+    # Handle GQA (Grouped Query Attention) - interleaved repeat matching ttnn layout
     if num_heads_k < num_heads_q:
         repeat_factor = num_heads_q // num_heads_k
-        torch_k_for_golden = torch_k_for_golden.repeat(1, repeat_factor, 1, 1)
-        if num_heads_q % num_heads_k != 0:
-            remaining = num_heads_q - (repeat_factor * num_heads_k)
-            torch_k_for_golden = torch.cat(
-                [torch_k_for_golden, torch_k_for_golden[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1
-            )
+        torch_k_for_golden = torch.cat(
+            [torch_k_for_golden[:, i : i + 1, :, :].repeat(1, repeat_factor, 1, 1) for i in range(num_heads_k)], dim=1
+        )
 
     if num_heads_v < num_heads_q:
         repeat_factor = num_heads_q // num_heads_v
-        torch_v_for_golden = torch_v_for_golden.repeat(1, repeat_factor, 1, 1)
-        if num_heads_q % num_heads_v != 0:
-            remaining = num_heads_q - (repeat_factor * num_heads_v)
-            torch_v_for_golden = torch.cat(
-                [torch_v_for_golden, torch_v_for_golden[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1
-            )
+        torch_v_for_golden = torch.cat(
+            [torch_v_for_golden[:, i : i + 1, :, :].repeat(1, repeat_factor, 1, 1) for i in range(num_heads_v)], dim=1
+        )
 
     # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
     # Always use DRAM interleaved for the round-trip (safe on any device).
@@ -322,12 +424,55 @@ def run(
     torch_k_golden = torch_k_for_golden.to(torch.float32)
     torch_v_golden = torch_v_for_golden.to(torch.float32)
 
+    # Reconstruct an explicit attn_mask when the master passed one (non-causal
+    # configs). Generate it once and use the SAME tensor for golden + device so
+    # PCC matches; dropping it is an attn_mask extra_key diff + wrong golden.
+    attn_mask_info = extract_named_tensor_kwargs(kwargs, "attn_mask")
+    torch_attn_mask = None
+    if attn_mask_info is not None and attn_mask_info.get("shape"):
+        torch_attn_mask = (torch.rand(tuple(attn_mask_info["shape"])) * 2 - 1).to(torch.float32)
+
     # Trace-validation mode: every chip receives the FULL per-chip Q/K/V via
     # replicate_with_topology and runs SDPA on them. The gathered output is the
     # per-chip SDPA tiled along the shard axis — handled by
-    # reconcile_golden_to_actual below.
+    # reconcile_golden_to_actual below. With an explicit attn_mask, is_causal
+    # must be False (torch rejects both).
+    _golden_causal = bool(is_causal) and torch_attn_mask is None
+    # Match the op's scale. The model can pass a custom scale (e.g. Gemma's
+    # query_pre_attn_scalar -> scale=1.0, not the 1/sqrt(head_dim) torch default);
+    # the device op gets it via op_kwargs, so the golden must use it too or the
+    # attention weights diverge (≈0.1 PCC). None -> torch's default scale.
+    _scale = kwargs.get("scale")
+    if _scale == "__ABSENT__":
+        _scale = None
+
+    # Sliding-window attention (e.g. Gemma): the op restricts each query to the
+    # last `sliding_window_size` keys on top of the causal mask. torch SDPA has no
+    # sliding-window flag, so build the causal+window mask explicitly and feed it
+    # in (is_causal must then be False). Without this the golden attends the full
+    # causal range and diverges past the window (≈0.5 PCC).
+    _sw = kwargs.get("sliding_window_size")
+    if _sw == "__ABSENT__":
+        _sw = None
+    if _sw is not None and int(_sw) > 0 and _golden_causal:
+        q_len = torch_q_golden.shape[-2]
+        k_len = torch_k_golden.shape[-2]
+        # Queries align to the end of the key sequence (prefill q_len == k_len);
+        # query qi attends keys kj with (kj <= qi) and (kj > qi - window).
+        offset = k_len - q_len
+        qi = torch.arange(q_len).view(-1, 1) + offset
+        kj = torch.arange(k_len).view(1, -1)
+        allowed = (kj <= qi) & (kj > qi - int(_sw))
+        torch_attn_mask = torch.where(allowed, 0.0, float("-inf")).to(torch.float32)
+        _golden_causal = False
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q_golden, torch_k_golden, torch_v_golden, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
+        torch_q_golden,
+        torch_k_golden,
+        torch_v_golden,
+        attn_mask=torch_attn_mask,
+        dropout_p=0.0,
+        is_causal=_golden_causal,
+        scale=_scale,
     )
 
     # Check for attention_sink named tensor kwarg (pre-allocated tensor)
@@ -363,6 +508,31 @@ def run(
                 memory_config=as_mem_cfg,
             )
         op_kwargs["attention_sink"] = preallocated_attention_sink
+
+    # Build the ttnn attn_mask on device only when the master actually traced one
+    # (attn_mask_info present). torch_attn_mask may instead be a golden-only
+    # sliding-window mask we synthesized above — the device op applies that window
+    # itself via sliding_window_size, so it must NOT be turned into a device
+    # attn_mask (and attn_mask_info is None there, which would crash on .get).
+    if torch_attn_mask is not None and attn_mask_info is not None:
+        am_dtype = attn_mask_info.get("dtype") or dtype_q
+        if isinstance(am_dtype, dict):
+            am_dtype = parse_dict_value("attn_mask_dtype", am_dtype) or dtype_q
+        am_layout = attn_mask_info.get("layout") or layout_q
+        if isinstance(am_layout, dict):
+            am_layout = parse_dict_value("attn_mask_layout", am_layout) or layout_q
+        am_mem = attn_mask_info.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+        if isinstance(am_mem, dict):
+            am_mem = parse_dict_value("attn_mask_memory_config", am_mem) or ttnn.DRAM_MEMORY_CONFIG
+        am_placement = attn_mask_info.get("tensor_placement")
+        if is_mesh_device and am_placement:
+            op_kwargs["attn_mask"] = create_tensor_on_mesh(
+                torch_attn_mask, device, am_dtype, am_layout, am_mem, am_placement
+            )
+        else:
+            op_kwargs["attn_mask"] = ttnn.from_torch(
+                torch_attn_mask, dtype=am_dtype, layout=am_layout, device=device, memory_config=am_mem
+            )
 
     # TTNN execution
     # GQA K/V used to take a replicate_with_topology path. With V2's global
@@ -405,30 +575,27 @@ def run(
         v_tensor = ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.transformer.scaled_dot_product_attention(
+    ttnn_output = ttnn.transformer.scaled_dot_product_attention(
         q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs
     )
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+    output_tensor = mesh_tensor_to_torch(ttnn_output, device if is_mesh_device else None)
+    if is_mesh_device and output_tensor.shape != torch_output_golden.shape:
+        dev_tensors = ttnn.get_device_tensors(ttnn_output)
+        output_tensor = ttnn.to_torch(dev_tensors[0])
     e2e_perf = stop_measuring_time(start_time)
 
-    # Compare raw golden (float32) against TTNN output.
-    # Do NOT requantize the golden — that introduces double-quantization error.
-    # LoFi compute kernels have lower precision — use relaxed threshold.
     ckc = op_kwargs.get("compute_kernel_config")
     is_lofi = False
     if ckc is not None:
         try:
             is_lofi = ckc.math_fidelity == ttnn.MathFidelity.LoFi
         except Exception:
-            pass  # math_fidelity attr may not exist on all config types
-    pcc_threshold = 0.98 if is_lofi else 0.99
-    # The slice-then-concat golden already mirrors the runtime sharded
-    # semantics; the residual gap (~0.02) is bfloat16 dest-acc rounding plus
-    # the unmodeled attention_sink scalar. Cap at 0.95 to flag regressions
-    # without rejecting that noise. TODO: model attention_sink in the golden.
-    pcc_threshold = min(pcc_threshold, 0.95)
-    if is_mesh_device:
+            # compute_kernel_config without a math_fidelity attr — treat as not-LoFi
+            pass
+    # BFLOAT8_B K/V has lower precision — relax PCC threshold
+    is_low_precision_kv = str(input_b_dtype) in ("DataType.BFLOAT8_B", "DataType.BFLOAT4_B")
+    pcc_threshold = 0.98 if is_lofi else (0.97 if is_low_precision_kv else 0.99)
+    if is_mesh_device and output_tensor.shape != torch_output_golden.shape:
         torch_output_golden = reconcile_golden_to_actual(
             torch_output_golden, output_tensor, input_a_tensor_placement, input_b_tensor_placement
         )

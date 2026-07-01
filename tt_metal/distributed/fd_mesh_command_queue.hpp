@@ -33,12 +33,6 @@ struct MeshCoreDataReadDescriptor;
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
-struct DeviceMemoryAddress {
-    MeshCoordinate device_coord;
-    CoreCoord virtual_core_coord;
-    DeviceAddr address{};
-};
-
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     // This class can now access private members of FDMeshCommandQueue
@@ -62,8 +56,7 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
-        std::unordered_set<uint32_t>& chip_ids_in_workload,
-        uint32_t program_runtime_id);
+        std::unordered_set<uint32_t>& chip_ids_in_workload);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signals to these subgrids.
@@ -74,13 +67,6 @@ private:
         bool mcast_go_signals,
         bool unicast_go_signals,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
-    // When the device profiler is not enabled, launch messages are identical across all physical devices running the
-    // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
-    // launch message must be unique across physical devices to accurately capture program execution time on host and
-    // device. This API is responsible for updating the launch message before writing it to each device (see
-    // tt_metal/api/tt-metalium/dev_msgs.h for a description of how the host_assigned_id field is generated).
-    void update_launch_messages_for_device_profiler(
-        ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
     // Access a reference system memory manager, which acts as a global host side state manager for
@@ -204,11 +190,15 @@ protected:
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void submit_memcpy_request(
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {}) override;
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+    void invalidate_prefetcher_cache_after_pinned_write() override;
 
 public:
     FDMeshCommandQueue(
@@ -241,6 +231,11 @@ public:
         uint32_t size_bytes,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_write_dram_core_counter(
+        tt::stl::Span<const DeviceMemoryAddress> targets,
+        uint32_t value,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
@@ -256,7 +251,8 @@ public:
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
         const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+        tt::stl::Span<const uint32_t> workers_per_sub_device) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;

@@ -110,9 +110,7 @@ def _compute_single(df: pd.DataFrame) -> dict:
     instrn_cycles = _avg_cycles(df, "INSTRN_THREAD")
     pack_cycles = _avg_cycles(df, "TDMA_PACK")
 
-    # ── Compute Utilization (FPU bank) ──
-    # Counter names match tt-metal PerfCounterType enum
-    # (see tt_metal/tools/profiler/perf_counters.hpp).
+    # Compute Utilization (FPU bank). Counter names mirror tt-metal PerfCounterType.
     fpu_instruction = _avg_count(df, "FPU", "FPU_COUNTER")
     fpu_or_sfpu = _avg_count(df, "FPU", "MATH_COUNTER")
     fpu_utilization = _safe_div(fpu_instruction, fpu_cycles)
@@ -148,10 +146,7 @@ def _compute_single(df: pd.DataFrame) -> dict:
     flow1 = _safe_div(srcb_avail, unpack1_busy)
     flow_avg = _avg_pair(flow0, flow1)
 
-    # ── Packer Metrics (TDMA_PACK bank) ──
-    # PACKER_DEST_READ_AVAILABLE (id 11) and PACKER_BUSY (id 18) exist on both
-    # WH (per-engine 0..3 also exposed) and BH (single packer). Using the
-    # aggregate IDs keeps metrics arch-agnostic.
+    # Packer Metrics — aggregate IDs work on both WH (per-engine also exposed) and BH (single packer).
     packer_busy = _avg_count(df, "TDMA_PACK", "PACKER_BUSY")
     pack_utilization = _safe_div(packer_busy, pack_cycles)
     dest_read = _avg_count(df, "TDMA_PACK", "PACKER_DEST_READ_AVAILABLE")

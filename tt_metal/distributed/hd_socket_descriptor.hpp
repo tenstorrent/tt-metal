@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
@@ -52,11 +53,15 @@ struct HDSocketDescriptor {
     uint32_t core_x = 0;     // Logical core coordinate X
     uint32_t core_y = 0;     // Logical core coordinate Y
 
+    // Owning device's mesh coordinate (1 entry per mesh dim), so the connector can rebuild the MeshCoreCoord.
+    std::vector<uint32_t> mesh_coord;
+
     // --- Pre-resolved transport info (connector uses these to bypass MetalContext) ---
     uint32_t virtual_core_x = 0;             // Virtual (translated) core coordinate X
     uint32_t virtual_core_y = 0;             // Virtual (translated) core coordinate Y
     uint32_t pcie_alignment = 0;             // PCIe page alignment in bytes (e.g. 64 for Blackhole)
     uint32_t bytes_acked_device_offset = 0;  // D2H: L1 offset of bytes_acked within config buffer
+    uint32_t connector_state_offset = 0;     // Offset of HDSocketConnectorState within the SHM region
 
     /**
      * @brief Populate common fields from the owner socket's state.
