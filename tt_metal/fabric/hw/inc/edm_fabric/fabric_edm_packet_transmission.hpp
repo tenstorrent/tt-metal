@@ -146,7 +146,11 @@ FORCE_INLINE
     constexpr bool update_counter = false;
 
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+    // Standard local-write types are 0..NOC_SEND_TYPE_LAST; NOC_SPARSE_MCAST_WRITE is the one valid
+    // type above that range. Everything else (the dead multicast/read slots in between) cannot reach
+    // this path, so exclude the gap explicitly rather than widening the bound to the max enum value.
+    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST &&
+        noc_send_type != tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {

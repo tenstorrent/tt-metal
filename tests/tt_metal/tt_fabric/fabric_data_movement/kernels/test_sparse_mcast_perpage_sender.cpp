@@ -65,8 +65,12 @@ void kernel_main() {
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
+
+    // send_payload_flush_non_blocking confirms the writes left the NIU but not that they landed in the
+    // EDM's L1; closing with a send mid-flight would let the EDM advance its slot bookkeeping before the
+    // bytes arrive. Barrier before close so payload/header writes (and credit atomics) have completed.
+    noc_async_full_barrier();
     close_connections(connections);
-    noc_async_write_barrier();
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_CYCLES_INDEX] = (uint32_t)cycles_elapsed;
