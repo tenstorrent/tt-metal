@@ -177,10 +177,15 @@ def assert_with_ulp(
 
     The error is measured using the following formula:
     ``
-        | expected - actual | / ULP(expected)
+        | actual - expected | / ULP(expected)
     ``
 
     Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
+
+    ``expected_result`` is the reference (golden) tensor and ``actual_result`` is the tensor under test.
+    On failure the message reports the worst element as ``|calculated <actual> - golden <expected>| /
+    ULP(golden)``, i.e. the first printed operand is ``actual_result`` and the divisor is the ULP of
+    ``expected_result``.
 
 
     Args:
