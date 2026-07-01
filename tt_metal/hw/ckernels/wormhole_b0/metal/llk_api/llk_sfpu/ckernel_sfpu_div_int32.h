@@ -32,11 +32,9 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
             // One residual step snaps exact quotients to the correct value.
             // Note: this cannot recover precision already lost when |operand| > 2^24 is rounded during
             // the int32 -> fp32 conversion.
-            // Gate on the integer operands (in0/in1 are the vSMag values we already loaded):
             //   in1 == 0: recip is +/-inf and (a - inf*0) would produce a NaN, corrupting the
             //             intended inf/-inf/NaN result of division by zero.
-            //   in0 == 0: the quotient is already exactly 0, so the residual is dead work.
-            v_if(in0 != 0 && in1 != 0) { result = result + (float_in0 - result * float_in1) * recip_in1; }
+            v_if(in1 != 0) { result = result + (float_in0 - result * float_in1) * recip_in1; }
             v_endif;
         }
         v_endif;
