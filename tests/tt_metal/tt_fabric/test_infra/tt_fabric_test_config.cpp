@@ -882,10 +882,6 @@ std::optional<uint32_t> CmdlineParser::get_master_seed() {
 
 bool CmdlineParser::dump_built_tests() { return test_args::has_command_option(input_args_, "--dump-built-tests"); }
 
-bool CmdlineParser::exit_retry_on_slow_mode() {
-    return test_args::has_command_option(input_args_, "--retry-exit-on-slow-mode");
-}
-
 std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& default_file_name) {
     auto dump_file = test_args::get_command_option(input_args_, "--built-tests-dump-file", default_file_name);
     return dump_file;
@@ -923,10 +919,6 @@ void CmdlineParser::print_help() {
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
     log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
-    log_info(
-        LogTest,
-        "  --retry-exit-on-slow-mode                    On a systemic BW shortfall with clean link-health, exit "
-        "75 (EX_TEMPFAIL) to signal a CI runner retry instead of a hard golden-comparison failure.");
     log_info(LogTest, "");
     log_info(LogTest, "Display Options:");
     log_info(

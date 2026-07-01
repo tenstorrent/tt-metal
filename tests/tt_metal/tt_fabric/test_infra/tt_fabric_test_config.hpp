@@ -335,9 +335,6 @@ public:
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
-    // --retry-exit-on-slow-mode (#2): on a systemic BW shortfall with clean link-health, exit 75
-    // (EX_TEMPFAIL) to signal a CI runner retry instead of a hard golden-comparison failure.
-    bool exit_retry_on_slow_mode();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
     bool has_help_option();
     void print_help();

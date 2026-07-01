@@ -16,7 +16,6 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
-#include <cstdlib>
 
 #include "tt_fabric_test_context.hpp"
 #include "tt_fabric_test_constants.hpp"
@@ -208,9 +207,8 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // Validate device frequencies for performance tests only. Frequency only affects
-        // cycle-based bandwidth measurement; a healthy node running slightly off 1000MHz must
-        // not be rejected for functional/stability tests. Validation runs once (cached).
+        // Validate device frequencies for performance tests. Validation runs only once
+        // since device frequencies are cached in TestFixture for its lifetime.
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
             if (!fixture->validate_device_frequencies_for_performance_tests()) {
                 test_context.close_devices();
@@ -357,30 +355,6 @@ int main(int argc, char** argv) {
         log_error(tt::LogTest, "Failed tests:");
         for (const auto& failed_test : failed_tests) {
             log_error(tt::LogTest, "  - {}", failed_test);
-        }
-
-        // #2 (Stage-2 slow-mode classification): a *systemic* bandwidth shortfall (many tests below golden
-        // at once) matches the known per-boot HW/FW fabric-init "slow mode" rather than a code regression.
-        // A targeted shortfall (a few tests) is more likely a real regression and still hard-fails below.
-        // NOTE: this only classifies/signals -- it does NOT fix the variance (a HW/FW init/link-training
-        // root cause). The effective recovery is a retry on a FRESH runner (re-rolls the per-boot mode);
-        // --retry-exit-on-slow-mode emits EX_TEMPFAIL(75) so CI auto-retry can act on it.
-        constexpr std::size_t kSlowModeSystemicFailureThreshold = 10;
-        const bool systemic_bw_shortfall =
-            has_bandwidth_tests && failed_tests.size() >= kSlowModeSystemicFailureThreshold;
-        if (systemic_bw_shortfall) {
-            log_error(
-                tt::LogTest,
-                "Stage-2 slow-mode signature: {} tests below golden -- matches the known per-boot "
-                "fabric-init throughput variance (HW/FW), not necessarily a code regression; "
-                "a retry on a fresh runner typically lands in fast mode.",
-                failed_tests.size());
-            if (cmdline_parser.exit_retry_on_slow_mode()) {
-                log_error(
-                    tt::LogTest,
-                    "--retry-exit-on-slow-mode set: exiting 75 (EX_TEMPFAIL) to signal a CI runner retry.");
-                std::exit(75);
-            }
         }
         TT_THROW("Some tests failed golden comparison validation. See summary above.");
     }
