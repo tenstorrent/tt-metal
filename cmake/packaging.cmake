@@ -165,6 +165,7 @@ cpack_add_component(
     DEPENDS
         nn
         metalium
+        metalium-validation
     GROUP nn-validation
     DESCRIPTION "TT-NN validation tools"
 )

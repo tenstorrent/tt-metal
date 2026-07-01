@@ -34,7 +34,7 @@ import importlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from transformers.configuration_utils import PretrainedConfig
@@ -159,6 +159,13 @@ class PrefillModelAdapter(ABC):
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
     supports_pretrained: bool = True
+    # Hand-built HF-attribute config factory (zero-arg callable) for models whose
+    # ``model_type`` transformers can't load via AutoConfig (unregistered, e.g. DeepSeek-V3.2's
+    # ``deepseek_v32`` / GLM's ``glm_moe_dsa``). None → resolve the config the normal way
+    # (AutoConfig, or the runner's ``load_hf_config``). A sparse-attention variant overrides this
+    # (typically as a lazily-importing property) — see the sparse-MLA adapters. It is the single
+    # source the sparse-MLA CPU reference derives its ModelArgs from, so device + truth share dims.
+    config_builder: Optional[Callable] = None
     # Golden-trace on-disk layout: "single_file" (one safetensors/layer) or
     # "chunked_group_a_v1" (per-tensor dir of row-sharded shards). Tests dispatch on it.
     prefill_trace_layout: str = "single_file"
@@ -200,6 +207,10 @@ DEFAULT_MODEL = "deepseek_v3_d_p"
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
+    # Sparse-attention (DSA) variants — test-only today (config + sparse-MLA reference parity;
+    # no prefill serving runtime wired). See adapters/sparse_mla.py.
+    "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
+    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:GLM51Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}
