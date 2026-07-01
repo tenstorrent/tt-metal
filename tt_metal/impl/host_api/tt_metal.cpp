@@ -411,12 +411,24 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
     auto device_id = device->id();
 
+#ifdef TT_METAL_USE_EMULE
+    if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        // Emule lazily JIT-compiles inside execute_program_emulated, so is_finalized()/is_compiled()
+        // are never set — skip both asserts (HW-only) and run synchronously, mirroring LaunchProgram.
+        detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+        detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+        emule::execute_program_emulated(device, program);
+        return;
+    }
+#endif
+
     // Verify program was prepared by prior LaunchProgram call
     TT_FATAL(
         program.impl().is_finalized(),
         "Program must be finalized before calling DispatchCompiledProgramToDevice (target device {}). "
         "Call LaunchProgram on another device first.",
         device_id);
+
     TT_FATAL(
         program.impl().is_compiled(),
         "Program must be compiled on at least one device before calling DispatchCompiledProgramToDevice (target device "
