@@ -222,9 +222,6 @@ ALWI void matmul_block(
     // OutWithUntilize is the ONE exception in Stage 2: it keeps its fused pack_untilize path
     // (accumulate + untilize straight into out in the K-loop). Stage 3 folds it into finalize.
     constexpr bool is_untilize = (last_block_target == LastBlockTarget::OutWithUntilize);
-    // The K-loop packs its last block to interm (accumulate-then-finalize) for every target except
-    // the legacy fused OutWithUntilize path (which still packs straight to out).
-    constexpr bool pack_last_to_interm = !is_untilize;
     // Interm target: a downstream in-kernel op consumes the accumulated block — no finalize.
     constexpr bool target_is_interm = (last_block_target == LastBlockTarget::Interm);
     // Relu on the finalize copy (OutWithRelu). OutWithUntilize routes relu externally (caller
@@ -234,13 +231,32 @@ ALWI void matmul_block(
     // in_place: the (packer_l1_acc + accumulate-to-interm) config packs in place — one reserve_back
     // over the whole output block before the K-loop + one push_back after (issued INTERNALLY here,
     // per batch), skipping the per-K-block reserve/push/drain. Each K-block packs to absolute offsets
-    // in that fixed region and packer_l1_acc accumulates in place. Correct because the software-reload
-    // accumulation path is statically dead whenever the K-loop lands in interm (enable_reload stays
-    // false), and packer_l1_acc makes in-place L1 accumulation the whole point. Both layouts place
-    // each subblock correctly via an absolute-offset pack: TileRowMajor row-strided (M-row-group base
-    // folded into the OOP offset), SubblockMajor contiguous (subblock_idx * out_num_tiles).
-    // OutWithUntilize (pack_last_to_interm == false) keeps the per-block FIFO reserve/push.
-    constexpr bool in_place = packer_l1_acc && pack_last_to_interm;
+    // in that fixed region and packer_l1_acc accumulates in place. packer_l1_acc makes in-place L1
+    // accumulation the whole point; without it the accumulation path is a software spill+reload, which
+    // does NOT accumulate in interm and must not take this path. Both layouts place each subblock
+    // correctly via an absolute-offset pack: TileRowMajor row-strided (M-row-group base folded into the
+    // OOP offset), SubblockMajor contiguous (subblock_idx * out_num_tiles).
+    constexpr bool in_place = packer_l1_acc && !is_untilize;
+
+    // pack_last_to_interm: land the FINAL K-block in interm (vs straight to out). Do this ONLY when
+    // something downstream reads it from interm: a downstream in-kernel op (Interm target), or the
+    // finalize that materializes an in-place-accumulated block into out (in_place). For the remaining
+    // case — the non-l1_acc software-reload Out/OutWithRelu path — the last block is already the
+    // finished sum in DST, so it packs STRAIGHT TO OUT. Routing that path through interm would (a) add
+    // a redundant full-block copy and, worse, (b) DEADLOCK: the last block reloads the prior spill from
+    // interm while re-reserving a row-group in the SAME headroom-free interm CB (factory sizes interm0
+    // == out_block), a classic reserve-before-pop circular wait (see the TileRowMajor row-group reserve
+    // below + docs/hangs.md "Compute-internal deadlock variant"). OutWithUntilize keeps its fused
+    // straight-to-out pack; is_untilize excludes it from in_place, so pack_last_to_interm is false for it.
+    constexpr bool pack_last_to_interm = target_is_interm || in_place;
+
+    // activate_on_last_pack: the straight-to-out Out/OutWithRelu path (non-l1_acc, no interm round-trip)
+    // has no finalize, so relu (finalize_relu) and the SFPU Activation apply HERE, on the last-block
+    // pack — correct because that block is the fully-accumulated sum (num_k_blocks==1, or the software
+    // reload has already added every prior K-block into DST). in_place / Interm defer these to the
+    // finalize / downstream phase (a per-partial relu under packer_l1_acc would relu each partial before
+    // accumulation). OutWithUntilize (is_untilize) applies its activation externally, so it is excluded.
+    constexpr bool activate_on_last_pack = !pack_last_to_interm && !is_untilize;
 
     // Cache integer IDs for legacy LLK calls. buf_id() resolves to
     // get_cb_id() on CircularBuffer or get_id() on DataflowBuffer.
@@ -494,13 +510,21 @@ ALWI void matmul_block(
                         if constexpr (tile_order == OutputCBLayout::SubblockMajor && !in_place) {
                             pack_target_buf.reserve_back(out_num_tiles);
                         }
-                        // Accumulation packs the RAW sum into interm — no SFPU activation here. The
-                        // Activation is applied on the fully-accumulated block by the finalize copy
-                        // (applying it per-block under packer_l1_acc would activate each partial before
-                        // accumulation, not the final sum). OutWithUntilize keeps the fused straight-to-out
-                        // pack and applies its activation externally (caller PreKBlockFn), matching prior
-                        // behavior, so no activation fires here for it either.
-                        tile_regs_wait();
+                        // Straight-to-out (activate_on_last_pack): apply the SFPU Activation to the
+                        // fully-accumulated block as it packs (apply_activation_from_pack replaces the
+                        // wait). Accumulate-to-interm paths pack the RAW sum — the finalize copy (or the
+                        // downstream phase) applies the Activation there (applying it per-block under
+                        // packer_l1_acc would activate each partial before accumulation, not the final
+                        // sum). OutWithUntilize applies its activation externally (caller PreKBlockFn).
+                        if constexpr (activate_on_last_pack && Activation::activation != KernelActivation::NONE) {
+                            apply_activation_from_pack<
+                                Activation::activation,
+                                Activation::param0,
+                                Activation::param1,
+                                Activation::param2>(out_num_tiles);
+                        } else {
+                            tile_regs_wait();
+                        }
 
                         if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
                             PACK((pack_reconfig_data_format(pack_target_id)));
@@ -515,6 +539,13 @@ ALWI void matmul_block(
                                 // pack must NOT re-accumulate.
                                 PACK((llk_pack_reconfig_l1_acc(0)));
                             }
+                        }
+
+                        // Straight-to-out relu (OutWithRelu, non-l1_acc): configure the packer to relu
+                        // this block as it writes out; restored after the pack below. In-place / Interm
+                        // relu happens in the finalize / downstream phase, so it is not set here.
+                        if constexpr (activate_on_last_pack && finalize_relu) {
+                            PACK((llk_pack_relu_config(ReluConfig::zero())));
                         }
 
                         if constexpr (in_place && tile_order == OutputCBLayout::SubblockMajor) {
@@ -548,6 +579,10 @@ ALWI void matmul_block(
                         }
 
                         tile_regs_release();
+                        // Restore a clean (non-relu) packer state for the next consumer/op.
+                        if constexpr (activate_on_last_pack && finalize_relu) {
+                            PACK((llk_pack_relu_config(ReluConfig::none())));
+                        }
                         if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_uninit(pack_target_id);
                         }
@@ -684,16 +719,19 @@ ALWI void matmul_block(
         }
 
         // ── Finalize ─────────────────────────────────────────────────────────────
-        // The K-loop above accumulated the full block into interm (in the output layout). Now
-        // materialize out ONLY when the accumulated block isn't already the output:
+        // The finalize materializes out from the in-place-accumulated interm block. It runs ONLY
+        // when the K-loop actually landed the final block in interm (pack_last_to_interm) — i.e. the
+        // in_place path — AND that interm isn't already out:
         //   Interm target        → downstream in-kernel op consumes interm → NO finalize.
         //   OutWithUntilize       → legacy fused pack already wrote out in the K-loop → NO finalize
         //                           (Stage 3 folds untilize into finalize).
-        //   Out / OutWithRelu     → needs_finalize = (out != interm). If false (aliased) the
+        //   Out / OutWithRelu, non-l1_acc → the last block packed STRAIGHT TO OUT (pack_last_to_interm
+        //                           is false), relu/Activation already applied → NO finalize.
+        //   Out / OutWithRelu, in_place   → needs_finalize = (out != interm). If false (aliased) the
         //                           accumulated block in interm IS out (same CB → same dtype /
         //                           layout / tile) → zero-copy skip. If true → copy interm→out with
         //                           dtype-convert + relu + Activation.
-        if constexpr (!target_is_interm && !is_untilize) {
+        if constexpr (pack_last_to_interm && !target_is_interm && !is_untilize) {
             const bool needs_finalize = (out_cb_id != interm_cb_id);
             if (needs_finalize) {
                 matmul_block_finalize_copy<packer_l1_acc, finalize_relu, Activation>(
