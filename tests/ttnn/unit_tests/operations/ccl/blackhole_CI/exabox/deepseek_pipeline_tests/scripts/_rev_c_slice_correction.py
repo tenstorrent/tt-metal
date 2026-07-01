@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 
+
 def load_tray_map(yaml_text):
     """Load `tray_to_pcie_device_mapping.yaml` -> {tray_id: {logical_ids}}.
 
