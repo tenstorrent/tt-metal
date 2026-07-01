@@ -21,7 +21,7 @@ Deprecated Device APIs
 
 .. _ttnn-pad-to-tile-shape-deprecated:
 
-``ttnn.pad_to_tile_shape`` (removed)
+``ttnn.pad_to_tile_shape``
 ------------------------------------
 
 ``ttnn.pad_to_tile_shape`` has been removed. It previously rounded the last two
