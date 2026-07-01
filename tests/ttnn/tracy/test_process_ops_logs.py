@@ -202,6 +202,52 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
 
 
+def test_attach_counter_derived_bw_uses_real_peaks(tmp_path):
+    """End-to-end for the counter-derived BW% path: a synthetic noc-trace + fabric_link_bw
+    sidecar must yield NoC BW% against the AICLK-derived per-port peak and ETH BW% against
+    the trained per-link speed -- both computed from real peaks, not hardcoded constants."""
+    import json
+
+    # 50 GB/s/link, as the device sidecar reports on a 400G BH mesh.
+    (tmp_path / "fabric_link_bw_0.json").write_text(json.dumps({"device_id": 0, "per_link_gb_s": 50.0}))
+    # op 1: pure NoC, one port, 21.6 MB in 1 ms -> 21.6 GB/s == 50% of the 43.2 GB/s port peak.
+    # op 2: one fabric link, 25 MB in 1 ms -> 25 GB/s == 50% of the 50 GB/s link peak.
+    (tmp_path / "noc_trace_0.json").write_text(
+        json.dumps(
+            [
+                {"run_host_id": 1, "noc": "NOC_0", "num_bytes": 21_600_000, "sx": 0, "sy": 0, "type": "WRITE"},
+                {
+                    "run_host_id": 2,
+                    "noc": "NOC_0",
+                    "num_bytes": 25_000_000,
+                    "sx": 0,
+                    "sy": 0,
+                    "dx": 1,
+                    "dy": 9,
+                    "fabric_send": {"eth_chan": 0},
+                },
+            ]
+        )
+    )
+
+    # DEVICE FW cycles -> a measured AICLK of 1350 MHz (1.35 Mcycle over 1 ms), so the NoC port peak
+    # is derived from the real clock: 1350 MHz x 32 B/cycle = 43.2 GB/s.
+    def _op(gid):
+        return {
+            "global_call_count": gid,
+            "DEVICE FW DURATION [ns]": 1_000_000,
+            "DEVICE FW START CYCLE": 0,
+            "DEVICE FW END CYCLE": 1_350_000,
+        }
+
+    ops = [_op(1), _op(2)]
+    touched = process_ops_logs._attach_counter_derived_bw(iter(ops), tmp_path)
+    assert touched == 2
+    assert ops[0]["NOC BW UTIL FROM COUNTERS (%)"] == pytest.approx(50.0, abs=1.0)
+    assert "ETH BW UTIL FROM COUNTERS (%)" not in ops[0]  # no fabric traffic -> no lie
+    assert ops[1]["ETH BW UTIL FROM COUNTERS (%)"] == pytest.approx(50.0, abs=1.0)
+
+
 def test_generate_reports_writes_noc_counter_bytes_column(tmp_path):
     log_folder = tmp_path / "logs"
     report_folder = tmp_path / "reports"
