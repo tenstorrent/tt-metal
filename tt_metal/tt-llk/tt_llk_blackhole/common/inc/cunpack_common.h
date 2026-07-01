@@ -957,6 +957,7 @@ inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint3
     std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // Wait for ThCon to land the SETDMAREG GPR write before WRCFG reads it (BH)
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride
     if (context_id == 0)
     {
