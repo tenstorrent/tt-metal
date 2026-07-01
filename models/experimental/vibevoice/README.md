@@ -37,7 +37,8 @@ vibevoice/
 ├── tests/pcc/
 │   ├── lm_pcc_common.py       # shared LM PCC helpers, probes, diagnostics
 │   ├── test_lm_prefill_pcc.py # prefill hidden-state PCC (+ ISL sweep)
-│   ├── test_lm_decode_pcc.py  # decode hidden-state PCC (+ multi-step + diagnostics)
+│   ├── test_lm_decode_pcc.py  # full-LM decode after prefill (+ diagnostics)
+│   ├── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
 │   └── test_lm_pcc.py         # basic prefill smoke test
 └── tt/                      # TTNN layers (empty initially)
 ```
@@ -109,21 +110,31 @@ sequence PCC still passes the threshold.
 
 ### Decode
 
-Compares decode-step hidden states after a 32-token prefill (seed=0). Uses fused
+Two decode PCC modes (mirroring Devstral's split between layer decode and full-model paths):
+
+**Devstral-style (layer 0, recommended decode regression):** random hidden states `[1, 1, H]`,
+empty KV cache, positions **0–9**, no prefill. Isolates decode SDPA at low cache depth.
+
+```bash
+pytest models/experimental/vibevoice/tests/pcc/test_decoder_layer_pcc.py::test_decoder_layer_decode_pcc -v -s
+```
+
+**Full-LM integration:** decode-step hidden states after a 32-token prefill (seed=0). Uses fused
 `scaled_dot_product_attention_decode` on TT; HF reference uses `attn_implementation="sdpa"`.
 
 ```bash
 # Single decode step (step 0, position 32)
 pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_hidden_state_pcc -v -s
 
-# 10-step decode sweep after 32-token prefill (primary regression test)
+# 10-step decode sweep after 32-token prefill (full-LM integration)
 pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_multi_step_hidden_state_pcc -v -s
 ```
 
-| Test | Type | Asserts PCC? | Status (Blackhole, seed=0) |
-|------|------|--------------|----------------------------|
-| `test_lm_decode_hidden_state_pcc` | regression | yes (step 0) | **pass** |
-| `test_lm_decode_multi_step_hidden_state_pcc` | regression | yes (all 10 steps) | **fail** at steps 7–8 (~0.988–0.990); steps 0–6, 9 pass |
+| Test | Type | Scope | Asserts PCC? | Status (Blackhole, seed=0) |
+|------|------|-------|--------------|----------------------------|
+| `test_decoder_layer_decode_pcc` | regression | layer 0, pos 0–9, no prefill | yes (all 10 steps) | **pass** (min 0.99997) |
+| `test_lm_decode_hidden_state_pcc` | regression | full LM, step 0 @ pos 32 | yes | **pass** |
+| `test_lm_decode_multi_step_hidden_state_pcc` | integration | full LM, pos 32–41 | yes (all 10 steps) | **fail** at steps 7–8 (~0.988–0.990); steps 0–6, 9 pass |
 
 **Known issue:** multi-step failure is traced to fused decode SDPA (manual fp32 SDPA monkeypatch
 passes all 10 steps). Diagnostic tests below print localization data; they do **not** assert the
@@ -157,8 +168,8 @@ Run **regression** gates only (expect decode multi-step to fail until fused SDPA
 
 ```bash
 pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py \
-       models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_hidden_state_pcc \
-       models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_multi_step_hidden_state_pcc -v
+       models/experimental/vibevoice/tests/pcc/test_decoder_layer_pcc.py \
+       models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_hidden_state_pcc -v
 ```
 
 Run all LM prefill + decode tests (including diagnostics):
