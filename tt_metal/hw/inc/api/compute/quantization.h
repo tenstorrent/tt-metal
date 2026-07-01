@@ -98,7 +98,7 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
  * */
 // clang-format on
 ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, true), zero_point)));
+    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
 }
 
 // clang-format off
@@ -130,7 +130,7 @@ ALWI void requant_tile_init(const uint32_t zero_point) {
  * */
 // clang-format on
 ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, true), zero_point)));
+    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
 }
 
 // clang-format off

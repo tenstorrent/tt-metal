@@ -183,8 +183,14 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false, bool IS_UNSIGNED = false>
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
 void quant_init(const uint zero_point) {
+    static_assert(
+        OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8,
+        "quant_init OUTPUT_FORMAT must be Int32 or UInt8");
     // One-time setup for calculate_quant:
     //   1. load the fp32 zero-point constant into LREG2;
     //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
@@ -215,7 +221,7 @@ void quant_init(const uint zero_point) {
         // fp32 -> int. LCONST_0 (LREG9) is the HW-provided 0.0 used as the zero
         // descale. For unsigned (uint8) output, round into the full [0, 255]
         // range; otherwise clamp to signed int8 [-128, 127].
-        if constexpr (IS_UNSIGNED) {
+        if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,
@@ -235,8 +241,14 @@ void quant_init(const uint zero_point) {
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false, bool IS_UNSIGNED = false>
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
 void requant_init(const uint zero_point) {
+    static_assert(
+        OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8,
+        "requant_init OUTPUT_FORMAT must be Int32 or UInt8");
     // One-time setup for calculate_requant; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2, programs
     // ADDR_MOD_6 with dest+=2, then records the register-only compute into
@@ -261,7 +273,7 @@ void requant_init(const uint zero_point) {
         // fp32 -> int. LCONST_0 (LREG9) provides the 0.0 descale. For unsigned
         // (uint8) output, round into the full [0, 255] range; otherwise clamp to
         // signed int8 [-128, 127].
-        if constexpr (IS_UNSIGNED) {
+        if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,
