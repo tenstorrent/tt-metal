@@ -346,9 +346,18 @@ def chunk_gated_delta_rule_seq(
     # SHAPE is fixed by the bucket length T (only its values depend on valid_len), so a
     # single program serves all real lengths. Mirrors the zeros concatenated below for
     # pad_len; here it covers the [valid_len, T) region the caller padded.
-    if valid_len is not None and valid_len < T:
+    # valid_len may be a scalar (one length for all BH rows) or a per-row list/tuple of length B
+    # (batched prefill): BH rows are ordered b*H + h, so user b owns rows [b*H, (b+1)*H).
+    _is_per_row = isinstance(valid_len, (list, tuple))
+    if _is_per_row or (valid_len is not None and valid_len < T):
         _m = torch.zeros(BH, T, 1, dtype=torch.float32)
-        _m[:, :valid_len, :] = 1.0
+        if _is_per_row:
+            _Bv = len(valid_len)
+            _H = BH // _Bv
+            for _b in range(_Bv):
+                _m[_b * _H : (_b + 1) * _H, : int(valid_len[_b]), :] = 1.0
+        else:
+            _m[:, :valid_len, :] = 1.0
         _m = ttnn.from_torch(_m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device)
         q = ttnn.multiply(q, _m, memory_config=None)
         k = ttnn.multiply(k, _m, memory_config=None)

@@ -242,9 +242,16 @@ def _causal_conv1d_fir(
         # valid_len value — defeating the bounded-program goal — so select those rows with a
         # one-hot matmul instead: the program depends only on shapes (fixed per bucket), and
         # only the one-hot VALUES depend on valid_len.
+        # valid_len may be a scalar (one length for all B rows) or a per-row list/tuple of length
+        # B (batched prefill: each user's own real length picks that user's decode conv window).
         sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
-        for j in range(kernel_size - 1):
-            sel[:, j, valid_len + j] = 1.0
+        if isinstance(valid_len, (list, tuple)):
+            for bi in range(B):
+                for j in range(kernel_size - 1):
+                    sel[bi, j, int(valid_len[bi]) + j] = 1.0
+        else:
+            for j in range(kernel_size - 1):
+                sel[:, j, valid_len + j] = 1.0
         sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
         xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
         new_state = ttnn.matmul(sel_tt, xp, memory_config=mc)

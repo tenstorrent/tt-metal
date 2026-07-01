@@ -26,9 +26,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import (
+    compute_pcc,
     get_pcc_threshold,
     load_gdn_layer,
     model_path,
+    parametrize_batch,
     parametrize_mesh_tp,
     replicate_to_device,
     tp_composer,
@@ -39,14 +41,14 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-def test_gdn_tp(mesh_device, reset_seeds, ensure_gc, request):
-    """Validate TP decode output against a hand-written PyTorch reference at pos0 (batch=32).
+@parametrize_batch()
+def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
+    """Validate TP decode output against a hand-written PyTorch reference at pos0 (batch sweep).
 
     Checks PCC for the full GDN forward pass (QKV proj, conv tap, L2 norm, beta gating,
     gated RMSNorm, output proj) and runs a second decode step to catch shape/NaN regressions.
     """
     os.environ.setdefault("HF_MODEL", model_path())
-    B = 32
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
@@ -100,6 +102,183 @@ def test_gdn_tp(mesh_device, reset_seeds, ensure_gc, request):
     out2_t = ttnn.to_torch(out2, mesh_composer=tp_composer(mesh_device))
     assert not torch.isnan(out2_t).any() and out2_t.abs().max() > 0
     logger.info("PASSED: GDN TP decode (pos0 PCC + pos1 shape/NaN)")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@parametrize_batch(batches=(8, 32))
+def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
+    """Per-user GDN prefill stitched into the batched decode state.
+
+    B users are prefilled independently via forward_prefill(return_state=True);
+    assemble_batched_state stitches each user's recurrent + conv state into row u of the
+    batched buffers. A single batched decode must then match, row-by-row, B independent B=1
+    prefill+decode runs, proving correct row assembly with no cross-user contamination.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    # forward_decode keys all shapes off self.B, so the B=1 reference needs its own
+    # max_batch_size=1 args (weights tw are batch-independent and shared).
+    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} B={B}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    comp = tp_composer(mesh_device)
+    T = 128  # one prefill chunk (gated_delta_attn_seq kernel chunk_size)
+
+    xp = [torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+    xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+
+    # ---- reference: B independent B=1 prefill (capture_state) + decode ----
+    ref_rows = []
+    for u in range(B):
+        g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
+        g.reset_state()
+        g.forward_prefill(replicate_to_device(mesh_device, xp[u]), chunk_size=T, capture_state=True)
+        out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
+        ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+
+    # ---- batched: per-user prefill(return_state) -> assemble -> single batched decode ----
+    gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    rec_list, conv_list = [], []
+    for u in range(B):
+        _, rec_u, conv_u = gb.forward_prefill(replicate_to_device(mesh_device, xp[u]), chunk_size=T, return_state=True)
+        rec_list.append(rec_u)
+        conv_list.append(conv_u)
+    gb.assemble_batched_state(rec_list, conv_list)
+    x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
+    out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
+    out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
+
+    # ---- per-row comparison (flattened PCC would mask a single contaminated user) ----
+    thr = get_pcc_threshold(request)
+    pccs = [compute_pcc(ref_rows[u], out_t[0, 0, u].float()) for u in range(B)]
+    worst = min(pccs)
+    logger.info(f"per-user GDN state (B={B}) PCC min={worst:.5f} max={max(pccs):.5f}")
+    bad = [(u, p) for u, p in enumerate(pccs) if p < thr]
+    assert not bad, f"users below PCC {thr}: {bad}"
+    logger.info(f"PASSED: per-user GDN state (B={B}) worst PCC = {worst:.5f}")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+# Batches capped at (2, 4): the gated_delta_attn_seq kernel maps one BH = B*Nv_tp row per
+# core and is L1-bound, so BH must stay <= ~32 (at TP=4/Nv_tp=8, B=4 -> BH=32 fits; B>=8
+# clashes/trips the BH <= compute_grid assert). Batched prefill itself is bit-exact (PCC 1.0);
+# serving B=32 would need grouped launches, so the model still prefills per-user.
+@parametrize_batch(batches=(2, 4))
+def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request):
+    """True batched GDN prefill (one pass over all B users) vs B independent B=1 prefills.
+
+    Each user has a distinct length (padded to a common bucket + per-row valid_len) and distinct
+    content. forward_prefill_batched runs the projection / conv-FIR / chunk-parallel recurrence over
+    the whole [B,T] batch in one shot and writes the batched decode state directly. A batched decode
+    must then match, row-by-row, B independent B=1 prefill+decode runs, proving the chunk-seq kernel
+    batches correctly with per-row masking. B capped at <=4 (see kernel BH limit note above).
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} B={B}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    comp = tp_composer(mesh_device)
+
+    Tmax = 128  # common bucket (one chunk-seq kernel chunk)
+    lens = [Tmax - 8 * (u % 8) for u in range(B)]  # distinct real lengths in {72..128}
+    xp = [torch.randn(1, 1, lens[u], args.dim, dtype=torch.bfloat16) for u in range(B)]
+    xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for u in range(B)]
+
+    # ---- reference: B independent B=1 prefill(capture_state) + decode ----
+    ref_rows = []
+    for u in range(B):
+        g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
+        g.reset_state()
+        g.forward_prefill(replicate_to_device(mesh_device, xp[u]), chunk_size=Tmax, capture_state=True)
+        out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
+        ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+
+    # ---- batched: pad each user to Tmax, ONE batched prefill, then a batched decode step ----
+    gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    gb.reset_state()
+    x_pad = torch.zeros(B, Tmax, args.dim, dtype=torch.bfloat16)
+    for u in range(B):
+        x_pad[u, : lens[u], :] = xp[u][0, 0]
+    gb.forward_prefill_batched(replicate_to_device(mesh_device, x_pad), chunk_size=Tmax, valid_lens=lens)
+    x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim]
+    out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
+    out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
+
+    thr = get_pcc_threshold(request)
+    pccs = [compute_pcc(ref_rows[u], out_t[0, 0, u].float()) for u in range(B)]
+    worst = min(pccs)
+    logger.info(f"batched GDN prefill (B={B}) PCC min={worst:.5f} max={max(pccs):.5f} lens={lens}")
+    bad = [(u, lens[u], p) for u, p in enumerate(pccs) if p < thr]
+    assert not bad, f"users below PCC {thr}: {bad}"
+    logger.info(f"PASSED: batched GDN prefill (B={B}) worst PCC = {worst:.5f}")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@parametrize_batch(batches=(2,))
+def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, request):
+    """Chunk-outer BATCHED GDN prefill (forward_prefill_batched carry=True) == single-shot.
+
+    Prefilling a 2-chunk sequence as TWO carried chunks must match prefilling it in ONE call
+    (the kernel runs <=16 sub-chunks per call, so the single-shot is the ground truth). Validates
+    the batched cross-chunk recurrent + conv-state carry in isolation — the foundation for grouped
+    long-context batched prefill.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    comp = tp_composer(mesh_device)
+
+    C = 128  # GDN kernel chunk size
+    T = 2 * C  # two full chunks
+    x = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
+    xd = torch.randn(1, 1, B, args.dim, dtype=torch.bfloat16)  # one decode token per user
+
+    # ---- reference: single-shot batched prefill over the full T (ground truth) ----
+    gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    gref.reset_state()
+    gref._stable_state = True
+    gref.forward_prefill_batched(replicate_to_device(mesh_device, x.unsqueeze(0)), chunk_size=C)
+    out_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
+
+    # ---- test: two CARRIED chunks ----
+    g = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    g.reset_state()
+    g._stable_state = True
+    g.reset_state_inplace()  # zero state + clear the batched conv carry at sequence start
+    g.forward_prefill_batched(replicate_to_device(mesh_device, x[:, :C].unsqueeze(0)), chunk_size=C, carry=True)
+    g.forward_prefill_batched(replicate_to_device(mesh_device, x[:, C:].unsqueeze(0)), chunk_size=C, carry=True)
+    out_t = ttnn.to_torch(g.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
+
+    thr = get_pcc_threshold(request, default=0.99)
+    pccs = [compute_pcc(out_ref[0, 0, u].float(), out_t[0, 0, u].float()) for u in range(B)]
+    worst = min(pccs)
+    logger.info(f"batched chunk-outer carry (B={B}) PCC min={worst:.5f} max={max(pccs):.5f}")
+    assert worst >= thr, f"carry vs single-shot PCC {worst:.5f} < {thr}: {pccs}"
+    logger.info(f"PASSED: batched chunk-outer GDN prefill carry (B={B}) worst PCC = {worst:.5f}")
 
 
 @torch.no_grad()
