@@ -225,11 +225,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
-    TT_FATAL(
-        !(use_welford && (tilize_in || untilize_out)),
-        "group_norm: ROW_MAJOR interleaved input/output with use_welford=true is not supported on the "
-        "multicast path yet. Use use_welford=false, TILE layout, or a core grid where batch >= num_virtual_rows.");
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -322,6 +317,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
+    }
+
+    // The default in0/in CB sizes above hold a single out-block; that is not enough for welford+ROW_MAJOR
+    // because the reader gathers the whole per-core batch once and the compute keeps it tilized in c_0/c_29
+    // across both the welford-stats and normalization passes (no per-tile pop). The output CBs (c_16/c_30)
+    // stay per out-block.
+    uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
+    if (use_welford && (tilize_in || untilize_out)) {
+        const uint32_t welford_batch_tiles = block_ht_group_1 * per_core_Nt;
+        const uint32_t welford_outblk_tiles = (block_ht_group_1 / num_out_blocks) * per_core_Nt;
+        in0_CB_size_group_1 = welford_batch_tiles * in_single_tile_size;
+        in_CB_size_group_1 = welford_batch_tiles * in_single_tile_size;
+        out_CB_size_group_1 = welford_outblk_tiles * out_single_tile_size;
+        rm_untilize_CB_size_group_1 = welford_outblk_tiles * in_single_tile_size;
     }
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
@@ -807,7 +816,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (untilize_out) {
         constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_1,
+            .total_size = rm_untilize_CB_size_group_1,
             .core_ranges = all_cores_group_1,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -816,16 +825,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             }}},
         });
 
-        constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_1,
-            .core_ranges = all_cores_group_1,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
-                .data_format = in_data_format,
-                .page_size = in_single_tile_size,
-            }}},
-        });
+        // The c_20 reread scratch is only used by the legacy compute path (cross-group output
+        // accumulation); the welford path combines stats via mcast instead and never reads it.
+        if (!use_welford) {
+            constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_CB_size_group_1,
+                .core_ranges = all_cores_group_1,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+        }
     }
 
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
