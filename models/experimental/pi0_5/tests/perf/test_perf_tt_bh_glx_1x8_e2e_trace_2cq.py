@@ -205,5 +205,4 @@ def test_perf_1x8_traced_2cq():
         print(f"  mean (excl iter 0)     : {mean_excl0:.2f} ms")
         print(f"  min                    : {mn:.2f} ms")
         print(f"  max                    : {mx:.2f} ms")
-        print(f"  per-iter (first 5)     : {[f'{t:.2f}' for t in times[:5]]}")
         print("=" * 72)
