@@ -370,17 +370,45 @@ std::unordered_map<std::string, std::string> build_firmware_filename_map(const s
 std::once_flag g_launch_once;
 std::thread g_prewarm_thread;
 
-void run_prewarm(const std::string& out_kernel_root, const std::string& firmware_root, std::uint64_t build_key) {
-    const char* path = env_or_null("TT_METAL_KERNEL_PREWARM_MANIFEST");
-    if (path == nullptr) {
+// Base kernel names (Kernel::name(), i.e. the out_dir prefix before the per-kernel hash) that
+// the launched prewarm batch is (re)building. Written exactly once under g_launch_once, before
+// g_prewarm_thread is created, then only read; g_prewarm_names_ready publishes it with
+// release/acquire ordering so any thread that can observe an in-flight batch also observes this
+// set. Empty/false when prewarm is disabled.
+std::unordered_set<std::string> g_prewarm_kernel_names;
+std::atomic<bool> g_prewarm_names_ready{false};
+
+// Captured recipes store kernel_name as "<base>/<hash>" (see build_kernel_descriptor), whereas the
+// op-by-op gate compares against Kernel::name(), which is just "<base>". Strip the hash so the two
+// use the same key.
+std::string base_kernel_name(const std::string& kernel_name) {
+    const auto pos = kernel_name.find('/');
+    return pos == std::string::npos ? kernel_name : kernel_name.substr(0, pos);
+}
+
+// Command-queue dispatch (cq_*) and fabric (*fabric*) kernels are compiled during device
+// initialization -- before the host reaches any idle (weight-load / warmup) window -- and form a
+// set DISJOINT from model kernels: their kernel names are distinct, so their cache out_dirs
+// (<root>/<name>/<hash>/<target>/) can never coincide with a model kernel's. Excluding them from
+// the prewarm batch lets device-init compile them concurrently with the batch (no shared out_dir,
+// so no FileRenamer temp collision), instead of forcing the first ProgramImpl::compile (a
+// device-init dispatch/fabric program) to block on the entire batch. Misclassifying only costs
+// overlap, never correctness: a kept device-init kernel would still gate its program via
+// prewarm_warms_kernel(); an excluded model kernel would just compile cold.
+bool is_device_init_kernel(const std::string& base_name) {
+    return base_name.rfind("cq_", 0) == 0 || base_name.find("fabric") != std::string::npos;
+}
+
+void run_prewarm(
+    std::vector<jit_server::CompileRequest> requests,
+    const std::string& out_kernel_root,
+    const std::string& firmware_root,
+    std::uint64_t build_key) {
+    if (requests.empty()) {
+        log_warning(tt::LogMetal, "kernel prewarm: manifest empty or unreadable; skipping");
         return;
     }
     auto t0 = std::chrono::steady_clock::now();
-    std::vector<jit_server::CompileRequest> requests = read_manifest(path);
-    if (requests.empty()) {
-        log_warning(tt::LogMetal, "kernel prewarm: manifest {} empty or unreadable; skipping", path);
-        return;
-    }
 
     const auto fw_map = build_firmware_filename_map(firmware_root);
 
@@ -388,6 +416,7 @@ void run_prewarm(const std::string& out_kernel_root, const std::string& firmware
     size_t launched = 0;
     size_t skipped_build_key = 0;
     size_t skipped_dup = 0;
+    size_t skipped_device_init = 0;
     // A kernel is captured once per program instance, so shared kernels (dispatch, fabric, reused
     // ops) appear many times with the SAME out_dir. FileRenamer temp names are per-process, so two
     // concurrent builds of one out_dir collide on the temp .o and destructively corrupt the final
@@ -397,6 +426,12 @@ void run_prewarm(const std::string& out_kernel_root, const std::string& firmware
     for (const auto& req : requests) {
         if (req.build_key != build_key) {
             ++skipped_build_key;
+            continue;
+        }
+        // Device-init dispatch/fabric kernels are compiled concurrently by device init (disjoint
+        // out_dirs); skip them here so the batch overlaps device init instead of racing it.
+        if (is_device_init_kernel(base_kernel_name(req.kernel_name))) {
+            ++skipped_device_init;
             continue;
         }
         // Generated files live in the kernel dir (parent of the per-target dirs); target srcs
@@ -447,11 +482,12 @@ void run_prewarm(const std::string& out_kernel_root, const std::string& firmware
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     log_info(
         tt::LogMetal,
-        "kernel prewarm: built {} unique targets in {}ms ({} dup targets skipped, {} entries skipped for "
-        "build_key mismatch)",
+        "kernel prewarm: built {} unique targets in {}ms ({} dup targets skipped, {} device-init entries "
+        "skipped, {} entries skipped for build_key mismatch)",
         launched,
         elapsed_ms,
         skipped_dup,
+        skipped_device_init,
         skipped_build_key);
 }
 
@@ -501,17 +537,36 @@ void append_manifest_entry(const jit_server::CompileRequest& request) {
 
 void maybe_launch_prewarm(
     const std::string& out_kernel_root, const std::string& firmware_root, std::uint64_t build_key) {
-    if (env_or_null("TT_METAL_KERNEL_PREWARM_MANIFEST") == nullptr) {
+    const char* path = env_or_null("TT_METAL_KERNEL_PREWARM_MANIFEST");
+    if (path == nullptr) {
         return;
     }
     std::call_once(g_launch_once, [&]() {
-        g_prewarm_thread = std::thread([out_kernel_root, firmware_root, build_key]() {
-            try {
-                run_prewarm(out_kernel_root, firmware_root, build_key);
-            } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "kernel prewarm aborted: {}", e.what());
+        // Read + parse the manifest on this (device-init) thread so the batch's kernel-name set is
+        // PUBLISHED before g_prewarm_thread is created. That guarantees any later ProgramImpl::compile
+        // that can observe the in-flight batch also observes the set (via prewarm_warms_kernel), so the
+        // precise barrier is race-free without a condition variable.
+        std::vector<jit_server::CompileRequest> requests = read_manifest(path);
+        for (const auto& req : requests) {
+            if (req.build_key != build_key) {
+                continue;
             }
-        });
+            std::string base = base_kernel_name(req.kernel_name);
+            if (is_device_init_kernel(base)) {
+                continue;
+            }
+            g_prewarm_kernel_names.insert(std::move(base));
+        }
+        g_prewarm_names_ready.store(true, std::memory_order_release);
+
+        g_prewarm_thread =
+            std::thread([reqs = std::move(requests), out_kernel_root, firmware_root, build_key]() mutable {
+                try {
+                    run_prewarm(std::move(reqs), out_kernel_root, firmware_root, build_key);
+                } catch (const std::exception& e) {
+                    log_warning(tt::LogMetal, "kernel prewarm aborted: {}", e.what());
+                }
+            });
     });
 }
 
@@ -523,6 +578,15 @@ void wait_for_prewarm() {
     if (g_prewarm_thread.joinable()) {
         g_prewarm_thread.join();
     }
+}
+
+bool prewarm_enabled() { return env_or_null("TT_METAL_KERNEL_PREWARM_MANIFEST") != nullptr; }
+
+bool prewarm_warms_kernel(const std::string& kernel_name) {
+    if (!g_prewarm_names_ready.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return g_prewarm_kernel_names.find(kernel_name) != g_prewarm_kernel_names.end();
 }
 
 }  // namespace tt::tt_metal::kernel_prewarm

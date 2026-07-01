@@ -51,8 +51,23 @@ void maybe_launch_prewarm(
     const std::string& out_kernel_root, const std::string& firmware_root, std::uint64_t build_key);
 
 // Prewarm: block until an in-flight prewarm batch finishes (no-op if none).
-// Called at the top of ProgramImpl::compile so the op-by-op path observes a fully
-// warm cache before issuing per-op compiles.
+// Used to gate the op-by-op path so it observes a fully warm cache before issuing
+// per-op compiles of kernels the batch is (re)building.
 void wait_for_prewarm();
+
+// True iff TT_METAL_KERNEL_PREWARM_MANIFEST is set (prewarm mode is opt-in).
+bool prewarm_enabled();
+
+// Precise barrier support. True iff the launched prewarm batch is (re)building a kernel
+// with this base name (|kernel_name| is Kernel::name(), i.e. the out_dir prefix before the
+// per-kernel hash). ProgramImpl::compile calls this for each of its kernels: if any is
+// warmed by the batch, it must wait_for_prewarm() before compiling (the batch may be writing
+// that same out_dir concurrently, and FileRenamer temp names are per-process, so a concurrent
+// same-out_dir build would corrupt the ELF). If none are warmed, the program's kernels are a
+// set disjoint from the batch (e.g. device-init dispatch/fabric programs), so it may compile
+// concurrently with the batch -- no shared out_dir, no collision. Returns false until the
+// batch's kernel-name set has been published (which happens before the batch thread starts,
+// so any compile observing an in-flight batch also observes the set).
+bool prewarm_warms_kernel(const std::string& kernel_name);
 
 }  // namespace tt::tt_metal::kernel_prewarm
