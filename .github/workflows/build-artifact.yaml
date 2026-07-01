@@ -69,6 +69,14 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      bypass-cache:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Bypass ccache entirely (sets CCACHE_DISABLE=1).
+          Use for release builds to eliminate the risk of a poisoned
+          cache entry corrupting the artifact.
       platform:
         required: false
         type: string
@@ -234,6 +242,14 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      bypass-cache:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Bypass ccache entirely (sets CCACHE_DISABLE=1).
+          Use for release builds to eliminate the risk of a poisoned
+          cache entry corrupting the artifact.
       harbor-prefix:
         required: false
         type: string
@@ -435,6 +451,12 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
 
     steps:
+      - name: Bypass ccache (if requested)
+        if: ${{ inputs.bypass-cache }}
+        run: |
+          echo "CCACHE_DISABLE=1" >> $GITHUB_ENV
+          echo "::notice::ccache bypassed — CCACHE_DISABLE=1 set for a clean build from source"
+
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
