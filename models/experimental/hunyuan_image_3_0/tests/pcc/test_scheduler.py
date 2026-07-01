@@ -22,8 +22,8 @@ import sys
 
 import torch
 
-ROOT = "/home/iguser/Christy/tt-metal"
-HUNYUAN = "/home/iguser/Christy/tt-metal/HunyuanImage-3.0"
+ROOT = "/home/iguser/ign-tt/tt-metal"
+HUNYUAN = "/home/iguser/ign-tt/hunyan_instruct"
 for _p in (ROOT, HUNYUAN):
     if _p not in sys.path:
         sys.path.insert(0, _p)

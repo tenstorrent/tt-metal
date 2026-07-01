@@ -341,6 +341,23 @@ def denoise_loop(
     return latent  # torch [B, C, h, w] — feed to VAE decode
 
 
+def upload_denoise_cond_mesh(
+    cond_row: dict,
+    *,
+    seq_len: int,
+    mesh_device,
+    replicate_fn,
+    full_attn_slices=None,
+):
+    """Upload host cond dict entries needed on device for ``denoise_loop``."""
+    del seq_len, full_attn_slices  # reserved for TT attention-mask build
+    out = dict(cond_row)
+    mask = out.get("attention_mask")
+    if mask is not None and not isinstance(mask, ttnn.Tensor):
+        out["attention_mask"] = replicate_fn(mask)
+    return out
+
+
 def decode_latent(
     mesh_device,  # ttnn.MeshDevice (replicated) — the VAE decoder's device context
     latent,  # torch [B, C, h, w] diffusion latent (single frame)
