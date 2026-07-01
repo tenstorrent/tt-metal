@@ -359,7 +359,7 @@ static void matmul_tile_block(
         .hw_config =
             [&] {
                 experimental::ComputeHardwareConfig hw_cfg;
-                if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                if (mesh_device->arch() == ARCH::QUASAR) {
                     hw_cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
                         .math_fidelity = cfg.math_fidelity,
                         .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
