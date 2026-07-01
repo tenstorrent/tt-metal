@@ -323,6 +323,10 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
+    // dispatch_message_addr is not in the env-level defines_ (it is per-state), so hash it
+    // explicitly here so that ETH and WORKER dispatch configs get distinct build_key_ values
+    // and thus distinct on-disk firmware directories / precompiled dir lookups.
+    hasher.update(config.dispatch_message_addr);
 
     if (get_rtoptions().get_build_map_enabled()) {
         // Do not hash compiler version when generating compiler logs
