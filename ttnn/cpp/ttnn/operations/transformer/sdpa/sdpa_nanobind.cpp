@@ -394,9 +394,8 @@ void bind_sdpa(nb::module_& mod) {
             cache_batch_idx (int, optional): select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
                 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
             chunk_start_idx (int, optional): global position of query row 0. When set, enforces a token-level
-                causal mask on the diagonal block (the query's own block). Unset keeps legacy block-only
-                causality. Hash-excluded runtime arg; changing it does not recompile. Requires bf16 q; fp8 q
-                with this set is rejected.
+                causal mask on the diagonal block (the query's own block); toggling set/unset (None vs int)
+		selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.
             cluster_axis (int, optional): SP mesh axis used to derive the per-device chunk_start
                 (chunk_start_idx + rank*S) under sequence parallelism. Host-side only.
 
