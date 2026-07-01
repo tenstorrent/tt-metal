@@ -55,6 +55,11 @@ tool_calls_block_name: str = "tool_calls"
 
 tool_output_template: str = "<tool_result>{content}</tool_result>"
 
+REASONING_EFFORT_LOW = (
+    "Reasoning Effort: Low with shortcuts permitted.\n"
+    "Don't repeat yourself while thinking, or state what you're going to do next. Don't restate the input."
+    "Make sure every word you write is necessary and carries new imforation."
+)
 REASONING_EFFORT_MAX = (
     "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
     "You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\n"
