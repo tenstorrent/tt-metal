@@ -46,14 +46,12 @@ struct DataMovementHardwareConfig {
         tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 
-        // Build the conventional Gen1 placement for a READER/WRITER kernel
-        // (mirrors the legacy Reader/WriterDataMovementConfig convention):
-        //   READER -> NCRISC (RISCV_1) on NOC_0;  WRITER -> BRISC (RISCV_0) on NOC_1
-        // Power users who need a non-conventional placement construct a Gen1Config directly.
+        // Create a generic Gen1 config based on the role of the kernel.
         static Gen1Config create_from_role(RoleHint role);
     };
-    // For a Gen1 DM kernel (Wormhole / Blackhole), specify the Gen1Config — either built via
-    // Gen1Config::create_from_role(READER/WRITER) for the common case, or constructed directly.
+    // For a Gen1 DM kernel (Wormhole / Blackhole), a Gen1Config must be provided.
+    // You can build a Gen1Config either via the convenient factory function `create_from_role`,
+    // or construct it directly.
     std::optional<Gen1Config> gen1_config = std::nullopt;
 
     struct Gen2Config {
