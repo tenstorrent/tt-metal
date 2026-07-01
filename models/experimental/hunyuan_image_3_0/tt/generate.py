@@ -92,7 +92,8 @@ def make_recaption_logits_fn(
     lm_head,
     device,
     *,
-    wte_weight,
+    wte_tt=None,
+    wte_weight=None,
     prefix_embeds,
     image_infos,
     attn_slices,
@@ -100,7 +101,7 @@ def make_recaption_logits_fn(
     use_kv_cache: bool = False,
     max_new_tokens: int = 512,
 ):
-    """I2I recaption adapter: fixed cond ``prefix_embeds`` + wte for new AR tokens.
+    """I2I recaption adapter: fixed cond ``prefix_embeds`` + on-device wte for new AR tokens.
 
     When ``use_kv_cache=True``, runs one prefix prefill then single-token decode
     steps with per-layer K/V cache (requires ``sp_factor=1`` on the backbone).
@@ -117,8 +118,11 @@ def make_recaption_logits_fn(
     )
     from models.experimental.hunyuan_image_3_0.tt.kv_cache import HunyuanTtKvCache
 
+    if wte_tt is None and wte_weight is None:
+        raise ValueError("make_recaption_logits_fn requires wte_tt or wte_weight")
+
     prefix_len = int(prefix_embeds.shape[1])
-    wte_host = wte_weight.detach().float()
+    wte_host = wte_weight.detach().float() if wte_weight is not None else None
     kv_cache = HunyuanTtKvCache(len(model.layers)) if use_kv_cache else None
     max_cache_len = prefix_len + max_new_tokens
     cos_sin_holder: list = [None]
@@ -160,6 +164,12 @@ def make_recaption_logits_fn(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _embed_ids(ids_slice: torch.Tensor) -> ttnn.Tensor:
+        if wte_tt is not None:
+            return wte_tt.embed(ids_slice.long())
+        new_emb = F.embedding(ids_slice.long(), wte_host)
+        return _upload_hidden(new_emb)
+
     def forward_logits_fn(ids):
         B, S = ids.shape
         if S < prefix_len:
@@ -167,8 +177,7 @@ def make_recaption_logits_fn(
 
         decode_step = use_kv_cache and S > prefix_len
         if decode_step:
-            new_emb = F.embedding(ids[:, -1:].long(), wte_host)
-            hidden_tt = _upload_hidden(new_emb)
+            hidden_tt = _embed_ids(ids[:, -1:])
             query_pos = S - 1
             if cos_sin_holder[0] is None:
                 raise RuntimeError("KV cache prefill must run before decode steps")
@@ -189,13 +198,19 @@ def make_recaption_logits_fn(
             ttnn.deallocate(hidden_tt)
         else:
             if S == prefix_len:
-                hidden_host = prefix_embeds.float()
+                hidden_tt = _upload_hidden(prefix_embeds.float())
+            elif wte_tt is not None:
+                prefix_tt = _upload_hidden(prefix_embeds.float())
+                suffix_tt = wte_tt.embed(ids[:, prefix_len:].long())
+                hidden_tt = ttnn.concat([prefix_tt, suffix_tt], dim=1)
+                ttnn.deallocate(prefix_tt)
+                ttnn.deallocate(suffix_tt)
             else:
                 hidden_host = torch.cat(
                     [prefix_embeds.float(), F.embedding(ids[:, prefix_len:].long(), wte_host)],
                     dim=1,
                 )
-            hidden_tt = _upload_hidden(hidden_host)
+                hidden_tt = _upload_hidden(hidden_host)
             if use_kv_cache:
                 cos_full, sin_full = model.layers[0].self_attn.rope.prepare_cos_sin(
                     max_cache_len, image_infos=image_infos

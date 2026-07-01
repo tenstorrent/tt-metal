@@ -5,16 +5,16 @@
 # No model weights needed; tests cos/sin build + on-device apply.
 #
 # Run:
-#   cd /home/iguser/Christy/tt-metal
+#   cd /home/iguser/ign-tt/tt-metal
 #   source python_env/bin/activate
 #   python3 models/experimental/hunyuan_image_3_0/tests/pcc/test_rope_2d.py
 
 import sys, json
 import torch
 
-ROOT = "/home/iguser/Christy/tt-metal"
-HUNYUAN = "/home/iguser/Christy/tt-metal/HunyuanImage-3.0"
-WEIGHTS = "/home/iguser/Christy/HunyuanImage-3"
+ROOT = "/home/iguser/ign-tt/tt-metal"
+HUNYUAN = "/home/iguser/ign-tt/hunyan_instruct"
+WEIGHTS = "/home/iguser/ign-tt/base"
 
 for p in [ROOT, HUNYUAN]:
     if p not in sys.path:

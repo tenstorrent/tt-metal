@@ -30,7 +30,7 @@ from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR
 
 PROMPT = "make the sky more dramatic at sunset"
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "ref/tokenizer/assets/config.json"
-UPSTREAM = Path("/home/iguser/tt-ign/HunyuanImage-3.0")
+UPSTREAM = Path("/home/iguser/ign-tt/hunyan_instruct")
 HAS_INSTRUCT = (INSTRUCT_MODEL_DIR / "model.safetensors.index.json").is_file()
 HAS_UPSTREAM = UPSTREAM.is_dir()
 VIT_LAYERS = 1

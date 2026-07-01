@@ -6,6 +6,17 @@ from .i2i import (
     encode_cond_vision,
     inject_cond_vision,
 )
+from .i2i_bundle import (
+    build_i2i_inputs_embeds_tt,
+    load_tt_cond_patch_embed,
+    load_tt_cond_timestep_embedders,
+    get_tt_vae_encoder,
+    load_tt_vae_encoder,
+    load_tt_vision_stack,
+    prepare_i2i_denoise_bundle_tt,
+    prepare_recaption_ar_bundle_tt,
+)
+from ..wte import HunyuanTtWte
 from .inject import (
     scatter_cond_vision_embeddings,
     scatter_cond_vision_embeddings_multi,
@@ -41,4 +52,13 @@ __all__ = [
     "encode_cond_vision",
     "inject_cond_vision",
     "build_i2i_inputs_embeds",
+    "build_i2i_inputs_embeds_tt",
+    "load_tt_vae_encoder",
+    "get_tt_vae_encoder",
+    "load_tt_cond_patch_embed",
+    "load_tt_cond_timestep_embedders",
+    "load_tt_vision_stack",
+    "prepare_i2i_denoise_bundle_tt",
+    "prepare_recaption_ar_bundle_tt",
+    "HunyuanTtWte",
 ]

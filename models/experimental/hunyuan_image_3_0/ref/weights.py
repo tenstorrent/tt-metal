@@ -15,7 +15,7 @@ from torch import Tensor
 MODEL_DIR = Path(
     os.environ.get(
         "HUNYUAN_MODEL_DIR",
-        "/home/iguser/Christy/HunyuanImage-3",
+        "/home/iguser/ign-tt/base",
     )
 )
 
@@ -24,7 +24,7 @@ MODEL_DIR = Path(
 INSTRUCT_MODEL_DIR = Path(
     os.environ.get(
         "HUNYUAN_INSTRUCT_MODEL_DIR",
-        "/home/iguser/Christy/HunyuanImage-3-Instruct",
+        "/home/iguser/ign-tt/hunyan_instruct",
     )
 )
 
@@ -32,7 +32,7 @@ INSTRUCT_MODEL_DIR = Path(
 INSTRUCT_DISTIL_MODEL_DIR = Path(
     os.environ.get(
         "HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR",
-        "/home/iguser/Christy/HunyuanImage-3-Instruct-Distil",
+        "/home/iguser/ign-tt/hunyan_instruct",
     )
 )
 

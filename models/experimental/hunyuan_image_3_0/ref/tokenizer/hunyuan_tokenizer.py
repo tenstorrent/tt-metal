@@ -96,10 +96,42 @@ def load_config(config_path: Path = CONFIG_PATH) -> HunyuanConfig:
         return HunyuanConfig.from_dict(json.load(f))
 
 
+def _resolve_tokenizer_dir(tokenizer_dir: Path = TOKENIZER_DIR) -> Path:
+    """Prefer bundled assets/; fall back to HUNYUAN_MODEL_DIR when tokenizer.json is absent."""
+    candidates = [tokenizer_dir]
+    try:
+        from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
+
+        candidates.append(MODEL_DIR)
+    except ImportError:
+        import os
+
+        env_dir = os.environ.get("HUNYUAN_MODEL_DIR")
+        if env_dir:
+            candidates.append(Path(env_dir))
+
+    seen: set[Path] = set()
+    for d in candidates:
+        d = d.resolve()
+        if d in seen:
+            continue
+        seen.add(d)
+        if (d / "tokenizer.json").is_file():
+            return d
+
+    tried = ", ".join(str(d) for d in seen)
+    raise FileNotFoundError(
+        f"Missing tokenizer.json (checked: {tried}). "
+        f"Download from Hugging Face, e.g.:\n"
+        f"  hf download tencent/HunyuanImage-3.0 tokenizer.json "
+        f"--local-dir {tokenizer_dir}\n"
+        f"Or set HUNYUAN_MODEL_DIR to a checkpoint dir that contains tokenizer.json."
+    )
+
+
 def load_tokenizer(tokenizer_dir: Path = TOKENIZER_DIR) -> PreTrainedTokenizerFast:
-    if not (tokenizer_dir / "tokenizer.json").is_file():
-        raise FileNotFoundError(f"Missing bundled tokenizer.json under {tokenizer_dir}")
-    return AutoTokenizer.from_pretrained(str(tokenizer_dir), trust_remote_code=False)
+    resolved = _resolve_tokenizer_dir(tokenizer_dir)
+    return AutoTokenizer.from_pretrained(str(resolved), trust_remote_code=False)
 
 
 class HunyuanTokenizer:

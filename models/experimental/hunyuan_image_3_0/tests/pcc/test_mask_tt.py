@@ -8,14 +8,14 @@
 #     must be a large-negative additive value while kept entries are exactly 0.
 #
 # Run:
-#   cd /home/iguser/Christy/tt-metal
+#   cd /home/iguser/ign-tt/tt-metal
 #   python_env/bin/python models/experimental/hunyuan_image_3_0/tests/pcc/test_mask_tt.py
 
 import sys
 import torch  # test-only (reference + comparison); the TT module itself uses no torch
 
-ROOT = "/home/iguser/Christy/tt-metal"
-HUNYUAN = "/home/iguser/Christy/tt-metal/HunyuanImage-3.0"
+ROOT = "/home/iguser/ign-tt/tt-metal"
+HUNYUAN = "/home/iguser/ign-tt/hunyan_instruct"
 for p in (ROOT, HUNYUAN):
     if p not in sys.path:
         sys.path.insert(0, p)
