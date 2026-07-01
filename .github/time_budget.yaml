@@ -197,6 +197,8 @@ scaleout:
     bh_sp1-blitz: 90 #blitz specific mgd sku
     bh_sp1-mgd: 90 #general mgd sku
     bh_sp4: 150
+    bh_sp4-blitz: 150 #blitz specific mgd sku
+    bh_sp4-mgd: 150 #general mgd sku
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
