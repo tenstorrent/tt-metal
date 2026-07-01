@@ -52,7 +52,8 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
             TensorLayout(
                 output_tensor_spec.tensor_layout().get_data_type(),
                 output_tensor_spec.tensor_layout().get_page_config(),
-                *mem_config));
+                *mem_config,
+                output_tensor_spec.tensor_layout().get_alignment()));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());
@@ -144,7 +145,8 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
             TensorLayout(
                 output_tensor_spec.tensor_layout().get_data_type(),
                 output_tensor_spec.tensor_layout().get_page_config(),
-                output_mem_config));
+                output_mem_config,
+                output_tensor_spec.tensor_layout().get_alignment()));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());

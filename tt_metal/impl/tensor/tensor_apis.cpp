@@ -97,7 +97,10 @@ MeshTensor enqueue_write_tensor(
         tensor_spec_overriden_memory_config = TensorSpec(
             old_spec.logical_shape(),
             TensorLayout(
-                old_spec.tensor_layout().get_data_type(), old_spec.tensor_layout().get_page_config(), *memory_config));
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                *memory_config,
+                old_spec.tensor_layout().get_alignment()));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -225,7 +228,8 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
             TensorLayout(
                 host_tensor.tensor_spec().tensor_layout().get_data_type(),
                 host_tensor.tensor_spec().tensor_layout().get_page_config(),
-                device_tensor.memory_config())),
+                device_tensor.memory_config(),
+                host_tensor.tensor_spec().tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 }
 
@@ -339,7 +343,10 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
         tensor_spec_overriden_memory_config = TensorSpec(
             old_spec.logical_shape(),
             TensorLayout(
-                old_spec.tensor_layout().get_data_type(), old_spec.tensor_layout().get_page_config(), *memory_config));
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                *memory_config,
+                old_spec.tensor_layout().get_alignment()));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -419,7 +426,8 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
             TensorLayout(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
-                device_tensor.memory_config())),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         topology);
 }
 
@@ -522,7 +530,8 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
             TensorLayout(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
-                device_tensor.memory_config())),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 
     return coords;

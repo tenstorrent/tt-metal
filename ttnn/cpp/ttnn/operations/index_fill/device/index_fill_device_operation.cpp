@@ -69,7 +69,8 @@ IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs
         tt::tt_metal::TensorLayout(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
-            operation_attributes.memory_config));
+            operation_attributes.memory_config,
+            old_spec.tensor_layout().get_alignment()));
 }
 IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

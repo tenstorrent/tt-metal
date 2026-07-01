@@ -84,7 +84,8 @@ TensorSpec EmaDeviceOperation::compute_output_specs(
         TensorLayout(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
-            operation_attributes.output_mem_config));
+            operation_attributes.output_mem_config,
+            old_spec.tensor_layout().get_alignment()));
 }
 
 Tensor EmaDeviceOperation::create_output_tensors(

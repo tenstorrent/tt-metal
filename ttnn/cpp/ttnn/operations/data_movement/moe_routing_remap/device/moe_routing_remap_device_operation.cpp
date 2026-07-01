@@ -57,7 +57,11 @@ MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperati
     const auto& old_spec = routing_weights.tensor_spec();
     return TensorSpec(
         old_spec.logical_shape(),
-        TensorLayout(old_spec.tensor_layout().get_data_type(), old_spec.tensor_layout().get_page_config(), mem_config));
+        TensorLayout(
+            old_spec.tensor_layout().get_data_type(),
+            old_spec.tensor_layout().get_page_config(),
+            mem_config,
+            old_spec.tensor_layout().get_alignment()));
 }
 
 MoeRoutingRemapDeviceOperation::tensor_return_value_t MoeRoutingRemapDeviceOperation::create_output_tensors(
