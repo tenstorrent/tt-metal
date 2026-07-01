@@ -349,15 +349,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     }
     const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
 
-    // Roles: 1 = hub 0 (start corner, NOC0), 2 = hub 1 (end corner, NOC1), 0 = plain core.
-    auto role_of = [&](const CoreCoord& core) -> uint32_t {
+    auto role_of = [&](const CoreCoord& core) -> HubRole {
         if (core == hub0_logical) {
-            return 1;
+            return HubRole::Hub0;
         }
         if (core == hub1_logical) {
-            return 2;
+            return HubRole::Hub1;
         }
-        return 0;
+        return HubRole::Plain;
     };
 
     auto build_reader_kernel = [&](const std::vector<CoreCoord>& cores, NOC noc) {
@@ -383,7 +382,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             const bool is_sender = it != sender_id_by_core.end();
             const uint32_t sender_id = is_sender ? it->second : 0;
             reader_kernel_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{static_cast<uint32_t>(is_sender), sender_id, role_of(core)});
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    static_cast<uint32_t>(is_sender), sender_id, static_cast<uint32_t>(role_of(core))});
         }
         return reader_kernel_desc;
     };
@@ -405,12 +406,12 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     std::vector<CoreCoord> noc1_cores;
     std::vector<CoreCoord> default_noc_cores;
     for (const auto& core : all_reader_cores) {
-        const uint32_t role = role_of(core);
-        if (role == 1) {
+        const HubRole role = role_of(core);
+        if (role == HubRole::Hub0) {
             noc0_cores.push_back(core);  // hub 0 broadcasts down/right
             continue;
         }
-        if (role == 2) {
+        if (role == HubRole::Hub1) {
             noc1_cores.push_back(core);  // hub 1 broadcasts up/left
             continue;
         }
