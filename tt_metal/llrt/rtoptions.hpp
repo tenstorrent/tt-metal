@@ -332,6 +332,9 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
+    // Number of simulator clocks to pump from CQ wait loops.
+    uint32_t simulator_cq_wait_clocks = 1;
+
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -804,6 +807,8 @@ public:
     bool get_dram_backed_cq() const { return dram_backed_cq; }
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
+
+    uint32_t get_simulator_cq_wait_clocks() const { return simulator_cq_wait_clocks; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

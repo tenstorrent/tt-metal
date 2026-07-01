@@ -4,7 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import apply_rope
+from .operations import apply_allreduce, apply_rope
 from .weights import AttentionWeights
 
 
@@ -182,29 +182,18 @@ def decode_forward(
         (1, 1, 32, padded_hidden),
     )
 
-    # Slice padding AFTER bias: [1,1,B,3072] -> [1,1,B,2880].
-    # Bias already applied on padded tensor; padding columns are zeros.
-    if padded_hidden != hidden_size and mesh_config.tp > 1:
+    # Tensor parallel all-reduce (AllBroadcast, ~80μs vs RS+AG ~138μs).
+    if mesh_config.tp > 1:
+        tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+        tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+
+    # Keep tile-aligned hidden padding through CCL, then trim to model hidden size.
+    if padded_hidden != hidden_size and mesh_config.tp > 1 and tt_out.shape[-1] > hidden_size:
         tt_out = ttnn.slice(
             tt_out,
             starts=[0, 0, 0, 0],
             ends=[1, 1, batch_size, hidden_size],
             steps=[1, 1, 1, 1],
-        )
-        # Workaround: ttnn.slice on bf8 TILE produces a buffer with non-standard
-        # page layout under L1 fragmentation that CCL all_reduce misreads.
-        # DRAM round-trip normalizes the buffer. See #41640 for repro and root cause analysis.
-        tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
-        tt_out = ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)
-
-    # Tensor parallel all-reduce (AllBroadcast, ~80μs vs RS+AG ~138μs).
-    if mesh_config.tp > 1:
-        tt_out = ttnn.all_reduce(
-            tt_out,
-            num_links=ccl_manager.num_links,
-            topology=ttnn.Topology.Ring,
-            cluster_axis=mesh_config.tp_axis,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     return tt_out

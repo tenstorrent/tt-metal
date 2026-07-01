@@ -93,6 +93,32 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         auto soc_desc =
             tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+        // A simulated galaxy still drives a (mock) cluster descriptor declaring UBB boards. Report it
+        // as a real GALAXY / BLACKHOLE_GALAXY so the galaxy fabric + CCL paths engage: is_6u() ->
+        // galaxy_type "6U" -> FABRIC_1D_RING, and is_ubb_galaxy() -> get_fabric_type() -> TORUS_XY
+        // (ring wraparound). Without this the sim is SIMULATOR_WORMHOLE_B0, is_6u()=false, fabric
+        // degrades to MESH, and reduce_scatter has no forwarding direction. Falls through to the
+        // arch-based SIMULATOR_* type for non-galaxy mock clusters (n150, etc.).
+        {
+            std::unique_ptr<umd::ClusterDescriptor> sim_temp_desc = nullptr;
+            const umd::ClusterDescriptor* sim_desc = cluster_desc;
+            if (sim_desc == nullptr && rtoptions.get_mock_enabled()) {
+                sim_temp_desc = get_mock_cluster_desc(rtoptions);
+                sim_desc = sim_temp_desc.get();
+            }
+            if (sim_desc != nullptr) {
+                const auto sim_chips = sim_desc->get_all_chips();
+                if (!sim_chips.empty()) {
+                    const auto sim_board = sim_desc->get_board_type(*sim_chips.begin());
+                    if (sim_board == BoardType::UBB) {
+                        return tt::tt_metal::ClusterType::GALAXY;
+                    }
+                    if (sim_board == BoardType::UBB_BLACKHOLE) {
+                        return tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+                    }
+                }
+            }
+        }
         if (arch == tt::ARCH::WORMHOLE_B0) {
             return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
         }

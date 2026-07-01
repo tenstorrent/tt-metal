@@ -77,7 +77,12 @@ def test_llama_decoder_inference(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
+    # Set LLAMA_DUMMY_WEIGHTS=1 to run against generated weights (e.g. in the simulator, with no
+    # checkpoint staged). Defaults to real weights so on-silicon behavior is unchanged.
+    dummy_weights = os.getenv("LLAMA_DUMMY_WEIGHTS", "0") == "1"
+    model_args = TtModelArgs(
+        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=dummy_weights
+    )
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()

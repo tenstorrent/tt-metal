@@ -9,7 +9,13 @@ from typing import Dict, List, Optional, Union
 import torch
 from PIL import Image
 from pydantic import BaseModel, validator
-from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
+from transformers import pipeline
+
+try:
+    from transformers import AutoModelForVision2Seq, AutoProcessor
+except ImportError:
+    AutoModelForVision2Seq = None
+    AutoProcessor = None
 
 
 class Role(Enum):

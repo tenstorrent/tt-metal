@@ -214,6 +214,14 @@ class MLA1D(AbstractModule):
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
 
+        sync_weight_steps = os.environ.get("DEEPSEEK_SYNC_MLA_WEIGHT_STEPS") == "1"
+
+        def sync_after(label: str) -> None:
+            if sync_weight_steps:
+                logger.info(f"DSV3 MLA weight convert: {label} sync start")
+                ttnn.synchronize_device(mesh_device)
+                logger.info(f"DSV3 MLA weight convert: {label} sync end")
+
         def _load_weight(weight_name: str, shape: tuple[int, ...]) -> torch.Tensor:
             """
             Load an already-dequantized weight tensor (bfloat16) from the HF state dict.
@@ -230,6 +238,7 @@ class MLA1D(AbstractModule):
             )
             for hf_name, ttnn_name in [("q_a_layernorm", "q_norm"), ("kv_a_layernorm", "kv_norm")]
         }
+        sync_after("norms")
 
         # DRAM sharding configuration
         num_dram_banks = mesh_device.dram_grid_size().x
@@ -279,18 +288,20 @@ class MLA1D(AbstractModule):
                     wq_b_dram_memory_config,
                     (0, 0, 0),  # n=3072 already aligned (multiple of 384), no padding needed
                 ),
-            },
-            "wo": {
-                "input_tensor_b": cls._convert_weight(
-                    output_path / "wo.input_tensor_b",
-                    wo_weight,
-                    (0, -1),
-                    mesh_device,
-                    wo_dram_memory_config,
-                    (0, 0, 0),  # Pad n from 896 to 1152 (multiple of 384)
-                ),
-            },
+            }
         }
+        sync_after("wq_b")
+        linear_weight_configs["wo"] = {
+            "input_tensor_b": cls._convert_weight(
+                output_path / "wo.input_tensor_b",
+                wo_weight,
+                (0, -1),
+                mesh_device,
+                wo_dram_memory_config,
+                (0, 0, 0),  # Pad n from 896 to 1152 (multiple of 384)
+            ),
+        }
+        sync_after("wo")
 
         # Fused wq_a and wkv_a weights: concatenated along output dimension
         # Output order: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
@@ -327,6 +338,7 @@ class MLA1D(AbstractModule):
                 ),
             },
         }
+        sync_after("wq_kv_a")
 
         # wkv_b (Needs Special handling!!)
         torch_weights = _load_weight(
@@ -377,10 +389,7 @@ class MLA1D(AbstractModule):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, wkv_b2_dram_shard_spec
         )
 
-        return {
-            **norm_weight_configs,
-            **linear_weight_configs,
-            **fused_weight_configs,
+        wkv_weight_configs = {
             "wkv_b1": {
                 "input_tensor_b": cls._convert_weight(
                     output_path / "wkv_b1.input_tensor_b",
@@ -390,17 +399,26 @@ class MLA1D(AbstractModule):
                     wkv_b1_dram_memory_config,
                     (0, 0, 0),  # Pad batch from 16 to 24
                 ),
-            },
-            "wkv_b2": {
-                "input_tensor_b": cls._convert_weight(
-                    output_path / "wkv_b2.input_tensor_b",
-                    torch_weights_v,
-                    (0, None),
-                    mesh_device,
-                    wkv_b2_dram_memory_config,
-                    (0, 0, 0),  # Pad batch from 128 to 132
-                ),
-            },
+            }
+        }
+        sync_after("wkv_b1")
+        wkv_weight_configs["wkv_b2"] = {
+            "input_tensor_b": cls._convert_weight(
+                output_path / "wkv_b2.input_tensor_b",
+                torch_weights_v,
+                (0, None),
+                mesh_device,
+                wkv_b2_dram_memory_config,
+                (0, 0, 0),  # Pad batch from 128 to 132
+            ),
+        }
+        sync_after("wkv_b2")
+
+        return {
+            **norm_weight_configs,
+            **linear_weight_configs,
+            **fused_weight_configs,
+            **wkv_weight_configs,
         }
 
     @classmethod
@@ -413,9 +431,27 @@ class MLA1D(AbstractModule):
         memory_config: ttnn.MemoryConfig,
         padding_needed: tuple[int, int, int] = (0, 0, 0),
     ) -> ttnn.Tensor:
+        converted_weight = torch_metaweight.transpose(-2, -1).contiguous()
+        if os.environ.get("DEEPSEEK_TRACE_MLA_WEIGHT_SHAPES") == "1":
+            finite = torch.isfinite(converted_weight)
+            finite_count = int(finite.sum().item())
+            total_count = converted_weight.numel()
+            if finite_count:
+                finite_values = converted_weight[finite]
+                value_min = float(finite_values.min().item())
+                value_max = float(finite_values.max().item())
+            else:
+                value_min = float("nan")
+                value_max = float("nan")
+            logger.info(
+                f"DSV3 MLA _convert_weight: path={path.name} input_shape={tuple(torch_metaweight.shape)} "
+                f"converted_shape={tuple(converted_weight.shape)} dims={dims} padding={padding_needed} "
+                f"dtype={torch_metaweight.dtype} finite={finite_count}/{total_count} "
+                f"min={value_min:.6g} max={value_max:.6g} memory_config={memory_config}"
+            )
         return shard_and_save(
             path,
-            torch_metaweight.transpose(-2, -1).contiguous(),
+            converted_weight,
             shard_dims=dims,
             mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
@@ -1455,9 +1491,12 @@ class MLA1D(AbstractModule):
 
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
+        trace_forward = os.environ.get("DEEPSEEK_TRACE_FORWARD_DECODE") == "1"
 
         # Fused Linear + AR: wq_kv_a (wq_a + wkv_a)
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: wq_kv_a start")
         tt_q, tt_kv_nope, tt_kv_rope = cls._fwd_decode_wq_kv_a(
             x,
             cfg,
@@ -1467,17 +1506,41 @@ class MLA1D(AbstractModule):
             kv_lora_rank,
             qk_rope_head_dim,
         )
+        if trace_forward:
+            logger.info("DSV3 MLA1D: wq_kv_a end")
+        if os.environ.get("DEEPSEEK_SYNC_EACH_MLA_STAGE") == "1":
+            logger.info("DSV3 MLA1D: wq_kv_a sync start")
+            ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+            logger.info("DSV3 MLA1D: wq_kv_a sync end")
 
         # Norm and Rope
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: norm_and_rope start")
         tt_q, tt_kvpe = cls._fwd_decode_norm_and_rope(tt_q, tt_kv_nope, tt_kv_rope, cfg, rope_tensors)
+        if trace_forward:
+            logger.info("DSV3 MLA1D: norm_and_rope end")
+        if os.environ.get("DEEPSEEK_SYNC_EACH_MLA_STAGE") == "1":
+            logger.info("DSV3 MLA1D: norm_and_rope sync start")
+            ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+            logger.info("DSV3 MLA1D: norm_and_rope sync end")
 
         # Paged Update Cache
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: paged_update_cache start")
         cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx, cfg)
+        if trace_forward:
+            logger.info("DSV3 MLA1D: paged_update_cache end")
+        if os.environ.get("DEEPSEEK_SYNC_EACH_MLA_STAGE") == "1":
+            logger.info("DSV3 MLA1D: paged_update_cache sync start")
+            ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+            logger.info("DSV3 MLA1D: paged_update_cache sync end")
 
         # Q Rope + Nope
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: q_rope_nope start")
         tt_q = cls._fwd_decode_q_rope_nope(
             tt_q,
             cfg,
@@ -1487,26 +1550,56 @@ class MLA1D(AbstractModule):
             qk_head_dim,
             qk_nope_head_dim,
         )
+        if trace_forward:
+            logger.info("DSV3 MLA1D: q_rope_nope end")
+        if os.environ.get("DEEPSEEK_SYNC_EACH_MLA_STAGE") == "1":
+            logger.info("DSV3 MLA1D: q_rope_nope sync start")
+            ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+            logger.info("DSV3 MLA1D: q_rope_nope sync end")
 
         # All To All before FlashMLA
 
+        if os.environ.get("DEEPSEEK_SYNC_BEFORE_A2A") == "1":
+            logger.info("DSV3 MLA1D: synchronize before all_to_all_pre_flash_mla start")
+            ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+            logger.info("DSV3 MLA1D: synchronize before all_to_all_pre_flash_mla end")
+        if trace_forward:
+            logger.info("DSV3 MLA1D: all_to_all_pre_flash_mla start")
         tt_q = cls._fwd_decode_all_to_all_pre_flash_mla(tt_q, cfg)
+        if trace_forward:
+            logger.info("DSV3 MLA1D: all_to_all_pre_flash_mla end")
 
         # Flash MLA
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: flash_mla start")
         attn_out = cls._fwd_decode_flash_mla(tt_q, kvpe_cache, page_table, position_idxs, cfg)
+        if trace_forward:
+            logger.info("DSV3 MLA1D: flash_mla end")
 
         # Wkv_b2
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: wkv_b2 start")
         v_out = cls._fwd_decode_wkv_b2(attn_out, cfg)
+        if trace_forward:
+            logger.info("DSV3 MLA1D: wkv_b2 end")
 
         # AG + Reshape
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: ag_reshape start")
         v_out = cls._fwd_decode_ag_reshape(v_out, cfg, ccl, bsz, num_heads, v_head_dim)
+        if trace_forward:
+            logger.info("DSV3 MLA1D: ag_reshape end")
 
         # WO
 
+        if trace_forward:
+            logger.info("DSV3 MLA1D: wo start")
         out = cls._fwd_decode_wo(v_out, cfg)
+        if trace_forward:
+            logger.info("DSV3 MLA1D: wo end")
 
         return out
 
@@ -1995,6 +2088,19 @@ class MLA1D(AbstractModule):
         kv_lora_rank: int,
         qk_rope_head_dim: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        sync_steps = os.environ.get("DEEPSEEK_SYNC_WQ_KV_A_STEPS") == "1"
+        sync_for_sim = sync_steps or os.environ.get("TT_METAL_SIMULATOR")
+
+        def sync_after(label: str) -> None:
+            if sync_for_sim:
+                if sync_steps:
+                    logger.info(f"DSV3 MLA1D wq_kv_a: {label} sync start")
+                ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+                if sync_steps:
+                    logger.info(f"DSV3 MLA1D wq_kv_a: {label} sync end")
+
+        sync_after("entry")
+
         # Shard in0 to L1 WIDTH sharded for qkv_a matmul
         x_shard_shape = list(x.shape)
         x_shard_shape[-2] = ttnn.core.roundup(x_shard_shape[-2], ttnn.TILE_SIZE)
@@ -2003,32 +2109,39 @@ class MLA1D(AbstractModule):
             **cfg["wq_kv_a_in0_memory_config"],
         )
         x = ttnn.to_memory_config(x, memory_config=in0_memory_config)
+        sync_after("input reshard")
 
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
+        sync_after("linear")
         # 1,1,32,2112 WIDTH sharded 1x8 [32,288]
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
         tt_q_kv = ttnn.experimental.all_gather_async(
             tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_decode"])
         )  # [1, num_devices, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        sync_after("all_gather")
         tt_q_kv = ttnn.experimental.fast_reduce_nc(
             tt_q_kv,
             **cfg["wq_kv_a_r_decode"],
         )  # [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        sync_after("fast_reduce")
 
         # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
         tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, bsz, q_lora_rank], **cfg["q_slice_decode"])
+        sync_after("q slice")
         tt_kv_nope = ttnn.slice(
             tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, bsz, q_lora_rank + kv_lora_rank], **cfg["kv_nope_slice_decode"]
         )
+        sync_after("kv nope slice")
         tt_kv_rope = ttnn.slice(
             tt_q_kv,
             [0, 0, 0, q_lora_rank + kv_lora_rank],
             [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
             **cfg["kv_rope_slice_decode"],
         )
+        sync_after("kv rope slice")
         ttnn.deallocate(tt_q_kv)
         return tt_q, tt_kv_nope, tt_kv_rope
 
@@ -2041,6 +2154,12 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        sync_for_sim = os.environ.get("TT_METAL_SIMULATOR")
+
+        def sync_after() -> None:
+            if sync_for_sim:
+                ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+
         # Parallel Q and KV Norms — persistent Parallel (reuse OpDescriptors + update).
         # Q: 1,1,32,1536, width sharded 4x4 [32,96]
         # KV: 1,1,32,512, width sharded 2x8 [32,32]
@@ -2055,33 +2174,49 @@ class MLA1D(AbstractModule):
             cfg["fused_qkv_norm"] = fused
         fused.q.update(tt_q)
         fused.kv.update(tt_kv_nope)
-        tt_q, tt_kv_nope = fused.run()
+        next_tt_q, next_tt_kv_nope = fused.run()
+        sync_after()
+        tt_q = next_tt_q
+        tt_kv_nope = next_tt_kv_nope
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
-        tt_kv_rope = ttnn.transpose(
+        next_tt_kv_rope = ttnn.transpose(
             tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
         )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
-        tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
+        sync_after()
+        tt_kv_rope = next_tt_kv_rope
+        next_tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
             rope_tensors["sin_matrix"],
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
+        sync_after()
+        tt_kv_rope = next_tt_kv_rope
         # 1,32,1,64 4x8 [32,64]
-        tt_kv_rope = ttnn.transpose(
+        next_tt_kv_rope = ttnn.transpose(
             tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # [1, 1, bsz, qk_rope_head_dim]
+        sync_after()
+        tt_kv_rope = next_tt_kv_rope
         # 1,1,32,64 L1 interleaved
-        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
+        next_tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sync_after()
+        tt_kv_nope = next_tt_kv_nope
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
+        sync_after()
         # 1,1,32,576 L1 interleaved
-        tt_kvpe = ttnn.transpose(tt_kvpe, 1, 2)
+        next_tt_kvpe = ttnn.transpose(tt_kvpe, 1, 2)
+        sync_after()
+        tt_kvpe = next_tt_kvpe
         # 1,32,1(32),576 L1 interleaved
-        tt_kvpe = ttnn.mesh_partition(tt_kvpe, dim=1, cluster_axis=1, **cfg["kvpe_reshard"])
+        next_tt_kvpe = ttnn.mesh_partition(tt_kvpe, dim=1, cluster_axis=1, **cfg["kvpe_reshard"])
+        sync_after()
+        tt_kvpe = next_tt_kvpe
         # 1,4,1(32),576 height sharded 1x4 [32,576]
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
@@ -2199,12 +2334,19 @@ class MLA1D(AbstractModule):
         qk_head_dim: int,
         qk_nope_head_dim: int,
     ) -> ttnn.Tensor:
+        sync_for_sim = os.environ.get("TT_METAL_SIMULATOR")
+
+        def sync_after() -> None:
+            if sync_for_sim:
+                ttnn.synchronize_device(cfg[MESH_DEVICE_STATE_DICT_KEY])
+
         pad_rows = 0
         padded_bsz = bsz
         if tt_q.shape[-2] < ttnn.TILE_SIZE:
             pad_rows = ttnn.TILE_SIZE - tt_q.shape[-2]
             padded_bsz = tt_q.shape[-2] + pad_rows
             tt_q = ttnn.pad(tt_q, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+            sync_after()
 
         # Shard in0 to L1 WIDTH sharded for wq_b matmul
         tt_q_shard_shape = list(tt_q.shape)
@@ -2213,12 +2355,16 @@ class MLA1D(AbstractModule):
             tt_q_shard_shape,
             **cfg["wq_b_in0_memory_config"],
         )
-        tt_q = ttnn.to_memory_config(tt_q, memory_config=wq_b_in0_memory_config)
+        next_tt_q = ttnn.to_memory_config(tt_q, memory_config=wq_b_in0_memory_config)
+        sync_after()
+        tt_q = next_tt_q
         # 1,1,32,1536, width sharded 8x2 [32,96]
-        tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+        next_tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+        sync_after()
+        tt_q = next_tt_q
         # 1,1,32,3072, WIDTH sharded 8x2 [32,192]
         # Reshape
-        tt_q = ttnn.untilize(
+        next_tt_q = ttnn.untilize(
             tt_q,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -2230,47 +2376,72 @@ class MLA1D(AbstractModule):
                 ),
             ),
         )
-        tt_q = ttnn.experimental.view(tt_q, (1, padded_bsz, num_heads_local, qk_head_dim))
-        tt_q = ttnn.to_memory_config(tt_q, memory_config=ttnn.L1_MEMORY_CONFIG)
-        tt_q = ttnn.tilize_with_zero_padding(tt_q)
+        sync_after()
+        tt_q = next_tt_q
+        next_tt_q = ttnn.experimental.view(tt_q, (1, padded_bsz, num_heads_local, qk_head_dim))
+        sync_after()
+        tt_q = next_tt_q
+        next_tt_q = ttnn.to_memory_config(tt_q, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sync_after()
+        tt_q = next_tt_q
+        next_tt_q = ttnn.tilize_with_zero_padding(tt_q)
+        sync_after()
+        tt_q = next_tt_q
 
-        # 1,32,16,192 L1 interleaved
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, bsz, num_heads_local, qk_nope_head_dim])
-        # 1,32,16,192 L1 interleaved
+        # Slice the sharded q_rope view before the L1 q_nope sibling. This avoids
+        # simulator-backed Galaxy tensor lifetime corruption seen when q_nope is
+        # sliced first and the sharded sibling is created second.
+        # 1,32,16,64 height sharded 8x4 [32,64]
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, qk_nope_head_dim], [1, bsz, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
+        sync_after()
+        # 1,32,16,192 L1 interleaved
+        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, bsz, num_heads_local, qk_nope_head_dim])
+        sync_after()
 
         # Q Nope: wkv_b1
         # 1,32,16,192 L1 interleaved
-        tt_q_nope = ttnn.transpose(
+        next_tt_q_nope = ttnn.transpose(
             tt_q_nope, 1, 2, memory_config=cfg["wkv_b1_in0_memory_config"]
         )  # [1, num_heads_local, bsz, qk_nope_head_dim]
+        sync_after()
+        tt_q_nope = next_tt_q_nope
 
-        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
-        tt_q_nope = ttnn.transpose(
+        next_tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
+        sync_after()
+        tt_q_nope = next_tt_q_nope
+        next_tt_q_nope = ttnn.transpose(
             tt_q_nope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # [1, bsz, num_heads_local, kv_lora_rank]
+        sync_after()
+        tt_q_nope = next_tt_q_nope
         # 1,32,16,512 L1 interleaved
 
         # Q RoPE
         # 1,32,16,64 height sharded 8x4 [32,64]
-        tt_q_rope = ttnn.experimental.rotary_embedding_llama(
+        next_tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
             rope_tensors["cos_matrix"],
             rope_tensors["sin_matrix"],
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
+        sync_after()
+        tt_q_rope = next_tt_q_rope
         # 1,32,16,64 width sharded 8x4 [32,64]
-        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
+        next_tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
+        sync_after()
+        tt_q_rope = next_tt_q_rope
         # 1,32,16,64 L1 interleaved
 
         # Concat Q Nope and Q Rope
         # 1,32,16,512 L1 interleaved | # 1,32,16,64 L1 interleaved
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
+        sync_after()
         if pad_rows:
             tt_q = ttnn.slice(tt_q, [0, 0, 0, 0], [1, bsz, num_heads_local, tt_q.shape[-1]])
+            sync_after()
         # 1,32,16,576 L1 interleaved
         return tt_q
 

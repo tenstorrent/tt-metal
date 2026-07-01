@@ -64,9 +64,9 @@ def ds_reduce_scatter_post_ff2_reference(
     1. Sums all partial products element-wise (each is [..., dim])
     2. Scatters the result: each device gets [..., dim / mesh_width]
 
-    For the reference, we need to match the first device's output:
+    For the reference, match the first row/column device's output:
     - Sum: x[..., :dim] + x[..., dim:2*dim] + ... = summed_result [..., dim]
-    - First device gets: summed_result[..., :dim/mesh_width]
+    - First column gets: summed_result[..., :dim/mesh_width]
 
     Args:
         x: Input tensor of shape [num_layers, seq_len, batch, dim * mesh_width] for decode
@@ -80,23 +80,35 @@ def ds_reduce_scatter_post_ff2_reference(
         Shape is [num_layers, seq_len, batch, dim / mesh_width] for decode
         or [num_layers, batch, seq_len, dim / mesh_width] for prefill.
     """
-    # Get the dimensions
-    last_dim = x.shape[-1]
-    per_device_input_dim = last_dim // mesh_width  # dim - what each device has as input
-    per_device_output_dim = per_device_input_dim // mesh_width  # dim / mesh_width - output per device
+    return _build_reduce_scatter_post_ff2_reference_shards(x, mesh_width)[0]
 
-    # Reshape to separate device contributions: [..., mesh_width, per_device_input_dim]
-    shape_prefix = x.shape[:-1]
-    x_reshaped = x.reshape(*shape_prefix, mesh_width, per_device_input_dim)
 
-    # Sum across devices (dim=-2) to get the reduced result: [..., per_device_input_dim]
-    x_reduced = x_reshaped.sum(dim=-2)
+def _build_reduce_scatter_post_ff2_reference_shards(torch_input: torch.Tensor, mesh_width: int) -> list[torch.Tensor]:
+    """Return expected reduce-scatter output for every row-major mesh shard."""
+    last_dim = torch_input.shape[-1]
+    per_device_input_dim = last_dim // mesh_width
+    per_device_output_dim = per_device_input_dim // mesh_width
 
-    # Scatter: each device gets 1/mesh_width of the reduced result
-    # First device gets the first chunk: [..., per_device_output_dim]
-    x_scattered = x_reduced[..., :per_device_output_dim]
+    assert last_dim % mesh_width == 0, f"Input width {last_dim} must divide evenly across {mesh_width} columns"
+    assert (
+        per_device_input_dim % mesh_width == 0
+    ), f"Reduced width {per_device_input_dim} must scatter evenly across {mesh_width} columns"
 
-    return x_scattered
+    # Production FF2 emits one full hidden-size partial product on each mesh column.
+    # Reduce-scatter sums those column partials per row, then scatters the reduced
+    # hidden dimension across the same columns.
+    shape_prefix = torch_input.shape[:-1]
+    reduced = torch_input.reshape(*shape_prefix, mesh_width, per_device_input_dim).sum(dim=-2)
+
+    ref_shards = []
+    for row_idx in range(torch_input.shape[0]):
+        row_reduced = reduced[row_idx : row_idx + 1]
+        for col_idx in range(mesh_width):
+            col_start = col_idx * per_device_output_dim
+            col_end = col_start + per_device_output_dim
+            ref_shards.append(row_reduced[..., col_start:col_end])
+
+    return ref_shards
 
 
 def ds_reduce_scatter_post_ff2_ttnn(
@@ -168,7 +180,7 @@ def _run_ds_reduce_scatter_post_ff2_test(
     mesh_device: ttnn.MeshDevice,
     run_config: dict,
     tt_input: ttnn.Tensor,
-    ref_output: torch.Tensor,
+    ref_outputs: list[torch.Tensor],
     expected_pcc: float,
     expected_atol: float,
     expected_rtol: float,
@@ -186,13 +198,26 @@ def _run_ds_reduce_scatter_post_ff2_test(
 
     tt_output = ds_reduce_scatter_post_ff2_ttnn(tt_input, run_config, ccl, mode)
 
-    # Get output from the first device only for comparison with reference
-    # (similar to how all_gather test does it)
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
-
-    pcc_value, max_abs_error = compare_with_reference(
-        tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol, strict_assert=False
+    pcc_value = 1.0
+    max_abs_error = 0.0
+    output_tensors = ttnn.get_device_tensors(tt_output)
+    assert len(output_tensors) == len(ref_outputs), (
+        f"Expected {len(ref_outputs)} output shards for mesh shape {mesh_device.shape}, " f"got {len(output_tensors)}"
     )
+    mesh_width = mesh_device.shape[1]
+    for device_idx, (output_tensor, ref_output) in enumerate(zip(output_tensors, ref_outputs)):
+        row_idx = device_idx // mesh_width
+        col_idx = device_idx % mesh_width
+        tt_output_torch = ttnn.to_torch(output_tensor)
+
+        try:
+            shard_pcc, shard_max_abs_error = compare_with_reference(
+                tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol, strict_assert=False
+            )
+        except AssertionError as e:
+            raise AssertionError(f"Reduce-scatter output shard mismatch at mesh row {row_idx}, column {col_idx}") from e
+        pcc_value = min(pcc_value, shard_pcc)
+        max_abs_error = max(max_abs_error, shard_max_abs_error)
 
     if os.getenv(DEVICE_PERF_ENV_VAR) is None:
         perf_profiler = BenchmarkProfiler()
@@ -348,17 +373,18 @@ def _build_reduce_scatter_inputs(
     mesh_width = mesh_device.shape[1]
     dim = hf_config.hidden_size
 
-    # Create input tensor with shape [num_layers, ..., dim]
-    # This will be sharded: each device gets [1, ..., dim/mesh_width] after sharding on dims=(0, -1)
+    # Create input tensor with shape [num_layers, ..., dim * mesh_width].
+    # This matches the post-FF2 production path: every column device owns a
+    # full-width partial product of size `dim`, and reduce-scatter sums those
+    # partial products before scattering the reduced result across columns.
+    input_width = dim * mesh_width
     if mode == "decode":
-        torch_input = torch.randn(num_layers, seq_len, batch_size, dim, dtype=torch.bfloat16)
+        torch_input = torch.randn(num_layers, seq_len, batch_size, input_width, dtype=torch.bfloat16)
     else:
-        torch_input = torch.randn(num_layers, batch_size, seq_len, dim, dtype=torch.bfloat16)
+        torch_input = torch.randn(num_layers, batch_size, seq_len, input_width, dtype=torch.bfloat16)
 
-    # Shard across mesh devices with dims=(0, -1)
-    # Each device (row=r, col=c) gets portion:
-    # - Layer: layers[r]
-    # - Dim: dim[c * dim/mesh_width : (c+1) * dim/mesh_width]
+    # Shard across mesh devices with dims=(0, -1). Each device row gets one
+    # layer, and each device column gets one full hidden-size FF2 partial.
     if mode == "decode":
         # The input to reduce_scatter is the w2 output, which is L1 WIDTH_SHARDED with width=dim.
         # output_num_cores is derived the same way as in MLP.decode_model_config.
@@ -381,21 +407,9 @@ def _build_reduce_scatter_inputs(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    per_device_dim = dim // mesh_width
-    per_device_output_dim = per_device_dim // mesh_width
+    ref_outputs = _build_reduce_scatter_post_ff2_reference_shards(torch_input, mesh_width)
 
-    # Get first layer and reshape to separate device contributions
-    first_layer = torch_input[:1]  # [1, seq, batch, dim]
-    shape_prefix = first_layer.shape[:-1]  # [1, seq, batch]
-    first_layer_reshaped = first_layer.reshape(*shape_prefix, mesh_width, per_device_dim)
-
-    # Sum across devices (simulate reduce)
-    reduced = first_layer_reshaped.sum(dim=-2)  # [1, seq, batch, per_device_dim]
-
-    # Scatter: first device gets first chunk
-    ref_output = reduced[..., :per_device_output_dim]  # [1, seq, batch, per_device_output_dim]
-
-    return run_config, tt_input, ref_output, batch_size
+    return run_config, tt_input, ref_outputs, batch_size
 
 
 @pytest.mark.ci_fused_op
@@ -486,7 +500,7 @@ def test_ds_reduce_scatter_post_ff2(
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
 
-    run_config, tt_input, ref_output, batch_size = _build_reduce_scatter_inputs(
+    run_config, tt_input, ref_outputs, batch_size = _build_reduce_scatter_inputs(
         mesh_device,
         hf_config,
         cache_path,
@@ -500,7 +514,7 @@ def test_ds_reduce_scatter_post_ff2(
         mesh_device,
         run_config,
         tt_input,
-        ref_output,
+        ref_outputs,
         expected_pcc,
         expected_atol,
         expected_rtol,

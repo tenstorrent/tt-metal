@@ -175,6 +175,9 @@ class PipelineBlockKind(Protocol):
     def drain_dummy_output(self) -> None:
         ...
 
+    def drain_dummy_roundtrip(self) -> None:
+        ...
+
     def get_upstream_socket(self):
         ...
 
@@ -265,7 +268,7 @@ class PipelineBlock:
         self.entry_socket_interface = None
         self.exit_socket_interface = None
         self._h2d_page_size_bytes = None
-        self._d2h_page_size_bytes = None
+        self._d2h_page_size_bytes = d2h_socket_page_size
 
         # Default H2D page = DeepseekMetadata struct (256 B). Callers like the combined
         # H2D+D2H stage in inject-hidden-states mode override this to fit a full
@@ -960,18 +963,18 @@ class PipelineBlock:
         from ttnn._ttnn.multi_device import recv_bytes, send_bytes
 
         if self.is_pipeline_start:
-            # Rank 0 receives the result from the last rank via host MPI.
+            # Stage 0 receives the result from the last stage via host MPI.
             # ttnn.to_torch returns a copy, so we can't write back through it.
             # Return the received torch tensor directly instead.
             backing = ttnn.to_torch(output_tensor)
-            raw = recv_bytes(backing.numel() * backing.element_size(), self.num_procs - 1)
+            raw = recv_bytes(backing.numel() * backing.element_size(), self._stages[self.num_procs - 1].rank)
             received = torch.frombuffer(bytearray(raw), dtype=backing.dtype).reshape(backing.shape)
             return received
         elif self.is_last_stage:
-            # Rank N-1 reads from the D2H socket then forwards to rank 0 via host MPI.
+            # The last stage reads from the D2H socket then forwards to stage 0 via host MPI.
             self.d2h_socket.read_tensor(output_tensor)
             result = ttnn.to_torch(output_tensor).reshape(-1).contiguous()
-            send_bytes(result.view(torch.uint8).numpy().tobytes(), 0)
+            send_bytes(result.view(torch.uint8).numpy().tobytes(), self._stages[0].rank)
 
     def push_dummy_token(self):
         """Push a single zeroed token through the H2D socket.
@@ -994,13 +997,28 @@ class PipelineBlock:
         """Drain one page from the D2H socket — pairs with :meth:`push_dummy_token` during teardown."""
         if self.d2h_socket is None or self._d2h_page_size_bytes is None:
             return
+        sink = self._make_dummy_output_tensor()
+        self.d2h_socket.read_tensor(sink)
+
+    def drain_dummy_roundtrip(self):
+        """Drain the teardown dummy token on whichever rank owns the return path."""
+        if self._loopback_mode == "host":
+            if not (self.is_pipeline_start or self.is_last_stage):
+                return
+            sink = self._make_dummy_output_tensor()
+            self.read_output(sink)
+            return
+        if self.is_pipeline_start:
+            self.drain_dummy_output()
+
+    def _make_dummy_output_tensor(self):
+        assert self._d2h_page_size_bytes is not None, "D2H page size is required to drain dummy output"
         page_words = self._d2h_page_size_bytes // 4
-        sink = ttnn.from_torch(
+        return ttnn.from_torch(
             torch.zeros(1, page_words, dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        self.d2h_socket.read_tensor(sink)
 
     def get_upstream_socket(self):
         """Return a single upstream socket (non-parallel mode only)."""

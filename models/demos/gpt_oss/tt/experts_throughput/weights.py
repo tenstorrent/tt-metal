@@ -184,12 +184,32 @@ def load_throughput_expert_weights(
             w2 = torch.nn.functional.pad(w2, (0, w2_pad_size), "constant", value=0.0)
             w2_bias = torch.nn.functional.pad(w2_bias, (0, w2_pad_size), "constant", value=0.0)
 
+    cache_suffix = "_reordered" if (mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1) else ""
+
+    if state_dict and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+        mesh_cols = mesh_device.shape[1]
+        experts_per_cluster = num_experts // mesh_cols
+        E = config.num_experts_per_device
+        reorder_indices = []
+        for d in range(num_devices):
+            r = d // mesh_cols
+            c = d % mesh_cols
+            start = c * experts_per_cluster + r * E
+            reorder_indices.extend(range(start, start + E))
+
+        w1 = w1[:, reorder_indices, ...] if w1 is not None else None
+        w3 = w3[:, reorder_indices, ...] if w3 is not None else None
+        w2 = w2[:, reorder_indices, ...] if w2 is not None else None
+        w1_bias = w1_bias[:, reorder_indices, ...] if w1_bias is not None else None
+        w3_bias = w3_bias[:, reorder_indices, ...] if w3_bias is not None else None
+        w2_bias = w2_bias[:, reorder_indices, ...] if w2_bias is not None else None
+
     w2_tt = _shard_experts_by_device(
         w2,
         num_devices,
         mesh_device,
         weight_dtype,
-        get_cache_file_name(tensor_cache_path, f"throughput_w2{w2_cache_suffix}"),
+        get_cache_file_name(tensor_cache_path, f"throughput_w2{w2_cache_suffix}{cache_suffix}"),
     )
 
     w2_bias_tt = _shard_experts_by_device(
@@ -197,7 +217,7 @@ def load_throughput_expert_weights(
         num_devices,
         mesh_device,
         ttnn.bfloat16,
-        get_cache_file_name(tensor_cache_path, "throughput_w2_bias"),
+        get_cache_file_name(tensor_cache_path, f"throughput_w2_bias{cache_suffix}"),
         shard_dim=-3,  # Expert dimension after reshape
     )
 
@@ -252,7 +272,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             weight_dtype,
-            get_cache_file_name(tensor_cache_path, weights_cache_suffix),
+            get_cache_file_name(tensor_cache_path, f"{weights_cache_suffix}{cache_suffix}"),
         )
 
         w1_w3_bias_fused_tt = _shard_experts_by_device(
@@ -260,7 +280,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             ttnn.bfloat16,
-            get_cache_file_name(tensor_cache_path, bias_cache_suffix),
+            get_cache_file_name(tensor_cache_path, f"{bias_cache_suffix}{cache_suffix}"),
             shard_dim=-3,  # Expert dimension after reshape
         )
     else:
@@ -272,7 +292,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             weight_dtype,
-            get_cache_file_name(tensor_cache_path, "throughput_w1"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w1{cache_suffix}"),
         )
 
         w3_tt = _shard_experts_by_device(
@@ -280,7 +300,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             weight_dtype,
-            get_cache_file_name(tensor_cache_path, "throughput_w3"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w3{cache_suffix}"),
         )
 
         # Load and shard bias (use bfloat16 for better precision)
@@ -289,7 +309,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             ttnn.bfloat16,
-            get_cache_file_name(tensor_cache_path, "throughput_w1_bias"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w1_bias{cache_suffix}"),
             shard_dim=-3,  # Expert dimension after reshape
         )
 
@@ -298,7 +318,7 @@ def load_throughput_expert_weights(
             num_devices,
             mesh_device,
             ttnn.bfloat16,
-            get_cache_file_name(tensor_cache_path, "throughput_w3_bias"),
+            get_cache_file_name(tensor_cache_path, f"throughput_w3_bias{cache_suffix}"),
             shard_dim=-3,  # Expert dimension after reshape
         )
 
@@ -1016,7 +1036,8 @@ def create_fused_moe_gpt_config(
     )
 
     # --- Pre-allocate dispatch output tensors ---
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    dispatch_drain_core = ttnn.CoreCoord(min(6, compute_grid.x - 1), min(9, compute_grid.y - 1))
 
     # Sparse buffer: [ring_devices, total_tokens, K] → each device gets [1, total_tokens, K]
     tt_dispatch_sparse = ttnn.from_torch(

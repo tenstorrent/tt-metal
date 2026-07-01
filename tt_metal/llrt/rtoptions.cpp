@@ -115,6 +115,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS,                  // Simulator clocks to pump from CQ wait loops
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
 
     // ========================================
@@ -250,6 +251,22 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
 
 // Helper function to check if environment variable value is "1" (enabled)
 bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
+
+uint32_t parse_uint32_env(const char* name, const char* value) {
+    TT_FATAL(value != nullptr && value[0] != '\0', "{} must not be empty", name);
+    std::string text(value);
+    TT_FATAL(text[0] != '-', "{} must be a non-negative integer, got '{}'", name, text);
+    size_t parse_pos = 0;
+    unsigned long long parsed = 0;
+    try {
+        parsed = std::stoull(text, &parse_pos, 0);
+    } catch (const std::exception& e) {
+        TT_FATAL(false, "{} must be a non-negative integer, got '{}': {}", name, text, e.what());
+    }
+    TT_FATAL(parse_pos == text.size(), "{} has trailing characters in '{}'", name, text);
+    TT_FATAL(parsed <= std::numeric_limits<uint32_t>::max(), "{} exceeds uint32_t max: {}", name, text);
+    return static_cast<uint32_t>(parsed);
+}
 
 std::string trim_copy(const std::string& input) {
     auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char ch) { return std::isspace(ch); });
@@ -784,6 +801,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
         case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
             this->simulator_direct_tensor_writes = is_env_enabled(value);
+            break;
+
+        // TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS
+        // Number of simulator clocks to pump from each CQ wait loop iteration.
+        // Default: 1 (preserve existing simulator behavior)
+        // Usage: export TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS=64
+        case EnvVarID::TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS:
+            this->simulator_cq_wait_clocks = parse_uint32_env("TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS", value);
             break;
 
         // ========================================

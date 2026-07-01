@@ -50,6 +50,15 @@ bool wrap_ge(uint32_t a, uint32_t b) {
     return diff >= 0;
 }
 
+void advance_simulator_cq_wait(MetalContext& ctx, uint32_t device_id) {
+    if (!ctx.rtoptions().get_simulator_enabled()) {
+        return;
+    }
+    for (uint32_t i = 0; i < ctx.rtoptions().get_simulator_cq_wait_clocks(); ++i) {
+        ctx.get_cluster().advance_device_execution(device_id);
+    }
+}
+
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
 // GetProgress is optional - if provided, timeout only triggers if BOTH wait_condition is true AND no progress made
@@ -687,8 +696,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         auto fetch_operation_body = [&]() {
             ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
-            // Yield to clock the simulator when running on TTSim; no-op on real hardware.
-            ctx.get_cluster().advance_device_execution(this->device_id);
+            advance_simulator_cq_wait(ctx, this->device_id);
         };
 
         // Condition to check if should continue waiting
@@ -733,14 +741,45 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     uint32_t write_ptr;
     uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+    const bool cq_wait_trace_enabled = std::getenv("TT_METAL_CQ_WAIT_TRACE") != nullptr;
+    const uint64_t cq_wait_trace_interval = [] {
+        const char* env = std::getenv("TT_METAL_CQ_WAIT_TRACE_INTERVAL");
+        return env == nullptr ? 1000ULL : std::max(1ULL, std::strtoull(env, nullptr, 0));
+    }();
+    uint64_t cq_wait_trace_count = 0;
 
     // Body of the operation to be timed out
-    auto wait_operation_body = [this, cq_id, &write_ptr_and_toggle, &write_ptr, &write_toggle]() {
+    auto wait_operation_body = [this,
+                                cq_id,
+                                &cq_interface,
+                                cq_wait_trace_enabled,
+                                cq_wait_trace_interval,
+                                &cq_wait_trace_count,
+                                &write_ptr_and_toggle,
+                                &write_ptr,
+                                &write_toggle]() {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-        // Yield to clock the simulator when running on TTSim; no-op on real hardware.
-        tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().advance_device_execution(this->device_id);
+        if (cq_wait_trace_enabled && ((cq_wait_trace_count++ % cq_wait_trace_interval) == 0)) {
+            auto* non_const_this = const_cast<SystemMemoryManager*>(this);
+            std::fprintf(
+                stderr,
+                "CQ_WAIT_TRACE dev=%u cq=%u rd=0x%x/%u wr=0x%x/%u raw=0x%x progress=0x%x current_event=%u "
+                "last_completed=%u\n",
+                this->device_id,
+                cq_id,
+                cq_interface.completion_fifo_rd_ptr,
+                cq_interface.completion_fifo_rd_toggle,
+                write_ptr,
+                write_toggle,
+                write_ptr_and_toggle,
+                get_cq_dispatch_progress(this->device_id, cq_id),
+                non_const_this->get_current_event(cq_id),
+                non_const_this->get_last_completed_event(cq_id));
+            std::fflush(stderr);
+        }
+        advance_simulator_cq_wait(tt::tt_metal::MetalContext::instance(this->context_id), this->device_id);
     };
 
     // Condition to check if the operation should continue

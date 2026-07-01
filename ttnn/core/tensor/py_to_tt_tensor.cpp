@@ -242,15 +242,22 @@ Tensor create_tt_tensor_from_host_data(
             auto src_tensor_layout =
                 compute_input_tensor_layout(src_dtype, device_shard_shape, memory_config, layout, optional_tile);
 
-            const bool construct_on_mesh_device = construct_on_device && has_sufficient_device_memory(
-                                                                             device,
-                                                                             src_tensor_layout,
-                                                                             device_shard_shape,
-                                                                             src_dtype,
-                                                                             dst_dtype,
-                                                                             layout,
-                                                                             memory_config,
-                                                                             optional_tile);
+            bool construct_on_mesh_device = construct_on_device && has_sufficient_device_memory(
+                                                                       device,
+                                                                       src_tensor_layout,
+                                                                       device_shard_shape,
+                                                                       src_dtype,
+                                                                       dst_dtype,
+                                                                       layout,
+                                                                       memory_config,
+                                                                       optional_tile);
+#if defined(TT_UMD_BUILD_SIMULATION)
+            // Simulator builds do not reliably support on-device construction for interleaved mesh uploads.
+            // Keep sharded mesh uploads on the existing fast path; DeepSeek MLP staging depends on it.
+            if (construct_on_mesh_device && !memory_config.is_sharded()) {
+                construct_on_mesh_device = false;
+            }
+#endif
 
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),

@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <cstdlib>
 #include <limits>
 
 namespace ttnn::operations::experimental::ccl {
@@ -381,6 +382,26 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         metadata_pages,
         metadata_page_size,
         aligned_metadata_page_size);
+    if (std::getenv("GPT_OSS_A2A_METADATA_PAGE_TRACE")) {
+        log_warning(
+            tt::LogOp,
+            "A2A metadata pages: indices is_dram={} page={} aligned={} pages={} shape={} scores is_dram={} page={} "
+            "aligned={} pages={} shape={} metadata_out page={} aligned={} scores_out page={} aligned={}",
+            indices_tensor.buffer()->is_dram(),
+            indices_page_size,
+            aligned_indices_page_size,
+            indices_pages,
+            indices_tensor.logical_shape(),
+            scores_tensor.buffer()->is_dram(),
+            scores_page_size,
+            aligned_scores_page_size,
+            scores_pages,
+            scores_tensor.logical_shape(),
+            metadata_page_size,
+            aligned_metadata_page_size,
+            output_scores_page_size,
+            aligned_output_scores_page_size);
+    }
 
     auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(
         input_tensor, metadata_tensor, scores_out_tensor, mapping_tensor, num_links, operation_attributes.axis);
@@ -570,6 +591,10 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(reader_compile_time_args);
 
     const auto& writer_compile_time_args = reader_compile_time_args;
+    std::map<std::string, std::string> reader_defines = {};
+    if (std::getenv("GPT_OSS_A2A_METADATA_LOGICAL_ROUTER_READ")) {
+        reader_defines["A2A_METADATA_LOGICAL_ROUTER_READ"] = "1";
+    }
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -579,7 +604,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
 
     // Code-gen a mesh-position to fabric chip ID array for the writer kernel
     // Code-gen a mesh-position to mesh-id array for the writer kernel

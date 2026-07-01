@@ -158,7 +158,11 @@ def run_topk_router_component(
 
     # Extract reference TopK router from reference layer
     reference_router = reference_layer.mlp.router
-    router_scores, router_indices = reference_router(hidden_states)
+    router_outputs = reference_router(hidden_states)
+    if len(router_outputs) == 3:
+        _, router_scores, router_indices = router_outputs
+    else:
+        router_scores, router_indices = router_outputs
     if decoder_layer.mlp.use_throughput_experts:
         # When using throughput experts, we return a dense tensor of router_scores. Convert sparse reference router_scores to dense router_weights (note: this requires reorder the weights to match the order of the indices)
         dense_router_scores = torch.concat(
@@ -172,19 +176,38 @@ def run_topk_router_component(
         )
         router_scores = dense_router_scores
 
+    router_input_variant = os.environ.get("GPT_OSS_ROUTER_INPUT_VARIANT")
+    match_mlp_input = bool(int(os.environ.get("GPT_OSS_ROUTER_MATCH_MLP_INPUT", "0")))
+    if router_input_variant == "mlp_bf16":
+        tt_input = hidden_states.unsqueeze(1)
+        sharding_dims = (0, None)
+        tt_dtype = ttnn.bfloat16
+    elif router_input_variant == "decode_bfp8":
+        tt_input = hidden_states.reshape(1, 1, -1, 2880)
+        sharding_dims = (-2, None)
+        tt_dtype = ttnn.bfloat8_b
+    elif match_mlp_input:
+        tt_input = hidden_states.unsqueeze(1)
+        sharding_dims = (0, None)
+        tt_dtype = ttnn.bfloat8_b
+    else:
+        tt_input = hidden_states.reshape(1, 1, -1, 2880)
+        sharding_dims = (-2, None)
+        tt_dtype = ttnn.bfloat16
+
     # Convert to TTNN tensors
     mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        ttnn.ShardTensor2dMesh(dims=sharding_dims, mesh_shape=mesh_device.shape, mesh_device=mesh_device)
         if is_row_sharded
         else None
     )
 
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.reshape(1, 1, -1, 2880),
+        tt_input,
         device=mesh_device,
         mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=tt_dtype,
     )
 
     # Extract TT TopK router from decoder layer
@@ -242,7 +265,7 @@ def run_throughput_experts_component(
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
     reference_output = reference_experts(
-        hidden_states, router_indices=router_indices.squeeze(), routing_weights=routing_weights.squeeze()
+        hidden_states, router_indices=router_indices.squeeze(), routing_weights=topk_weights_dense.squeeze()
     )
 
     # Convert to TTNN tensors
@@ -436,6 +459,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
 
     router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
     routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+    topk_routing_weights = torch.zeros(batch_size * seq_len, config.num_experts_per_tok)
 
     for b, s in itertools.product(range(batch_size), range(seq_len)):
         active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
@@ -443,10 +467,13 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         weights = torch.rand(config.num_experts_per_tok)
         weights = weights / weights.sum()  # Normalize
         routing_weights[b * seq_len + s, active_experts] = weights
+        topk_routing_weights[b * seq_len + s, :] = weights
 
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
+    reference_output = reference_experts(
+        hidden_states, router_indices=router_indices, routing_weights=topk_routing_weights
+    )
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(
@@ -493,26 +520,183 @@ def run_full_mlp_pipeline(
     reference_model = reference_layer.mlp
     reference_output, routing_scores = reference_model(hidden_states)
 
+    mlp_input_variant = os.environ.get("GPT_OSS_MLP_INPUT_VARIANT")
+    match_decode_input = bool(int(os.environ.get("GPT_OSS_MLP_MATCH_DECODE_INPUT", "0")))
+    if mlp_input_variant == "decode_bfp8":
+        tt_input = hidden_states.reshape(1, 1, batch * seq_len, hidden_size)
+        sharding_dims = (-2, None)
+        tt_dtype = ttnn.bfloat8_b
+    elif match_decode_input:
+        tt_input = hidden_states.reshape(1, 1, batch * seq_len, hidden_size)
+        sharding_dims = (-2, None)
+        tt_dtype = ttnn.bfloat16
+    else:
+        tt_input = hidden_states.unsqueeze(1)
+        sharding_dims = (0, None)
+        tt_dtype = ttnn.bfloat8_b
+
     # Convert to TTNN tensors
     mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        ttnn.ShardTensor2dMesh(dims=sharding_dims, mesh_shape=mesh_device.shape, mesh_device=mesh_device)
         if is_row_sharded
         else None
     )
     tt_hidden_states = ttnn.from_torch(
-        # hidden_states.reshape(-1, 1, 2880),
-        hidden_states.unsqueeze(1),
+        tt_input,
         device=mesh_device,
         mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
+        dtype=tt_dtype,
     )
 
     # Create TT MLP using TestFactory setup
     tt_mlp = decoder_layer.mlp
-    tt_output = tt_mlp(tt_hidden_states, is_decode=is_decode)
-    mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch * seq_len, :hidden_size]
+    if os.environ.get("GPT_OSS_MLP_REFERENCE_ROUTING") == "tt":
+        tt_router_indices, tt_router_weights = tt_mlp.router(tt_hidden_states, tt_mlp.use_throughput_experts)
+        router_mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape))
+        tt_router_indices_torch = ttnn.to_torch(tt_router_indices, mesh_composer=router_mesh_composer)[
+            : batch * seq_len, : reference_model.router.top_k
+        ].long()
+        tt_router_weights_torch = ttnn.to_torch(tt_router_weights, mesh_composer=router_mesh_composer)[
+            : batch * seq_len, : reference_model.router.top_k
+        ].float()
+        dense_routing_weights = torch.zeros(
+            batch * seq_len, reference_model.router.num_experts, dtype=tt_router_weights_torch.dtype
+        )
+        dense_routing_weights.scatter_(1, tt_router_indices_torch, tt_router_weights_torch)
+
+        router_outputs = reference_model.router(hidden_states)
+        if len(router_outputs) == 3:
+            _, _, reference_router_indices = router_outputs
+        else:
+            _, reference_router_indices = router_outputs
+        tt_sorted = torch.sort(tt_router_indices_torch.cpu(), dim=-1).values
+        ref_sorted = torch.sort(reference_router_indices[: batch * seq_len].cpu(), dim=-1).values
+        topk_set_match = torch.all(tt_sorted == ref_sorted, dim=-1).float().mean().item()
+        logger.info(f"MLP TT/HF top-k exact set match: {topk_set_match:.6f}")
+
+        reference_output = reference_model.experts(
+            hidden_states,
+            router_indices=tt_router_indices_torch,
+            routing_weights=dense_routing_weights,
+        )
+
+    handoff_probe = os.environ.get("GPT_OSS_MLP_HANDOFF_PROBE") == "1"
+    reupload_router = os.environ.get("GPT_OSS_MLP_REUPLOAD_ROUTER") == "1"
+    if handoff_probe or reupload_router:
+        tt_router_indices, tt_router_weights = tt_mlp.router(tt_hidden_states, tt_mlp.use_throughput_experts)
+        router_mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape))
+        tt_router_indices_torch = ttnn.to_torch(tt_router_indices, mesh_composer=router_mesh_composer)[
+            : batch * seq_len, : reference_model.router.top_k
+        ].long()
+        tt_router_weights_torch = ttnn.to_torch(tt_router_weights, mesh_composer=router_mesh_composer)[
+            : batch * seq_len, : reference_model.router.top_k
+        ].float()
+
+        router_outputs = reference_model.router(hidden_states)
+        if len(router_outputs) == 3:
+            _, _, reference_router_indices = router_outputs
+        else:
+            _, reference_router_indices = router_outputs
+        tt_sorted = torch.sort(tt_router_indices_torch.cpu(), dim=-1).values
+        ref_sorted = torch.sort(reference_router_indices[: batch * seq_len].cpu(), dim=-1).values
+        topk_set_match = torch.all(tt_sorted == ref_sorted, dim=-1).float().mean().item()
+        logger.info(
+            "MLP handoff router: topk_set_match={:.6f} indices_min={} indices_max={} "
+            "weights_min={:.6f} weights_max={:.6f} weights_sum_min={:.6f} weights_sum_max={:.6f} "
+            "first_indices={} first_weights={}".format(
+                topk_set_match,
+                int(tt_router_indices_torch.min().item()),
+                int(tt_router_indices_torch.max().item()),
+                float(tt_router_weights_torch.min().item()),
+                float(tt_router_weights_torch.max().item()),
+                float(tt_router_weights_torch.sum(dim=-1).min().item()),
+                float(tt_router_weights_torch.sum(dim=-1).max().item()),
+                tt_router_indices_torch[0].tolist(),
+                [float(x) for x in tt_router_weights_torch[0].tolist()],
+            )
+        )
+
+        if reupload_router:
+            reupload_memory = os.environ.get("GPT_OSS_MLP_REUPLOAD_MEMORY", "DRAM").upper()
+            if reupload_memory == "L1":
+                reupload_memory_config = ttnn.L1_MEMORY_CONFIG
+            elif reupload_memory == "DRAM":
+                reupload_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                raise ValueError(f"Unsupported GPT_OSS_MLP_REUPLOAD_MEMORY={reupload_memory}")
+            logger.info(f"MLP handoff reupload memory: {reupload_memory}")
+            router_mesh_mapper = (
+                ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+                if is_row_sharded
+                else None
+            )
+            tt_router_indices = ttnn.from_torch(
+                tt_router_indices_torch.to(torch.int16),
+                device=mesh_device,
+                mesh_mapper=router_mesh_mapper,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint16,
+                memory_config=reupload_memory_config,
+            )
+            tt_router_weights = ttnn.from_torch(
+                tt_router_weights_torch,
+                device=mesh_device,
+                mesh_mapper=router_mesh_mapper,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=reupload_memory_config,
+            )
+            if os.environ.get("GPT_OSS_MLP_REUPLOAD_READBACK_PROBE") == "1":
+                readback_indices = ttnn.to_torch(tt_router_indices, mesh_composer=router_mesh_composer)[
+                    : batch * seq_len, : reference_model.router.top_k
+                ].long()
+                readback_weights = ttnn.to_torch(tt_router_weights, mesh_composer=router_mesh_composer)[
+                    : batch * seq_len, : reference_model.router.top_k
+                ].float()
+                indices_match = torch.equal(readback_indices.cpu(), tt_router_indices_torch.cpu())
+                max_weight_diff = torch.max(torch.abs(readback_weights.cpu() - tt_router_weights_torch.cpu())).item()
+                logger.info(
+                    "MLP handoff reupload readback: indices_match={} max_weight_diff={:.8f} "
+                    "first_indices={} first_weights={}".format(
+                        indices_match,
+                        float(max_weight_diff),
+                        readback_indices[0].tolist(),
+                        [float(x) for x in readback_weights[0].tolist()],
+                    )
+                )
+            tt_output = tt_mlp.experts(
+                hidden_states=tt_hidden_states,
+                topk_expert_indices=tt_router_indices,
+                topk_expert_weights=tt_router_weights,
+                is_decode=is_decode,
+            )
+        else:
+            tt_output = tt_mlp.experts(
+                hidden_states=tt_hidden_states,
+                topk_expert_indices=tt_router_indices,
+                topk_expert_weights=tt_router_weights,
+                is_decode=is_decode,
+            )
+    elif os.environ.get("GPT_OSS_MLP_SPLIT_SYNC") == "1":
+        tt_router_indices, tt_router_weights = tt_mlp.router(tt_hidden_states, tt_mlp.use_throughput_experts)
+        ttnn.synchronize_device(mesh_device)
+        tt_output = tt_mlp.experts(
+            hidden_states=tt_hidden_states,
+            topk_expert_indices=tt_router_indices,
+            topk_expert_weights=tt_router_weights,
+            is_decode=is_decode,
+        )
+    else:
+        tt_output = tt_mlp(tt_hidden_states, is_decode=is_decode)
+    if os.environ.get("GPT_OSS_MLP_GATHER_MODE") == "col0_rows":
+        mesh_rows, mesh_cols = mesh_device.shape
+        dev_tensors = ttnn.get_device_tensors(tt_output)
+        per_row = [ttnn.to_torch(dev_tensors[r * mesh_cols]) for r in range(mesh_rows)]
+        tt_output_torch = torch.cat(per_row, dim=-2)[..., : batch * seq_len, :hidden_size]
+    else:
+        mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch * seq_len, :hidden_size]
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=pcc_threshold)
@@ -630,6 +814,9 @@ def test_decoder(
         )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+    if os.environ.get("GPT_OSS_DISABLE_PROGRAM_CACHE") == "1":
+        mesh_device.disable_and_clear_program_cache()
     is_decode = seq_len == 1
     mode = "decode" if is_decode else "prefill"
 

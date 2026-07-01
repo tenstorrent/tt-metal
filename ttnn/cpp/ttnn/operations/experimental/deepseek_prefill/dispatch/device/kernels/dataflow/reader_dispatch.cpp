@@ -62,11 +62,8 @@ void kernel_main() {
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(30);
 
     // Mesh information (indices 31-35)
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(31);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(32);
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(33);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(34);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(35);
 
     // Aligned page sizes (indices 36-42)
     constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(36);
@@ -133,6 +130,7 @@ void kernel_main() {
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t dispatch_core_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t num_dispatch_cores = get_arg_val<uint32_t>(rt_args++);
+    uint32_t linearized_mesh_coord = get_arg_val<uint32_t>(rt_args++);
     uint32_t core_mask = num_dispatch_cores - 1;
 
 #ifdef IS_TILE_LAYOUT
@@ -174,12 +172,12 @@ void kernel_main() {
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
-    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
-    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
-    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
-    constexpr uint32_t device_end_idx =
+    uint32_t row = linearized_mesh_coord / mesh_cols;
+    uint32_t col = linearized_mesh_coord % mesh_cols;
+    uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
+    uint32_t device_end_idx =
         (axis == ReplicateGroup::COLS) ? (col + mesh_rows * mesh_cols) : (row * mesh_cols + mesh_cols);
-    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
+    uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
 #else
     constexpr ReplicateGroup axis = ReplicateGroup::NONE;
     constexpr uint32_t device_begin_idx = 0;
@@ -385,10 +383,8 @@ void kernel_main() {
 
             // Only wait if the idle core will actually send data back.
             if (has_non_local) {
-                DPRINT_DISPATCH << "Waiting for idle core " << C << " batch " << B << ENDL();
                 noc_semaphore_wait(data_ready_sem_ptr, 1);
                 noc_semaphore_set(data_ready_sem_ptr, 0);
-                DPRINT_DISPATCH << "Got batch " << B << " from idle core " << C << ENDL();
             }
         } else {
             // ---- Self-batch: read tiles, untilize locally, no NOC transfer ----
@@ -424,7 +420,6 @@ void kernel_main() {
             // Wait for compute to finish (it writes untilized data into cb_untilize_id / c_18)
             cb_wait_front(cb_untilize_id, read_batch_size);
             noc_async_read_barrier();
-            DPRINT_DISPATCH << "Self-untilize batch " << B << " done" << ENDL();
         }
 #endif
 

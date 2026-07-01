@@ -224,6 +224,160 @@ void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
     }
 }
 
+void FDMeshCommandQueue::mark_pending_ordered_work(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
+        pending_ordered_work_[*sub_device_id].store(true, std::memory_order_release);
+    }
+    in_use_.store(true, std::memory_order_release);
+}
+
+void FDMeshCommandQueue::clear_pending_ordered_work(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
+        pending_ordered_work_[*sub_device_id].store(false, std::memory_order_release);
+    }
+}
+
+bool FDMeshCommandQueue::has_pending_ordered_work() const {
+    for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
+        if (pending_ordered_work_[sub_device_id].load(std::memory_order_acquire)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<SubDeviceId> FDMeshCommandQueue::pending_ordered_sub_device_ids() const {
+    std::vector<SubDeviceId> pending_sub_device_ids;
+    for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
+        if (pending_ordered_work_[sub_device_id].load(std::memory_order_acquire)) {
+            pending_sub_device_ids.emplace_back(sub_device_id);
+        }
+    }
+    return pending_sub_device_ids;
+}
+
+#if defined(TT_UMD_BUILD_SIMULATION)
+bool FDMeshCommandQueue::try_defer_direct_write(
+    std::shared_ptr<Buffer> shard_view,
+    const void* src,
+    const BufferRegion& region,
+    const CoreRangeSet* logical_core_filter) {
+    constexpr uint64_t default_limit_bytes = 1ull << 30;
+    static const uint64_t deferred_write_limit_bytes = [] {
+        const char* env = std::getenv("TT_METAL_SIM_DEFERRED_DIRECT_WRITE_LIMIT_BYTES");
+        if (env == nullptr || *env == '\0') {
+            return default_limit_bytes;
+        }
+        char* end = nullptr;
+        uint64_t value = std::strtoull(env, &end, 0);
+        return end != env ? value : default_limit_bytes;
+    }();
+
+    uint64_t current_bytes = deferred_direct_write_bytes_.load(std::memory_order_relaxed);
+    while (current_bytes + region.size <= deferred_write_limit_bytes) {
+        if (deferred_direct_write_bytes_.compare_exchange_weak(
+                current_bytes, current_bytes + region.size, std::memory_order_acq_rel)) {
+            break;
+        }
+    }
+    if (current_bytes + region.size > deferred_write_limit_bytes) {
+        return false;
+    }
+
+    std::vector<uint8_t> payload(
+        static_cast<const uint8_t*>(src), static_cast<const uint8_t*>(src) + static_cast<size_t>(region.size));
+    const uint64_t order = next_deferred_direct_write_order_.fetch_add(1, std::memory_order_relaxed);
+    DeferredDirectWrite deferred_write{
+        .order = order,
+        .shard_view = std::move(shard_view),
+        .payload = std::move(payload),
+        .region = region,
+        .logical_core_filter = std::nullopt};
+    if (logical_core_filter != nullptr) {
+        deferred_write.logical_core_filter = *logical_core_filter;
+    }
+    const uint32_t device_id = deferred_write.shard_view->device()->id();
+
+    {
+        std::lock_guard<std::mutex> lock(deferred_direct_write_mutex_);
+        deferred_direct_writes_.push_back(std::move(deferred_write));
+    }
+    if (std::getenv("TT_METAL_SIM_DIRECT_WRITE_TRACE") != nullptr) {
+        std::fprintf(
+            stderr,
+            "SIM_DIRECT_WRITE_DEFERRED order=%llu size=%llu outstanding_bytes=%llu device=%u\n",
+            static_cast<unsigned long long>(order),
+            static_cast<unsigned long long>(region.size),
+            static_cast<unsigned long long>(deferred_direct_write_bytes_.load(std::memory_order_relaxed)),
+            device_id);
+        std::fflush(stderr);
+    }
+    in_use_.store(true, std::memory_order_release);
+    return true;
+}
+
+void FDMeshCommandQueue::flush_deferred_direct_writes_nolock() {
+    if (flushing_deferred_direct_writes_ || deferred_direct_write_bytes_.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+
+    flushing_deferred_direct_writes_ = true;
+    const auto pending_sub_device_ids = this->pending_ordered_sub_device_ids();
+    if (!pending_sub_device_ids.empty()) {
+        auto event = this->enqueue_record_event_to_host_nolock(pending_sub_device_ids);
+        (void)event;
+        std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+        reads_processed_cv_.wait(
+            lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+        if (should_handle_exception_.load()) {
+            std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+            flushing_deferred_direct_writes_ = false;
+            if (auto exception_ptr = thread_exception_ptr_) {
+                thread_exception_ptr_ = nullptr;
+                should_handle_exception_.store(false);
+                num_outstanding_reads_.store(0);
+                reads_processed_cv_.notify_all();
+                lock.unlock();
+                std::rethrow_exception(exception_ptr);
+            }
+        }
+        this->clear_pending_ordered_work(pending_sub_device_ids);
+    }
+
+    std::vector<DeferredDirectWrite> deferred_writes;
+    {
+        std::lock_guard<std::mutex> lock(deferred_direct_write_mutex_);
+        deferred_writes.swap(deferred_direct_writes_);
+    }
+    std::sort(deferred_writes.begin(), deferred_writes.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.order < rhs.order;
+    });
+    for (auto& deferred_write : deferred_writes) {
+        const CoreRangeSet* logical_core_filter =
+            deferred_write.logical_core_filter ? &*deferred_write.logical_core_filter : nullptr;
+        if (std::getenv("TT_METAL_SIM_DIRECT_WRITE_TRACE") != nullptr) {
+            std::fprintf(
+                stderr,
+                "SIM_DIRECT_WRITE_FLUSH order=%llu size=%llu device=%u\n",
+                static_cast<unsigned long long>(deferred_write.order),
+                static_cast<unsigned long long>(deferred_write.region.size),
+                deferred_write.shard_view->device()->id());
+            std::fflush(stderr);
+        }
+        tt_sim::write_shard(
+            *deferred_write.shard_view, deferred_write.payload.data(), deferred_write.region, logical_core_filter);
+        deferred_direct_write_bytes_.fetch_sub(deferred_write.region.size, std::memory_order_acq_rel);
+    }
+    flushing_deferred_direct_writes_ = false;
+}
+#endif
+
+void FDMeshCommandQueue::drain_deferred_writes_nolock() {
+#if defined(TT_UMD_BUILD_SIMULATION)
+    this->flush_deferred_direct_writes_nolock();
+#endif
+}
+
 CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return this->dispatch_core_; }
 
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
@@ -330,6 +484,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         return;
     }
 
+    this->flush_deferred_direct_writes_nolock();
+    this->mark_pending_ordered_work({{sub_device_id}});
+
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     // Expected number of workers from the previous run
     uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
@@ -348,6 +505,22 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     expected_num_workers_completed_[*sub_device_id] = updated_worker_counts.current;
+    if (std::getenv("TT_METAL_WORKER_COUNT_TRACE") != nullptr) {
+        std::fprintf(
+            stderr,
+            "WORKER_COUNT_TRACE cq=%u sub_device=%u num_workers=%u previous=%u current=%u wrapped=%u "
+            "mcast=%u unicast=%u virtual_eth=%u\n",
+            id_,
+            *sub_device_id,
+            num_workers,
+            updated_worker_counts.previous,
+            updated_worker_counts.current,
+            updated_worker_counts.wrapped ? 1u : 0u,
+            mcast_go_signals ? 1u : 0u,
+            unicast_go_signals ? 1u : 0u,
+            num_virtual_eth_cores);
+        std::fflush(stderr);
+    }
     expected_num_workers_completed = updated_worker_counts.previous;
 
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
@@ -455,13 +628,13 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         return;
     }
 
-    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     IDevice* device = mesh_device_->impl().get_device(address.device_coord);
     address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    this->mark_pending_ordered_work(sub_device_ids);
 
     device_dispatch::write_to_core(
         device,
@@ -496,7 +669,6 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         return;
     }
 
-    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     IDevice* device = mesh_device_->impl().get_device(address.device_coord);
@@ -505,6 +677,8 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     device_dispatch::validate_core_read_write_bounds(device, address.virtual_core_coord, address.address, size_bytes);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    this->drain_deferred_writes_nolock();
+    this->mark_pending_ordered_work(sub_device_ids);
 
     if (size_bytes > 0) {
         this->reset_prefetcher_cache_manager();
@@ -532,6 +706,7 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
         return;
     }
 
+    this->drain_deferred_writes_nolock();
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
@@ -553,6 +728,8 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
             std::rethrow_exception(exception_ptr);
         }
     }
+
+    this->clear_pending_ordered_work(sub_device_ids);
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -598,16 +775,22 @@ bool FDMeshCommandQueue::write_shard_to_device(
 #if defined(TT_UMD_BUILD_SIMULATION)
     const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
         .target = this->get_target_device_type(),
-        .cq_idle = !in_use_.load(std::memory_order_acquire),
+        .cq_idle = !this->has_pending_ordered_work(),
         .rtoptions = &MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions(),
     };
     if (tt_sim::try_direct_write(tt_sim_direct_write_guard, *shard_view, src, region_value, logical_core_filter)) {
         return false;
     }
+    if (!tt_sim_direct_write_guard.cq_idle && shard_view->buffer_type() == BufferType::DRAM &&
+        tt_sim::is_direct_write_candidate(tt_sim_direct_write_guard, *shard_view, src, region_value) &&
+        this->try_defer_direct_write(shard_view, src, region_value, logical_core_filter)) {
+        return false;
+    }
 #endif
 
-    in_use_ = true;
+    in_use_.store(true, std::memory_order_release);
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    this->mark_pending_ordered_work(sub_device_ids);
     return buffer_dispatch::write_to_device_buffer(
         src,
         *shard_view,
@@ -635,7 +818,6 @@ void FDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
@@ -643,6 +825,8 @@ void FDMeshCommandQueue::read_shard_from_device(
 
     auto* device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    this->drain_deferred_writes_nolock();
+    this->mark_pending_ordered_work(sub_device_ids);
     // Reading from device would clobber prefetcher cache, so reset it now
     this->reset_prefetcher_cache_manager();
 
@@ -728,7 +912,6 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
 
-    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
 
     auto& sysmem_manager = this->reference_sysmem_manager();
@@ -739,6 +922,28 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    this->drain_deferred_writes_nolock();
+    if (std::getenv("TT_METAL_EVENT_TRACE") != nullptr) {
+        std::fprintf(
+            stderr,
+            "EVENT_TRACE cq=%u event=%u notify_host=%u sub_devices=",
+            id_,
+            event.id(),
+            notify_host ? 1u : 0u);
+        bool first = true;
+        for (const auto& sub_device_id : sub_device_ids) {
+            std::fprintf(
+                stderr,
+                "%s%u:expected=%u",
+                first ? "" : ",",
+                *sub_device_id,
+                expected_num_workers_completed_[*sub_device_id]);
+            first = false;
+        }
+        std::fprintf(stderr, "\n");
+        std::fflush(stderr);
+    }
+    this->mark_pending_ordered_work(sub_device_ids);
     auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
@@ -795,7 +1000,8 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
-    in_use_ = true;
+    this->drain_deferred_writes_nolock();
+    this->mark_pending_ordered_work();
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for_each_local(mesh_device_, sync_event.device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
@@ -960,7 +1166,7 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
-    in_use_ = true;
+    this->mark_pending_ordered_work();
     for (auto* device : mesh_device_->get_devices()) {
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
@@ -1034,11 +1240,11 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
     auto lock = lock_api_function_();
-    in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
+    this->mark_pending_ordered_work(descriptor->sub_device_ids);
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto sub_device_id : descriptor->sub_device_ids) {
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
@@ -1507,6 +1713,7 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
         }
         finish_nolock({});
 
+        this->clear_pending_ordered_work({});
         in_use_ = false;
     }
 }

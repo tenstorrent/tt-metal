@@ -135,8 +135,9 @@ def prefill_forward(
             for b in range(batch_size):
                 k_b = ttnn.slice(tt_k, (b, 0, 0, 0), (b + 1, tt_k.shape[1], tt_k.shape[2], tt_k.shape[3]))
                 v_b = ttnn.slice(tt_v, (b, 0, 0, 0), (b + 1, tt_v.shape[1], tt_v.shape[2], tt_v.shape[3]))
-                ttnn.fill_cache(k_cache, k_b, batch_idx=b)
-                ttnn.fill_cache(v_cache, v_b, batch_idx=b)
+                batch_idx = b % config.max_local_batch_size if config.users_row_sharded else b
+                ttnn.fill_cache(k_cache, k_b, batch_idx=batch_idx)
+                ttnn.fill_cache(v_cache, v_b, batch_idx=batch_idx)
                 k_b.deallocate(True)
                 v_b.deallocate(True)
         else:

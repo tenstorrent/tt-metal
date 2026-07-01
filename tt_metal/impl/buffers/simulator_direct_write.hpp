@@ -15,7 +15,8 @@ class RunTimeOptions;
 namespace tt::tt_metal::tt_sim {
 
 // Inputs required to evaluate the tt-sim direct H2D write guard for fast-dispatch mesh uploads.
-// CQ idle state and trace policy remain owned by the mesh command queue caller.
+// cq_idle is owned by the mesh command queue; try_direct_write may still allow a narrow
+// simulator-only sharded-L1 staging write when ordered FD work is pending.
 struct DirectWriteGuard {
     tt::TargetDevice target = tt::TargetDevice::Invalid;
     bool cq_idle = false;
@@ -24,8 +25,13 @@ struct DirectWriteGuard {
 
 #if defined(TT_UMD_BUILD_SIMULATION)
 
-// True when tt-sim may bypass simulated CQ payload copies for this shard write.
+// True when tt-sim may use the ordered direct-write path for this shard write.
 bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, const BufferRegion& region);
+
+// True when this shard can use simulator direct writes after the caller has
+// satisfied command queue ordering.
+bool is_direct_write_candidate(
+    const DirectWriteGuard& guard, Buffer& shard_view, const void* src, const BufferRegion& region);
 
 // Synchronous host-to-device shard write used by the tt-sim fast path.
 void write_shard(

@@ -35,26 +35,28 @@ Usage:
     output = experts(hidden_states, topk_indices, topk_weights)
 """
 
-import ttnn
 from typing import Optional
+
+import ttnn
 from models.demos.gpt_oss.config import MeshConfig
+
 from .config import (
+    AllToAllCombineConfig,
+    AllToAllDispatchConfig,
+    FusedMoeGptConfig,
     ThroughputExpertConfig,
     ThroughputProgramConfig,
-    AllToAllDispatchConfig,
-    AllToAllCombineConfig,
-    FusedMoeGptConfig,
     create_expert_mapping_tensors,
     create_remap_topk_mask,
 )
 from .decode import decode_forward
 from .fused_decode import fused_decode_forward
-from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
+from .prefill import DeepSeekPrefillConfig, _prepare_expert_weights_for_deepseek, forward_prefill_deepseek
 from .weights import (
     ThroughputExpertWeights,
-    load_throughput_expert_weights,
     create_fused_moe_gpt_config,
     get_moe_gpt_combine_core_range,
+    load_throughput_expert_weights,
 )
 
 __all__ = [
@@ -150,7 +152,7 @@ class ThroughputExperts:
 
         # Create all_to_all configurations (used by dense flow)
         _axis = dispatch_cluster_axis if dispatch_cluster_axis is not None else 0
-        _num_links = ccl_manager.num_links
+        _num_links = ccl_manager.num_links if ccl_manager is not None else 4
         self.dispatch_config_decode = AllToAllDispatchConfig(
             memory_config=decode_memory_config,
             cluster_axis=_axis,
@@ -188,6 +190,7 @@ class ThroughputExperts:
             num_devices=config.num_devices,
             num_experts_global=config.num_experts,
             mesh_device=mesh_device,
+            new_format=True,
         )
 
         # Create remap mask (rows is dispatch dimension)
@@ -299,6 +302,8 @@ class ThroughputExperts:
                 config=self.config,
                 fused_config=self.fused_config,
                 mesh_device=self.mesh_device,
+                mesh_config=self.mesh_config,
+                ccl_manager=self.ccl_manager,
             )
         return decode_forward(
             hidden_states=hidden_states,
