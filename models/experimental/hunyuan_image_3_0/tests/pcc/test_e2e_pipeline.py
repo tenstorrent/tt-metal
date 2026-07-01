@@ -63,11 +63,13 @@ def _pcc(a, b):
     return (a @ b / (a.norm() * b.norm()).clamp(min=1e-12)).item()
 
 
-def _host_reference(c, down_sd, up_sd, init_latent, text_embeds):
+def _host_reference(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=None, cfg_guidance=1.0):
     """fp32 host reference: denoise loop -> latent, then torch VAE decode -> RGB.
 
     Reads the SAME scheduler schedule the pipeline uses, so divergence isolates to
-    the TTNN port rather than the schedule."""
+    the TTNN port rather than the schedule. When ``text_embeds_uncond`` is given and
+    ``cfg_guidance`` != 1, runs the base classifier-free-guidance combine each step
+    (mirrors run_denoise's CFG path)."""
     LATENT, HID, HSZ = e2e._pe_dims(down_sd)
     H = c["H"]
     sched = HunyuanTtScheduler(None)
@@ -105,18 +107,27 @@ def _host_reference(c, down_sd, up_sd, init_latent, text_embeds):
     cos, sin = build_batch_2d_rope(S, c["HD"], image_infos=[[(IMG_SLICE, (GRID, GRID))]])
     mask = to_additive(build_attention_mask(S, image_slices=[IMG_SLICE], bsz=B), dtype=torch.float32)
 
-    print("[e2e-pcc] host reference denoise loop ...", flush=True)
+    do_cfg = text_embeds_uncond is not None and cfg_guidance != 1.0
+    print(f"[e2e-pcc] host reference denoise loop{' (+CFG)' if do_cfg else ''} ...", flush=True)
+
+    def _pred(lat, te_embeds, e1, e2_):
+        img, th, tw = rd(lat, e1)
+        h = te_embeds.clone()
+        h[:, IMG_SLICE, :] = img
+        for L in layers:
+            h = L(h, attention_mask=mask, custom_pos_emb=(cos, sin))
+        return ru(h[:, IMG_SLICE, :], e2_, th, tw)
+
     lat = init_latent.clone()
     for i, t in enumerate(timesteps):
         tv = torch.tensor([float(t)] * B)
         with torch.no_grad():
             e1, e2_ = te1r(tv), te2r(tv)
-            img, th, tw = rd(lat, e1)
-            h = text_embeds.clone()
-            h[:, IMG_SLICE, :] = img
-            for L in layers:
-                h = L(h, attention_mask=mask, custom_pos_emb=(cos, sin))
-            pred = ru(h[:, IMG_SLICE, :], e2_, th, tw)
+            pred = _pred(lat, text_embeds, e1, e2_)
+            if do_cfg:
+                pred_uncond = _pred(lat, text_embeds_uncond, e1, e2_)
+                # uncond + scale*(cond - uncond) == classifier_free_guidance_tt
+                pred = pred_uncond + cfg_guidance * (pred - pred_uncond)
         lat = lat + float(sigmas[i + 1] - sigmas[i]) * pred
 
     print("[e2e-pcc] host reference VAE decode ...", flush=True)
@@ -134,22 +145,47 @@ def _run():
     LATENT, _, _ = e2e._pe_dims(down_sd)
     assert LATENT == Z_CHANNELS, f"diffusion latent ch {LATENT} != VAE z-channels {Z_CHANNELS}"
 
+    # Base classifier-free guidance: mirror demo/e2e.py — CFG when BASE_GUIDANCE != 1
+    # on the base path (no per-step continuous tokens).
+    cfg_distilled, use_meanflow = e2e._model_flags()
+    base_cfg = (not (cfg_distilled or use_meanflow)) and e2e.BASE_GUIDANCE != 1.0
+    cfg_guidance = e2e.BASE_GUIDANCE if base_cfg else 1.0
+
     print(
         f"\n[e2e-pcc] grid={GRID}x{GRID}  seq_len={S} (<= max {c['MAX_SEQ']})  layers={NUM_LAYERS}  "
-        f"steps={STEPS}  image={GRID * 16}x{GRID * 16}",
+        f"steps={STEPS}  image={GRID * 16}x{GRID * 16}{f'  base_CFG={cfg_guidance}' if base_cfg else ''}",
         flush=True,
     )
     torch.manual_seed(0)
     init_latent = torch.randn(B, LATENT, GRID, GRID)
     text_embeds = torch.randn(B, S, c["H"]) * 0.02
+    # Same deterministic uncond draw as run_pipeline (manual_seed(0) above, then this is
+    # the 3rd randn — keep both paths drawing it identically so cond/uncond match).
+    text_embeds_uncond = torch.randn(B, S, c["H"]) * 0.02 if base_cfg else None
 
     # Host fp32 reference (denoise -> latent -> VAE -> RGB).
-    ref_latent, ref_rgb = _host_reference(c, down_sd, up_sd, init_latent, text_embeds)
+    ref_latent, ref_rgb = _host_reference(
+        c,
+        down_sd,
+        up_sd,
+        init_latent,
+        text_embeds,
+        text_embeds_uncond=text_embeds_uncond,
+        cfg_guidance=cfg_guidance,
+    )
     gc.collect()
 
     # TT pipeline — the SAME functions demo/e2e.py runs.
     print("[e2e-pcc] TT pipeline: resident backbone denoise ...", flush=True)
-    tt_latent = e2e.run_denoise(c, down_sd, up_sd, init_latent, text_embeds)
+    tt_latent = e2e.run_denoise(
+        c,
+        down_sd,
+        up_sd,
+        init_latent,
+        text_embeds,
+        text_embeds_uncond=text_embeds_uncond,
+        cfg_guidance=cfg_guidance,
+    )
     print("[e2e-pcc] TT pipeline: VAE decode ...", flush=True)
     tt_rgb = e2e.run_vae_decode(tt_latent)
 
@@ -160,6 +196,55 @@ def _run():
         ref_rgb_shape=tuple(ref_rgb.shape),
         tt_rgb_shape=tuple(tt_rgb.shape),
     )
+
+
+def test_gen_special_token_order():
+    """Guards the special-token ordering fix: e2e.gen_special_token_indices() must
+    match the tokenizer's canonical layout — encode_sequence appends gen_timestep,
+    then guidance (distil), then timestep_r (meanflow) immediately before the gen
+    span, so gen_timestep is FURTHEST from the image. Ground-truthed against
+    prepare_gen_image_inputs for the cases the base vocab can build (base + distil);
+    meanflow's <timestep_r> is absent from the base vocab, so its relative order is
+    checked structurally. This is the gate for the distil/meanflow path, whose
+    weights are not present on disk for a full device PCC."""
+    import dataclasses
+    from models.experimental.hunyuan_image_3_0.ref.tokenizer.hunyuan_tokenizer import HunyuanTokenizer
+    from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
+        prepare_gen_image_inputs,
+        get_gen_image_slice,
+    )
+
+    tok = HunyuanTokenizer.from_pretrained()
+
+    def canonical(cfg_distilled, use_meanflow):
+        cfgo = dataclasses.replace(tok.config, cfg_distilled=cfg_distilled, use_meanflow=use_meanflow)
+        tk = HunyuanTokenizer(cfgo, tok.tokenizer, tok.special, sequence_template=tok.sequence_template)
+        b = prepare_gen_image_inputs(tk, "a cat", image_size=256)
+        gs = get_gen_image_slice(b, 0)
+        idx = lambda v: None if v is None else int(v[0, 0])
+        return (
+            gs.start,
+            idx(b.gen_timestep_scatter_index),
+            idx(b.guidance_scatter_index),
+            idx(b.gen_timestep_r_scatter_index),
+        )
+
+    # Tokenizer ground truth for base + distil (vocab-buildable).
+    for cfg_distilled in (False, True):
+        img_start, g_ts, g_guid, g_tr = canonical(cfg_distilled, False)
+        ts, guid, tr, n = e2e.gen_special_token_indices(img_start, cfg_distilled, False)
+        assert ts == g_ts, f"gen_timestep idx {ts} != tokenizer {g_ts} (distil={cfg_distilled})"
+        assert guid == g_guid, f"guidance idx {guid} != tokenizer {g_guid} (distil={cfg_distilled})"
+        assert tr == g_tr, f"timestep_r idx {tr} != tokenizer {g_tr} (distil={cfg_distilled})"
+
+    # Structural check incl. meanflow: order is gen_timestep (furthest) < guidance <
+    # timestep_r (adjacent to image), tokens contiguous right before IMG_START.
+    img_start = 32
+    ts, guid, tr, n = e2e.gen_special_token_indices(img_start, True, True)
+    assert n == 3 and ts < guid < tr and tr == img_start - 1 and ts == img_start - 3
+    ts, guid, tr, n = e2e.gen_special_token_indices(img_start, False, True)
+    assert n == 2 and guid is None and ts < tr and tr == img_start - 1
+    print("[e2e-pcc] gen_special_token_order: indices match tokenizer canonical order", flush=True)
 
 
 def test_e2e_pipeline():
