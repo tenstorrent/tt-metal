@@ -129,3 +129,69 @@ Phase-0 implementation. On-device verification attempted but blocked (see below)
 ### Artifacts written
 - `verification_report.md`, `op_requirements.md` (empty refinement queue + verification
   debt), this changelog entry, and `eval/results/point_to_point/verifier_report.json`.
+
+## 2026-07-01 — On-device (sim) acceptance run PASSES — prior blocker cleared
+
+### What was done
+Executed the previously-blocked acceptance suite on the graded multi-device sim
+topology. **No implementation code changed** — the Phase-0 op (entry point,
+program descriptor, four dataflow kernels) was already complete and structurally
+verified; this pass closes the only outstanding item, the on-device run.
+
+Command (the multichip analog of `run_safe_pytest.sh`, per op_design.md
+"Verification Topology"):
+```
+scripts/run_multidevice_sim_pytest.py --topology bh_8xP150_p2p -- \
+  tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py
+```
+Topology `bh_8xP150_p2p` = Blackhole 8× P150, mesh **(2, 4)**, `FABRIC_1D`
+(torus-x mesh-graph descriptor) — the `grade_primary`, `required` entry, and the
+exact shape/fabric the acceptance test hardcodes.
+
+### Result — GREEN
+```
+======================== 16 passed in 570.68s (0:09:30) ========================
+MULTIDEV_SIM_RESULT[bh_8xP150_p2p]: PASS (pytest exit 0)
+[multidevice-sim] aggregate exit = 0
+```
+All 16 invocations pass (11 CASES + 2 nonparticipating-unchanged + 2 output_tensor
++ 1 program_cache), covering:
+- **dtype**: bfloat16, float32, bfloat8_b, uint16, int32, uint32 (block-float + all
+  integer passthroughs bit-exact; floats within the suite's PCC thresholds).
+- **layout**: TILE and ROW_MAJOR (incl. non-tile-aligned shards, e.g. (1,1,48,64),
+  (1,1,96,64) — confirms the alignment-agnostic byte-copy claim).
+- **topology**: Linear and Ring (Ring degenerates to the 1-hop line route for the
+  adjacent (0,0)->(0,1) pair under FABRIC_1D, as designed).
+- **output_tensor path**: caller-supplied preallocated output filled in place,
+  same buffer handle returned.
+- **non-participating shards unchanged**: every bystander shard (including the
+  sender's own) equals its input — the output-seeding contract holds.
+- **program cache**: two back-to-back calls both correct — the cached
+  GlobalSemaphore survives, and the sender-before-inc / receiver-after-wait
+  `noc_semaphore_set(0)` re-arm ordering is correct (the cache-reuse footgun).
+
+### Accuracy achieved (now MEASURED, not analytical)
+Pure byte copy ⇒ receiver shard is bit-for-bit equal to the device-resident sender
+shard. Integer dtypes compared with `torch.equal` (exact) — pass. Float/block-float
+compared with `assert_with_pcc` at the suite thresholds (f32 0.999, bf16 0.995,
+bf8b 0.99) — pass. Effective PCC = 1.0 (identity transfer, no arithmetic).
+
+### Prior blocker — RESOLVED
+The Phase-0 changelog + verifier reported the sim `bh_8xP150_p2p` fabric bring-up
+deadlocking (`Fabric Router Sync: Timeout ... Device 4 ... stuck at STARTED`) in
+`open_mesh_device`, before the op ran. In THIS environment fabric bring-up
+completes cleanly ("Fabric Initialized with config FabricConfig::FABRIC_1D" across
+all 8 devices) and the op runs to green. The blocker was environmental (sim
+build / fabric model), not an op defect — as the prior notes hypothesized.
+
+### Issues encountered
+None in the op. One runner-usage note for future runs: `run_multidevice_sim_pytest.py`
+does NOT auto-append `-x` and passes trailing args verbatim to pytest, so
+`run_safe_pytest.sh`-only flags like `--run-all` must NOT be forwarded (pytest exits
+4). Also prefer `--topology bh_8xP150_p2p` over `--op point_to_point` for the
+acceptance test: `--op` fans across all three p2p topologies (4x2, 8x4) whose mesh
+shapes differ from the test's hardcoded (2,4), which would hang their fabric init.
+
+### Tests added
+None (implementation unchanged). The existing acceptance suite and the Phase-0
+precision baseline both run under the sim runner.
