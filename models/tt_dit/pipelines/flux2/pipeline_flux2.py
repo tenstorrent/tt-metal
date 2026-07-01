@@ -12,8 +12,8 @@ import diffusers
 import numpy as np
 import torch
 import tqdm
-from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
+from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from PIL import Image
@@ -141,7 +141,7 @@ class Flux2Pipeline:
 
         self._pos_embed = self._torch_transformer.pos_embed
 
-        self._image_processor = VaeImageProcessor()
+        self._image_processor = Flux2ImageProcessor(vae_scale_factor=self._vae_scale_factor * self._patch_size)
 
         logger.info("creating TT-NN text encoder...")
         self._encoder_ccl_manager = CCLManager(self._mesh_device, num_links=num_links, topology=topology)
@@ -307,6 +307,7 @@ class Flux2Pipeline:
         guidance_scale: float = 4.0,
         prompts: Sequence[str],
         num_inference_steps: int,
+        image: Image.Image | None = None,
         prompt_upsample_temperature: float | None = None,  # prompt upsampling is currently very slow
         seed: int | None = None,
         traced: bool = False,
@@ -323,7 +324,7 @@ class Flux2Pipeline:
         latents_height = self._height // self._vae_scale_factor
         latents_width = self._width // self._vae_scale_factor
         transformer_batch_size = prompt_count * num_images_per_prompt
-        spatial_sequence_length = (latents_height // self._patch_size) * (latents_width // self._patch_size)
+        noise_sequence_length = (latents_height // self._patch_size) * (latents_width // self._patch_size)
 
         logger.info("encoding prompts...")
 
@@ -334,6 +335,7 @@ class Flux2Pipeline:
                     prompts,
                     max_length=224,  # TODO: this should be higher
                     temperature=prompt_upsample_temperature,
+                    images=[image] if image is not None else None,
                     traced=traced,
                 )
 
@@ -345,11 +347,30 @@ class Flux2Pipeline:
             )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
+        image_latents_torch: torch.Tensor | None = None
+        image_latents_for_rope: list[torch.Tensor] | None = None
+        if image is not None:
+            logger.info("encoding condition image...")
+            condition_image = self._preprocess_condition_image(image)
+            patchified = self._encode_vae_image(condition_image)
+            image_latents_torch = _pack_latents(patchified).repeat(transformer_batch_size, 1, 1)
+            image_latents_for_rope = [patchified[0]]
+
+        spatial_sequence_length = noise_sequence_length
+        if image_latents_torch is not None:
+            spatial_sequence_length += image_latents_torch.shape[1]
+            self._update_spatial_rope(
+                noise_height=latents_height // self._patch_size,
+                noise_width=latents_width // self._patch_size,
+                image_latents=image_latents_for_rope or [],
+                traced=traced,
+            )
+
         logger.info("preparing timesteps...")
         timesteps, sigmas = _schedule(
             self._scheduler,
             step_count=num_inference_steps,
-            spatial_sequence_length=spatial_sequence_length,
+            spatial_sequence_length=noise_sequence_length,
         )
 
         guidance = torch.full([transformer_batch_size], fill_value=guidance_scale)
@@ -362,13 +383,18 @@ class Flux2Pipeline:
         shape = [transformer_batch_size, self._num_channels_latents, latents_height, latents_width]
         latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
+        is_img2img = image_latents_torch is not None
+        latents_to_upload = torch.cat([latents, image_latents_torch], dim=1) if is_img2img else latents
+
         # Shard the prompt sequence across SP (like spatial) when enabled, so per-block matmuls
         # run on 1/sp of the prompt tokens; attention gathers prompt q/k/v for the joint SDPA.
         prompt_embeds_mesh_axes = [None, sp_axis, None] if self._shard_prompt else None
         self.ts._tt_prompt_embeds.update(
             prompt_embeds, traced, mesh_axes=prompt_embeds_mesh_axes, device=self._mesh_device
         )
-        self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+        self.ts._tt_latents_step.update(
+            latents_to_upload, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device
+        )
         self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
 
         logger.info("denoising...")
@@ -401,6 +427,7 @@ class Flux2Pipeline:
                         sigma_difference=self.ts.tt_sigma_difference,
                         spatial_rope=(self.ts.tt_spatial_rope_cos, self.ts.tt_spatial_rope_sin),
                         prompt_rope=(self.ts.tt_prompt_rope_cos, self.ts.tt_prompt_rope_sin),
+                        noise_sequence_length=noise_sequence_length,
                         spatial_sequence_length=spatial_sequence_length,
                         prompt_sequence_length=prompt_sequence_length,
                         traced=traced,
@@ -411,6 +438,15 @@ class Flux2Pipeline:
         with pcv:
             self._prepare_vae()
 
+            tt_latents = self.ts.tt_latents_step
+            if is_img2img:
+                tt_latents = _extract_noise_latents_from_combined(
+                    self._ccl_manager,
+                    self._parallel_config,
+                    tt_latents,
+                    noise_sequence_length=noise_sequence_length,
+                )
+
             # Latents arrive SP-sharded on dim=1 (patchified token dim). Redistribute to
             # whatever spatial sharding the VAE conv pyramid expects before unpatchifying.
             #
@@ -418,10 +454,10 @@ class Flux2Pipeline:
             # W (spatial dim=2): can only be applied after unpatchify since H/W are interleaved
             #   in patchified tokens; mesh_partition is applied right after the reshape below.
             if self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis:
-                tt_latents = self.ts.tt_latents_step
+                pass
             else:
                 tt_latents = self._ccl_manager.all_gather(
-                    self.ts.tt_latents_step,
+                    tt_latents,
                     dim=1,
                     mesh_axis=sp_axis,
                     use_hyperparams=True,
@@ -471,9 +507,12 @@ class Flux2Pipeline:
         sigma_difference: ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        noise_sequence_length: int,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
     ) -> None:
+        is_img2img = spatial_sequence_length > noise_sequence_length
+
         noise_pred = self.transformer.forward(
             spatial=spatial,
             prompt=prompt,
@@ -485,8 +524,74 @@ class Flux2Pipeline:
             prompt_sequence_length=prompt_sequence_length,
         )
 
+        if is_img2img:
+            _apply_img2img_scheduler_step(
+                self._ccl_manager,
+                self._parallel_config,
+                spatial=spatial,
+                noise_pred=noise_pred,
+                noise_sequence_length=noise_sequence_length,
+                sigma_difference=sigma_difference,
+            )
+            return
+
         ttnn.multiply_(noise_pred, sigma_difference)
         ttnn.add_(spatial, noise_pred)
+
+    def _preprocess_condition_image(self, image: Image.Image) -> torch.Tensor:
+        self._image_processor.check_image_input(image)
+
+        image_width, image_height = image.size
+        if image_width * image_height > 1024 * 1024:
+            image = self._image_processor._resize_to_target_area(image, 1024 * 1024)
+            image_width, image_height = image.size
+
+        multiple_of = self._vae_scale_factor * self._patch_size
+        image_width = (image_width // multiple_of) * multiple_of
+        image_height = (image_height // multiple_of) * multiple_of
+        return self._image_processor.preprocess(image, height=image_height, width=image_width, resize_mode="crop")
+
+    def _encode_vae_image(self, image: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            encoded = self._torch_vae.encode(image).latent_dist.mode()
+
+        encoded = _patchify_latents(encoded)
+        mean = self._torch_vae.bn.running_mean.view(1, -1, 1, 1).to(device=encoded.device, dtype=encoded.dtype)
+        std = torch.sqrt(self._torch_vae.bn.running_var.view(1, -1, 1, 1) + self._torch_vae.config.batch_norm_eps).to(
+            device=encoded.device, dtype=encoded.dtype
+        )
+        return (encoded - mean) / std
+
+    def _update_spatial_rope(
+        self,
+        *,
+        noise_height: int,
+        noise_width: int,
+        image_latents: list[torch.Tensor],
+        traced: bool,
+    ) -> None:
+        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
+
+        noise_ids = _prepare_ids(height=noise_height, width=noise_width, text_sequence_length=1)
+        if image_latents:
+            image_ids = _prepare_image_ids(image_latents).squeeze(0)
+            spatial_ids = torch.cat([noise_ids, image_ids], dim=0)
+        else:
+            spatial_ids = noise_ids
+
+        spatial_rope_cos, spatial_rope_sin = self._pos_embed.forward(spatial_ids)
+        self.ts._tt_spatial_rope_cos.update(
+            spatial_rope_cos.unsqueeze(0).unsqueeze(0),
+            traced,
+            mesh_axes=[None, None, sp_axis, None],
+            device=self._mesh_device,
+        )
+        self.ts._tt_spatial_rope_sin.update(
+            spatial_rope_sin.unsqueeze(0).unsqueeze(0),
+            traced,
+            mesh_axes=[None, None, sp_axis, None],
+            device=self._mesh_device,
+        )
 
     def _patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), C * P * P
@@ -547,3 +652,93 @@ def _prepare_ids(*, height: int = 1, width: int = 1, text_sequence_length: int =
     s = torch.arange(text_sequence_length)
 
     return torch.cartesian_prod(t, h, w, s)
+
+
+def _patchify_latents(latents: torch.Tensor) -> torch.Tensor:
+    batch_size, num_channels_latents, height, width = latents.shape
+    latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
+    latents = latents.permute(0, 1, 3, 5, 2, 4)
+    return latents.reshape(batch_size, num_channels_latents * 4, height // 2, width // 2)
+
+
+def _pack_latents(latents: torch.Tensor) -> torch.Tensor:
+    batch_size, num_channels, height, width = latents.shape
+    return latents.reshape(batch_size, num_channels, height * width).permute(0, 2, 1)
+
+
+def _extract_noise_latents_from_combined(
+    ccl_manager: CCLManager,
+    parallel_config: DiTGParallelConfigNoCFG,
+    combined: ttnn.Tensor,
+    *,
+    noise_sequence_length: int,
+) -> ttnn.Tensor:
+    sp_axis = parallel_config.sequence_parallel.mesh_axis
+    full_combined = ccl_manager.all_gather(combined, dim=1, mesh_axis=sp_axis, use_hyperparams=True)
+    noise_latents = ttnn.slice(
+        full_combined,
+        [0, 0, 0],
+        [full_combined.shape[0], noise_sequence_length, full_combined.shape[2]],
+    )
+    return ttnn.mesh_partition(
+        noise_latents,
+        dim=1,
+        cluster_axis=sp_axis,
+        memory_config=noise_latents.memory_config(),
+    )
+
+
+def _apply_img2img_scheduler_step(
+    ccl_manager: CCLManager,
+    parallel_config: DiTGParallelConfigNoCFG,
+    *,
+    spatial: ttnn.Tensor,
+    noise_pred: ttnn.Tensor,
+    noise_sequence_length: int,
+    sigma_difference: ttnn.Tensor,
+) -> None:
+    sp_axis = parallel_config.sequence_parallel.mesh_axis
+
+    full_pred = ccl_manager.all_gather(noise_pred, dim=1, mesh_axis=sp_axis, use_hyperparams=True)
+    noise_pred_only = ttnn.slice(
+        full_pred,
+        [0, 0, 0],
+        [full_pred.shape[0], noise_sequence_length, full_pred.shape[2]],
+    )
+    ttnn.multiply_(noise_pred_only, sigma_difference)
+
+    full_spatial = ccl_manager.all_gather(spatial, dim=1, mesh_axis=sp_axis, use_hyperparams=True)
+    noise_spatial = ttnn.slice(
+        full_spatial,
+        [0, 0, 0],
+        [full_spatial.shape[0], noise_sequence_length, full_spatial.shape[2]],
+    )
+    image_spatial = ttnn.slice(
+        full_spatial,
+        [0, noise_sequence_length, 0],
+        [full_spatial.shape[0], full_spatial.shape[1], full_spatial.shape[2]],
+    )
+    updated_noise = ttnn.add(noise_spatial, noise_pred_only)
+    full_spatial = ttnn.concat([updated_noise, image_spatial], dim=1)
+
+    updated_combined = ttnn.mesh_partition(
+        full_spatial,
+        dim=1,
+        cluster_axis=sp_axis,
+        memory_config=full_spatial.memory_config(),
+    )
+    ttnn.copy(updated_combined, spatial)
+
+
+def _prepare_image_ids(image_latents: list[torch.Tensor], *, scale: int = 10) -> torch.Tensor:
+    t_coords = [scale + scale * t for t in torch.arange(0, len(image_latents))]
+    t_coords = [t.view(-1) for t in t_coords]
+
+    image_latent_ids = []
+    for latent, t in zip(image_latents, t_coords):
+        latent = latent.squeeze(0)
+        _, height, width = latent.shape
+        x_ids = torch.cartesian_prod(t, torch.arange(height), torch.arange(width), torch.arange(1))
+        image_latent_ids.append(x_ids)
+
+    return torch.cat(image_latent_ids, dim=0).unsqueeze(0)

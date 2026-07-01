@@ -7,6 +7,7 @@ import os
 
 import pytest
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -19,6 +20,24 @@ line_params_flux2 = {**line_params, "l1_small_size": 65536}
 ring_params_flux2 = {**ring_params, "l1_small_size": 65536}
 ring_params_8k_flux2 = {**ring_params_8k, "l1_small_size": 65536}
 line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
+
+
+def _load_init_image(*, width: int, height: int, mesh_device: ttnn.MeshDevice) -> Image.Image:
+    """Load a real reference image for img2img (Flux2 conditions on encoded reference latents)."""
+    arch = "bh" if is_blackhole() else "wh"
+    mesh_tag = "x".join(str(s) for s in mesh_device.shape)
+    ref_path = f"flux2_{arch}_{width}_{height}_{mesh_tag}_0.png"
+    if os.path.isfile(ref_path):
+        logger.info(f"Using reference image: {ref_path}")
+        return Image.open(ref_path).convert("RGB")
+
+    logger.warning(f"Reference image not found at {ref_path}; using synthetic gradient")
+    gradient = Image.new("RGB", (width, height))
+    pixels = gradient.load()
+    for y in range(height):
+        for x in range(width):
+            pixels[x, y] = (x * 255 // width, y * 255 // height, 128)
+    return gradient
 
 
 @pytest.mark.parametrize(
@@ -124,3 +143,70 @@ def test_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [line_params_flux2],
+    indirect=True,
+)
+@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 12)])
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load",
+    [
+        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, True, False],
+    ],
+    ids=["wh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_pipeline_img2img(
+    tt_dit_cache_dir,
+    *,
+    mesh_device: ttnn.MeshDevice,
+    width: int,
+    height: int,
+    num_inference_steps: int,
+    sp_axis: int,
+    tp_axis: int,
+    encoder_tp_axis: int,
+    vae_tp_axis: int,
+    topology: ttnn.Topology,
+    num_links: int,
+    is_fsdp: bool,
+    dynamic_load: bool,
+    model_location_generator,
+) -> None:
+    pipeline = Flux2Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        encoder_tp_axis=encoder_tp_axis,
+        vae_tp_axis=vae_tp_axis,
+        vae_h_axis=1 - vae_tp_axis,
+        vae_w_axis=None,
+        num_links=num_links,
+        topology=topology,
+        width=width,
+        height=height,
+        is_fsdp=is_fsdp,
+        dynamic_load=dynamic_load,
+        trace_warmup=False,
+    )
+
+    init_image = _load_init_image(width=width, height=height, mesh_device=mesh_device)
+    prompt = "winter night"
+
+    images = pipeline(
+        prompts=[prompt],
+        image=init_image,
+        num_inference_steps=num_inference_steps,
+        seed=0,
+        traced=False,
+    )
+
+    arch = "bh" if is_blackhole() else "wh"
+    mesh_tag = "x".join(str(s) for s in mesh_device.shape)
+    output_filename = f"flux2_{arch}_{width}_{height}_{mesh_tag}_img2img_0.png"
+    images[0].save(output_filename)
+    logger.info(f"Image saved as {output_filename}")

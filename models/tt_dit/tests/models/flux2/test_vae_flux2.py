@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from ....models.vae.vae_flux2_opt import Flux2VaeDecoder
+from ....models.vae.vae_flux2 import Flux2VaeDecoder
 from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
@@ -163,3 +163,38 @@ def test_vae_flux2_decoder(
 
     tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)  # [B, 3, H, W]
     assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
+
+
+def test_vae_encode_img2img(tt_dit_cache_dir) -> None:
+    """PCC: img2img VAE encode + patchify + pack helpers match diffusers Flux2Pipeline."""
+    from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
+    from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
+    from diffusers.pipelines.flux2.pipeline_flux2 import Flux2Pipeline
+    from PIL import Image
+
+    from ....pipelines.flux2.pipeline_flux2 import _pack_latents, _patchify_latents
+
+    vae = AutoencoderKLFlux2.from_pretrained("black-forest-labs/FLUX.2-dev", subfolder="vae")
+    assert isinstance(vae, AutoencoderKLFlux2)
+    vae.eval()
+
+    image_processor = Flux2ImageProcessor(vae_scale_factor=16)
+    image = Image.new("RGB", (512, 512), color=(32, 64, 128))
+    preprocessed = image_processor.preprocess(image, height=512, width=512, resize_mode="crop")
+
+    with torch.no_grad():
+        encoded = vae.encode(preprocessed).latent_dist.mode()
+
+    ref_patchified = Flux2Pipeline._patchify_latents(encoded)
+    ours_patchified = _patchify_latents(encoded)
+    assert torch.equal(ref_patchified, ours_patchified)
+
+    mean = vae.bn.running_mean.view(1, -1, 1, 1).to(ref_patchified.dtype)
+    std = torch.sqrt(vae.bn.running_var.view(1, -1, 1, 1) + vae.config.batch_norm_eps).to(ref_patchified.dtype)
+    ref_normalized = (ref_patchified - mean) / std
+    ours_normalized = (ours_patchified - mean) / std
+    assert torch.equal(ref_normalized, ours_normalized)
+
+    ref_packed = Flux2Pipeline._pack_latents(ref_normalized)
+    ours_packed = _pack_latents(ours_normalized)
+    assert torch.equal(ref_packed, ours_packed)
