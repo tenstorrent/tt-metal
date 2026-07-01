@@ -119,7 +119,7 @@
         --output-file output1_teacher_forcing_results.json \
         --chunk-accuracy 256
   skus:
-    bh_sp4:
+    bh_sp4-blitz:
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
@@ -145,7 +145,7 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp4:
+    bh_sp4-blitz:
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
@@ -172,7 +172,7 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp4:
+    bh_sp4-blitz:
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
