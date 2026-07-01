@@ -110,26 +110,49 @@ negligible. **These casts are a symptom of the accidental fp32→bf16 mix and di
 > listen to the demo `.wav`. Do #1 first, then re-measure — the memory note that "bf16 main path is
 > capped at ~2 %" is most likely explained by the affine fold (#1) having stayed fp32 and dominating.
 
-### 6. Run the main decoder path in bf16; keep only InstanceNorm stats + harmonic/STFT in fp32
-The prize. `target_dtype = har_nlc.dtype` forces fp32 across the whole `x` path. Only the
-`noise_conv` input (`har`) needs fp32. After the initial cast, keep `x` (ups → resblocks → snake →
-AdaIN affine → residual adds) in **bf16**, with the InstanceNorm reduce still accumulating in fp32
-(`ttnn.layer_norm` already does this with `fp32_dest_acc_en`). Targets the 744 µs (`50×256`) +
-195 µs (`301×128`) fp32 activation ops — bf16 equivalents are ~6× cheaper. Est. ~750–940 µs.
-⚠️ Highest PCC sensitivity of the list — the demo currently leans on fp32 + fallbacks for audio
-clarity.
+### 6. Run the main decoder path in bf16  ❌ INVESTIGATED — NOT VIABLE
+Investigated with a deterministic injected-har harness (mirrors `test_tt_generator_pipeline_pcc`,
+toggling the noise-path and main-`x` dtypes). Findings:
+- The **main resblocks are already bf16** (`x` becomes bf16 after `ups`), so there's no gain there.
+- The remaining ~940 µs of fp32 (`50×256` + `301×128`) is the **noise_res / harmonic path**, which is
+  **precision-load-bearing**. Converting it to bf16 drops pipeline PCC **0.99592 → 0.98836** (below
+  the 0.99 gate): the InstanceNorm normalizes the small-amplitude harmonic signal (RMS ≈ 0.06) and
+  amplifies its relative bf16 error before the residual add — the loss is *not* truncated away.
+- Starting `x` in bf16 adds nothing (0.98836 → 0.98797).
 
-### 7. Lower conv math fidelity where PCC allows
-Generator-level convs (ups / noise_conv / conv_post) run at **HiFi4** (the single 143 µs conv is
-HiFi4 on 16 cores); resblock convs already run HiFi3. Conv weights are fp32 (needed for PCC per the
-`preprocess` comment), so fidelity is the main knob. Try HiFi3→HiFi2 on the generator convs and
-measure. Est. tens of µs on the largest convs.
+Conclusion: the generator's fp32 floor is set by the fp32 noise_res + InstanceNorm and cannot be
+lowered by dtype without breaking the PCC gate. Matches the prior `[[project_kokoro_generator_perf]]`
+note. **Do not pursue bf16 main path.** Remaining device-time levers are non-dtype (see #7/#8).
 
-### 8. Raise conv core utilization
-Several convs run on **16 of 110 cores** (the 143 µs conv; the `84×256→50×256` group). Limited by the
-tiny time axis (T=50 ≈ 2 tiles). Explore block/width-shard grids that parallelize over the channel
-dim, `act_block_h_override`, or batching the three resblock convs of a stage. Largest single lever in
-the 876 µs conv bucket.
+### 7. Lower conv math fidelity  ❌ INVESTIGATED — NO BENEFIT (BW-bound)
+The two `ups` ConvTransposes dominate the conv bucket: `ups[0]` (512→256, stride 10) = 143.5 µs on
+16 cores, `ups[1]` (256→128, stride 6) = 77.2 µs on 80 cores. PCC sweep found **ups=HiFi3 is
+PCC-neutral (0.99592 → 0.99606, no drop)** — but profiling showed **identical timing** (ups[0] still
+143.5 µs): these convs are **weight-BW-bound** (reading the 10.5 MB fp32 `ups[0]` weight across 16
+cores), not compute-bound, so dropping fidelity passes does nothing. HiFi2/LoFi drop PCC and still
+don't help timing. Reverted. conv_post fidelity is likewise neutral but conv_post is only 6.7 µs.
+
+### 8. Conv weight/core levers  ❌ INVESTIGATED — NOT WORTH IT (not actually BW-bound)
+bf16 `ups` weights were **measured** (not just estimated): they save only **−11 µs** (ups convs
+220.7 → 208.8 µs), not the ~110 µs a BW-bound halving would predict. So the `ups` convs are **not**
+weight-BW-bound — they're dominated by ConvTranspose staging/halo overhead and the fixed cost of
+16-core serialization on the 50-row `ups[0]` output. bf16 weights barely help and cost PCC (0.99592 →
+0.99404). Not worth it; reverted. Core count: `ups[0]` is pinned at 16/110 cores by its 50-row output
+(a ConvTranspose can't spread 50 rows further, no exact re-shard knob found). The conv bucket has no
+worthwhile win at any PCC bar.
+
+### Conclusion — generator device-kernel time is at its practical floor
+After #1 + #2 (−387 µs / −8.3 %, both PCC-neutral), every further device-kernel lever tested fails:
+bf16 activations (#6) break the 0.99 gate (0.98836); conv fidelity (#7) is BW-bound (no benefit);
+bf16 conv weights barely help (−11 µs) because the convs are ConvTranspose-overhead-bound, not
+precision-bound. **Relaxing the PCC bar does *not* unlock a meaningful device-kernel win.** #1 + #2 is
+the practical ceiling for generator device time.
+
+The real remaining opportunity is **wall-clock, not device-kernel** (PCC-safe, 0 device change):
+- **#10 trace / program cache** — all 1,570 ops are `PROGRAM CACHE HIT=False`, no trace; the op-to-op
+  gap was ~13.8 ms vs 4.7 ms of device kernel. This is the biggest real demo speedup.
+- **#9 device-side SineGen** — drop the CPU phase-fallback device↔host round-trip (memory says the
+  cumsum path landed; re-validate the `sine_merge > 0.98` gate).
 
 ### 9. Drop `use_torch_phase_fallback` (device-side SineGen) — wall-clock, not device-kernel
 The CPU phase fallback forces device→host→device round-trips (the ~13.8 ms op-to-op gap in this
