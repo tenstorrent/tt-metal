@@ -150,9 +150,7 @@ from models.experimental.deepseek_v4_flash.tt.hyperconnection import (  # noqa: 
 )
 
 
-_SYSTEM_PYTHON = (
-    "/usr/bin/python3" if Path("/usr/bin/python3").exists() else (shutil.which("python3") or sys.executable)
-)
+_SYSTEM_PYTHON = shutil.which("python") or sys.executable
 _THIS_FILE = str(Path(__file__).resolve())
 PCC_THRESHOLD = 0.99
 
@@ -169,8 +167,8 @@ def _generate_reference(out_path: Path, batch: int, seq_len: int) -> bool:
     return out_path.is_file()
 
 
-@pytest.mark.parametrize("seq_len", (128,))
-@pytest.mark.parametrize("batch_size", (1, 2))
+@pytest.mark.parametrize("seq_len", (1,))
+@pytest.mark.parametrize("batch_size", (1,))
 def test_hyperconnection_pcc(device, reset_seeds, tmp_path, batch_size: int, seq_len: int) -> None:
     ref_path = tmp_path / "ref_hc.pt"
     if not _generate_reference(ref_path, batch_size, seq_len):

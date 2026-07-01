@@ -9,7 +9,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-
+#include "ttnn/operations/creation/creation.hpp"
 namespace ttnn::experimental::deepseek::hyperconnection {
 
 std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
@@ -32,6 +32,17 @@ std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
     const uint32_t s = static_cast<uint32_t>(shape[1]);
     const uint32_t hc = num_streams;
     const uint32_t d = static_cast<uint32_t>(shape[-1]);
+    // (void)pre_w;
+    // (void)post_w;
+    // (void)comb_w;
+    // (void)pre_bias;
+    // (void)post_bias;
+    // (void)comb_bias;
+    // (void)sinkhorn_iters;
+    // (void)pre_scale;
+    // (void)post_scale;
+    // (void)comb_scale;
+    // (void)eps;
 
     // Decode-only fused stage (T == 1):
     //   post      = 2 * sigmoid(post_w * post_scale + post_bias)            [1,1,1,H]
@@ -58,6 +69,20 @@ std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
         comb = ttnn::to_memory_config(comb, *memory_config);
         collapsed = ttnn::to_memory_config(collapsed, *memory_config);
     }
+
+    // const auto dtype = hidden_streams.dtype();
+    // const auto layout = hidden_streams.layout();
+    // auto* device = hidden_streams.device();
+    // const auto output_mem_config = memory_config.value_or(hidden_streams.memory_config());
+
+    // const auto dtype = hidden_streams.dtype();
+    // const auto layout = hidden_streams.layout();
+    // auto* device = hidden_streams.device();
+    // const auto output_mem_config = memory_config.value_or(hidden_streams.memory_config());
+    // Tensor post = ttnn::empty(ttnn::Shape({b, s, hc, 1}), dtype, layout, device, output_mem_config);
+    // Tensor comb = ttnn::empty(ttnn::Shape({b, s, hc, hc}), dtype, layout, device, output_mem_config);
+    // Tensor collapsed = ttnn::empty(ttnn::Shape({b, s, 1, d}), dtype, layout, device, output_mem_config);
+
     return {post, comb, collapsed};
 }
 
