@@ -236,7 +236,7 @@ class TtIndexer:
             index_topk=getattr(config, "index_topk", 2048),
             index_rope_interleave=getattr(config, "index_rope_interleave", False),
         )
-        self._alloc_index_kcache()
+        self._index_kcache = None  # lazily allocated fallback; the runtime may instead pass a shared cache
         self._upload_weights(idx_host)
         self._build_rope_tables()
 
@@ -301,27 +301,36 @@ class TtIndexer:
             cluster_axis=self.tp_axis,
         )
 
-    def _alloc_index_kcache(self):
-        """Persistent, slot-indexed index-key cache read directly by ``indexer_score_dsa`` — replaces the
-        grow-by-``concat`` buffer that reallocated the whole prefix each chunk (O(n^2) DRAM copies).
+    def _resolve_kcache(self, index_kcache, cache_batch_idx):
+        """Pick the index-key cache + slot for this dispatch.
 
-        Shape ``[1, 1, T_full, D_idx]`` (``T_full = config.max_seq_len``, the same length the RoPE tables
-        span, so no key ever lands past it), replicated/full on every chip (each query scores ALL keys —
-        the cache is NOT SP-sharded), TILE bf16 in DRAM. ``write_k`` fills columns ``[start_pos,
-        start_pos+glob)`` in place via ``fill_cache``; scoring reads the valid prefix via ``kv_len`` and
-        the tail is never read — so a fixed-shape buffer keeps the op program stable across chunks (the
-        concat buffer's per-chunk shape forced a recompile every chunk). B=1 here (indexer-owned, single
-        user); Commit 2 will move this to a runtime-owned ``[num_users*num_layers, ...]`` shared buffer."""
-        T_full = self.config.max_seq_len
-        D_idx = self.index_args.index_head_dim
-        self._index_kcache = ttnn.from_torch(
-            torch.zeros(1, 1, T_full, D_idx, dtype=torch.bfloat16),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        Two ownership modes for the persistent, slot-indexed cache read directly by ``indexer_score_dsa``
+        (both replace the old grow-by-``concat`` buffer that reallocated the whole prefix each chunk —
+        O(n^2) DRAM copies, and a per-chunk shape that recompiled the scoring op every chunk):
+
+        - ``index_kcache`` passed (runtime-owned): the shared ``[num_users*num_layers, 1, T_full, D_idx]``
+          buffer from ``init_index_kcache``; this layer/user reads+writes its own ``cache_batch_idx`` slot.
+        - ``index_kcache is None`` (standalone / device tests): lazily allocate a self-owned single-slot
+          ``[1, 1, T_full, D_idx]`` fallback (slot 0) once, and reuse it. Lazy (not in ``__init__``) so the
+          runtime path never pays for a per-layer buffer it won't use.
+
+        ``T_full = config.max_seq_len`` (the RoPE-table length, so no key ever lands past it); replicated/
+        full on every chip (each query scores ALL keys — the cache is NOT SP-sharded), TILE bf16 in DRAM.
+        Returns ``(kcache, slot)``."""
+        if index_kcache is not None:
+            return index_kcache, cache_batch_idx
+        if self._index_kcache is None:
+            T_full = self.config.max_seq_len
+            D_idx = self.index_args.index_head_dim
+            self._index_kcache = ttnn.from_torch(
+                torch.zeros(1, 1, T_full, D_idx, dtype=torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._index_kcache, 0
 
     def _build_rope_tables(self):
         """Precompute device cos/sin for the indexer RoPE via the shared builder
@@ -391,11 +400,11 @@ class TtIndexer:
             )
         return ttnn.concat([pe, nope], dim=-1)
 
-    def write_k(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int):
+    def write_k(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int, kcache: ttnn.Tensor, slot: int):
         """Device K stem (wk + TP all-reduce + k_norm + SP all-gather + device rope), written in place
-        into the persistent device index-key cache at sequence offset ``start_pos``. forward() calls this
-        on every chunk so the key-cache stays complete — else later chunks score against missing keys for
-        the early prefix. (Dense v3.1 binds a NullIndexer instead, so write_k never runs there.)"""
+        into ``kcache`` slot ``slot`` at sequence offset ``start_pos``. forward() calls this on every
+        chunk so the key-cache stays complete — else later chunks score against missing keys for the early
+        prefix. (Dense v3.1 binds a NullIndexer instead, so write_k never runs there.)"""
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,
@@ -414,17 +423,24 @@ class TtIndexer:
         glob = seq_len * self.sp_factor
         k = self._sp_all_gather(k, dim=2)  # [1, 1, glob, D_idx] full, replicated, natural order
         k = self._device_rope_pe(k, glob, start_pos)  # on-device non-interleaved rope
-        # Write the chunk in place into the persistent replicated cache at its sequence offset — no concat,
+        # Write the chunk in place into this user/layer's cache slot at its sequence offset — no concat,
         # no reallocation (the old grow-by-concat path copied the whole prefix each chunk, O(n^2) over a long
         # prefill). ``update_idx`` must be TILE_HEIGHT-aligned; ``start_pos`` (= kv_actual_isl) is a
         # chunk-size multiple, so assert it explicitly. A new request (start_pos==0) overwrites from offset 0
-        # and ``kv_len`` bounds the scoring read, so the stale tail needs no zeroing. batch_idx=0: B=1,
-        # indexer-owned single-user cache (Commit 2 will slot it by user*num_layers+layer).
+        # and ``kv_len`` bounds the scoring read, so the stale tail needs no zeroing.
         assert start_pos % ttnn.TILE_SIZE == 0, f"fill_cache update_idx {start_pos} must be tile-aligned"
-        ttnn.fill_cache(self._index_kcache, k, 0, update_idx=start_pos)
+        ttnn.fill_cache(kcache, k, slot, update_idx=start_pos)
         ttnn.deallocate(k)
 
-    def forward(self, hidden_states: ttnn.Tensor, qr: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        qr: ttnn.Tensor,
+        seq_len: int,
+        start_pos: int = 0,
+        index_kcache: ttnn.Tensor = None,
+        cache_batch_idx: int = 0,
+    ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
         stems, RoPE, cache, logits, topk — no host. K stays full/replicated (every query scores all keys).
@@ -433,11 +449,16 @@ class TtIndexer:
         and passes it in; the indexer applies wq_b to it (no q_a stem of its own). ``qr`` is NOT deallocated
         here — ttMLA's _q_stem consumes it afterwards. ``hidden_states`` is still needed for the K stem
         (write_k) and the per-head weights (weights_proj). (write_k is called internally here; ttMLA.forward
-        only ever calls self._indexer.forward — it never calls write_k directly.)"""
+        only ever calls self._indexer.forward — it never calls write_k directly.)
+
+        ``index_kcache`` / ``cache_batch_idx``: the runtime-owned shared key cache and this user/layer's
+        slot (from init_index_kcache; see _resolve_kcache). When ``index_kcache`` is None the indexer uses
+        its own lazily-allocated single-slot fallback."""
         a = self.index_args
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
-        self.write_k(hidden_states, seq_len, start_pos)
+        kcache, slot = self._resolve_kcache(index_kcache, cache_batch_idx)
+        self.write_k(hidden_states, seq_len, start_pos, kcache, slot)
 
         # PROTOTYPE — SP×TP seq-sharded indexer. The expensive part of the old TP-head-sharded indexer was
         # all-reducing the full [S/sp, end_pos] partial logits over TP (two CCLs over a 50k-wide tensor).
@@ -493,13 +514,17 @@ class TtIndexer:
         # op program is stable across chunks — the concat buffer's per-chunk shape forced a recompile each
         # chunk. The op does NOT -inf the tail past kv_len (cells fully past kv_len are skipped, so those
         # columns are stale), so slice logits to [0, end_pos) before top-k — identical shape to the old path.
+        # cache_batch_idx only on a multi-slot shared cache; the op rejects a B>1 cache with no slot and a
+        # single-slot cache needs none (mirrors the op's own contract).
+        score_slot = slot if kcache.shape[0] > 1 else None
         logits_full = ttnn.experimental.indexer_score_dsa(
             q_dev,
-            self._index_kcache,
+            kcache,
             weights,
             chunk_start_idx=start_pos,
             program_config=cfg,
             cluster_axis=None,  # flattened SP×TP index -> correct 2D causal offset
+            cache_batch_idx=score_slot,  # this user/layer's slot (None for the single-slot cache)
             kv_len=end_pos,  # valid prefix this chunk (tile-aligned, <= T_full)
         )  # [1, 1, sq, T_full] ROW_MAJOR; columns [0, end_pos) valid, tail stale
         ttnn.deallocate(q_dev)
@@ -507,7 +532,7 @@ class TtIndexer:
         # Drop the stale tail past end_pos. When end_pos == T_full (last chunk / single-shot) there is no
         # tail and a full-range ttnn.slice would alias logits_full — so skip it (deallocating the alias would
         # free the tensor we hand to top-k). Otherwise slice off [end_pos, T_full) and free the wide buffer.
-        if end_pos < self._index_kcache.shape[2]:
+        if end_pos < kcache.shape[2]:
             logits = ttnn.slice(logits_full, [0, 0, 0, 0], [1, 1, sq, end_pos])
             ttnn.deallocate(logits_full)
         else:

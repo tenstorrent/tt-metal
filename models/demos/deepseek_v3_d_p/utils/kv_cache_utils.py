@@ -344,3 +344,57 @@ def init_kvpe_cache(
     tt_kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
     return tt_kvpe_cache
+
+
+def init_index_kcache(
+    index_head_dim,
+    mesh_device,
+    seq_len,
+    num_index_kcache_layers,
+    num_users=1,
+    dtype=ttnn.bfloat16,
+    layout=ttnn.TILE_LAYOUT,
+):
+    """Initialize the DSA lightning-indexer key cache (shared across users×layers), the sibling of
+    init_kvpe_cache for the sparse indexer.
+
+    Unlike the KVPE cache, this one is REPLICATED and full-``seq_len`` on every chip (NOT SP-sharded):
+    the indexer scores every query against ALL keys, so each device needs the whole prefix (see the
+    cache-ops plan §3). It is plain interleaved DRAM (not ND-sharded) — start simple; ND-shard later
+    only if capacity demands. Kept bf16 (top-k selection is precision-sensitive).
+
+    Args:
+        index_head_dim: indexer head dim D_idx (config.index_head_dim, typically 128).
+        mesh_device: mesh device.
+        seq_len: full sequence length T_full (config.max_seq_len); the RoPE-table length, so no key
+            ever lands past it.
+        num_index_kcache_layers: layers per user in the cache.
+        num_users: independent users sharing the cache. Batch is user-major: slot = user_id *
+            num_index_kcache_layers + layer_idx, matching init_kvpe_cache's layout.
+        dtype / layout: cache element dtype / layout (default bf16 TILE).
+
+    Returns:
+        The zeroed [num_users * num_index_kcache_layers, 1, seq_len, index_head_dim] cache on device,
+        replicated across the mesh.
+    """
+    # Allocate + zero on device (no host transfer), mirroring init_kvpe_cache. Plain interleaved DRAM
+    # (replicated by the topology fix-up below), not the KVPE ND-shard spec.
+    tt_index_kcache = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([num_users * num_index_kcache_layers, 1, seq_len, index_head_dim]),
+        dtype,
+        layout,
+        mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    DRAMZeroFill.op(tt_index_kcache)
+
+    # allocate_tensor_on_device assigns a default 2D fully-replicated topology; reproduce the 1D
+    # single-Replicate topology the rest of the model emits via ReplicateTensorToMesh (see init_kvpe_cache).
+    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+    dist_shape = ttnn.MeshShape([num_devices])
+    placements = [ttnn.PlacementReplicate()]
+    physical_mesh_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    coords = list(ttnn.MeshCoordinateRange(physical_mesh_shape))
+    tt_index_kcache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
+
+    return tt_index_kcache

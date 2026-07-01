@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_index_kcache, init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -334,6 +334,17 @@ def run_sparse_mla_chunked_case(
         is_chunked=True,
         layer_num=1,
     )
+    # Exercise the runtime-owned indexer key cache (Commit 2): a MULTI-slot shared buffer (num_users=2)
+    # read at slot 0, so the multi-slot cache_batch_idx path is covered at model level (op-level tests cover
+    # nonzero slots). accuracy/determinism leave index_kcache unset -> the indexer's single-slot fallback.
+    tt_index_kcache = init_index_kcache(
+        index_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        num_index_kcache_layers=1,
+        num_users=2,
+    )
+
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk)
 
@@ -355,7 +366,7 @@ def run_sparse_mla_chunked_case(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
-        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s)
+        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s, index_kcache=tt_index_kcache)
         outs.append(
             ttnn.to_torch(
                 out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)

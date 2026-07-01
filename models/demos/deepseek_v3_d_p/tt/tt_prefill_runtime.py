@@ -13,10 +13,11 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_index_kcache, init_kvpe_cache
 
 
 @dataclass
@@ -177,6 +178,17 @@ class TtPrefillRuntime:
             num_kvpe_cache_layers=self.config.num_layers,
             num_users=self.config.num_users,
         )
+        # DSA sparse models also need the indexer key cache (one shared user-major buffer, replicated
+        # full-seq on every chip); dense models leave it None (the NullIndexer ignores it).
+        self.index_kcache = None
+        if resolve_has_indexer(self.hf_config):
+            self.index_kcache = init_index_kcache(
+                index_head_dim=self.hf_config.index_head_dim,
+                mesh_device=self.mesh_device,
+                seq_len=self.config.max_seq_len,
+                num_index_kcache_layers=self.config.num_layers,
+                num_users=self.config.num_users,
+            )
         self.kv_cache_allocated = True
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
@@ -279,6 +291,7 @@ class TtPrefillRuntime:
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
+            index_kcache=self.index_kcache,
         )
         ttnn.deallocate(input_tensor)
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
