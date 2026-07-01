@@ -77,6 +77,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
+#include "impl/program/kernel_prewarm.hpp"
 #ifdef GENERATE_HASH_LOG
 #include <fstream>
 #endif
@@ -2120,6 +2121,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
+    // Opt-in kernel prewarm (TT_METAL_KERNEL_PREWARM_MANIFEST): a background batch launched at device
+    // init populates the JIT cache during weight_load. Block here on the first compile so the per-op
+    // path below observes an already-warm cache. No-op when the flag is unset.
+    kernel_prewarm::wait_for_prewarm();
+
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
     std::vector<std::shared_future<void>> events;
 
@@ -2207,6 +2213,16 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                        if (kernel_prewarm::manifest_write_path() != nullptr) {
+                            // Capture this kernel's portable recipe for a later prewarm run. Read-only
+                            // on purpose: ensure_kernel_binaries() above already (re)generated this
+                            // kernel's genfiles under build_options.path (via the jit_build_once dedup),
+                            // so build_kernel_descriptor only reads them. Regenerating here would race
+                            // the parallel device-init builds that share dispatch kernels and corrupt
+                            // their genfiles mid-read (transient "Cannot read file").
+                            kernel_prewarm::append_manifest_entry(
+                                build_kernel_descriptor(device, kernel, build_options, kernel_hash).request);
+                        }
                     },
                     events);
             }
