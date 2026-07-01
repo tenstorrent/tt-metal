@@ -349,8 +349,14 @@ def _batched_tt_conv1d_nlc(
     this rank-4 shape (all rank-agnostic over the channel dim) and defers the one un-flatten to
     ``[batch, out_len, C]`` until right before the LSTM.
     """
-    conv_config = ttnn.Conv1dConfig(weights_dtype=params.weight.dtype)
-    conv_config.config_tensors_in_dram = True
+    # bfloat8_b conv weights (this batched path is TextEncoder-ONLY — sole caller is
+    # tt_text_encoder.py, verified — so the F0/prosody/generator convs are untouched). The L1 sweep
+    # (perf/conv_sweep_l1_results.md) found this the single real lever: the conv re-reads the
+    # [Cin*k, Cout] weight per output block, so halving the weight bytes cuts the conv 16.1->11.4µs
+    # (-29%) at isolated PCC 0.99988 vs 0.99989 (bf16). The tolerant ASR TextEncoder absorbs it; the
+    # F0-feeding convs (which reject precision drops) never take this path.
+    conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat8_b)
+    conv_config.config_tensors_in_dram = False
     conv_config.deallocate_activation = True
     # Config sweep (perf/test_conv_text_encoder_perf_sweep.py, production 512x512x5 @ B*T=96 shape):
     # the conv op was 31.6µs on the default auto-shard/no-double-buffer config. Block-sharded with both

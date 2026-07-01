@@ -6,6 +6,9 @@
 Kokoro TTNN LSTM helpers (TT-prefixed params, ``tt_`` entrypoints).
 
 Host-driven timestep loop using ``ttnn.linear`` and activations (no high-level LSTM op).
+The perf report's many slice ops are L per-step copies (one per timestep) — the LSTM
+recurrence is serial (step t reads step t-1's state) so it can't be batched over time.
+See the per-slice comments below; the only wall-clock lever is tracing, not cutting slices.
 """
 
 from __future__ import annotations
@@ -214,10 +217,10 @@ def _lstm_step(
     H = params.hidden_size
     assert H4 == 4 * H
 
-    # Gate order is [i, f, g, o] with i,f,o -> sigmoid and g -> tanh. Sigmoid is
-    # elementwise, so applying it once over the whole [B, 4H] tensor and slicing the
-    # i/f/o parts is bit-identical to three separate sigmoids but uses one op instead
-    # of three. g still needs tanh on the raw (pre-sigmoid) slice.
+    # Per-step gate split (4 slices/step). Gate order is [i, f, g, o] with i,f,o -> sigmoid
+    # and g -> tanh. One sigmoid over the whole [B, 4H] tensor + slicing i/f/o is bit-identical
+    # to three separate sigmoids but one op instead of three (g takes tanh on the raw slice).
+    # The slices are the price of fusing the activation — dropping them re-adds ops.
     sig = ttnn.sigmoid(gates, memory_config=memory_config)
     i = ttnn.slice(sig, [0, 0], [sig.shape[0], H], [1, 1])
     f = ttnn.slice(sig, [0, H], [sig.shape[0], 2 * H], [1, 1])
@@ -509,6 +512,9 @@ def tt_bilstm_nlc(
         return _precompute_gates_x_of(p, x_nlc)
 
     def _gates_x_at(gx_all: ttnn.Tensor, t: int) -> ttnn.Tensor:
+        # Per-step gate-row hand-off (1 slice/step): the state-independent input projection is
+        # batched out of the loop (gx_all), so only extracting step t's row stays per step.
+        # Irreducible — the recurrence serializes the L steps. Same as _gates_comb_at (fused path).
         # Slice the timestep directly into the per-step memory config (L1 when small enough).
         # The DRAM gx buffer is read once and the [B, 4H] row lands where the gate add wants it,
         # so the per-step DRAM->L1 copy that a follow-up to_memory_config would emit is avoided.
@@ -633,8 +639,9 @@ def tt_bilstm_nlc(
         gx_r = _precompute_gates_x_of(rev, x_rev, program_config=gatex_pc)  # [L, B, 4H] reversed-x order
         ttnn.deallocate(x_rev)
 
-        # Interleave into gate-major direction-minor order [i_f i_r f_f f_r g_f g_r o_f o_r] to
-        # match the fused recurrent weight's columns. Done once (not per step).
+        # One-shot setup (NOT per step): interleave into gate-major direction-minor order
+        # [i_f i_r f_f f_r g_f g_r o_f o_r] to match the fused recurrent weight's columns.
+        # Done once so each step reads a contiguous [B,8H] row.
         chunks = []
         for gi in range(4):
             chunks.append(ttnn.slice(gx_f, [0, 0, gi * H], [L, B, (gi + 1) * H], [1, 1, 1], memory_config=gx_mc))
@@ -646,6 +653,10 @@ def tt_bilstm_nlc(
         ttnn.deallocate(gx_r)
 
         def _gates_comb_at(t: int) -> ttnn.Tensor:
+            # Per-step gate-row hand-off (1 slice/step): the batchable input projection is hoisted
+            # out of the loop into gx_comb [L,B,8H], so only extracting step t's row stays per step.
+            # L is the leading untiled dim, so this is a page copy (not untilize+slice+tilize) —
+            # already at the floor. Irreducible: the recurrence serializes the L steps.
             return ttnn.reshape(
                 ttnn.slice(gx_comb, [t, 0, 0], [t + 1, B, H8], [1, 1, 1], memory_config=step_mc),
                 [B, H8],
