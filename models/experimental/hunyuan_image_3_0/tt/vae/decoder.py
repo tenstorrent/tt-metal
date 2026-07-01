@@ -325,17 +325,21 @@ class AttnBlockTTNN(Module):
         channels: int,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        t: int = LATENT_T,
+        h: int = LATENT_H,
+        w: int = LATENT_W,
     ) -> None:
         super().__init__()
         self.channels = channels
         self.mesh_device = mesh_device
         self.dtype = dtype
-        self.spatial = LATENT_H * LATENT_W
+        self.spatial = h * w
 
         self.norm = GroupNorm3D(
             num_channels=channels,
             num_groups=NUM_GROUPS,
-            input_nhw=LATENT_T * LATENT_H * LATENT_W,
+            input_nhw=t * h * w,
             num_batches=1,
             eps=GN_EPS,
             mesh_device=mesh_device,
@@ -344,9 +348,9 @@ class AttnBlockTTNN(Module):
         conv_kwargs = dict(
             mesh_device=mesh_device,
             dtype=dtype,
-            t=LATENT_T,
-            h=LATENT_H,
-            w=LATENT_W,
+            t=t,
+            h=h,
+            w=w,
         )
         self.q = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)
         self.k = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)

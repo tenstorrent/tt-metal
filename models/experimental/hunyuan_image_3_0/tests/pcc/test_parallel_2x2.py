@@ -19,8 +19,8 @@ import torch
 import pytest
 from loguru import logger
 
-ROOT = "/home/iguser/Christy/tt-metal"
-WEIGHTS = "/home/iguser/Christy/HunyuanImage-3"
+ROOT = "/home/iguser/ign-tt/tt-metal"
+WEIGHTS = "/home/iguser/ign-tt/base"
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
