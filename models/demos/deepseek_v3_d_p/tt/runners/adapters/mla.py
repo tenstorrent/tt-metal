@@ -114,7 +114,14 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         is stateless w.r.t. the KV cache — the engine allocates it (allocate_kv_cache) and
         passes it into each runtime call; the runtime knows the layout to read/write it."""
         from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+        from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
         from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+
+        # Per-axis CCL topology derived from the opened fabric: Ring on a physically-wrapped axis
+        # (FABRIC_2D_TORUS_{X,Y,XY}), Linear otherwise. Querying the active fabric keeps topology
+        # consistent with what open_mesh_device set. (sp_axis_0, tp_axis_1).
+        topology = per_axis_topology()
+        logger.info(f"Per-axis CCL topology (sp, tp) = {topology}")
 
         runtime_config = TtPrefillRuntimeConfig(
             num_layers=params.num_layers,
@@ -125,6 +132,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
             num_links=params.num_links,
+            topology=topology,
             capacity_factor=params.capacity_factor,
             gate_fallback_mode=GateComputeMode[params.gate_mode_name],
             weight_cache_path=params.weight_cache_path,
