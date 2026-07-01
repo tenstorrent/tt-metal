@@ -2,7 +2,7 @@ from typing import Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _profile
+from .common import DeepSeekV4Module, _profile, width_sharded_l1_config
 from .layers import Linear, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
@@ -49,6 +49,10 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         # The pre [H] / post [H] / comb [H*H] projections are contiguous slices of
         # the packed ``fn`` weight, so fuse them into one matmul ([(2+H)*H, H*D])
         # and split the output back into the three parts via ``ttnn.split``.
+        # TODO: this fn matmul ([T, H*D] @ [H*D, (2+H)*H], large K / small N) would
+        # benefit from a DRAM HEIGHT_SHARDED (K-split) weight, but no matmul kernel
+        # supports a K-split DRAM reduction yet -- see Linear's docstring. Use a plain
+        # interleaved Linear for now.
         self.fn = Linear(lambda: fn()[: 2 * hc + hc * hc], device, cache.file("fn"))
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
@@ -78,6 +82,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
 
         # Flatten streams to [1,1,T,H*D] and unweighted-RMSNorm over H*D.
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d])
+        flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
+        flat = ttnn.to_memory_config(flat, flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
 
         fused_w = self.fn(flat)  # [1,1,T,(2+H)*H]
@@ -145,6 +151,8 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
         t = b * s
 
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d])
+        flat_mem_config = width_sharded_l1_config(1, hc * d, self.device)
+        flat = ttnn.to_memory_config(flat, flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
 
         mixes = self.fn(flat)  # [1,1,T,H]
