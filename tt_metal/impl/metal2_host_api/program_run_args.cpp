@@ -481,7 +481,7 @@ void AttachBorrowedDFBBuffers(
 }
 
 // ============================================================================
-// PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs + GetProgramRunArgsView
+// PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
 // ============================================================================
 
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
@@ -1278,17 +1278,6 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
         }
     }
     return base;
-}
-
-ProgramRunArgsView& GetProgramRunArgsView(Program& program) {
-    (void)program;
-    TT_FATAL(false, "GetProgramRunArgsView is not yet implemented.");
-
-    // This is the fast path, power user API.
-    // Return type was changed to a reference to avoid copying the view.
-    // With this API, we will need to either:
-    //   - Create the view object on the first call and stash it in the Program object.
-    //   - Or, create the view object upon Program construction.
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -56,11 +56,6 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 // NOTE: If DFB size overrides are unspecified, they revert to the ProgramSpec-defined defaults.
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
-//////////////////////////////////////////////////////////////////////////////////////
-// NOTE: UpdateProgramRunArgs supersedes UpdateTensorArgs. I plan to remove it.
-//       (or require that all non-tensor args are enqueue-loop invariant.)
-//////////////////////////////////////////////////////////////////////////////////////
-
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
 // All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their values
 // from the most recent SetProgramRunArgs call.
@@ -74,15 +69,6 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunArgs variation
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
 void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args);
-
-// Power-user API for updating the mutable parameters of a Program in-place.
-// ProgramRunArgsView is a non-owning view into the Program's command buffers,
-// enabling in-place modification of mutable Program parameters.
-// (Sketch only; not yet implemented. TBD if needed at all.)
-ProgramRunArgsView& GetProgramRunArgsView(Program& program);
-
-// Useful? Might want to expose a const view for debug/test use?
-// ProgramRunArgsConstView GetProgramRunArgsConstView(const Program& program);
 
 }  // namespace tt::tt_metal::experimental
 
@@ -151,12 +137,11 @@ public:
     // Parameterization
     ///////////////////////////////////////////////////////////////
 
-    // Single descriptor API for program execution parameters
-    void set_run_args(const ProgramRunArgs& params);
+    // Single descriptor API for program execution arguments
+    void set_run_args(const ProgramRunArgs& params, bool skip_validation = false);
 
-    // Alternative API for setting the program execution parameters in-place,
-    // modifying the underlying dispatch command buffers directly.
-    ProgramRunArgsView get_run_args_view();
+    // Partial update API for program execution arguments
+    void update_run_args(const ProgramRunArgs& params, bool skip_validation = false);
 
 
     ///////////////////////////////////////////////////////////////
