@@ -96,7 +96,7 @@ struct StridedAllGatherFusedOpSignaler {
 
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index,
-        uint32_t all_gather_direction);
+        uint32_t signal_sem_index);
 };
 
 // Used to propagate semaphore information from matmul to reduce scatter in matmul_reduce_scatter op
@@ -240,8 +240,16 @@ struct MinimalMatmulFusedOpSignaler {
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
+    // Semaphore layout: [backward_0..backward_{N-1}, forward_0..forward_{N-1}, self], where
+    // N = num_ag_workers. With N==1 (default / reader-signaled path) this is [backward, forward, self],
+    // identical to the legacy 3-semaphore layout. With N>1 (writer-signals-matmul path), each AG worker
+    // in a direction increments its own semaphore so the matmul can wait for all N portions of a k-block.
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
+
+    // Number of all-gather workers per direction that will independently signal the matmul. Must be set
+    // before init_fused_op(). Defaults to 1 (single aggregated signal per direction, legacy behavior).
+    uint32_t num_ag_workers = 1;
 
     /* All Gather specs */
     uint32_t ring_size = 0;
