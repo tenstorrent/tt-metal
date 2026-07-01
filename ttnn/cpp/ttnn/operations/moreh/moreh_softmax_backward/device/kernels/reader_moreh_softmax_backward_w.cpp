@@ -35,7 +35,8 @@ void kernel_main() {
 
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-    generate_mask_w(cb_mask, mask_w);
+    CircularBuffer cb_mask_obj(cb_mask);
+    generate_mask_w(cb_mask_obj, mask_w);
 
     Noc noc;
     CircularBuffer cb_y_obj(cb_y);

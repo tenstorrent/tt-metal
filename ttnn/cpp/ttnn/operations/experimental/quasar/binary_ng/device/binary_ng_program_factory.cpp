@@ -836,7 +836,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else if (b_dtype == DataType::UINT32) {
-            compute_kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::UInt32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";

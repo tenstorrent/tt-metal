@@ -18,14 +18,14 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose_dest.h"
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -133,9 +133,9 @@ void kernel_main() {
             welford_restore_state(dst1);
 
             reconfig_data_format_srca(cb_m2_spill, cb_inp);
-            transpose_wh_init_short(cb_inp);
+            transpose_init(cb_inp);
             for (auto i : block.local()) {
-                transpose_wh_tile(cb_inp, i, dst0);
+                transpose_tile(cb_inp, i, dst0);
                 if (block.to_global(i) < Wt - 1) {
                     welford_update<W>(dst0, start_N, *p_reciprocals);
                 } else {
@@ -187,31 +187,31 @@ void kernel_main() {
 
         tile_regs_acquire();
         uint32_t start_N = 0;
-        transpose_wh_init(cb_inp, cb_scratch);
+        transpose_init(cb_inp);
         welford_init();
 
         // When the input CB carries Float32 with fp32_dest_acc_en=true, the program factory
-        // sets UnpackToDestFp32 for cb_inp so transpose_wh_tile preserves FP32 precision into DEST.
-        // Its math-side init (called from transpose_wh_init_short) records slots [16, 32) of the
+        // sets UnpackToDestFp32 for cb_inp so transpose_tile preserves FP32 precision into DEST.
+        // Its math-side init (called from transpose_init) records slots [16, 32) of the
         // math-thread replay buffer, clobbering the LREG2 / LREG3 portions of Welford's recurrence
         // (welford records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
-        // welford_init<WelfordInitMode::PreserveStats>() after each transpose_wh_tile re-records
+        // welford_init<WelfordInitMode::PreserveStats>() after each transpose_tile re-records
         // all 32 slots with the welford recurrence so welford_update replays welford ops instead
         // of stale transpose-dest ops. PreserveStats keeps the running mean / M2 accumulator in
         // LREG4/5, which survive transpose_dest anyway because it only uses FPU MOVs. UNPACK A
-        // is left in transpose=1 by transpose_wh_tile; welford_update is pure SFPU and does
-        // not consume that state, and the next iteration's transpose_wh_init_short reprograms
+        // is left in transpose=1 by transpose_tile; welford_update is pure SFPU and does
+        // not consume that state, and the next iteration's transpose_init reprograms
         // it.
         //
-        // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
+        // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
         // gated out.
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
             if constexpr (welford_unpack_fp32_active) {
-                transpose_wh_init_short(cb_inp);
+                transpose_init(cb_inp);
             }
-            transpose_wh_tile(cb_inp, 0, dst0);
+            transpose_tile(cb_inp, 0, dst0);
             if constexpr (welford_unpack_fp32_active) {
                 welford_init<WelfordInitMode::PreserveStats>();
             }
@@ -222,9 +222,9 @@ void kernel_main() {
         }
         cb_wait_front(cb_inp, 1);  // cumulative wait
         if constexpr (welford_unpack_fp32_active) {
-            transpose_wh_init_short(cb_inp);
+            transpose_init(cb_inp);
         }
-        transpose_wh_tile(cb_inp, 0, dst0);
+        transpose_tile(cb_inp, 0, dst0);
         if constexpr (welford_unpack_fp32_active) {
             welford_init<WelfordInitMode::PreserveStats>();
         }
@@ -233,9 +233,9 @@ void kernel_main() {
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
         // tt-llk/issues/549
         // BUG: using transpose_dest here causes a bug. where the kernel hangs
-        //  transpose_wh_dest_init_short();
-        //  transpose_wh_dest(dst1);
-        //  transpose_wh_dest(dst2);
+        //  transpose_dest_init();
+        //  transpose_dest(dst1);
+        //  transpose_dest(dst2);
         cb_reserve_back(cb_scratch, 2);
         tile_regs_commit();
         tile_regs_wait();
@@ -247,11 +247,11 @@ void kernel_main() {
 
         reconfig_data_format(cb_scratch, cb_scratch);
         pack_reconfig_data_format(cb_out);
-        transpose_wh_init_short(cb_scratch);
+        transpose_init(cb_scratch);
         tile_regs_acquire();
         cb_wait_front(cb_scratch, 2);  // cumulative wait
-        transpose_wh_tile(cb_scratch, 0, dst0);
-        transpose_wh_tile(cb_scratch, 1, dst1);
+        transpose_tile(cb_scratch, 0, dst0);
+        transpose_tile(cb_scratch, 1, dst1);
         cb_pop_front(cb_scratch, 2);
 
         tile_regs_commit();

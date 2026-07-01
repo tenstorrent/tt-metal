@@ -15,12 +15,14 @@ to `TEST_VARIANTS`.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention as DSv3RefAttention
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model as DSv3RefModel
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE as DSv3RefMoE
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Model as KimiRefModel
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3MoE as KimiRefMoE
@@ -52,6 +54,7 @@ class TestVariant:
         supports_pretrained: bool = True,
         prefill_trace_default: Optional[str] = None,
         prefill_trace_layout: str = "single_file",
+        config_builder: Optional[Callable[[], object]] = None,
     ) -> None:
         self.name = name
         self.env_var = env_var
@@ -76,6 +79,13 @@ class TestVariant:
         # or "chunked_group_a_v1" (Kimi — each tensor a directory of row-sharded rows_<s>_<e>.safetensors,
         # hidden_states/ -> decoder_io/). The chunked trace readers in the tests dispatch on this.
         self.prefill_trace_layout = prefill_trace_layout
+        # --- DSA (Deepseek Sparse Attention) capabilities -------------------------------------------
+        # Per-variant behaviour branches on these fields (data-driven), not on `name`.
+        # config_builder: returns a ready HF-attribute config when AutoConfig cannot load the model
+        # (GLM's model_type `glm_moe_dsa` is unregistered). When set, it overrides the disk/HF
+        # resolution path in conftest, and is also the single source the sparse-MLA CPU reference
+        # derives its ModelArgs from (see reference.cpu_deepseek_v32). None = resolve via AutoConfig.
+        self.config_builder = config_builder
 
 
 DSV3 = TestVariant(
@@ -113,10 +123,65 @@ KIMI_V2_6 = TestVariant(
     ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.971,
-    # vllm-traced golden: metadata.json + kv_cache nest under a run-hash subdir (resolve_trace_dir
-    # descends), and kv_post_transform is row-sharded (the transformer test's loader reassembles it).
-    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320",
+    # vllm-traced golden: metadata.json at top level + row-sharded kv_post_transform
+    # (kv_cache/layer_N/rows_*.safetensors, the transformer test's loader reassembles it).
+    # resolve_trace_dir descends a run-hash subdir if metadata.json isn't at the top level.
+    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm",
     prefill_trace_layout="chunked_group_a_v1",
 )
 
-TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6]}
+DSV32 = TestVariant(
+    name="deepseek_v32",
+    env_var="DEEPSEEK_V32_HF_MODEL",
+    # V3.2-Exp config is hand-built (deepseek_v32_hf_config), like GLM: model_type `deepseek_v32` needs
+    # trust_remote_code via AutoConfig, and — unlike a borrowed R1 config — the hand-built one carries
+    # the DSA index_* fields so the sparse resolver (TtIndexer.matches_config) detects it. MLA dims +
+    # YaRN match R1; the indexer is non-interleaved. hf_repo_id is the real V3.2-Exp repo (used only by
+    # the pretrained path below + as the DEEPSEEK_V32_HF_MODEL override target).
+    hf_repo_id="deepseek-ai/DeepSeek-V3.2-Exp",
+    # model_config: a dims class read only by the full-transformer / prefill tests (NUM_DENSE_LAYERS,
+    # NUM_ROUTED_EXPERTS). Kept as DeepSeekV3Config because V3.2 shares R1's MoE dims (256 experts, 3
+    # dense layers). Swap for a V3.2 dims class if/when a V3.2 full-transformer path is wired.
+    model_config=DeepSeekV3Config,
+    # config the device runs on: the hand-built V3.2 HF-attribute config (DSA index_* + YaRN). This is
+    # what config_only resolves to for V3.2 (conftest short-circuits to config_builder).
+    config_builder=deepseek_v32_hf_config,
+    # The MLA truth is MLACPU (the "mlacpu" sparse reference) with random/CPU weights, so the sparse
+    # tests never load pretrained HF weights — the pretrained path is disabled.
+    supports_pretrained=False,
+    # --- Pretrained-weight resolution (DISABLED) -------------------------------------------------
+    # These locate an on-disk HF checkout (config.json + safetensors index + shards) for the pretrained
+    # path; order is env_var -> default_local_path -> shared_path -> download hf_repo_id.
+    # num_layers_to_download bounds the HF download to the first N layers' shards (+embeddings+norm), so
+    # the full ~600GB model isn't pulled. All unused while supports_pretrained=False. To enable a V3.2
+    # pretrained / full-model path: set supports_pretrained=True, point these at a real DeepSeek-V3.2-Exp
+    # checkout (NOT an R1 one — V3.2 ships the indexer weights R1 lacks), and add a test that requests
+    # the pretrained_transformer_weights / state_dict / model_path fixtures.
+    # default_local_path=Path("/path/to/DeepSeek-V3.2-Exp"),
+    # shared_path=Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-V3.2-Exp"),
+    # num_layers_to_download=24,
+    # Block / full-model parity is out of P0 scope; the MLA truth comes from MLACPU, not HF attn.
+    reference_model_cls=None,
+    reference_attention_cls=None,
+    reference_moe_cls=None,
+    mla_ref_cache_env="DEEPSEEK_V32_MLA_REF_CACHE",
+    mla_pcc_threshold=0.996,
+)
+
+GLM51 = TestVariant(
+    name="glm_5_1",
+    env_var="GLM51_HF_MODEL",
+    hf_repo_id="zai-org/GLM-5.1",
+    model_config=GLM51Config,
+    # No HF pretrained_transformer_weights path: GLM ships per-layer shards and its MLA dims
+    # (nope=192, v=256) differ from the dequant fixture's assumptions. Config is hand-built.
+    supports_pretrained=False,
+    reference_model_cls=None,
+    reference_attention_cls=None,
+    reference_moe_cls=None,
+    mla_ref_cache_env="GLM51_MLA_REF_CACHE",
+    mla_pcc_threshold=0.995,
+    config_builder=glm_hf_config,
+)
+
+TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6, DSV32, GLM51]}

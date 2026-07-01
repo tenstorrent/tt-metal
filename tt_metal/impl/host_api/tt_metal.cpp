@@ -430,8 +430,10 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
         "Program has no logical cores to dispatch to device {}. Ensure the program has kernels.",
         device_id);
 
-    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+    // First configure (allocate buffers + write configs/binaries), then write runtime args.
+    // This allows us to allocate ephemeral scratchpad buffers, and pass their locations as implicit CRTAs.
     detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
 
     MetalContext::instance().get_cluster().dram_barrier(device_id);
     MetalContext::instance().get_cluster().l1_barrier(device_id);
@@ -861,8 +863,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             program.impl().finalize_offsets(device);
         }
 
-        detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+        // First configure (allocate buffers + write configs/binaries), then write runtime args.
+        // This allows us to allocate ephemeral scratchpad buffers, and pass their locations as implicit CRTAs.
         detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
+        detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
 
         auto device_id = device->id();
 

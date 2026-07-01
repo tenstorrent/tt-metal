@@ -21,6 +21,7 @@ from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMu
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.generator import create_submeshes
@@ -313,16 +314,24 @@ def prepare_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer
 
 
+def _gemma3_text_demo_model_key() -> str:
+    hf_model = os.getenv("HF_MODEL", "").lower()
+    if "4b" in hf_model:
+        return "gemma-3-4b"
+    return "gemma-3-27b"
+
+
 def _gemma3_text_demo_device_params():
-    # Blackhole (e.g. P150) needs an extra CQ, L1 small, and a larger trace region than Wormhole.
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
+    model_key = _gemma3_text_demo_model_key()
     if is_blackhole():
         return {
             "fabric_config": True,
-            "trace_region_size": 70000000,
+            TRACE_MODEL_KEY_PARAM: model_key,
             "num_command_queues": 2,
             "l1_small_size": 24576,
         }
-    return {"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}
+    return {"fabric_config": True, TRACE_MODEL_KEY_PARAM: model_key, "num_command_queues": 1}
 
 
 # List of supported Parameters for demo.py
@@ -1310,31 +1319,33 @@ def test_demo_text(
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, iteration):
+        if not token_accuracy:
+            # Save the decode performance of every iteration for plotting in superset
+            for i in range(1, iteration):
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    f"time_to_token_{i}",
+                    profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                    step_warm_up_num_iterations=None,
+                    target=None,
+                )
+
+            # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+            num_iterations_for_avg = min(128, iteration)
+            inference_decode_time_first_128 = sum(
+                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
+            )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                "avg_decode_time_first_128",
+                inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
                 step_warm_up_num_iterations=None,
                 target=None,
             )
-
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
         if token_accuracy:
             benchmark_data.add_measurement(
                 profiler,
@@ -1356,7 +1367,7 @@ def test_demo_text(
             )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_accuracy" if token_accuracy else "demo_perf",
             ml_model_name=model_name,
             ml_model_type="llm",
             device_name=tt_device_name,

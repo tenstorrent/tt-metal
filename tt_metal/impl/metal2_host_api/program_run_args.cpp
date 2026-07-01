@@ -336,9 +336,12 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 //
 // The base address always lives in CRTAs (per-enqueue, since the bound MeshTensor's
 // address can change between binds). Additional runtime field words appear immediately
-// after, when the TensorParameter opts into a dynamic accessor field. Currently the
-// only such field is tensor_shape_in_pages, for sharded TensorParameters with
-// dynamic_tensor_shape=true; in that case there are `rank` shape words.
+// after, when the TensorParameter opts into a dynamic accessor field. Two kinds exist,
+// mutually exclusive per binding (discriminated by handle.runtime_field_is_page_size):
+//   - tensor_shape_in_pages, for sharded TensorParameters with dynamic_tensor_shape=true
+//     (`rank` shape words); or
+//   - the aligned page size, for interleaved row-major TensorParameters with
+//     dynamic_tensor_shape=true (one word).
 //
 // Allocation-free by design: this runs once per binding on every enqueue, so callers
 // emit straight into their destination (push_back onto the assembled CRTA vector on the
@@ -352,40 +355,50 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const auto address = tensor.address();
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
-        "TensorParameter '{}' base address {} exceeds uint32_t max",
+        "Tensor argument for TensorParameter '{}' base address {} exceeds uint32_t max",
         handle.tensor_parameter_name,
         address);
     emit(static_cast<uint32_t>(address));
 
-    if (handle.num_runtime_field_crta_words > 0) {
-        // Currently the only runtime accessor field that lives in CRTAs is tensor_shape_in_pages
-        // (sharded TensorParameter with dynamic_tensor_shape=true). Read it from the bound
-        // MeshTensor's buffer.
-        const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
-        TT_FATAL(
-            buffer != nullptr,
-            "Tensor binding '{}' has runtime accessor field CRTA words but no backing Buffer to "
-            "source them from.",
-            handle.tensor_parameter_name);
-        const auto& bds_opt = buffer->buffer_distribution_spec();
-        TT_FATAL(
-            bds_opt.has_value(),
-            "Tensor binding '{}' has runtime accessor field CRTA words but its bound MeshTensor's "
-            "buffer has no BufferDistributionSpec. dynamic_tensor_shape currently requires a sharded "
-            "TensorParameter.",
-            handle.tensor_parameter_name);
-        const auto& tensor_shape = bds_opt->tensor_shape_in_pages();
-        TT_FATAL(
-            tensor_shape.rank() == handle.num_runtime_field_crta_words,
-            "Tensor binding '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
-            "({}) reserved at ProgramSpec resolution time. Rank must remain constant across binds; "
-            "only the per-dim shape values may vary.",
-            handle.tensor_parameter_name,
-            tensor_shape.rank(),
-            handle.num_runtime_field_crta_words);
-        for (size_t i = 0; i < tensor_shape.rank(); ++i) {
-            emit(static_cast<uint32_t>(tensor_shape[i]));
-        }
+    if (handle.num_runtime_field_crta_words == 0) {
+        return;
+    }
+
+    // Both runtime-field kinds source their values from the bound MeshTensor's reference buffer.
+    const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
+    TT_FATAL(
+        buffer != nullptr,
+        "Tensor argument for TensorParameter '{}' has runtime accessor field CRTA words but no backing Buffer to "
+        "source them from.",
+        handle.tensor_parameter_name);
+
+    if (handle.runtime_field_is_page_size) {
+        // Page-size runtime field (interleaved row-major): emit the buffer's aligned page size, re-derived
+        // each dispatch so it tracks a width-varying tensor across program-cache hits. Exactly one
+        // word by construction (ResolveTensorParameterStaticCTAs reserves a single slot). No
+        // BufferDistributionSpec is involved -- interleaved tensors have none, which is exactly why
+        // the field-kind discriminator exists (the shape path below would FATAL on a missing BDS).
+        emit(static_cast<uint32_t>(buffer->aligned_page_size()));
+        return;
+    }
+
+    // dynamic_tensor_shape (sharded): the runtime tensor's shape-in-pages, one word per dim.
+    const auto& bds_opt = buffer->buffer_distribution_spec();
+    TT_FATAL(
+        bds_opt.has_value(),
+        "Tensor argument for TensorParameter '{}' has no BufferDistributionSpec.",
+        handle.tensor_parameter_name);
+    const auto& tensor_shape = bds_opt->tensor_shape_in_pages();
+    TT_FATAL(
+        tensor_shape.rank() == handle.num_runtime_field_crta_words,
+        "Tensor argument for TensorParameter '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
+        "({}) reserved at ProgramSpec resolution time. Rank must remain constant across binds; "
+        "only the per-dim shape values may vary.",
+        handle.tensor_parameter_name,
+        tensor_shape.rank(),
+        handle.num_runtime_field_crta_words);
+    for (size_t i = 0; i < tensor_shape.rank(); ++i) {
+        emit(static_cast<uint32_t>(tensor_shape[i]));
     }
 }
 

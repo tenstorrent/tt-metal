@@ -16,6 +16,7 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
+#include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -87,7 +88,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     sfpi::vFloat x_poly = x * poly;  // x * poly ≈ -9 to -13 (safe range)
 
     // Step 5: Exponent bit manipulation on the FUSED result
-    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::NoDebias);  // Extract exponent of x*poly
+    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::Biased);  // Extract exponent of x*poly
     sfpi::vInt new_exp = xpoly_exp + k_int;               // Shift by 2^k
 
     // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
@@ -155,7 +156,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
-        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
         sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
         sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
@@ -345,6 +346,71 @@ inline void calculate_gelu() {
             sfpi::dst_reg++;
         }
     }
+}
+
+// =============================================================================
+// GELU tanh approximation in FP32:
+//   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+// =============================================================================
+
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_gelu_tanh() {
+    constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
+    constexpr float GELU_TANH_K = 0.044715f;
+    // Saturation threshold for tanh -> +/- 1.
+    // Empirically calibrated to torch's CPU tanh saturation point.
+    constexpr float TANH_SAT_THRESHOLD = 8.6643f;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // x^3.
+        sfpi::vFloat x2 = x * x;
+        sfpi::vFloat x3 = x2 * x;
+
+        // x + (0.044715 * x^3).
+        sfpi::vFloat kx3 = x3 * GELU_TANH_K;
+        sfpi::vFloat inner = x + kx3;
+
+        sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
+
+        // Handle +-0 using the sign of x to prevent 1 ULP difference.
+        // NOTE: vConst0 is a vCReg<vFloat>, not a vFloat. copysgn's overloads are
+        // constrained templates whose argument deduction does not apply the implicit
+        // vCReg->vFloat conversion, so materialize a real vFloat first.
+        sfpi::vFloat zero = sfpi::vConst0;
+        sfpi::vFloat result = sfpi::copysgn(zero, x);
+
+        v_if(scaled >= TANH_SAT_THRESHOLD) {
+            // Saturated positive tail: gelu_tanh(x) = x.
+            result = x;
+        }
+        v_elseif(scaled > -TANH_SAT_THRESHOLD) {
+            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
+            sfpi::vFloat one_plus = 1.0f + t;
+            sfpi::vFloat half_x = 0.5f * x;
+            result = half_x * one_plus;
+        }
+        v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void gelu_tanh_init() {
+    // _sfpu_tanh_fp32_accurate_ calls _sfpu_sigmoid_ -> _sfpu_reciprocal_
+    // regardless of is_fp32_dest_acc_en, so we always need reciprocal init.
+    // Calling tanh_init<false, is_fp32_dest_acc_en>() does NOT work when
+    // is_fp32_dest_acc_en=false: it loads polynomial constants for the
+    // BF16 polynomial tanh path that this kernel doesn't take, and skips
+    // reciprocal init.
+    sigmoid_init<false>();
 }
 
 // =============================================================================

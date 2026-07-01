@@ -6,17 +6,17 @@
 
 #include "device/tilize_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::quasar {
 // Shared data-movement helpers (data_movement/common/common.hpp, reshape_view/reshape.hpp) used
 // bare by this op; they previously resolved via the enclosing data_movement namespace.
-using ttnn::TileReshapeMapMode;
 using ttnn::operations::data_movement::MassagedOperation;
 using ttnn::operations::data_movement::MassagedOperationParams;
 using ttnn::operations::data_movement::squeeze_from_ND_to_4D;
+using ttnn::operations::experimental::quasar::TileReshapeMapMode;
 
 using OwnedTilizeArgs = std::tuple<ttnn::Tensor>;
 using BaseTilizeType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
@@ -34,7 +34,7 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize, const std::optiona
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(
+            auto unsqueezed_tensor = ttnn::operations::experimental::quasar::reshape(
                 output, *original_shape, std::nullopt, std::nullopt, TileReshapeMapMode::CACHE, sub_core_grids);
             return unsqueezed_tensor;
         },

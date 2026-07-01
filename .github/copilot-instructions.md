@@ -80,6 +80,31 @@ What the issue is and where (file:line).
 ```
 ````
 
+## PR Title Clarity
+
+The PR title becomes the release-note entry for this change, so it must read clearly to someone outside the team. Using the title **and** the description, assess whether the title is clear, accurate, and externally meaningful. When it is not, suggest one improved title.
+
+Flag and rewrite when the title:
+- has spelling or grammar errors;
+- references something a reader can't resolve (a bare ticket/PR number, "fix the thing from yesterday");
+- uses internal-only codenames or raw symbol names that mean nothing externally, with no plain-language hint;
+- is vague about what changed ("update code", "fixes", "address comments").
+
+Rules for the suggested title:
+- Keep it concise and imperative; preserve the original technical meaning — do not invent scope the diff doesn't support.
+- **Preserve any functional prefix such as `[skip ci]` exactly** — it controls CI and must not be dropped.
+- Prefer plain external wording; keep a meaningful component name when it aids clarity.
+
+Use the standard finding format, with the proposed title on a `Suggested title:` line:
+
+````
+**[🟢] Suggestion: Title clarity**
+
+Why it matters: this title is the release-note line; <reason>.
+
+Suggested title: `<rewritten title>`
+````
+
 ## Testing Expectations
 
 - New public API → unit test in the nearest `tests/` target

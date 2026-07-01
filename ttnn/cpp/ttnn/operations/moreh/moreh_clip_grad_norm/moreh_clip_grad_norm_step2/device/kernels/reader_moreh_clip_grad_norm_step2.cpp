@@ -20,7 +20,8 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(input_args, input_addr);
 
-    fill_cb_with_value(cb_id_decimal, decimal);
+    CircularBuffer cb_decimal(cb_id_decimal);
+    fill_cb_with_value(cb_decimal, decimal);
 
     constexpr uint32_t onetile = 1;
 

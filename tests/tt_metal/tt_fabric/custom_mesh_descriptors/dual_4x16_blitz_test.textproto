@@ -1,0 +1,47 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# Dual 4x16 BH logical meshes on quad galaxy (128 ASICs total): M0 single-pod slice
+# (1x8 hosts, 64 ASICs) + M1 split-host superpod slice (2x16 hosts, 64 ASICs).
+# Intermesh links carry Blitz forward crossing and loopback (logical sockets, not torus wrap).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 8 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 2, 16 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graph (two meshes + intermesh links) ----------------------------------
+# M0 and M1 are joined by intermesh ethernet links (any device may realize them).
+# The pipeline's forward crossing (last 4x2 stage -> first 1x2 stage) and loopback
+# (last 1x2 stage -> embedding) both ride these links; routing is logical (sockets),
+# not a physical torus wrap.
+graph_descriptors {
+  name: "G0"
+  # MGD 1.0 compatibility requires the single top-level graph to be a FABRIC graph
+  # (a "POD"/other type trips "There can only be one FABRIC level graph").
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  # Only 4 physical inter-mesh links exist between M0 and M1 (ports W6,W7,E6,E7);
+  # requesting 16 made the mapper reference uncabled corner chips (M0/M1 D48,D63),
+  # and the pipeline's cross-mesh sockets (s7->s8 forward, s39->s0 loopback) landed
+  # there and timed out. Match the physical link count.
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1  } }
+    channels { count: 4 policy: STRICT }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
