@@ -16,6 +16,7 @@
 //    call_unary_sfpu_operation_quasar() (and to init_unary_sfpu_operation_quasar()
 //    if the op needs an init step).
 #include "experimental/ckernel_sfpu_abs.h"
+#include "experimental/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
@@ -205,6 +206,30 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::square)
     {
         _llk_math_eltwise_unary_sfpu_params_(calculate_square<ITERATIONS>, dst_index);
+    }
+    else if constexpr (OPERATION == SfpuType::sine)
+    {
+        // Trigonometry helpers take the per-face iteration count as a runtime arg (not a template
+        // param), so it is forwarded through the vector-mode params call: VectorMode::RC runs the
+        // functor once per face with iterations = ITERATIONS. APPROXIMATION_MODE=false selects the
+        // full-polynomial (accurate) path.
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_sine_<false /* APPROX */>, dst_index, VectorMode::RC, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::cosine)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_cosine_<false /* APPROX */>, dst_index, VectorMode::RC, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::acosh)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_acosh_<false /* APPROX */>, dst_index, VectorMode::RC, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::asinh)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_asinh_<false /* APPROX */>, dst_index, VectorMode::RC, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::atanh)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_atanh_<false /* APPROX */, is_fp32_dest_acc_en>, dst_index, VectorMode::RC, ITERATIONS);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
