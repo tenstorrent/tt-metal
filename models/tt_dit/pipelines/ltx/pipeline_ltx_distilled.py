@@ -32,18 +32,19 @@ class LTXDistilledPipeline(LTXPipeline):
     SUPPORTS_IMAGE_CONDITIONING = True
 
     @staticmethod
-    def _pin_i2v_latent_tt(
-        video_lat: ttnn.Tensor,
+    def _post_process_latent_tt(
+        denoised: ttnn.Tensor,
         denoise_mask: ttnn.Tensor,
         clean_latent: ttnn.Tensor,
-    ) -> None:
-        """In-place frame-0 pin: ``lat = lat * mask + clean * (1 - mask)``."""
+    ) -> ttnn.Tensor:
+        """Blend the denoised estimate toward the clean latent: ``denoised * mask + clean * (1 - mask)``.
+        Mirrors the reference ``post_process_latent``; the caller applies it to the x0 estimate before
+        the Euler step so partial ``image_cond_strength`` integrates like the reference (hard pin at 1.0)."""
         one_minus = ttnn.subtract(
             ttnn.full_like(denoise_mask, 1.0, dtype=ttnn.bfloat16),
             denoise_mask,
         )
-        pinned = ttnn.add(ttnn.multiply(video_lat, denoise_mask), ttnn.multiply(clean_latent, one_minus))
-        ttnn.copy(pinned, video_lat)
+        return ttnn.add(ttnn.multiply(denoised, denoise_mask), ttnn.multiply(clean_latent, one_minus))
 
     def warmup_buffers(
         self,
@@ -324,10 +325,10 @@ class LTXDistilledPipeline(LTXPipeline):
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
         # ----- Video latent init (always end up with shape (B, video_N, C)) -----
-        if image_cond:
+        if image_cond:  # I2V path
             ns = sigmas[0].item()
             torch.manual_seed(seed)
-            if initial_video_latent is not None:
+            if initial_video_latent is not None:  # I2V S2
                 base_v = initial_video_latent.float()
                 if base_v.dim() == 2:
                     base_v = base_v.unsqueeze(0)
@@ -338,7 +339,7 @@ class LTXDistilledPipeline(LTXPipeline):
             noise_v = torch.randn_like(base_v)
             scaled_mask = denoise_mask * ns
             video_lat_real = noise_v * scaled_mask + base_v * (1.0 - scaled_mask)
-        elif initial_video_latent is not None:
+        elif initial_video_latent is not None:  # T2V S2
             # Stage-2 path: upsampled latent comes in at (B, video_N_real, C).
             video_lat_real = initial_video_latent.float()
             assert video_lat_real.shape[1] == video_N_real, (
@@ -347,7 +348,7 @@ class LTXDistilledPipeline(LTXPipeline):
             torch.manual_seed(seed)
             noise_v = torch.randn_like(video_lat_real)
             video_lat_real = video_lat_real * (1 - sigmas[0]) + noise_v * sigmas[0]
-        else:
+        else:  # T2V S1
             torch.manual_seed(seed)
             video_lat_real = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
 
@@ -452,16 +453,23 @@ class LTXDistilledPipeline(LTXPipeline):
                 traced=traced,
                 tracer_trace_key=trace_key,
             )
-            # In-place flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the
-            # trace's baked latent address holds across replays.
+            # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
+            # baked latent address holds across replays.
             dt = sigma_next - sigma
             v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
             ttnn.multiply_(v_vel, state.tt_video_pad_mask)
-            ttnn.multiply_(v_vel, dt)
-            ttnn.add_(state.tt_video_lat, v_vel)
-            ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
             if image_cond:
-                self._pin_i2v_latent_tt(state.tt_video_lat, tt_i2v_mask, tt_i2v_clean)
+                # Reference-parity: pin the x0 estimate pre-step, then Euler-step it. Stepping the
+                # pinned x0 (not overwriting the latent after) tracks the reference under partial
+                # image_cond_strength; equal at strength 1.0. sigma is never 0 in-loop, so dt/sigma is safe.
+                x0 = ttnn.subtract(state.tt_video_lat, ttnn.multiply(v_vel, sigma))
+                x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
+                v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
+                ttnn.add_(state.tt_video_lat, v_pin)
+            else:
+                ttnn.multiply_(v_vel, dt)
+                ttnn.add_(state.tt_video_lat, v_vel)
+            ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
             a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
             ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
             ttnn.multiply_(a_vel, dt)
