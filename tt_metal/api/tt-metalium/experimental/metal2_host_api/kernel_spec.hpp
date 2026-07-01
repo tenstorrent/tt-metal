@@ -17,10 +17,10 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/spec_names.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -63,9 +63,6 @@ namespace tt::tt_metal::experimental {
 // PLACEMENT: The nodes the kernel runs on is derived from WorkUnitSpec membership.
 //
 // ============================================================================
-
-// A name identifying a KernelSpec within a ProgramSpec.
-using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 
 //------------------------------------------------
 // KernelSpec
@@ -175,7 +172,6 @@ struct KernelSpec {
     // (Bound argument values cannot be changed between Program executions)
     using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
-    // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)

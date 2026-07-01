@@ -13,6 +13,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/spec_names.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
@@ -68,9 +69,6 @@
 
 namespace tt::tt_metal::experimental {
 
-// DFBSpecName is defined in advanced_options.hpp (included above) — the lowest
-// header that references it.
-
 //------------------------------------------------
 // DataflowBufferSpec
 //------------------------------------------------
@@ -125,7 +123,6 @@ struct DataflowBufferSpec {
     // The bound memory object must have L1-based storage and be large enough to hold the DFB's
     // total size (entry_size * num_entries).
     //
-    // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     //////////////////////////////
