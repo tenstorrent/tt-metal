@@ -84,6 +84,7 @@ struct TestCaseConfig {
     StagingTestPattern test_pattern = StagingTestPattern::BasicSend;
     uint32_t stage_count = 0;
     uint32_t idle_cycles = 0;
+    uint8_t status_read_trid = 0xFF;  // 0xFF = kInvalidStatusReadTrid (blocking fallback)
 };
 
 struct SenderMemoryLayout {
@@ -594,6 +595,7 @@ std::vector<uint32_t> make_common_compile_args(
         test_case.eager_staging ? 1u : 0u,
         test_case.use_stateful_lane ? 1u : 0u,
         static_cast<uint32_t>(test_case.test_pattern),
+        static_cast<uint32_t>(test_case.status_read_trid),
     };
 }
 
@@ -842,7 +844,7 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 21> kTestCases = {{
+constexpr std::array<TestCaseConfig, 26> kTestCases = {{
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
@@ -984,6 +986,45 @@ constexpr std::array<TestCaseConfig, 21> kTestCases = {{
         .stage_count = 1,
         .idle_cycles = 1000,
     },
+    // Eager staging tests with TRID — exercises non-blocking status read path
+    TestCaseConfig{
+        .name = "Staging_NonStateful_TridOppFlush",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::OpportunisticFlush,
+        .stage_count = 2,
+        .status_read_trid = 1,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stateful_TridOppFlush",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::OpportunisticFlush,
+        .stage_count = 2,
+        .status_read_trid = 1,
+    },
+    TestCaseConfig{
+        .name = "Staging_NonStateful_TridStageAndClose",
+        .num_packets = 1,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageAndClose,
+        .stage_count = 1,
+        .status_read_trid = 1,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stateful_TridStageAndClose",
+        .num_packets = 1,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::StageAndClose,
+        .stage_count = 1,
+        .status_read_trid = 1,
+    },
     // Multi-sender staging stress tests
     TestCaseConfig{
         .name = "Staging_Stress_8Senders_4Bufs_StageThenFlush",
@@ -1011,6 +1052,13 @@ constexpr std::array<TestCaseConfig, 21> kTestCases = {{
         .eager_staging = true,
         .test_pattern = StagingTestPattern::StageRingFull,
         .stage_count = 1,
+    },
+    // High channel count stress test
+    TestCaseConfig{
+        .name = "Stress_64Senders_DefaultPayload",
+        .num_senders = 64,
+        .num_packets = kLongPacketCount,
+        .num_buffers_per_channel = 4,
     },
 }};
 

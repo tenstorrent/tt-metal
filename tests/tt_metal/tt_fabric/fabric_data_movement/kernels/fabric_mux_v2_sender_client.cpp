@@ -21,6 +21,7 @@ constexpr bool is_2d_fabric = get_compile_time_arg_val(4) != 0;
 constexpr bool kEagerStaging = get_compile_time_arg_val(5) != 0;
 constexpr bool kUseStatefulLane = get_compile_time_arg_val(6) != 0;
 constexpr uint32_t kTestPattern = get_compile_time_arg_val(7);
+constexpr uint8_t kStatusReadTrid = static_cast<uint8_t>(get_compile_time_arg_val(8));
 
 enum class StagingTestPattern : uint32_t {
     BasicSend = 0,
@@ -166,10 +167,10 @@ void kernel_main() {
     uint32_t receiver_slot_id = 0;
 
     if constexpr (kUseStatefulLane) {
-        sender.open();
+        sender.open(kStatusReadTrid);
         sender.template setup_stateful_send_cmd_bufs</*posted=*/false>();
     } else {
-        sender.open();
+        sender.open(kStatusReadTrid);
     }
 
     const auto pattern = static_cast<StagingTestPattern>(kTestPattern);
