@@ -98,7 +98,8 @@ def gpt_oss_experts_reference(
         Output tensor [batch, seq_len, hidden_size]
     """
     # Convert to float32 for reference computation (HuggingFace model uses float32 weights)
-    hidden_states_fp32 = hidden_states.float()
+    original_shape = hidden_states.shape
+    hidden_states_fp32 = hidden_states.view(-1, original_shape[-1]).float()
     routing_weights_fp32 = routing_weights.float()
 
     with torch.no_grad():
@@ -107,7 +108,7 @@ def gpt_oss_experts_reference(
             router_indices=router_indices,
             routing_weights=routing_weights_fp32,
         )
-    return output
+    return output.view(original_shape)
 
 
 def gpt_oss_experts_ttnn(
@@ -122,6 +123,7 @@ def gpt_oss_experts_ttnn(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """TTNN implementation for gpt_oss_experts.
 
@@ -139,10 +141,12 @@ def gpt_oss_experts_ttnn(
         combine_config: AllToAllCombineConfig
         program_config: ThroughputProgramConfig
         mesh_device: TTNN mesh device
-
-    Returns:
-        Output tensor [1, 1, batch_per_device * seq_len, hidden_size]
+        ccl_manager: Optional Communication manager
     """
+    if ccl_manager is None:
+        from models.demos.gpt_oss.tt.ccl import CCLManager
+        from models.demos.gpt_oss.utils.general_utils import get_default_num_links
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
     return decode_forward(
         hidden_states,
         topk_expert_indices,
@@ -155,6 +159,7 @@ def gpt_oss_experts_ttnn(
         combine_config,
         program_config,
         mesh_device,
+        ccl_manager=ccl_manager,
     )
 
 
