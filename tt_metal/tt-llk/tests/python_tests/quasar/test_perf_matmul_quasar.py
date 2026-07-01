@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""Quasar matmul tests that validate functionality while recording perf."""
 
 import pytest
 import torch
@@ -19,6 +20,7 @@ from helpers.llk_params import (
     DestSync,
     ImpliedMathFormat,
     MathFidelity,
+    PerfRunType,
     Transpose,
     format_dict,
 )
@@ -28,9 +30,10 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, InputOutputFormat, TestConfig
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -47,6 +50,9 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 kt_dims = [1]  # [1, 2, 4]
+_ARCH = get_chip_architecture()
+
+NUM_FACES_VALUE = 4
 
 
 def matmul_dimensions_dest_sync(dest_acc_modes):
@@ -69,9 +75,6 @@ def matmul_dimensions_dest_sync(dest_acc_modes):
     ]
 
 
-# Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
-# unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
-# entries where MxFp4 would land as an output.
 MATMUL_FORMAT = input_output_formats(
     [
         DataFormat.Float16,
@@ -85,80 +88,21 @@ MATMUL_FORMAT = input_output_formats(
     ],
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
-_ARCH = get_chip_architecture()
+
+def _stimuli_spec(formats):
+    if formats.input_format == DataFormat.Int8:
+        return StimuliSpec.uniform(low=-127.0, high=127.0)
+    return StimuliSpec.uniform(low=0.0, high=1.0)
 
 
-@pytest.mark.quasar
-@parametrize(
-    format=MATMUL_FORMAT,
-    # Integer matmul is LoFi-only on Quasar.
-    math_fidelity=lambda format: (
-        [MathFidelity.LoFi]
-        # if format.input_format == DataFormat.Int8
-        # else [
-        #     MathFidelity.LoFi,
-        #     MathFidelity.HiFi2,
-        #     MathFidelity.HiFi3,
-        #     MathFidelity.HiFi4,
-        # ]
-    ),
-    dimensions_dest_acc_dest_sync=lambda format: (
-        matmul_dimensions_dest_sync((DestAccumulation.Yes,))
-        if format.input_format == DataFormat.Int8
-        else matmul_dimensions_dest_sync((DestAccumulation.Yes, DestAccumulation.No))
-    ),
-    implied_math_format=lambda format: (
-        [ImpliedMathFormat.Yes]
-        if format.input_format.is_mx_format()
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    ),
-    register_format_hint=lambda format: (
-        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
-        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
-        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
-        else [None]
-    ),
-    enable_direct_indexing=lambda register_format_hint: (
-        [False] if register_format_hint is None else [True, False]
-    ),
-    transpose=[Transpose.No],
-)
-# Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
-def test_matmul(
-    math_fidelity,
-    dimensions_dest_acc_dest_sync,
-    format,
-    implied_math_format,
-    register_format_hint,
-    enable_direct_indexing,
-    transpose,
-):
-
-    # Reassign format with register_format_hint so that test config generation and stimulus generation are aware of the register format hint.
-    format = InputOutputFormat(
-        format.input_format,
-        format.output_format,
-        input_format_B=format.input_format_B,
-        register_format_hint=register_format_hint,
-    )
-
-    input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
-        dimensions_dest_acc_dest_sync
-    )
-
-    torch_format = format_dict[format.output_format]
-
-    if format.input_format == DataFormat.Int8:
-        stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
-    else:
-        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+def _generate_stimuli(format, input_A_dimensions, input_B_dimensions):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=format.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=format.input_format,
         input_dimensions_B=input_B_dimensions,
-        spec_A=stimuli_spec,
-        spec_B=stimuli_spec,
+        spec_A=_stimuli_spec(format),
+        spec_B=_stimuli_spec(format),
         output_format=format.output_format,
     )
 
@@ -169,8 +113,25 @@ def test_matmul(
         src_B, dimensions=input_B_dimensions, stimuli_format=format.input_format
     )
 
+    return src_A, tile_cnt_A, src_B, tile_cnt_B, tilized_A, tilized_B
+
+
+def _golden_tensor(
+    math_fidelity,
+    input_A_dimensions,
+    input_B_dimensions,
+    format,
+    dest_acc,
+    transpose,
+    src_A,
+    tile_cnt_B,
+    src_B,
+    tilized_A,
+    tilized_B,
+):
     src_A_golden = src_A
     src_B_golden = src_B
+
     if format.input_format.is_mx_format():
         tilized_A_golden = quantize_mx_tensor_chunked(
             tilized_A.flatten().to(torch.bfloat16), format.input_format
@@ -207,9 +168,6 @@ def test_matmul(
             input_dimensions=input_B_dimensions,
         )
 
-    # Calculate all matmul dimensions using helper function
-    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
-
     formats_config = data_formats(
         input_format=format.input_format,
         input_format_B=format.input_format_B,
@@ -217,8 +175,6 @@ def test_matmul(
         is_fp32_dest_acc_en=dest_acc,
         num_iterations=1,
         unpacking_to_dest=False,
-        # 2x register-format opt-in needs to flow through inference; only disable
-        # for plain MX formats where there's nothing to infer.
         disable_format_inference=(
             format.input_format.is_mx_format() and format.register_format_hint is None
         ),
@@ -234,18 +190,107 @@ def test_matmul(
         math_fidelity,
         input_A_dimensions=input_A_dimensions,
         input_B_dimensions=input_B_dimensions,
-        tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
+        tilize=True,
         input_A_format=format.input_format,
         input_B_format=format.input_format,
-        math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
+        math_format=pack_src_format,
         dest_acc=dest_acc,
     )
 
-    num_faces = 4
+    if format.output_format.is_mx_format():
+        golden_tensor = quantize_mx_tensor_chunked(
+            golden_tensor.to(format_dict[pack_src_format]), format.output_format
+        ).to(format_dict[format.output_format])
 
-    configuration = TestConfig(
+    return golden_tensor
+
+
+def _validate_result(golden_tensor, res_from_L1, format):
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[format.output_format])
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
+        format.output_format,
+    ), "Assert against golden failed"
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    format=MATMUL_FORMAT,
+    # Integer matmul is LoFi-only on Quasar.
+    math_fidelity=lambda format: (
+        [MathFidelity.LoFi]
+        # if format.input_format == DataFormat.Int8
+        # else [
+        #     MathFidelity.LoFi,
+        #     MathFidelity.HiFi2,
+        #     MathFidelity.HiFi3,
+        #     MathFidelity.HiFi4,
+        # ]
+    ),
+    dimensions_dest_acc_dest_sync=lambda format: (
+        matmul_dimensions_dest_sync((DestAccumulation.Yes,))
+        if format.input_format == DataFormat.Int8
+        else matmul_dimensions_dest_sync((DestAccumulation.Yes, DestAccumulation.No))
+    ),
+    implied_math_format=lambda format: (
+        [ImpliedMathFormat.Yes]
+        if format.input_format.is_mx_format()
+        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    ),
+    register_format_hint=lambda format: (
+        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
+        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
+        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
+        else [None]
+    ),
+    enable_direct_indexing=lambda register_format_hint: (
+        [False] if register_format_hint is None else [True, False]
+    ),
+    transpose=[Transpose.No],
+)
+def test_perf_matmul_quasar(
+    perf_report,
+    math_fidelity,
+    dimensions_dest_acc_dest_sync,
+    format,
+    implied_math_format,
+    register_format_hint,
+    enable_direct_indexing,
+    transpose,
+):
+    format = InputOutputFormat(
+        format.input_format,
+        format.output_format,
+        input_format_B=format.input_format_B,
+        register_format_hint=register_format_hint,
+    )
+
+    input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
+        dimensions_dest_acc_dest_sync
+    )
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B, tilized_A, tilized_B = _generate_stimuli(
+        format, input_A_dimensions, input_B_dimensions
+    )
+
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
+
+    configuration = PerfConfig(
         "sources/quasar/matmul_quasar_test.cpp",
         format,
+        run_types=[
+            PerfRunType.PACK_ISOLATE,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+            PerfRunType.L1_TO_L1,
+        ],
         templates=[
             MATH_FIDELITY(math_fidelity),
             IMPLIED_MATH_FORMAT(implied_math_format),
@@ -256,10 +301,10 @@ def test_matmul(
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
-            LOOP_FACTOR(1),
+            LOOP_FACTOR(32),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             TILE_COUNT(matmul_dims.output_tile_cnt),
-            NUM_FACES(num_faces, num_faces, num_faces),
+            NUM_FACES(NUM_FACES_VALUE, NUM_FACES_VALUE, NUM_FACES_VALUE),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -271,36 +316,36 @@ def test_matmul(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=matmul_dims.output_tile_cnt,
-            num_faces=num_faces,
+            num_faces=NUM_FACES_VALUE,
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,
-        boot_mode=BootMode.TRISC,
-        # 2x register-format opt-in needs to flow through inference; only disable
-        # for plain MX formats where there's nothing to infer.
         disable_format_inference=(
             format.input_format.is_mx_format() and format.register_format_hint is None
         ),
     )
 
-    res_from_L1 = configuration.run().result
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
+    configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+    configuration.run(perf_report)
 
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the
-    # math/pack_src format the result was produced in) so the comparison validates the
-    # device's MX output quantization, not just matmul-math-to-MX-precision. The lattice-
-    # aware compare in passed_test then supplies the small HW-vs-reference rounding slack.
-    if format.output_format.is_mx_format():
-        golden_tensor = quantize_mx_tensor_chunked(
-            golden_tensor.to(format_dict[pack_src_format]), format.output_format
-        ).to(torch_format)
-
-    assert passed_test(
-        golden_tensor,
-        res_tensor,
-        format.output_format,
-    ), "Assert against golden failed"
+    # Validate the result for L1_TO_L1 run type
+    res_from_L1 = configuration.variant_stimuli.collect_results(
+        TestConfig.TENSIX_LOCATION
+    )
+    _validate_result(
+        _golden_tensor(
+            math_fidelity,
+            input_A_dimensions,
+            input_B_dimensions,
+            format,
+            dest_acc,
+            transpose,
+            src_A,
+            tile_cnt_B,
+            src_B,
+            tilized_A,
+            tilized_B,
+        ),
+        res_from_L1,
+        format,
+    )

@@ -72,13 +72,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            for (std::uint32_t j = 0; j < KT_DIM; j++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                {
+                    _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+                }
             }
         }
+        else
+        {
+            // TODO: ndivnic implement remaining run types.
+        }
+
         PROFILER_SYNC();
     }
 }
@@ -120,14 +129,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            for (std::uint32_t i = 0; i < KT_DIM; i++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                for (std::uint32_t i = 0; i < KT_DIM; i++)
+                {
+                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                }
+                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
-            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }
+        else
+        {
+            // TODO: ndivnic implement remaining run types.
+        }
+
         PROFILER_SYNC();
     }
 }
@@ -166,11 +184,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            _llk_pack_matmul_(0, 0);
-            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_pack_matmul_(0, 0);
+                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            }
         }
+        else
+        {
+            // TODO: ndivnic implement remaining run types.
+        }
+
         PROFILER_SYNC();
     }
 }

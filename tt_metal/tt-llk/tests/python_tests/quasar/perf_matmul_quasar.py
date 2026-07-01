@@ -52,7 +52,7 @@ class MatmulPerfCase:
 
 _ARCH = get_chip_architecture()
 _MXFP4_2X_HINT = DataFormat.MxFp4_2x_A if _ARCH == ChipArchitecture.QUASAR else None
-LOOP_FACTORS = [1, 2, 4, 8, 16, 32, 64]
+LOOP_FACTORS = [16, 32, 64, 128, 256, 512]
 MIN_MATMUL_TILE_COUNT = 8
 MIN_MATMUL_TILE_COUNT_HALF = MIN_MATMUL_TILE_COUNT // 2
 
