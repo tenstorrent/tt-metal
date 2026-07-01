@@ -28,10 +28,6 @@ void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
-    TT_FATAL(
-        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR || tensor.layout() == tt::tt_metal::Layout::TILE,
-        "{} must be ROW_MAJOR or TILE layout",
-        name);
 }
 
 ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
