@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# Dockerfile.deepseek-pd-worker — deepseek_v3_d_p disaggregated-prefill/decode
+# WORKER image with the tt-llm-engine migration client baked in, so the runtime
+# no longer needs a hostPath mount of a developer's tt-llm-engine build.
+#
+# WHY THIS EXISTS
+#   models/demos/deepseek_v3_d_p/tt/runners/integration_setup.py imports the
+#   `_migration_client` nanobind extension from PREFILL_MIGRATION_CLIENT_DIR
+#   (= $TT_LLM_ENGINE/disaggregation/migration/build_RelWithDebInfo/python) when
+#   PREFILL_ENABLE_MIGRATION=1, and does so with strict=True — a failed import is
+#   fatal. That extension is built by the SEPARATE tt-llm-engine repo; it is NOT
+#   part of tt-metal (not a submodule, no build target here), so the stock worker
+#   image does not contain it. The k8s deployment used to side-load it via a
+#   hostPath mount (/data/<user>/tt-llm-engine -> /opt/tt-llm-engine), which ties
+#   the pod to one node and one person's build. This image removes that mount by
+#   copying the prebuilt client in at the exact path the runner expects.
+#
+# WHY A PLAIN COPY IS SUFFICIENT (portability)
+#   `_migration_client` is a nanobind module built with NB_STATIC that links only
+#   the `migration_client` STATIC lib, whose only deps are header-only (fmt,
+#   spdlog, tt-logger) plus librt. It has NO dynamic dependency on tt-metal, UMD,
+#   MPI, or any tt-llm-engine .so (see tt-llm-engine
+#   disaggregation/migration/CMakeLists.txt: "Only depends on migration_client +
+#   nanobind (NOT tt-metal)"). It needs only libc/libstdc++/librt and a CPython
+#   3.10 interpreter — all present in the worker base — so the copy is drop-in.
+#
+# WHY THIS SOURCE IMAGE
+#   Default TT_LLM_ENGINE_IMAGE is the SAME image that runs the migration_endpoint
+#   (the ttop-pmix-migration-layer pod, charts/ttop-pmix-migration-layer/values.yaml).
+#   Copying the client from that build guarantees the shmem wire protocol and the
+#   nanobind/python3.10 ABI match the decode-side endpoint this worker rendezvouses
+#   with. If you bump the migration-layer image, rebuild this with the same tag.
+#
+# BUILD (amd64; the COPY-only build is fast even under emulation on arm64):
+#   docker build -f dockerfile/Dockerfile.deepseek-pd-worker --platform=linux/amd64 \
+#     --build-arg WORKER_BASE=ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.73.0-dev20260610-50-g89cfb54aa9d \
+#     --build-arg TT_LLM_ENGINE_IMAGE=ghcr.io/tenstorrent/tt-llm-engine/test:vm_dpd_v3-mpijob \
+#     -t ghcr.io/tenstorrent/tt-metal/deepseek-pd-worker:v0.73.0-dev20260610-50-g89cfb54aa9d-mig .
+#   docker push ghcr.io/tenstorrent/tt-metal/deepseek-pd-worker:v0.73.0-dev20260610-50-g89cfb54aa9d-mig
+#
+#   Then point charts/ttop-pmix-prefill (and ttop-pmix-decode) images.worker at the
+#   pushed ref and drop the tt-llm-engine hostPath volume + workerMount.
+
+ARG WORKER_BASE=ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.73.0-dev20260610-50-g89cfb54aa9d
+ARG TT_LLM_ENGINE_IMAGE=ghcr.io/tenstorrent/tt-llm-engine/test:vm_dpd_v3-mpijob
+
+# Stage 1: the tt-llm-engine image that already ships the built migration client.
+FROM ${TT_LLM_ENGINE_IMAGE} AS ttllm
+
+# Stage 2: the worker image + the migration client at the path the runner expects.
+FROM ${WORKER_BASE}
+
+# Must equal ttLlmEngineDir (/opt/tt-llm-engine) + the PREFILL_MIGRATION_CLIENT_DIR
+# suffix in charts/ttop-pmix-prefill/values/values.kimi-prefill.common.yaml.
+ARG MIG_CLIENT_DIR=/opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+COPY --from=ttllm ${MIG_CLIENT_DIR}/ ${MIG_CLIENT_DIR}/
+
+# Fail the BUILD (not the pod, ~2 min into a run) if the client didn't come across
+# or is ABI-incompatible with the interpreter that runs prefill_runner. Uses the
+# venv python when present (that's what the worker command execs), else system python3.
+RUN if [ -x /opt/venv/bin/python3 ]; then PY=/opt/venv/bin/python3; else PY=python3; fi; \
+    "$PY" -c "import sys; sys.path.insert(0, sys.argv[1]); import _migration_client; \
+print('OK _migration_client:', _migration_client.__file__); \
+assert hasattr(_migration_client, 'MigrationLayerClient'), 'MigrationLayerClient missing'" "${MIG_CLIENT_DIR}"
