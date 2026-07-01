@@ -76,7 +76,13 @@ constexpr uint32_t kRopeStreamBlocks = 2u;
 //   3. measured DRAM/compute knee (arch-specific; Blackhole = 48).
 // Read inside the single-source-of-truth sizing path so the op + create_stats_buffer
 // agree on num_workers / buffer geometry.
-uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links, tt::ARCH arch, uint32_t stick_bytes = 128u) {
+uint32_t derive_worker_cap(
+    const CoreCoord& grid_size,
+    uint32_t num_links,
+    tt::ARCH arch,
+    uint32_t stick_bytes = 128u,
+    uint32_t ring_size = 1u,
+    uint32_t num_tile_rows = 0u) {
     const uint32_t max_cores = grid_size.x * grid_size.y;
     const uint32_t num_forwarders = std::max<uint32_t>(1u, num_links);  // one forwarder per link
     const uint32_t budget = max_cores > num_forwarders ? max_cores - num_forwarders : 1u;
@@ -88,21 +94,34 @@ uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links, tt::A
     // into one fabric packet, so workers_per_forwarder (= ceil(cap/num_forwarders))
     // must not exceed it. Bound cap by sticks_per_packet * num_forwarders. On BH the
     // raw grid budget is 108 (12x10) -> 54 workers/forwarder > 32 -> would TT_FATAL;
-    // this clamps it to the valid 64.
+    // this clamps it to the valid 64 (RMS, 128 B sticks) or 32 (LayerNorm, 256 B).
     const uint32_t sticks_per_packet =
         std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
     cap = std::min(cap, sticks_per_packet * num_forwarders);
-    // Perf knee is ARCH-SPECIFIC. On Blackhole the worker sweep
-    // (REBENCH_baseline_vs_fused.md) put the DRAM/compute optimum at ~48 — well below
-    // the 64 validity ceiling; beyond it per-round DRAM/NoC contention rises and
-    // latency plateaus then regresses (w64 is frequently slower than w48). So BH gets
-    // an explicit 48 knee. On Wormhole the grid-derived budget (64 on 8x9) IS the
-    // optimum (the forwarder sweep showed 32->64 = +29..44%), so no extra knee is
-    // applied there — it falls through at its grid/validity bound. Other arches also
-    // fall through.
+    // Perf knee is ARCH- AND WORKLOAD-specific. The BH worker sweep (2026-07-01, in
+    // REBENCH_baseline_vs_fused.md) shows the optimum is set by two competing effects:
+    //   * per-round DRAM/NoC + fabric contention (favours FEWER workers), which scales
+    //     with fabric pressure (ring_size = TP degree) and total row count; and
+    //   * round count = ceil(rows/workers) (favours MORE workers).
+    // The knee where contention wins:
+    //   - ring_size >= 8 (8-hop AG, heavy fabric): 48 — e.g. FLUX tp8 N16384 (512 rows)
+    //     48=275µs vs 64=335µs, N4096 (128) 48=83 vs 64=90.
+    //   - ring_size <= 4, very large row counts: 48 — Wan self/cross_sp4 (592 rows)
+    //     48=410/356µs vs 64=477/434µs (the two most expensive shapes; protect them).
+    //   - ring_size <= 4, moderate rows: 64 — round-bound, more workers win. Biggest
+    //     wins are the 152-row LTX s2 shapes (videoQ_s2 64=76µs vs 48=143µs = 1.9x) and
+    //     Wan sp8 (296) / FLUX tp4 N2048,N8192 (64,256). (Balancing to fewer, evenly-
+    //     loaded workers was tried and did NOT help — it is a round-count win, not a
+    //     remainder-balance one.)
+    // WH's grid-derived budget (64) is already its optimum, so no BH-style knee there.
+    // Tuned to the DiT (Wan/LTX/FLUX) shape suite; 48 is the conservative fallback.
     if (arch == tt::ARCH::BLACKHOLE) {
-        constexpr uint32_t kBlackholeWorkerKnee = 48u;
-        cap = std::min(cap, kBlackholeWorkerKnee);
+        constexpr uint32_t kBhContentionKnee = 48u;
+        constexpr uint32_t kBhRoundBoundCap = 64u;
+        constexpr uint32_t kBhRing4RowThreshold = 448u;  // between Wan sp8 (296, want 64) and sp4 (592, want 48)
+        const uint32_t bh_knee =
+            (ring_size <= 4u && num_tile_rows <= kBhRing4RowThreshold) ? kBhRoundBoundCap : kBhContentionKnee;
+        cap = std::min(cap, bh_knee);
     }
     return cap;
 }
@@ -232,9 +251,8 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
     }
-    // One worker per tile-row, capped at the core budget (grid − forwarders). A worker
-    // sweep on the forwarder showed parallelism keeps helping up to the grid limit, so
-    // we provision as many workers as fit; `cap` already excludes the forwarder cores.
+    // One worker per tile-row, clamped to the workload-aware cap (derive_worker_cap:
+    // grid budget, fabric-packet validity, and the BH perf knee).
     return std::min<uint32_t>(num_tile_rows, cap);
 }
 
@@ -263,7 +281,12 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     // device so create_stats_buffer / validate / compute_output_specs / create_at all
     // agree on num_workers (they share this single-source-of-truth path).
     const uint32_t worker_cap = derive_worker_cap(
-        input.device()->compute_with_storage_grid_size(), args.num_links, input.device()->arch(), s.stick_bytes);
+        input.device()->compute_with_storage_grid_size(),
+        args.num_links,
+        input.device()->arch(),
+        s.stick_bytes,
+        args.ring_size,
+        s.num_tile_rows);
     s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows, worker_cap);
     // use_mux selects the fabric-forwarder all-gather path (+ DRAM scratch);
     // !use_mux (is_tp_1) reduces locally with no fabric.
@@ -416,7 +439,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // (grid − forwarders). Same derivation as compute_sizing so the stats-buffer
         // geometry matches. Tiny shapes (<kMuxRowsThreshold) collapse to 1 worker.
         num_workers = pick_num_workers_tp_gt_1(
-            num_tile_rows, derive_worker_cap(grid_size, args.num_links, device->arch(), stick_bytes));
+            num_tile_rows,
+            derive_worker_cap(grid_size, args.num_links, device->arch(), stick_bytes, args.ring_size, num_tile_rows));
     }
     use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
 
