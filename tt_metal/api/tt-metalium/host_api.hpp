@@ -465,7 +465,8 @@ void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program&
 // ==================================================
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
@@ -507,7 +508,8 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
@@ -528,7 +530,8 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *
@@ -544,7 +547,8 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
  *
  * Return value: void
  *

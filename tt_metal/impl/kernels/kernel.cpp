@@ -605,6 +605,8 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
+// When watcher asserts are enabled the caller-provided counts already include the reserved count words
+// (one for the unique RTAs, one for the common RTAs), so no extra reservation is applied here.
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
@@ -660,7 +662,8 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
         // When watcher assert is enabled, we store [arg count | args]
         size_t effective_limit = runtime_args.size() + watcher_count_word_offset_;
 
-        // Validate against hardware limit (341 words)
+        // Validate against the per-core RTA/CRTA L1 ceiling. The RTA count word (watcher) is already
+        // included via effective_limit above; the CRTA count word is reserved in set_common_runtime_args.
         this->validate_runtime_args_size(effective_limit, this->common_runtime_args_.size(), logical_core);
 
         // Track maximum dispatch size for CRTA validation
@@ -707,8 +710,9 @@ void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_ar
 
     size_t effective_crta_limit = common_runtime_args.size() + watcher_count_word_offset_;
 
-    // Validate combined RTA + CRTA size doesn't exceed hardware limit (341 words)
-    // max_runtime_args_per_core_ already includes count word if watcher enabled
+    // Validate combined RTA + CRTA size against the per-core L1 ceiling. When watcher asserts are enabled
+    // both count words are reserved here: max_runtime_args_per_core_ already includes the RTA count word,
+    // and effective_crta_limit includes the CRTA count word.
     this->validate_runtime_args_size(max_runtime_args_per_core_, effective_crta_limit, core_with_max_runtime_args_);
 
     // Prepend count when watcher enabled for device-side bounds checking
