@@ -217,15 +217,18 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
     )
 
     # Represent `cache` already-processed tokens by POPULATING the caches directly (no warm-up
-    # forwards). The indexer K-cache (replicated, natural order, grown by concat) is filled with random
-    # keys so the measured chunk scores against a full `cache`-length prefix. The KVPE block-cyclic
+    # forwards). The persistent indexer K-cache (replicated, natural order, [1,1,max_seq_len,D]) is
+    # overwritten with random keys so the measured chunk scores against a full `cache`-length prefix; the
+    # measured chunk overwrites its own [cache, total) slab in place via fill_cache. The KVPE block-cyclic
     # cache is left at its init: the measured chunk writes its own slab and the gather reads the full
     # prefix, and cache values don't change op shapes/timing.
-    mla._indexer._index_kbuf = ttnn.from_torch(
-        torch.randn(1, 1, cache, mla._indexer.index_args.index_head_dim, dtype=torch.bfloat16),
+    ttnn.deallocate(mla._indexer._index_kcache)
+    mla._indexer._index_kcache = ttnn.from_torch(
+        torch.randn(1, 1, total, mla._indexer.index_args.index_head_dim, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 

@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix, get_rot
 
 class TtIndexer:
     """DSA lightning indexer for one MLA layer. Self-contained: owns the indexer weights, the
-    grown-by-concat device index-key cache and the indexer RoPE tables, and runs its own TP/SP
+    persistent slot-indexed device index-key cache and the indexer RoPE tables, and runs its own TP/SP
     collectives. All MLA-layer dependencies it reuses are injected at construction (no ttMLA ref)."""
 
     # --- DSA ownership: weight names, config-field detection, host/cache API. ttMLA routes all
@@ -208,7 +208,8 @@ class TtIndexer:
     ):
         """Architecture constants are read from the HF config (DS defaults below; GLM sets
         index_rope_interleave / index_n_heads etc.). θ / YaRN / rope table length come from the
-        same config — single source of truth. Device index-key cache is grown by concat per chunk.
+        same config — single source of truth. The device index-key cache is a persistent, fixed-shape
+        [1, 1, max_seq_len, D_idx] buffer written in place per chunk (see _alloc_index_kcache).
 
         Injected from ttMLA (the indexer keeps no back-reference): the SP×TP mesh + axes,
         compute-kernel configs, weight-cache location, and the CCL handles used by the inlined
@@ -235,7 +236,7 @@ class TtIndexer:
             index_topk=getattr(config, "index_topk", 2048),
             index_rope_interleave=getattr(config, "index_rope_interleave", False),
         )
-        self._index_kbuf = None
+        self._alloc_index_kcache()
         self._upload_weights(idx_host)
         self._build_rope_tables()
 
@@ -298,6 +299,28 @@ class TtIndexer:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
+        )
+
+    def _alloc_index_kcache(self):
+        """Persistent, slot-indexed index-key cache read directly by ``indexer_score_dsa`` — replaces the
+        grow-by-``concat`` buffer that reallocated the whole prefix each chunk (O(n^2) DRAM copies).
+
+        Shape ``[1, 1, T_full, D_idx]`` (``T_full = config.max_seq_len``, the same length the RoPE tables
+        span, so no key ever lands past it), replicated/full on every chip (each query scores ALL keys —
+        the cache is NOT SP-sharded), TILE bf16 in DRAM. ``write_k`` fills columns ``[start_pos,
+        start_pos+glob)`` in place via ``fill_cache``; scoring reads the valid prefix via ``kv_len`` and
+        the tail is never read — so a fixed-shape buffer keeps the op program stable across chunks (the
+        concat buffer's per-chunk shape forced a recompile every chunk). B=1 here (indexer-owned, single
+        user); Commit 2 will move this to a runtime-owned ``[num_users*num_layers, ...]`` shared buffer."""
+        T_full = self.config.max_seq_len
+        D_idx = self.index_args.index_head_dim
+        self._index_kcache = ttnn.from_torch(
+            torch.zeros(1, 1, T_full, D_idx, dtype=torch.bfloat16),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
     def _build_rope_tables(self):
@@ -369,10 +392,10 @@ class TtIndexer:
         return ttnn.concat([pe, nope], dim=-1)
 
     def write_k(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int):
-        """Device K stem (wk + TP all-reduce + k_norm + SP all-gather + device rope),
-        appended to the device index-key cache. forward() calls this on every chunk so the key-cache
-        stays complete — else later chunks score against missing keys for the early prefix. (Dense v3.1
-        binds a NullIndexer instead, so write_k never runs there.)"""
+        """Device K stem (wk + TP all-reduce + k_norm + SP all-gather + device rope), written in place
+        into the persistent device index-key cache at sequence offset ``start_pos``. forward() calls this
+        on every chunk so the key-cache stays complete — else later chunks score against missing keys for
+        the early prefix. (Dense v3.1 binds a NullIndexer instead, so write_k never runs there.)"""
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,
@@ -391,24 +414,15 @@ class TtIndexer:
         glob = seq_len * self.sp_factor
         k = self._sp_all_gather(k, dim=2)  # [1, 1, glob, D_idx] full, replicated, natural order
         k = self._device_rope_pe(k, glob, start_pos)  # on-device non-interleaved rope
-        # Grow the replicated device cache by concat (natural order; no block-cyclic).
-        # FOLLOW-UP (scoped redesign, not a drop-in): concat reallocates the whole key-cache each chunk
-        # (O(n^2) copies over a long prefill). Reusing the MLA block-cyclic KVPE cache machinery
-        # (update_padded_kv_cache + a gather/un-rotate read like _gather_kvpe_prefix) would avoid that,
-        # but it changes the indexer key-cache layout (replicated-natural -> block-cyclic-SP) and the
-        # scoring read path, so it is tracked as its own task rather than done here.
-        # The rest of this MLA code manually deallocates intermediate device tensors, so free the device
-        # buffers we drop here too rather than relying on Python ref-loss (which would accumulate device
-        # allocations over a long chunked prefill or across repeated requests).
-        if start_pos == 0 or self._index_kbuf is None:
-            if self._index_kbuf is not None:  # start_pos==0 reset: drop the prior request's full cache
-                ttnn.deallocate(self._index_kbuf)
-            self._index_kbuf = k
-        else:
-            old = self._index_kbuf
-            self._index_kbuf = ttnn.concat([old, k], dim=2)  # concat copies into a fresh buffer...
-            ttnn.deallocate(old)  # ...so the old cache and this chunk's keys are both free to drop
-            ttnn.deallocate(k)
+        # Write the chunk in place into the persistent replicated cache at its sequence offset — no concat,
+        # no reallocation (the old grow-by-concat path copied the whole prefix each chunk, O(n^2) over a long
+        # prefill). ``update_idx`` must be TILE_HEIGHT-aligned; ``start_pos`` (= kv_actual_isl) is a
+        # chunk-size multiple, so assert it explicitly. A new request (start_pos==0) overwrites from offset 0
+        # and ``kv_len`` bounds the scoring read, so the stale tail needs no zeroing. batch_idx=0: B=1,
+        # indexer-owned single-user cache (Commit 2 will slot it by user*num_layers+layer).
+        assert start_pos % ttnn.TILE_SIZE == 0, f"fill_cache update_idx {start_pos} must be tile-aligned"
+        ttnn.fill_cache(self._index_kcache, k, 0, update_idx=start_pos)
+        ttnn.deallocate(k)
 
     def forward(self, hidden_states: ttnn.Tensor, qr: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
@@ -474,16 +488,30 @@ class TtIndexer:
         # must divide sq (Sqt % QC == 0); 32 is the fallback when 64 doesn't (e.g. sq=160).
         q_chunk = next(c for c in (64, 32) if (sq // ttnn.TILE_SIZE) % (c // ttnn.TILE_SIZE) == 0)
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=min(64, end_pos), head_group_size=0)
-        logits = ttnn.experimental.indexer_score_dsa(
+        # Persistent cache: k is the full-T_full buffer; ``kv_len=end_pos`` caps scoring to the live prefix
+        # (op writes only columns [0, end_pos)). Because k's shape is now fixed at T_full (not end_pos), the
+        # op program is stable across chunks — the concat buffer's per-chunk shape forced a recompile each
+        # chunk. The op does NOT -inf the tail past kv_len (cells fully past kv_len are skipped, so those
+        # columns are stale), so slice logits to [0, end_pos) before top-k — identical shape to the old path.
+        logits_full = ttnn.experimental.indexer_score_dsa(
             q_dev,
-            self._index_kbuf,
+            self._index_kcache,
             weights,
             chunk_start_idx=start_pos,
             program_config=cfg,
             cluster_axis=None,  # flattened SP×TP index -> correct 2D causal offset
-        )  # [1, 1, sq, end_pos] ROW_MAJOR, fully head-summed
+            kv_len=end_pos,  # valid prefix this chunk (tile-aligned, <= T_full)
+        )  # [1, 1, sq, T_full] ROW_MAJOR; columns [0, end_pos) valid, tail stale
         ttnn.deallocate(q_dev)
         ttnn.deallocate(weights)
+        # Drop the stale tail past end_pos. When end_pos == T_full (last chunk / single-shot) there is no
+        # tail and a full-range ttnn.slice would alias logits_full — so skip it (deallocating the alias would
+        # free the tensor we hand to top-k). Otherwise slice off [end_pos, T_full) and free the wide buffer.
+        if end_pos < self._index_kcache.shape[2]:
+            logits = ttnn.slice(logits_full, [0, 0, 0, 0], [1, 1, sq, end_pos])
+            ttnn.deallocate(logits_full)
+        else:
+            logits = logits_full
 
         # Top-k over this chip's sq rows -> [1,1,sq,k]. Then gather the TP seq-shards back to the SP block's
         # full seq_len rows (replicated across TP) so the indices match sparse_mla's SP-sharded q.
