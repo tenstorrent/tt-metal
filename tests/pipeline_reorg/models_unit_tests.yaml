@@ -237,7 +237,7 @@
   model: janus-pro-7b
   skus:
     bh_p150:
-      timeout: 2
+      timeout: 5
       tier: 3
   owner_id: U0B25UFEEAX # Milos Micic
   team: shield
