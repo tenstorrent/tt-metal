@@ -186,7 +186,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         TensorParameter{.unique_id = BLK_OUTPUT_TENSOR, .spec = output.tensor_spec()},
     };
 
-    ComputeHardwareConfig compute_hw_template{.fp32_dest_acc_en = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw_template{
+        .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
 
     uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
     for (const auto& g : groups) {
@@ -269,7 +270,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         // Compute: consumes c_0 (in), produces c_16 (out).
         ComputeHardwareConfig compute_hw = compute_hw_template;
         if (fp32_llk_acc) {
-            compute_hw.unpack_to_dest_mode = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
+            compute_hw.gen2_config->unpack_to_dest_mode = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
         }
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,

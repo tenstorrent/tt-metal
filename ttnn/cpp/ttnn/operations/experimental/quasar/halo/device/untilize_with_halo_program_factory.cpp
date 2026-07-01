@@ -378,10 +378,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
             .hw_config =
                 ComputeHardwareConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .math_approx_mode = math_approx_mode,
+                    .gen2_config =
+                        ComputeHardwareConfig::Gen2Config{
+                            .math_fidelity = math_fidelity,
+                            .fp32_dest_acc_en = fp32_dest_acc_en,
+                            .dst_full_sync_en = dst_full_sync_en,
+                            .math_approx_mode = math_approx_mode,
+                        },
                 },
         };
         kernels.push_back(std::move(compute));

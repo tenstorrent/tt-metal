@@ -126,7 +126,13 @@ inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint32_t num
         .unique_id = KernelSpecName{name},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = ComputeHardwareConfig{},
+        // Engage both sub-configs so tests can populate whichever matches their mock arch
+        // (ProgramSpecTestQuasar → gen2_config, ProgramSpecTestGen1 → gen1_config).
+        .hw_config =
+            ComputeHardwareConfig{
+                .gen1_config = ComputeHardwareConfig::Gen1Config{},
+                .gen2_config = ComputeHardwareConfig::Gen2Config{},
+            },
     };
 }
 

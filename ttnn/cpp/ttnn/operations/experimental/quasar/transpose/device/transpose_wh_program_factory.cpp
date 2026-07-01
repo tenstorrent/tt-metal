@@ -182,11 +182,12 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                         DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         };
 
-        ComputeHardwareConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_cfg{
+            .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
         if (src_is_float32) {
             // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
             // on the unpack-to-dest path; both feed the transpose.
-            compute_cfg.unpack_to_dest_mode = {
+            compute_cfg.gen2_config->unpack_to_dest_mode = {
                 {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
                 {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
         }
@@ -277,9 +278,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                         DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         };
 
-        ComputeHardwareConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_cfg{
+            .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
         if (src_is_float32) {
-            compute_cfg.unpack_to_dest_mode = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+            compute_cfg.gen2_config->unpack_to_dest_mode = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
         }
 
         KernelSpec compute_spec{

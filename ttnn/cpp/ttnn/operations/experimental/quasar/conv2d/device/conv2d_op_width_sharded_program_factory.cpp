@@ -612,10 +612,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             },
         .hw_config =
             m2::ComputeHardwareConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-                .math_approx_mode = math_approx_mode,
+                .gen2_config =
+                    m2::ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = math_fidelity,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_approx_mode = math_approx_mode,
+                    },
             },
     };
 

@@ -5737,10 +5737,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     };
 
     m2::ComputeHardwareConfig compute_hw_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = false,
-        .math_approx_mode = math_approx_mode,
+        .gen2_config =
+            m2::ComputeHardwareConfig::Gen2Config{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = false,
+                .math_approx_mode = math_approx_mode,
+            },
     };
 
     // ---- in0 sender kernel CTAs (named) ----
@@ -6738,10 +6741,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     };
 
     m2::ComputeHardwareConfig compute_hw_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = false,
-        .math_approx_mode = math_approx_mode,
+        .gen2_config =
+            m2::ComputeHardwareConfig::Gen2Config{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = false,
+                .math_approx_mode = math_approx_mode,
+            },
     };
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based

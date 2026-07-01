@@ -221,10 +221,13 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
     ComputeHardwareConfig compute_hw_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
+        .gen2_config =
+            ComputeHardwareConfig::Gen2Config{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
+            },
     };
 
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
