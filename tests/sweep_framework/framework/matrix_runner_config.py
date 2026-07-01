@@ -210,24 +210,19 @@ MODEL_TRACED_BATCH_POLICY = {
 # these specific galaxy-class machine labels instead of the shared topology-6u
 # label, so the galaxy sweep runs only on this vetted pool. Each batch is pinned
 # to one label (GitHub can't OR labels); batch i -> pool[i % len(pool)].
-# Chosen from a per-runner reliability analysis of the last 15 lead-models runs
-# (all retry attempts), scored on BOTH dimensions:
-#   - vector-level fail rate (incl. PCC) from job logs, and
-#   - job-level (infra/board-reset) failures from job conclusions.
-# These 3 are the only galaxy runners clean on both (0 infra failures AND lowest
-# vector fail rate): OM1-01A04-STGWH02 (0.42%), OM1-01A04-STGWH01 (2.47%),
-# OM1-01A03-STGWH02 (2.77%). Excluded: OM1-01A02-STGWH01 (0.74% vector but 15
-# board-reset job failures) and OM1-01A02-STGWH03 (9 board-reset failures);
-# g04glx03/g14glx04 (~3.3% vector); g14glx03/g04glx01/OM1-01A02-STGWH02 broken
-# (29-92%). g04glx03 (3.29% vector, 0 infra) is the best add if more parallelism
-# is needed.
-# NOTE: OM1-01A02-STGWH02 added by explicit request despite a 92% historical
-# vector fail rate (pass=42/fail=501) + 3 board-reset failures in the analysis —
-# included on the assumption it has since been repaired; re-check its results.
+# Chosen from per-runner reliability analysis of run 28439679108 (5 attempts):
+# these are the runners that passed 100% of jobs across every attempt.
+#   OM1-01A02-STGWH03  33/33 (100%)
+#   OM1-01A01-STGWH03  27/27 (100%)
+#   j06glx01           27/27 (100%)
+#   OM1-01A03-STGWH01  19/19 (100%)
+#   OM1-01A02-STGWH01  18/18 (100%)
 GALAXY_RUNNER_POOL = (
-    "OM1-01A04-STGWH02",
-    "OM1-01A04-STGWH01",
-    "OM1-01A02-STGWH02",
+    "OM1-01A02-STGWH03",
+    "OM1-01A01-STGWH03",
+    "j06glx01",
+    "OM1-01A03-STGWH01",
+    "OM1-01A02-STGWH01",
 )
 
 # Logical galaxy test groups whose batches route to GALAXY_RUNNER_POOL.
