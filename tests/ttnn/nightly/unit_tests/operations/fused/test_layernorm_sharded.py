@@ -423,7 +423,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 

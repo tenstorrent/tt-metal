@@ -31,10 +31,9 @@ namespace rt_arg {
 constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;
 constexpr uint32_t reader_w_addr = 2;
-constexpr uint32_t compute_chunk_start_tiles = 7;  // after the 6 sched scalars + kv_len[6]; match the compute kernel
+constexpr uint32_t compute_chunk_start_tiles = 7;  // after 6 sched scalars + kv_len[6]
 constexpr uint32_t writer_out_addr = 0;
-// Persistent-cache args, appended after the schedule/mcast args of each kernel (excluded from the hash,
-// re-patched on a cache hit). Reader: 3 addrs + 6 schedule + 2 mcast dirs * 8 = 25, then the two below.
+// Persistent-cache args, appended after each kernel's schedule/mcast args (hash-excluded, re-patched on a hit).
 constexpr uint32_t reader_num_scalars = 3 + 6;  // q/k/w addrs + schedule {row_group0..max_bands}
 constexpr uint32_t mcast_args_per_dir = 8;      // role, rect (xs,ys,xe,ye), sender (sx,sy), ndst
 constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
@@ -42,11 +41,11 @@ constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
 constexpr uint32_t compute_kv_len_tiles = 6;     // after the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_kv_len_tiles = 1 + 6;  // out_addr + the 6 schedule scalars {row_group0..max_bands}
+constexpr uint32_t writer_chunk_start_tiles = 1 + 7;  // after out_addr + 6 sched scalars + kv_len[7]; match writer
 }  // namespace rt_arg
 
-// Per-device chunk_start (in tiles): base + rank*Sq, /TILE_WIDTH (the per-rank stride is exactly the
-// per-device query count Sq). Shared by create_at (derives device_index from the coordinate) and
-// override (reuses the stored device_index).
+// Per-device chunk_start (tiles): (base + rank*Sq) / TILE_WIDTH. Shared by create_at (device_index from
+// the coordinate) and override (stored device_index).
 inline uint32_t chunk_start_tiles_for(const operation_attributes_t& args, uint32_t device_index, uint32_t Sq) {
     return (args.chunk_start_idx + device_index * Sq) / tt::constants::TILE_WIDTH;
 }
@@ -66,9 +65,8 @@ inline void patch_arg(tt::tt_metal::RuntimeArgsData& args, uint32_t index, uint3
     args[index] = value;
 }
 
-// The two non-hashed runtime args derived from k's (hashed) shape + the optionals. Single source for both
-// create() (bakes them at miss) and override_runtime_arguments() (re-patches them on a hit) -- a divergence
-// would silently mis-patch the slot/kv_len on a cache hit.
+// The two non-hashed runtime args derived from k's shape + the optionals. Single source for both create()
+// (bakes at miss) and override_runtime_arguments() (re-patches on a hit).
 struct PersistentCacheArgs {
     uint32_t k_batch_page_offset;  // cache_batch_idx * Tt * Dt; 0 when not indexed
     uint32_t kv_len_tiles;         // valid key prefix in tiles; full Tt when kv_len unset
@@ -82,11 +80,9 @@ inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& a
         .kv_len_tiles = attrs.kv_len.value_or(shape[2]) / tt::constants::TILE_WIDTH};
 }
 
-// Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto
-// a rows_used x cols_used core rectangle -- groups -> rows (q/w multicast along a row), bands ->
-// columns (k multicast down a column). One (group, band) cell = one work unit of QC q-tile-rows x
-// up-to-KC k-tiles. Heads stream in HB-head groups; the causal masked suffix is stamped to -inf by
-// compute (zeros unsafe: gates can be negative). See indexer_score_work_split.hpp for the grid map.
+// Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto a
+// rows_used x cols_used core rectangle -- groups -> rows (q/w mcast along a row), bands -> columns (k
+// mcast down a column). One cell = one QC x up-to-KC work unit. See indexer_score_work_split.hpp.
 IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_at(
     const operation_attributes_t& args,
     const ttnn::MeshCoordinate& coord,
@@ -105,8 +101,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t D = q.logical_shape()[3];
     const uint32_t T = k.logical_shape()[2];
 
-    // This device's SP-ring index and chunk_start (tiles), derived from the mesh coordinate (stride = Sq).
-    // chunk_t is a compute RUNTIME arg (not compile-time), so the binary is identical across coords and steps.
+    // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
+    // arg, so the binary is identical across coords and steps.
     const uint32_t device_index = device_index_for(args, coord, q);
     const uint32_t chunk_t = chunk_start_tiles_for(args, device_index, Sq);
 
@@ -120,53 +116,84 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t KC = cfg.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t HB = resolve_head_group(cfg, Hi);
 
-    // Compute knobs from the resolved compute config. math_fidelity defaults to the dtype-derived
-    // choice (bf16 -> HiFi2, both bfp8 -> LoFi) but a caller can override it; validate guarantees
-    // fp32_dest_acc_en==false / dst_full_sync_en==false (the bf16-DEST half-sync layout the custom
-    // blocked bcast-col MUL LLK + packer path are validated for).
+    // num_groups: G==1 sums all heads (DSA/GLM); G>1 sums Hi/G heads per group into G planes (M3). The
+    // subblock height and cb_qk batch key off the per-plane width: HB when G==1, plane_heads when G>1.
+    const uint32_t G = args.num_groups;
+    const uint32_t plane_heads = Hi / G;
+    const uint32_t subblock_basis = (G > 1) ? plane_heads : HB;
+
+    // block-max-pool: 0 = off; >0 = max over each block_size-key block -> [.,.,Sq,T/block_size] (M3).
+    // block_tiles k-tiles per block; a unit's KC tiles pool to blocks_per_unit block scores.
+    const uint32_t block_tiles = args.block_size ? args.block_size / tt::constants::TILE_WIDTH : 0;
+    const bool block_pool = block_tiles != 0;
+    const uint32_t blocks_per_unit = block_pool ? (KC / block_tiles) : KC;
+    const uint32_t nblocks = block_pool ? (Tt / block_tiles) : 0;  // total block columns per output row (pool only)
+
+    // Compute knobs from the resolved config (validate guarantees fp32_dest_acc_en / dst_full_sync_en false).
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         ttnn::get_compute_kernel_config_args(q.device()->arch(), args.compute_kernel_config);
 
-    // qk matmul subblock: heads are output rows, k column is 1 tile wide (SDPA-style), so only the
-    // subblock height (head rows) is needed.
+    // qk matmul subblock: heads are output rows, k column is 1 tile wide, so only the subblock height matters.
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;  // half-sync, as in sdpa_program_factory
-    const uint32_t qk_subblock_h = ttnn::prim::detail::determine_largest_subblock_size(HB, 1, dst_size).first;
-    TT_FATAL(HB % qk_subblock_h == 0, "head group {} must be divisible by qk_subblock_h={}", HB, qk_subblock_h);
+    const uint32_t qk_subblock_h =
+        ttnn::prim::detail::determine_largest_subblock_size(subblock_basis, 1, dst_size).first;
+    TT_FATAL(
+        subblock_basis % qk_subblock_h == 0,
+        "per-plane head count {} must be divisible by qk_subblock_h={}",
+        subblock_basis,
+        qk_subblock_h);
 
-    // QC/KC/HB are verbatim from the config -- no auto-tune; the caller owns the perf trade-off (see
-    // glx_config() in the test). An oversized config is not clamped; it fails at CB allocation.
+    // QC/KC/HB are verbatim from the config (no auto-tune; caller owns the trade-off, oversized fails at
+    // CB allocation).
 
     // ---- banded-product schedule -------------------------------------------------------------
-    // Work space = group_count q-row-groups x band_count k-bands, tiled onto a rows_used x cols_used
-    // rectangle: groups -> rows (q/w mcast along a row), bands -> columns (k mcast down a column). Rows
-    // phase-stack groups when group_count > grid_y; each column owns a contiguous chunk of bands.
+    // groups -> rows (phase-stack when group_count > grid_y), bands -> columns (each owns a contiguous chunk).
+    // When the group dimension leaves grid rows idle (short sequences: group_count < grid_y), replicate each
+    // group across num_blocks row-blocks and split its band range across them (a band-chunk per block). Cells
+    // in different blocks write disjoint output columns -- no cross-core reduce -- and each block's k-mcast
+    // stays a contiguous per-column rectangle (a block's group_rows rows share that block's band-chunk).
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC)
     const auto grid = q.device()->compute_with_storage_grid_size();
     const uint32_t grid_x = grid.x, grid_y = grid.y;
 
-    const uint32_t rows_used = rows_for_groups(group_count, grid_y);
+    const uint32_t group_rows = rows_for_groups(group_count, grid_y);
     const uint32_t cols_used = cols_for_bands(band_count, grid_x);
+    // Row-block replication factor (shared with the perf model so their core counts can't drift): fill the
+    // idle rows (grid_y / group_rows), but never finer than one band per (block, column) cell. num_blocks==1
+    // is the original single-band-row schedule -- the deployed long-sequence cases, where group_rows fills
+    // grid_y.
+    const uint32_t num_blocks = band_row_blocks(group_count, band_count, grid_x, grid_y);
+    const uint32_t rows_used = group_rows * num_blocks;
     const uint32_t num_cores = rows_used * cols_used;
+    // Phase-stack count: groups dealt round-robin onto the group_rows rows (1 when group_rows == group_count).
+    const uint32_t num_groups = group_count / group_rows;
 
-    // Even band split across the used columns: the first (band_count % cols_used) columns get one extra.
-    std::vector<uint32_t> col_band_start(cols_used), col_band_size(cols_used);
+    // 2-D band deal: bands split into num_blocks contiguous blocks (front blocks get the remainder), each
+    // block split across cols_used columns (front columns get the remainder). Indexed [block][col]; with
+    // num_blocks==1 this is exactly the original per-column split over the whole band range.
+    std::vector<std::vector<uint32_t>> band_start(num_blocks, std::vector<uint32_t>(cols_used));
+    std::vector<std::vector<uint32_t>> band_size(num_blocks, std::vector<uint32_t>(cols_used));
     {
-        const uint32_t bands_per_col = band_count / cols_used, extra = band_count % cols_used;
-        uint32_t off = 0;
-        for (uint32_t col = 0; col < cols_used; ++col) {
-            col_band_size[col] = bands_per_col + (col < extra ? 1u : 0u);
-            col_band_start[col] = off;
-            off += col_band_size[col];
+        const uint32_t bands_per_block = band_count / num_blocks, blk_extra = band_count % num_blocks;
+        uint32_t blk_off = 0;
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+            const uint32_t blk_bands = bands_per_block + (blk < blk_extra ? 1u : 0u);
+            const uint32_t bands_per_col = blk_bands / cols_used, extra = blk_bands % cols_used;
+            uint32_t off = blk_off;
+            for (uint32_t col = 0; col < cols_used; ++col) {
+                band_size[blk][col] = bands_per_col + (col < extra ? 1u : 0u);
+                band_start[blk][col] = off;
+                off += band_size[blk][col];
+            }
+            blk_off += blk_bands;
         }
     }
-    // rows_used divides group_count, so every row runs the same num_groups (group = y + p*rows_used).
-    // Uniformity keeps every column's k-mcast in lockstep.
-    const uint32_t num_groups = group_count / rows_used;
-    // Widest column's band count: the streaming q-mcast pad target. Streaming re-reads q per output tile,
-    // so the uneven per-column band counts would desync the row's q-mcast; the kernels pad each row to
-    // max_bands with dummy q-only "phantom" bands (band-independent data) to keep the rendezvous uniform.
-    const uint32_t max_bands = (band_count + cols_used - 1) / cols_used;
+    // Widest cell's band count: the streaming q-mcast pad target (the kernels pad each row to max_bands with
+    // q-only phantom bands so the rendezvous stays uniform). Widest block has ceil(band_count/num_blocks)
+    // bands; its widest column ceil(that/cols_used).
+    const uint32_t bands_in_widest_block = (band_count + num_blocks - 1) / num_blocks;
+    const uint32_t max_bands = (bands_in_widest_block + cols_used - 1) / cols_used;
 
     const CoreRange core_rect(CoreCoord{0, 0}, CoreCoord{cols_used - 1, rows_used - 1});
     const CoreRangeSet core_ranges(core_rect);
@@ -179,13 +206,13 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         }
     }
 
-    // k-mcast needs >1 row down a column; q/w-mcast needs >1 column along a row. Both are HB-independent:
-    // streaming keeps q-mcast via the phantom-band pad (see max_bands above), so neither gates on HB.
-    const uint32_t k_mcast_on = (rows_used > 1) ? 1u : 0u;
+    // k-mcast shares a block's band-chunk down its group_rows rows; q/w-mcast needs >1 column along a row
+    // (both HB-independent).
+    const uint32_t k_mcast_on = (group_rows > 1) ? 1u : 0u;
     const uint32_t q_mcast_on = (cols_used > 1) ? 1u : 0u;
 
     // 3 semaphores per active direction: send (receivers ready), recv (sender relays valid in), valid
-    // (constant 1, relay source). Mirrors SDPA chain_link's handshake.
+    // (constant 1). Mirrors SDPA chain_link's handshake.
     const uint32_t k_send_sem = k_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 0) : 0;
     const uint32_t k_recv_sem = k_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 0) : 0;
     const uint32_t k_valid_sem = k_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 1) : 0;
@@ -196,19 +223,24 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t fp32_tile = tt::tile_size(tt::DataFormat::Float32);
 
-    // q (srcB) and k (srcA) are matmul inputs; either may be bfp8_b to halve its DRAM/L1 footprint
-    // (w stays bf16). The format flows into the CB; the compute kernel needs no change.
+    // q (srcB) and k (srcA) are matmul inputs; either may be bfp8_b to halve its footprint (w stays bf16).
     const bool q_is_bfp8 = q.dtype() == tt::tt_metal::DataType::BFLOAT8_B;
     const bool k_is_bfp8 = k.dtype() == tt::tt_metal::DataType::BFLOAT8_B;
+    // Fused single-head fast path: one head/plane, no ReLU, bf16 q -> the matmul writes the gated score
+    // straight to the accumulator (cb_qk sized to 1, cb_out_strip deepened). Composes with the multicast.
+    // bfp8 q is EXCLUDED: the in-place gate-fold (scale_q_by_w_inplace) re-packs gated q to bfp8 and the
+    // matmul then misreads it (PCC ~0, garbage magnitudes) -- bf16 q has no shared-exponent section so it is
+    // unaffected. bfp8 q therefore stays on the non-fused path (gate applied on the fp32 matmul output).
+    const bool fuse_single = (plane_heads == 1) && !args.apply_relu && !q_is_bfp8;
+    // Fused + mcast: K is one block -> wait whole chunk. Fused + no mcast: stream K in column sub-chunks.
+    const bool fused_stream_k = fuse_single && (k_mcast_on == 0) && (q_mcast_on == 0);
     const tt::DataFormat q_fmt = q_is_bfp8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
     const tt::DataFormat k_fmt = k_is_bfp8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
     const uint32_t q_tile = tt::tile_size(q_fmt);
     const uint32_t k_tile = tt::tile_size(k_fmt);
 
-    // Continuous CB indices, allocated on demand: each make_cb claims the next free index (c_0, c_1, ...)
-    // and records it under its CbArg slot. The whole array is forwarded to the kernels as compile-time
-    // args (CbArg is the shared slot order; see indexer_score_cb.hpp), so every buffer is resolved through
-    // this one allocation and indices can never drift host<->device.
+    // Continuous CB indices: each make_cb claims the next free index and records it under its CbArg slot.
+    // The whole array is forwarded to the kernels (CbArg = shared slot order), so indices can't drift.
     std::array<uint32_t, num_cb_args> cb_id{};
     uint32_t next_cb_index = tt::CBIndex::c_0;
     auto make_cb = [&](uint32_t slot, uint32_t ntiles, tt::DataFormat fmt, uint32_t tile_bytes) {
@@ -222,16 +254,17 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     const bool stream_heads = HB < Hi;
 
-    // One-line schedule/mcast summary (per program-cache miss) so profiling can read the active
-    // multicast directions without decoding compile-time args.
+    // One-line schedule/mcast summary (per cache miss) for profiling.
     log_debug(
         tt::LogOp,
-        "indexer_score schedule: G={} U={} grid={}x{} rows_used={} cols_used={} num_groups={} "
-        "max_bands={} stream_heads={} k_mcast={} q_mcast={}",
+        "indexer_score schedule: G={} U={} grid={}x{} group_rows={} num_blocks={} rows_used={} cols_used={} "
+        "num_groups={} max_bands={} stream_heads={} k_mcast={} q_mcast={}",
         group_count,
         band_count,
         grid_x,
         grid_y,
+        group_rows,
+        num_blocks,
         rows_used,
         cols_used,
         num_groups,
@@ -247,49 +280,63 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
-    // cb_qk buffers a batch of the group's relu(q.kT) tiles so compute runs that batch's matmuls then
-    // its mul+accumulates, hoisting the matmul<->eltwise reinit out of the per-head-pass loop.
-    // QC==1 has spare L1 -> batch the whole group; QC>1 doubles cb_q/cb_w, so cap at 32.
-    const uint32_t qk_batch_cap = (QC == 1) ? HB : 32u;
-    const uint32_t qk_batch_heads = std::min<uint32_t>(HB, qk_batch_cap);  // multiple of qk_subblock_h
-    // The compute kernel walks HB in qk_batch_heads-sized chunks (chunk += qk_batch_heads), so HB must
-    // be a whole multiple or the last chunk over-reads past the resident head group. Only reachable when
-    // the 32-cap engages (HB > 32 && QC > 1); the deployed cases never hit it, but guard loudly.
+    // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
+    // hoisting the matmul<->eltwise reinit out of the per-head loop. QC==1 batches the whole group; QC>1 caps
+    // at one tile-row of heads (TILE_HEIGHT).
+    const uint32_t qk_batch_cap = (QC == 1) ? subblock_basis : tt::constants::TILE_HEIGHT;
+    const uint32_t qk_batch_heads = std::min<uint32_t>(subblock_basis, qk_batch_cap);  // multiple of qk_subblock_h
+    // Per-plane head count must be a whole multiple of qk_batch_heads or the last chunk over-reads (only
+    // reachable when the 32-cap engages; deployed cases never hit it).
     TT_FATAL(
-        HB % qk_batch_heads == 0,
-        "head_group {} not divisible by qk_batch_heads {} (QC>1 with HB>32); reduce head_group_size or q_chunk_size",
-        HB,
+        subblock_basis % qk_batch_heads == 0,
+        "per-plane head count {} not divisible by qk_batch_heads {} (QC>1 with >32 heads); reduce head_group_size, "
+        "q_chunk_size, or raise num_groups",
+        subblock_basis,
         qk_batch_heads);
-    // Full-strip path batches the whole k chunk's columns per matmul<->mul mode switch (one switch per
-    // batch, not per output tile): w is column-independent and the whole k chunk is resident, so a row's
-    // columns share one switch. Only when the group is a single chunk (qk_batch_heads == Hi) and the fast
-    // strip is used (KC >= 2); cb_qk then holds KC * qk_batch_heads tiles and fails at allocation if the
-    // caller's k_chunk_size is too large for L1 (the caller owns the knob trade-off).
-    const bool single_chunk = (qk_batch_heads == Hi) && !stream_heads;
+    // Full-strip path batches the whole k chunk's columns per matmul<->mul switch (w is column-independent,
+    // the chunk is resident). Only for a single-chunk group (qk_batch_heads == basis) with KC >= 2.
+    const bool single_chunk = (qk_batch_heads == subblock_basis) && !stream_heads;
     const uint32_t qk_col_batch = (KC >= 2 && single_chunk) ? KC : 1u;
-    make_cb(cb_qk_arg, qk_col_batch * qk_batch_heads, acc_fmt, acc_tile);
-    // cb_out_strip holds a unit's untilized output. Uniform KC push/pop keeps the packer's KC-tile
-    // reads contiguous (a non-uniform push would wrap the ring mid-strip).
-    make_cb(cb_out_strip_arg, 2 * KC, tt::DataFormat::Float16_b, bf16_tile);
-    // cb_acc_strip accumulates a whole unit's QC*KC strip, then all QC strips untilize under ONE
-    // pack_untilize bracket (per-strip cost amortizes over QC*KC, not KC). max(2*KC, .) keeps the
-    // QC<=2 double buffer and a whole multiple of the QC*KC batch so a uniform push never wraps mid-unit.
+    // G>1 reuses the full-strip path (the fallback is not wired for groups); only fires if plane_heads
+    // exceeds the batch cap (QC>1 with plane_heads>32).
+    TT_FATAL(
+        G == 1 || qk_col_batch > 1,
+        "num_groups {}>1 requires the full-strip path (got qk_col_batch=1; plane_heads {} likely > batch cap)",
+        G,
+        plane_heads);
+    // cb_qk stages the matmul output for the gate-mul phase; the fused path writes straight to the
+    // accumulator, so cb_qk is unused there (1 tile, L1 spent on a deeper cb_out_strip).
+    make_cb(cb_qk_arg, fuse_single ? 1u : (qk_col_batch * qk_batch_heads), acc_fmt, acc_tile);
+    // cb_out_strip holds the pooled/untilized output, normally double-buffered. The fused block-pool path
+    // deepens it to the whole unit's blocks so the pool and writer decouple (no 2-row-ring mutual stall).
+    const uint32_t out_strip_tiles =
+        (fuse_single && block_pool) ? (QC * blocks_per_unit) : 2 * (block_pool ? blocks_per_unit : KC);
+    make_cb(cb_out_strip_arg, out_strip_tiles, tt::DataFormat::Float16_b, bf16_tile);
+    // Block-max-pool scratch CBs (only when pooling): cb_scaler = one 1.0 reduce-MAX tile; cb_pool_scratch
+    // = the writer's one-tile row-assembly buffer.
+    if (block_pool) {
+        make_cb(cb_scaler_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
+        make_cb(cb_pool_scratch_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
+    }
+    // cb_acc_strip accumulates a whole unit's QC*KC strip, then untilizes under ONE pack_untilize bracket.
+    // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
-    // No up-front L1-fit guard: an oversized QC/KC/head_group config fails at CB allocation. The caller
-    // owns the knob trade-off (see glx_config() in the test).
-
-    // Common args: 7 dims then the CB indices in CbArg order (kernels read both from this shared base).
-    // chunk_t is NOT here -- it is a per-device compute runtime arg (derived from the coordinate above).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB};
+    // Common args: 9 dims then the CB indices in CbArg order. chunk_t is NOT here (per-device runtime arg).
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
+
+    // MSA synthesizes the constant gate in-kernel (no weights tensor / no fill op): the reader fills cb_w
+    // with `gate_scale` instead of reading DRAM, and the weights accessor below is the unused q placeholder.
+    // Pack the scale into a bf16 pair (two values per word) for the reader's word-wise fill.
+    const uint16_t gate_scale_bf16 = static_cast<uint16_t>(__builtin_bit_cast(uint32_t, args.gate_scale) >> 16);
+    const uint32_t gate_scale_bits = (static_cast<uint32_t>(gate_scale_bf16) << 16) | gate_scale_bf16;
 
     std::vector<uint32_t> reader_ct = common_ct;
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
-    // multicast: on/off per direction (q_mcast_on covers q and w) then the 6 semaphore ids, at fixed
-    // offsets right after the three TensorAccessors.
+    tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);  // q placeholder when synthesize_gate
+    // multicast: on/off per direction (q_mcast_on covers q and w) then the 6 semaphore ids.
     reader_ct.push_back(k_mcast_on);
     reader_ct.push_back(q_mcast_on);
     reader_ct.push_back(k_send_sem);
@@ -298,16 +345,28 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(q_send_sem);
     reader_ct.push_back(q_recv_sem);
     reader_ct.push_back(q_valid_sem);
+    // Fused single-head: reader reads q+w FIRST (the matmul gate needs them), then streams k (when no mcast).
+    reader_ct.push_back(fuse_single ? 1u : 0u);
+    reader_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: stream k (no mcast) vs whole mcast block
+    reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
+    reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
 
     std::vector<uint32_t> writer_ct = common_ct;
-    const uint32_t out_elem_bytes = out.element_size();  // from the output tensor's dtype (bf16 today)
-    writer_ct.push_back(T * out_elem_bytes);             // row-major page = one full row of T scores
+    const uint32_t out_elem_bytes = out.element_size();  // bf16 today
+    // row-major page = one output row: T scores, or nblocks block-scores when pooling.
+    const uint32_t out_row_elems = block_pool ? nblocks : T;
+    writer_ct.push_back(out_row_elems * out_elem_bytes);
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
-    compute_ct.push_back(qk_batch_heads);  // head tiles per matmul/mul phase chunk
-    compute_ct.push_back(qk_col_batch);    // k-columns batched per mode switch in the full-strip path
+    compute_ct.push_back(qk_batch_heads);             // head tiles per matmul/mul phase chunk
+    compute_ct.push_back(qk_col_batch);               // k-columns batched per mode switch in the full-strip path
+    compute_ct.push_back(args.apply_relu ? 1u : 0u);  // 1 = relu(q.kT) (DSA/GLM), 0 = raw q.kT (M3)
+    // Fused single-head fast path: plane_heads==1, no ReLU, bf16 q (the gate is applied to q in place, so
+    // bfp8 q falls back). GLM/DSv32 and bfp8-q MSA fall back, byte-identical.
+    compute_ct.push_back(fuse_single ? 1u : 0u);
+    compute_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: incremental k wait (stream) vs whole-chunk
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(
@@ -326,13 +385,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             .compile_args = compute_ct});
 
     // Per-core args: schedule {row_group0, group_stride, num_groups, band0, num_bands, max_bands} then
-    // (reader only) the K-column + Q/W-row mcast 8-tuples. role is a McastRole (none = per-core DRAM read); rect
-    // (xs,ys,xe,ye) + sender (sx,sy) are physical NoC; ndst = #receivers. mcast rects are fixed per core
-    // (one column for k, one row for q); only the data changes per group/band phase.
+    // (reader only) the K-column + Q/W-row mcast 8-tuples (role, rect xs/ys/xe/ye, sender sx/sy, ndst). The
+    // mcast rects are fixed per core; only the data changes per phase.
     const auto u32 = [](auto v) { return static_cast<uint32_t>(v); };
-    // Indexed-cache k page offset and valid kv_len, baked here for the cache-miss build and re-applied each
-    // dispatch in override_runtime_arguments (both excluded from the hash). The grid/work-split above stay
-    // keyed on the hashed Tt; kv_len_tiles only narrows the per-cell columns the kernels touch.
+    // Indexed-cache k page offset + valid kv_len, baked at miss and re-applied each dispatch (both hash-excluded).
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
     std::vector<CoreCoord> cores;
     cores.reserve(num_cores);
@@ -346,22 +402,25 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         const uint32_t q_py = u32(phys[row][0].y);
         const uint32_t q_diag = std::min<uint32_t>(row, cols_used - 1);  // diagonal sender column
         const CoreCoord q_sender = phys[row][q_diag];
+        // This row's band-chunk block and its row base within the grid. The k-mcast spans only the block's
+        // group_rows rows; row % group_rows is the group this row computes (same in every block).
+        const uint32_t block = row / group_rows;
+        const uint32_t block_base = block * group_rows;
         for (uint32_t col = 0; col < cols_used; ++col) {
-            // physical bbox of this column down the used rows (k mcast rect); px constant down the column.
-            uint32_t k_ys = u32(phys[0][col].y), k_ye = u32(phys[0][col].y);
-            for (uint32_t bbox_row = 0; bbox_row < rows_used; ++bbox_row) {
+            // physical bbox of this column down the block's rows (k mcast rect); px constant down the column.
+            uint32_t k_ys = u32(phys[block_base][col].y), k_ye = u32(phys[block_base][col].y);
+            for (uint32_t bbox_row = block_base; bbox_row < block_base + group_rows; ++bbox_row) {
                 k_ys = std::min<uint32_t>(k_ys, u32(phys[bbox_row][col].y));
                 k_ye = std::max<uint32_t>(k_ye, u32(phys[bbox_row][col].y));
             }
-            const uint32_t k_px = u32(phys[0][col].x);
-            const CoreCoord k_sender = phys[0][col];
+            const uint32_t k_px = u32(phys[block_base][col].x);
+            const CoreCoord k_sender = phys[block_base][col];
 
             const CoreCoord core{col, row};
             cores.push_back(core);
-            // {row_group0, group_stride, num_groups, band0, num_bands, max_bands}. max_bands is uniform
-            // (the row's widest column); the streaming reader/compute pad their band loop to it.
+            // max_bands is uniform (global widest cell); streaming pads its band loop to it.
             const std::array<uint32_t, 6> sched = {
-                row, rows_used, num_groups, col_band_start[col], col_band_size[col], max_bands};
+                row % group_rows, group_rows, num_groups, band_start[block][col], band_size[block][col], max_bands};
 
             std::vector<uint32_t> reader_rt = {q.buffer()->address(), k.buffer()->address(), w.buffer()->address()};
             reader_rt.insert(reader_rt.end(), sched.begin(), sched.end());
@@ -381,15 +440,16 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
                 reader_rt.push_back(u32(s.y));
                 reader_rt.push_back(ndst);
             };
-            // K column: sender row 0, receivers rows [1, rows_used); vertical rect spanning the column.
+            // K column: per row-block, sender is the block's top row, receivers the rest of the block;
+            // vertical rect spanning only the block's group_rows rows.
             push_mcast_dir(
-                k_mcast_on ? (row == 0 ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
+                k_mcast_on ? (row == block_base ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
                 k_px,
                 k_ys,
                 k_px,
                 k_ye,
                 k_sender,
-                rows_used - 1);
+                group_rows - 1);
             // Q/W row: sender on the diagonal column, receivers the rest of the row; horizontal rect.
             push_mcast_dir(
                 q_mcast_on ? (col == q_diag ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
@@ -399,13 +459,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
                 q_py,
                 q_sender,
                 cols_used - 1);
-            // Persistent-cache args last (slots reader[25,26]): after the mcast tuples in both branches.
+            // Persistent-cache args last (slots reader[25,26]).
             reader_rt.push_back(k_batch_page_offset);
             reader_rt.push_back(kv_len_tiles);
             tt::tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
-            // compute: schedule scalars[0-5], then kv_len_tiles[6] and chunk_start_tiles[7]. Both are
-            // hash-excluded runtime values -- kv_len is per-dispatch, chunk_t is per-device (from the
-            // coordinate) -- so distinct values reuse one compiled program.
+            // compute: schedule[0-5], then kv_len_tiles[6] + chunk_start_tiles[7] (both hash-excluded runtime).
             std::vector<uint32_t> compute_rt(sched.begin(), sched.end());
             compute_rt.push_back(kv_len_tiles);  // slot [6]
             compute_rt.push_back(chunk_t);       // slot [7]
@@ -413,6 +471,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             std::vector<uint32_t> writer_rt = {out.buffer()->address()};
             writer_rt.insert(writer_rt.end(), sched.begin(), sched.end());
             writer_rt.push_back(kv_len_tiles);  // slot [7], after out_addr + the 6 schedule scalars
+            writer_rt.push_back(chunk_t);       // slot [8], per-device chunk-start (tiles); block-pool forced-local
             tt::tt_metal::SetRuntimeArgs(program, writer_id, core, writer_rt);
         }
     }
@@ -434,8 +493,7 @@ IndexerScoreProgramFactory::cached_mesh_workload_t IndexerScoreProgramFactory::c
     tensor_return_value_t& out) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    // One program per coordinate: each device derives its own chunk_start from its coordinate. A single
-    // device is a 1x1 mesh, so this loops once with index 0 (the single-chip / scalar path).
+    // One program per coordinate (each device derives its own chunk_start); a single device loops once at index 0.
     for (const auto& range : tensor_coords.ranges()) {
         for (const auto& coord : range) {
             const ttnn::MeshCoordinateRange single{coord, coord};
@@ -452,9 +510,8 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
-    // All hash-excluded runtime values re-applied on a cache hit: buffer addresses (uniform across the mesh),
-    // cache_batch_idx / kv_len (per-dispatch), and chunk_start (per-coordinate, recomputed from the stored
-    // device_index) -- so a hit patches all of them without recompiling.
+    // Re-apply all hash-excluded runtime values on a hit: buffer addresses, cache_batch_idx / kv_len, and
+    // chunk_start (per-coordinate, from the stored device_index).
     const uint32_t Sq = tensors.q.logical_shape()[2];
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
     for (auto& [range, shared] : cached.shared_variables) {
@@ -474,6 +531,7 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_kv_len_tiles, kv_len_tiles, "writer.kv_len_tiles");
+            patch_arg(writer_args[core.x][core.y], rt_arg::writer_chunk_start_tiles, chunk_t, "writer.chunk_start");
         }
     }
 }

@@ -99,33 +99,7 @@ struct KernelAdvancedOptions {
     //       existing uses are refactored to avoid it.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // Multi-threaded self-loop DFBs on compute kernels
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Self-loop DFBs on compute kernels (niche use case).
-    // This applies only to compute kernels that bind BOTH the producer and consumer
-    // endpoints of the same DFB (self-loop).
-    //
-    // The compute kernel threads can communicate via the DFB in two topologies:
-    //
-    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
-    //         (no cross-thread communication). This is the common case.
-    //   INTER (inter-thread): Within the kernel, some threads produce data for other
-    //          threads to consume.
-    //
-    // Only the INTRA case is currently supported. INTER will trigger a validation error.
-    // There are currently no known use cases for an INTER-thread self-loop. This option
-    // is present in the API for completeness, to surface any use cases that may arise.
-    enum class DFBSelfLoopConnectivity { INTRA, INTER };
-
-    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
-    Table<DFBSpecName, DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
 };
-
-// (Convenience aliases for nested types)
-using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

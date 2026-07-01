@@ -81,6 +81,7 @@ class MathOperation(Enum):
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
+    GeluTanh = OpSpec("gelu_tanh", MathOpType.SFPU_UNARY)
     Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
@@ -570,16 +571,6 @@ class UnpackerEngine(Enum):
     UnpB = "UNP_B"
     UnpS = "UNP_S"
     UnpDest = "UNP_DEST"
-
-
-class TilizeUnpackerSel(Enum):
-    """
-    Enum for selecting which unpacker(s) perform tilization.
-    """
-
-    UnpA = "UnpA"
-    UnpB = "UnpB"
-    UnpAB = "UnpAB"
 
 
 class ReluConfig(Enum):

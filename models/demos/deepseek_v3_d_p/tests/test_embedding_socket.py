@@ -89,8 +89,7 @@ def test_embedding_8x4_galaxy(mesh_device):
     h2d_service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
         global_spec=global_spec,
-        fifo_size_bytes=8 * per_chip_bytes,
-        scratch_cb_size_bytes=per_chip_bytes,
+        max_socket_page_size_bytes=per_chip_bytes,
         mapper=mapper,
         worker_cores=worker_cores,
     )

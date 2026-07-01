@@ -213,8 +213,7 @@ const m2::DFBSpecName DFB_WEIGHTS{"weights"};                  // weights reader
 const m2::DFBSpecName DFB_BIAS{"bias"};                        // weights writer -> compute (optional)
 const m2::DFBSpecName DFB_MATMUL_PARTIALS{"matmul_partials"};  // compute self-loop (borrows OUTPUT when aliased)
 const m2::DFBSpecName DFB_OUT{"out"};                          // compute packer -> OUTPUT (degenerate DM consumer)
-const m2::DFBSpecName DFB_ACT_SHARDED{"act_sharded"};          // borrowed INPUT (reader address source)
-const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};    // borrowed indices (reader address source)
+const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};    // fresh L1 DMA landing (DRAM-config path only)
 
 const m2::TensorParamName TP_INPUT{"input"};
 const m2::TensorParamName TP_OUTPUT{"output"};
@@ -986,20 +985,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
 
-    // ACT_SHARDED: borrowed INPUT; reader/writer use it as an address source.  Self-loop on the reader.
-    {
-        auto dfb = make_dfb(DFB_ACT_SHARDED, Conv2dCb::ACT_SHARDED);
-        dfb.borrowed_from = TP_INPUT;
-        spec.dataflow_buffers.push_back(std::move(dfb));
-    }
+    // ACT_SHARDED: the resident input shard is read by address via tensor::act_sharded (a local
+    // TensorAccessor) in the reader — no borrowed self-loop DFB.
 
-    // READER_INDICES: borrowed indices tensor (L1-resident path) or fresh L1 (DRAM-config path, filled by
-    // the reader via tensor::reader_indices).  Self-loop on the reader.
-    {
+    // READER_INDICES: L1-resident indices are read by address via tensor::reader_indices. Only the
+    // DRAM-config path needs a fresh L1 landing DFB (the reader DMAs the slice into it, then reads it);
+    // that path is not exercised by resnet.
+    if (!reader_indices_globally_allocated) {
         auto dfb = make_dfb(DFB_READER_INDICES, Conv2dCb::READER_INDICES);
-        if (reader_indices_globally_allocated) {
-            dfb.borrowed_from = TP_READER_INDICES;
-        }
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
 
@@ -1060,58 +1053,42 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .dfb_spec_name = DFB_ACT_TILIZED,
                 .accessor_name = "act_tilized",
                 .endpoint_type = m2::DFBEndpointType::CONSUMER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_ACT_SHARDED,
-                .accessor_name = "act_sharded",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_ACT_SHARDED,
-                .accessor_name = "act_sharded",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
         reader_sem_bindings = {
             m2::SemaphoreBinding{.semaphore_spec_name = SEM_ACT_MCAST_SENDER, .accessor_name = "act_mcast_sender"},
             m2::SemaphoreBinding{.semaphore_spec_name = SEM_ACT_MCAST_RECEIVER, .accessor_name = "act_mcast_receiver"},
         };
     } else {
-        // Height-sharded / depthwise reader: produces ACT (direct), self-loops ACT_SHARDED + READER_INDICES.
+        // Height-sharded / depthwise reader: produces ACT (direct). act_sharded + reader_indices are read
+        // by address via tensor bindings (no self-loop DFBs).
         reader_dfb_bindings = {
             m2::DFBBinding{
                 .dfb_spec_name = DFB_ACT, .accessor_name = "act", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_ACT_SHARDED,
-                .accessor_name = "act_sharded",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_ACT_SHARDED,
-                .accessor_name = "act_sharded",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
     }
+    // The resident activation shard and (L1-resident) reader-indices are read by address via local
+    // TensorAccessors — tensor::act_sharded and tensor::reader_indices — rather than borrowed self-loop CBs.
+    reader_tensor_bindings.push_back(
+        m2::TensorBinding{.tensor_parameter_name = TP_INPUT, .accessor_name = "act_sharded"});
+    reader_tensor_bindings.push_back(
+        m2::TensorBinding{.tensor_parameter_name = TP_READER_INDICES, .accessor_name = "reader_indices"});
+
     // The depthwise reader has no CONFIG_TENSOR_IN_DRAM path (its indices are always L1-resident); only
-    // the height-/block-sharded readers DMA the config slice via tensor::reader_indices.
+    // the height-/block-sharded readers DMA the config slice into the fresh READER_INDICES DFB.
     TT_FATAL(
         !(config_tensors_in_dram && is_conv_1d_depthwise_conv),
         "conv2d Metal 2.0 sharded factory: config_tensors_in_dram is not supported for the 1D depthwise path.");
-    if (config_tensors_in_dram && !is_conv_1d_depthwise_conv) {
-        reader_tensor_bindings.push_back(
-            m2::TensorBinding{.tensor_parameter_name = TP_READER_INDICES, .accessor_name = "reader_indices"});
+    if (!reader_indices_globally_allocated) {
+        // DRAM-config: the reader DMAs the indices slice from tensor::reader_indices into this fresh L1
+        // DFB and then reads it (a self-loop on the reader; this path is not exercised by resnet).
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = DFB_READER_INDICES,
+            .accessor_name = "reader_indices",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = DFB_READER_INDICES,
+            .accessor_name = "reader_indices",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
     m2::KernelSpec reader_kernel_spec{
@@ -1560,11 +1537,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"kernel_width", filter_w},
             {"coalesce_kw_reads", (uint32_t)coalesce_1d_depthwise_kw_reads},
         };
-        // OUT self-loop (dest-reuse accumulate) + ACT_TILIZED self-loop.
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_OUT, m2::DFBSelfLoopConnectivity::INTRA});
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_ACT_TILIZED, m2::DFBSelfLoopConnectivity::INTRA});
     } else {
         compute_kernel_spec.compile_time_args = {
             {"in0_block_w", act_block_w_ntiles},
@@ -1612,17 +1584,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             compute_kernel_spec.compile_time_args.insert({"tilized_cb_second_reader_offset", 0u});
         }
         compute_kernel_spec.compile_time_args.insert({"split_reader_cb_shared", 0u});
-
-        // MATMUL_PARTIALS self-loop (resolution #2) and OUT degenerate self-loop (resolution #1).
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_MATMUL_PARTIALS, m2::DFBSelfLoopConnectivity::INTRA});
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_OUT, m2::DFBSelfLoopConnectivity::INTRA});
-        if (!block_sharded) {
-            // Height-sharded: ACT_TILIZED is a compute-internal tilize->matmul self-loop.
-            compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-                {DFB_ACT_TILIZED, m2::DFBSelfLoopConnectivity::INTRA});
-        }
 
         if (has_bias) {
             compute_kernel_spec.compiler_options.defines.insert({"FUSE_BIAS", "1"});
