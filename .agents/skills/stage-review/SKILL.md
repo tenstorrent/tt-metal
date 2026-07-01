@@ -244,10 +244,13 @@ For optimization stages, also inspect:
   output-subblock result from BFP8/HiFi does not validate BFP4/LoFi geometry,
   and a BFP4/LoFi result on one geometry does not reject the other material
   geometries. Small `in0_block_w` values are not enough just because they used
-  to look reasonable: if a material row keeps `2`, `4`, or `8`, check whether
-  larger legal values such as `16` were measured under the selected dtype/fidelity
-  policy, or whether there is an exact L1, divisibility, padding, or op-contract
-  blocker. If the final report leaves a dominant row `SLOW`, has low DRAM
+  to look reasonable: if a material row keeps a small value such as `2`, `4`,
+  or `8`, check whether larger legal divisors of the tiled K dimension and the
+  input shard's K-tile width were measured under the selected dtype/fidelity
+  policy. Legal values do not need to be powers of two; values such as `3`,
+  `5`, `7`, `10`, `14`, or `16` may be valid depending on the shape and shard.
+  Otherwise require an exact L1, divisibility, padding, or op-contract blocker.
+  If the final report leaves a dominant row `SLOW`, has low DRAM
   utilization, reports missing output subblocks, or cites a larger-core blocker
   without a precision-locked smaller-core or residual-grid candidate, return
   `more-work-needed`;
