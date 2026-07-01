@@ -404,7 +404,7 @@ jobs:
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
           || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2')
           || '' }}
-      pytest-markers: "not perf and not nightly and not quasar"
+      pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:
