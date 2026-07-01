@@ -18,8 +18,8 @@
  *   2a) is_tp_1: that IS the full mean/var -> transpose to col 0, 1/std = rsqrt(var+eps).
  *   2b) TP>1: push (mean, var) row-0 sticks; the worker writer ring-gathers all
  *       ring_size shards' partials into stats_transposed_gathered_cb (interleaved
- *       [mean_d, var_d]); combine_welford_partials merges them into the global
- *       (mean, 1/std); transpose both to col 0.
+ *       [mean_d, var_d]); the equal-count Welford combine (below) merges them into the
+ *       global (mean, 1/std); transpose both to col 0.
  *   3) POST: x' = (x - mean) [rotated_input_cb] ; x'' = x' * (1/std) ; [* weight] ;
  *      [+ bias] -> output_cb.
  *
@@ -28,25 +28,25 @@
  * reduce_result_cb holds 1/std (col 0), rotated_input_cb (RoPE-only normally)
  * holds (x - mean). On TP>1: stats_transposed_local_cb carries the local
  * (mean, var) partial, stats_transposed_gathered_cb the gathered ring partials,
- * stats_gathered_cb the merged (mean, 1/std). See WELFORD_LAYERNORM_DESIGN.md.
+ * stats_gathered_cb the merged (mean, 1/std).
  */
 
 #include <cstdint>
 #include <array>
 
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "tools/profiler/kernel_profiler.hpp"
-
-using norm::kernel_util::compute::combine_welford_partials;
-using norm::kernel_util::compute::RSqrtPolicy;
 
 void kernel_main() {
     // === Compile-time args (shared list with the RMSNorm kernel; LN reads a subset) ===
@@ -82,7 +82,7 @@ void kernel_main() {
     constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(39);
     constexpr uint32_t use_recip_lut = get_compile_time_arg_val(40);
     // Zeroed welford-state CB (2 tiles: mean=0, M2=0). Captured once below while the SFPU is clean,
-    // reloaded per row to reset the welford accumulator (ISSUE 3A). See the cold-start capture.
+    // reloaded per row to reset the welford accumulator; see the cold-start capture.
     constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(41);
 
     // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
@@ -157,13 +157,12 @@ void kernel_main() {
 
         // -------- PHASE 1: PRE — local per-token Welford (mean, var) over the shard --------
         {
-            DeviceZoneScopedN("LN_PRE_WELFORD");
             tile_regs_acquire();
             // welford_init() programs the SFPU replay buffer + address mods (needed every row).
             // Its SFPLOADI accumulator clear is UNRELIABLE here: a prior row's combine (SFPU rsqrt
             // with data-dependent predication) can leave the condition code predicated, so the
             // clear skips some token lanes -> stale ~1e36 mean -> M2 overflow -> inf var -> token
-            // collapse on warm rows (ISSUE 3A). So reset the accumulator via the UNPREDICATED
+            // collapse on warm rows. So reset the accumulator via the UNPREDICATED
             // L1->DST path instead: copy the cold-captured zero state and welford_restore_state
             // (mirrors layernorm_large_tensor_welford's fuse_pre_add reload).
             welford_init();
@@ -225,7 +224,6 @@ void kernel_main() {
 
         // -------- Produce per-token mean (col 0) + 1/std (col 0) into mean_cb / invstd_cb --------
         if constexpr (is_tp_1 != 0) {
-            DeviceZoneScopedN("LN_STAT_FINALIZE");
             // Transpose row 0 -> col 0; 1/std = rsqrt(var + eps).
             cb_wait_front(mean_cb, 1);
             cb_wait_front(invstd_cb, 1);
@@ -255,22 +253,17 @@ void kernel_main() {
             cb_push_back(mean_cb, 1);
             cb_push_back(invstd_cb, 1);
         } else {
-            DeviceZoneScopedN("LN_MERGE");
-            // Equal-count Welford combine. All ring_size shards have identical count
-            // n_i == reduce_width, so the EXACT parallel-Welford (Chan) combine collapses to
+            // Equal-count Welford (Chan) combine. All ring_size shards have identical count
+            // n_i == reduce_width, so the exact parallel-Welford combine collapses in closed
+            // form to:
             //   mean_g = mean(mean_i)
             //   var_g  = mean(var_i) + (1/K) Σ (mean_i - mean_g)^2
-            // The second term is the between-shard sum-of-squared-deviations / N -- computed
-            // here in the STABLE deviation form (Welford/Chan's delta identity), NOT the
-            // algebraically-equal-but-cancellation-prone mean(mean_i^2) - mean_g^2. So this is
-            // exactly Welford's parallel merge for equal counts, just in closed form: the
-            // per-shard M2 (var_i) stays additive and the cross-shard term squares the small
-            // deviations (mean_i - mean_g), never large means. The per-shard PRE Welford is
-            // unchanged. Replaces the sequential pairwise combine_welford_partials (~11 ops/
-            // shard, was 62.8% of LN compute) with FPU pairwise sums + one deviation-square
-            // per shard. Gathered CB interleaves [mean_0, var_0, mean_1, var_1, ...] (row 0),
-            // mean_i at 2i, var_i at 2i+1. Output [mean_g, 1/std] (row 0) -> combine_cb for the
-            // downstream transpose. legacy rsqrt matches the composite dit_layernorm baseline.
+            // The between-shard term uses the STABLE deviation form Σ(mean_i - mean_g)^2
+            // (squares only the small deviations), not the cancellation-prone
+            // mean(mean_i^2) - mean_g^2 -- numerically identical to Welford's pairwise merge.
+            // Gathered CB interleaves [mean_0, var_0, ...] (row 0): mean_i at 2i, var_i at 2i+1;
+            // output [mean_g, 1/std] (row 0) -> combine_cb for the downstream transpose. legacy
+            // rsqrt matches the composite dit_layernorm baseline.
             constexpr uint32_t DM = 0;   // Σ mean_i  -> mean_g
             constexpr uint32_t DV = 1;   // Σ var_i   -> 1/std
             constexpr uint32_t DMM = 2;  // Σ (mean_i - mean_g)^2
@@ -360,7 +353,6 @@ void kernel_main() {
             // (x-mean) -> *1/std -> [*weight] -> [+bias] -> output, so xmm /
             // intermediate / output CBs stay O(block_size). mean_cb / invstd_cb
             // (col 0) and weight_cb / bias_cb (whole-row) stay resident.
-            DeviceZoneScopedN("LN_BLKMAJOR");
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 // (x - mean) -> xmm_cb
                 cb_wait_front(input_cb, block_size);
@@ -464,7 +456,6 @@ void kernel_main() {
             // ===== Resident POST (shard fits L1) =====
             // Sub-phase A: x - mean (broadcast mean over feature cols) -> xmm_cb.
             {
-                DeviceZoneScopedN("LN_SUB_MEAN");
                 reconfig_data_format(input_cb, mean_cb);
                 pack_reconfig_data_format(xmm_cb);
                 sub_bcast_cols_init_short(input_cb, mean_cb);
@@ -487,7 +478,6 @@ void kernel_main() {
 
             // Sub-phase B: (x - mean) * (1/std) -> norm_result_cb.
             {
-                DeviceZoneScopedN("LN_MUL_INVSTD");
                 reconfig_data_format(xmm_cb, invstd_cb);
                 pack_reconfig_data_format(norm_result_cb);
                 mul_bcast_cols_init_short(xmm_cb, invstd_cb);
@@ -512,7 +502,6 @@ void kernel_main() {
 
             // Sub-phase C: * weight (gamma).
             if constexpr (has_weight != 0) {
-                DeviceZoneScopedN("LN_WEIGHT");
                 reconfig_data_format(norm_result_cb, weight_cb);
                 pack_reconfig_data_format(weight_result_cb);
                 if constexpr (per_token_weight != 0) {
@@ -546,7 +535,6 @@ void kernel_main() {
 
             // Sub-phase D: + bias (beta).
             if constexpr (has_bias != 0) {
-                DeviceZoneScopedN("LN_BIAS");
                 reconfig_data_format(weight_result_cb, bias_cb);
                 pack_reconfig_data_format(output_cb);
                 if constexpr (per_token_bias != 0) {

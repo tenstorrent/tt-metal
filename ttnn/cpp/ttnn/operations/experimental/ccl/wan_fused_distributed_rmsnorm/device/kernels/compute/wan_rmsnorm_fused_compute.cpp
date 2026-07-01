@@ -40,7 +40,6 @@
 #include "api/compute/transpose_wh.h"
 #include "api/compute/transpose_wh_dest.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     // === Compile-time args ===
@@ -190,7 +189,6 @@ void kernel_main() {
             // tried and does NOT help (the per-row reduce clobbers the math config, so
             // mul_tiles_init must re-run each row; it's FPU-throughput-bound, not
             // init-bound).
-            DeviceZoneScopedN("RMS_PRE");
             if constexpr (streaming_low_l1) {
                 // Streamed whole-row PRE (rows_in_chunk == 1, one group). Input
                 // arrives block by block from the reader's first pass; each
@@ -320,7 +318,6 @@ void kernel_main() {
 
         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
         {
-            DeviceZoneScopedN("RMS_AGWAIT");
             // Packed-AG path: the worker writer lands the ring gather in row-0 of the
             // transposed gathered CB; is_tp_1 fills the plain col-0 gathered CB locally.
             cb_wait_front(stats_reduce_src_cb, chunk_stats_tiles);
@@ -328,7 +325,6 @@ void kernel_main() {
 
         // -------- PHASE 3: POST — finalize normalization --------
         {
-            DeviceZoneScopedN("RMS_POST");
             for (uint32_t r = 0; r < rows_in_chunk; r++) {
                 const uint32_t row_base = r * num_tile_cols;
                 // Single shared cos/sin tile cursor: in broadcast RoPE the cos
@@ -342,7 +338,6 @@ void kernel_main() {
                 constexpr uint32_t post_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
                 constexpr uint32_t post_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
                 {
-                    DeviceZoneScopedN("P_NORM");
                     for (uint32_t g = 0; g < post_groups_per_row; g++) {
                         const uint32_t group_col_base = g * post_group_width;
                         const uint32_t group_abs_base = row_base + group_col_base;
@@ -365,7 +360,6 @@ void kernel_main() {
                             rsqrt_tile<use_legacy_rsqrt>(dst_idx);
                         };
                         {
-                            DeviceZoneScopedN("P_NRED");
                             if constexpr (per_head_norm != 0) {
                                 compute_kernel_lib::reduce<
                                     PoolType::AVG,
@@ -378,17 +372,15 @@ void kernel_main() {
                                     compute_kernel_lib::NoAccumulation{},
                                     eps_rsqrt);
                             } else if constexpr (stats_tiles_cols > 1) {
-                                // Candidate #3: sum the ring_size gathered partial-sum tiles
-                                // with an FPU eltwise add (dst-accumulate) instead of the
-                                // matmul-based reduce<AVG,REDUCE_ROW>. Each gathered tile
-                                // holds this device's per-token partial sum-of-squares in
-                                // col 0, so adding the tiles element-wise gives the full
-                                // per-token sum in col 0; then *1/H_full + eps + rsqrt on
-                                // dst (mirrors the eps_rsqrt post-op). Removing the matmul
-                                // eliminates the matmul->pack transition that wedges the
-                                // packer at multi-row-chunk x ring_size>1 (see the TP=2 hang
-                                // note in RMSNORM_FUSION_FINDINGS.md). stats_tiles_cols ==
-                                // ring_size == TP is always even (2/4/8).
+                                // Sum the ring_size gathered partial-sum tiles with an FPU
+                                // eltwise add (dst-accumulate) instead of the matmul-based
+                                // reduce<AVG,REDUCE_ROW>. Each gathered tile holds this device's
+                                // per-token partial sum-of-squares in col 0, so adding the tiles
+                                // element-wise gives the full per-token sum in col 0; then
+                                // *1/H_full + eps + rsqrt on dst (mirrors the eps_rsqrt post-op).
+                                // Removing the matmul eliminates the matmul->pack transition that
+                                // wedges the packer at multi-row-chunk x ring_size>1.
+                                // stats_tiles_cols == ring_size == TP is always even (2/4/8).
                                 // NB: this branch is `if constexpr (stats_tiles_cols > 1)`, but the
                                 // kernel is a plain function (constexpr CT args, not a template), so the
                                 // discarded branch is still semantically checked — hence the `== 1` exempt
@@ -486,7 +478,6 @@ void kernel_main() {
                         // below, so the standalone P_NMUL sub-phase is skipped (and
                         // reduce_result_cb stays resident for that loop to consume).
                         if constexpr (!block_major_post) {
-                            DeviceZoneScopedN("P_NMUL");
                             // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
                             reconfig_data_format(input_cb, reduce_result_cb);
                             pack_reconfig_data_format(mul_rms_result_cb);
@@ -555,7 +546,6 @@ void kernel_main() {
                             // end-of-chunk). reduce_result holds this head's 1/rms (front),
                             // popped after this head. Broadcast cos/sin are held resident
                             // across heads (cyclic index); popped once after the head loop.
-                            DeviceZoneScopedN("P_HEADMAJOR");
                             for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
                                 const uint32_t tiles_in_block = ((post_group_width - col_tile) >= block_size)
                                                                     ? block_size
@@ -723,7 +713,6 @@ void kernel_main() {
                     // O(block_size)). The aliases route the LAST affine sub-phase to
                     // output_cb when !fuse_rope, so the no-rope case needs no extra copy.
                     // reduce_result_cb (1/rms) is still at the front (P_NMUL skipped).
-                    DeviceZoneScopedN("P_BLKMAJOR");
                     uint32_t rope_cursor = 0;  // broadcast cos/sin cyclic index (mod head_dim_tiles)
                     for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                         // ---- x * (1/rms): input 2nd-pass block (streamed) -> mul_rms_result_cb ----
@@ -897,7 +886,6 @@ void kernel_main() {
                 }
 
                 if constexpr (has_weight && !block_major_post) {
-                    DeviceZoneScopedN("P_WEIGHT");
                     // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
                     // Broadcast weight (default): weight_cb holds num_tile_cols
                     // row-broadcast tiles pushed once per worker; we use
@@ -986,7 +974,6 @@ void kernel_main() {
                         // matmul<->rope reconfigs (the resident sub-phase-major path below is
                         // faster). fuse_mm_rope is only set when per_head_rope, so cos/sin are
                         // streamed: block-relative index, popped per block.
-                        DeviceZoneScopedN("P_MMROPE");
                         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                             const uint32_t tiles_in_block =
                                 (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
@@ -1050,7 +1037,6 @@ void kernel_main() {
                         }
                     } else {
                         {
-                            DeviceZoneScopedN("P_MM");
                             // ----- Sub-phase 3a: matmul(intermediate, trans_mat) → rotated -----
                             reconfig_data_format(transformation_mat_cb, intermediate_cb);
                             pack_reconfig_data_format(rotated_input_cb);
@@ -1095,7 +1081,6 @@ void kernel_main() {
                         }  // P_MM
 
                         {
-                            DeviceZoneScopedN("P_ROPE");
                             // ----- Fused RoPE finalize: out = x*cos + rotate(x)*sin -----
                             // FPU dst-accumulate. The first mul writes x*cos into dst;
                             // the second mul is initialized with acc_to_dest=true so the
