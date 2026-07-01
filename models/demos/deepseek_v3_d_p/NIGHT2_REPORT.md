@@ -170,3 +170,22 @@ test_kimi_prefill_transformer_chunked_trace_kv_pcc (11-chunk metadata trace, per
 - L61-chunks11: PASS min-over-asserted 0.993545, min-over-61 0.966851 (matches packed baseline ~0.967)
 => the per-element metadata + both read fixes work end-to-end, no hacks. Results in
 PER_ELEMENT_TENSOR_RESULTS.log. Continuing remaining Phase 3 (padded trace, runner, ring_mla perf).
+
+### Phase 3 runner + padded trace (2026-07-01)
+- padded trace: kimi L1 0.00e+00, kimi L10 4.75e-06 (traced metadata == untraced scalar). ds unavailable (weight cache not on box).
+- runner STANDALONE traced+PCC: kimi L10 min KV PCC 0.994096 PASS (prefill ~1959 ms/iter steady).
+All correctness levels (op / transformer / padded / runner) green with the per-element metadata + the two
+non-hack read fixes. Remaining: request-loop (producer+socket) + ring_mla perf.
+
+### Phase 3 COMPLETE (2026-07-01) — every correctness level green, no hacks
+- op equivalence: 15/15 (rotary, update_padded, zero_pad, ring_mla indexed+rotation)
+- transformer trace KV-PCC: L10 0.994096, L61 0.966851 (min-over-asserted 0.993545)
+- padded full-55k trace (traced==untraced): kimi L1 0.00e+00, kimi L10 4.75e-06
+- runner STANDALONE traced+PCC: 0.994096 (prefill ~1959 ms/iter)
+- runner REQUEST loop (producer+socket, 2-proc) traced+PCC: 0.994096
+- ring_mla microperf: PASS (scalar+metadata at kv 256/1024/5120)
+Results: models/demos/deepseek_v3_d_p/PER_ELEMENT_TENSOR_RESULTS.log (gitignored; content mirrored above).
+gotcha: `pkill -f prefill_runner` self-matches a shell whose cmdline contains that string (heredoc/echo) ->
+kills own shell; kill by PID or use a bracketed ps grep instead.
+Branch ppopovic/per_element_metadata; code fixes pushed at 7fb1f6f9111. Phases 4-6 (rebase onto main,
+multi-host port, per-op split) not yet started.
