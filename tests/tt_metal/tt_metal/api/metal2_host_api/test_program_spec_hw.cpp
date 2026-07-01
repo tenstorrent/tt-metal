@@ -1070,75 +1070,97 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 }
 
 // ============================================================================
-// Scratchpad + Common-Vararg CRTA Offset Under Partial Update (regression)
+// CRTA buffer: all four sections read at correct offsets — set + partial update (regression)
 // ============================================================================
 //
-// Regression guard for the "A1" bug: UpdateProgramRunArgs once computed the common-vararg base as
-// `named CRTAs + tensor_binding_section_words`, omitting the scratchpad section. The CRTA buffer
-// layout is four sections — [named | tensor bindings | scratchpads | varargs] — and both
-// SetProgramRunArgs and the device-side crta_layout.vararg_section_offset account for the scratchpad
-// words. So for a kernel with BOTH a scratchpad binding AND a common vararg, a partial
-// UpdateProgramRunArgs would write the vararg one word too early — into the scratchpad base-address
-// slot — leaving the device reading the stale vararg from the (correct) vararg offset. The fix
-// (program_run_args.cpp) adds scratchpad_section_words to the vararg base; this test pins it.
+// The common-runtime-arg (CRTA) buffer is laid out in four sections, in order:
+//     [ named CRTAs | tensor bindings | scratchpads | common varargs ]
+// Both the host (SetProgramRunArgs full assembly + UpdateProgramRunArgs in-place patch) and the
+// device-side generated header compute each section's offset independently, so a boundary miscomputed
+// on either side silently cross-contaminates regions — the classic sneaky offset bug. This generalizes
+// the "A1" regression (which carried only a scratchpad + one vararg): here ONE kernel carries ALL FOUR
+// sections at once, each with a distinct verifiable value, so any inter-section offset error surfaces
+// as one region reading another's word.
 //
-// Layout for the producer below: [0 named | 0 tensor bindings | 1 scratchpad | 1 vararg].
-//   - scratchpad base-address slot: CRTA word 0
-//   - common vararg slot:           CRTA word 1  (== vararg_section_offset)
+// A BRISC producer binds 2 named CRTAs + 1 tensor + 1 scratchpad + 2 common varargs (plus a DFB it
+// produces into). It reads one value from each section and stages all six into a DFB entry; an NCRISC
+// consumer drains the entry to DRAM for host inspection. The named/vararg values are distinct sentinels
+// (exact-checked); the tensor base and scratchpad base are real addresses (checked nonzero and mutually
+// distinct from every sentinel and each other — a mis-offset read of an address region would return a
+// sentinel or the other base).
 //
-// Sequence: SetProgramRunArgs (vararg = OLD), then UpdateProgramRunArgs (vararg = NEW), then
-// dispatch. The producer stages [get_common_vararg(0), scratch_base] into a DFB entry; the consumer
-// drains that entry to DRAM. The scratchpad is genuinely framework-allocated here, so scratch_base
-// is a real L1 address (not a sentinel). Host then checks:
-//   word 0 (vararg)       == NEW                      — the partial update reached the real vararg slot
-//   word 1 (scratch base) != NEW (and != OLD, != 0)  — the scratchpad slot was NOT clobbered, and
-//                                                       still holds a real allocated L1 address
-//
-// With the A1 bug the update writes NEW into CRTA word 0 (the scratchpad slot) instead of word 1, so
-// the device sees word 0 (vararg) == OLD and word 1 (scratch base) == NEW — both checks fail.
-TEST_F(ProgramSpecHWTest, ScratchpadCommonVarargPartialUpdate) {
+// Two phases:
+//   SET    — SetProgramRunArgs installs all four sections; verify every region reads its own value
+//            (the full-assembly offset math for all four sections).
+//   UPDATE — UpdateProgramRunArgs patches the named CRTAs + common varargs to NEW sentinels; verify the
+//            new values land AND the tensor-binding + scratchpad slots are untouched. The vararg base
+//            here is named + tensor-binding + scratchpad section words — the exact A1 sum, now with all
+//            three preceding sections non-empty (River's original had named=0, binding=0).
+TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     auto mesh_device = devices_.at(0);
     IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // bytes per DFB entry
     constexpr uint32_t num_entries = 4;    // DFB depth
-    constexpr uint32_t kOldVararg = 0x11111111u;
-    constexpr uint32_t kNewVararg = 0x22222222u;
+    constexpr uint32_t kScratchpadBytes = 64;
 
     const NodeCoord node{0, 0};
+
+    // Distinct, non-trivial sentinels: a wrong-offset read is detectable, and none looks like an L1/DRAM base.
+    constexpr uint32_t kNamed0Set = 0xA1A10000u;
+    constexpr uint32_t kNamed1Set = 0xB2B20000u;
+    constexpr uint32_t kVararg0Set = 0xC3C30000u;
+    constexpr uint32_t kVararg1Set = 0xD4D40000u;
+    constexpr uint32_t kNamed0Upd = 0xA1A1FFFFu;
+    constexpr uint32_t kNamed1Upd = 0xB2B2FFFFu;
+    constexpr uint32_t kVararg0Upd = 0xC3C3FFFFu;
+    constexpr uint32_t kVararg1Upd = 0xD4D4FFFFu;
 
     // Output buffer holds one DFB entry (single page → single bank).
     InterleavedBufferConfig dram_config{
         .device = device, .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
     auto output_buffer = CreateBuffer(dram_config);
 
-    ProgramSpec spec;
-    spec.name = "scratchpad_common_vararg_partial_update";
+    // Input tensor for the tensor-binding section (interleaved DRAM; only its base address is read here).
+    auto tensor_layout = TensorLayout(
+        DataType::BFLOAT16,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    auto tensor_spec = TensorSpec(Shape{1, 512}, tensor_layout);
+    MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
 
-    // Producer (BRISC): binds a scratchpad AND declares one common vararg — the exact combination
-    // that trips the A1 offset bug. Stages [common_vararg, scratch_base] into the DFB.
+    ProgramSpec spec;
+    spec.name = "crta_all_four_sections";
+
+    // Producer (BRISC): read one value from each CRTA section, stage all six into the DFB entry:
+    //   w[0]=named0  w[1]=named1  w[2]=tensor base  w[3]=scratch base  w[4]=vararg0  w[5]=vararg1
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
-    const uint32_t vararg_value = get_common_vararg(0);
-    Scratchpad<int32_t> pad(scratch::scratch);
+    const uint32_t named0 = get_arg(args::named0);
+    const uint32_t named1 = get_arg(args::named1);
+    TensorAccessor acc(tensor::io);
+    const uint32_t tensor_base = acc.get_bank_base_address();
+    Scratchpad<uint32_t> pad(scratch::pad);
     const uint32_t scratch_base = pad.get_base_address();
+    const uint32_t vararg0 = get_common_vararg(0);
+    const uint32_t vararg1 = get_common_vararg(1);
     DataflowBuffer buf(dfb::stage);
     buf.reserve_back(1);
     volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();
-    w[0] = vararg_value;
-    w[1] = scratch_base;
+    w[0] = named0; w[1] = named1; w[2] = tensor_base; w[3] = scratch_base; w[4] = vararg0; w[5] = vararg1;
     buf.push_back(1);
 }
 )"};
-    producer.advanced_options = KernelAdvancedOptions{.num_common_runtime_varargs = 1};
-    producer.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+    producer.runtime_arg_schema.common_runtime_arg_names = {"named0", "named1"};
+    producer.advanced_options = KernelAdvancedOptions{.num_common_runtime_varargs = 2};
+    producer.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    BindTensorParameterToKernel(producer, "io", "io");
 
-    // Consumer (NCRISC): drains the DFB entry to DRAM. Uses named RTAs so it can be re-supplied on
-    // the partial update below.
+    // Consumer (NCRISC): drain the staged entry to DRAM.
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
@@ -1163,61 +1185,87 @@ void kernel_main() {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
+    // enqueue_invariant so the UPDATE phase may omit it (retaining its bound tensor) — this also
+    // exercises the "invariant tensor retained across partial update" path.
+    spec.tensor_parameters = {TensorParameter{
+        .unique_id = TensorParamName{"io"},
+        .spec = tensor_spec,
+        .advanced_options = TensorParameterAdvancedOptions{.enqueue_invariant = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    // Initial full set: producer's common vararg = OLD; consumer's named RTAs point at the output.
+    // Consumer's per-node RTAs (re-supplied on every set/update — they are not enqueue-invariant).
+    auto consumer_args = [&]() {
+        return ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"consumer"},
+            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+        };
+    };
+
+    // Blocking launch, then read back the six staged words.
+    auto launch_and_read = [&]() {
+        detail::LaunchProgram(device, program);
+        std::vector<uint32_t> out;
+        detail::ReadFromBuffer(output_buffer, out);
+        EXPECT_GE(out.size(), 6u);
+        out.resize(6);
+        return out;
+    };
+
+    // ---- SET phase: install all four sections; every region must read its own value. ----
     ProgramRunArgs set_params;
     set_params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .advanced_options = AdvancedKernelRunArgs{.common_runtime_varargs = {kOldVararg}},
+            .common_runtime_arg_values = {{"named0", kNamed0Set}, {"named1", kNamed1Set}},
+            .advanced_options = AdvancedKernelRunArgs{.common_runtime_varargs = {kVararg0Set, kVararg1Set}},
         },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
-        },
+        consumer_args(),
     };
+    set_params.tensor_args = {{TensorParamName{"io"}, TensorArgument{io_tensor}}};
     SetProgramRunArgs(program, set_params);
 
-    // Partial update: refresh the producer's common vararg to NEW. This is the path that
-    // mis-computed the vararg base when a scratchpad section is present. The consumer's named per-node
-    // RTAs are not declared enqueue-invariant, so it is re-supplied unchanged; only the producer's
-    // CRTA buffer is relevant to the bug.
-    ProgramRunArgs update_params;
-    update_params.kernel_run_args = {
+    std::vector<uint32_t> s = launch_and_read();
+    const uint32_t tensor_base = s[2];
+    const uint32_t scratch_base = s[3];
+    EXPECT_EQ(s[0], kNamed0Set) << "named CRTA 0 read the wrong offset";
+    EXPECT_EQ(s[1], kNamed1Set) << "named CRTA 1 read the wrong offset";
+    EXPECT_EQ(s[4], kVararg0Set) << "common vararg 0 read the wrong offset (named+binding+scratchpad sum?)";
+    EXPECT_EQ(s[5], kVararg1Set) << "common vararg 1 read the wrong offset";
+    // The two address regions must be real and distinct from every sentinel and each other — a mis-offset
+    // read of either would surface here as a known sentinel or as the other base.
+    for (uint32_t sentinel : {kNamed0Set, kNamed1Set, kVararg0Set, kVararg1Set}) {
+        EXPECT_NE(tensor_base, sentinel) << "tensor-binding slot read a CRTA sentinel — section offset wrong";
+        EXPECT_NE(scratch_base, sentinel) << "scratchpad slot read a CRTA sentinel — section offset wrong";
+    }
+    EXPECT_NE(tensor_base, 0u);
+    EXPECT_NE(scratch_base, 0u);
+    EXPECT_NE(tensor_base, scratch_base) << "tensor-binding and scratchpad slots collided — section offset wrong";
+
+    // ---- UPDATE phase: partial-update named CRTAs + varargs; bindings/scratchpad must be untouched. ----
+    ProgramRunArgs upd_params;
+    upd_params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .advanced_options = AdvancedKernelRunArgs{.common_runtime_varargs = {kNewVararg}},
+            .common_runtime_arg_values = {{"named0", kNamed0Upd}, {"named1", kNamed1Upd}},
+            .advanced_options = AdvancedKernelRunArgs{.common_runtime_varargs = {kVararg0Upd, kVararg1Upd}},
         },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
-        },
+        consumer_args(),
     };
-    UpdateProgramRunArgs(program, update_params);
+    UpdateProgramRunArgs(program, upd_params);
 
-    detail::LaunchProgram(device, program);
-
-    std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(output_buffer, output_data);
-
-    ASSERT_GE(output_data.size(), 2u);
-    EXPECT_EQ(output_data[0], kNewVararg)
-        << "Partial UpdateProgramRunArgs must write the common vararg to the real vararg slot "
-           "(after the scratchpad section). A wrong base writes it into the scratchpad slot instead, "
-           "leaving the device reading the stale OLD vararg.";
-    // The scratchpad base-address slot must survive the partial update. The scratchpad is really
-    // allocated, so this slot holds a live L1 address — never the vararg value. With the A1 bug the
-    // update overwrites it with kNewVararg.
-    EXPECT_NE(output_data[1], kNewVararg)
-        << "Scratchpad base-address slot was clobbered by the common-vararg partial update — the "
-           "vararg base omitted the scratchpad section (A1 bug).";
-    EXPECT_NE(output_data[1], kOldVararg) << "Scratchpad base-address slot holds a stale vararg value, not an L1 base.";
-    EXPECT_NE(output_data[1], 0u)
-        << "Scratchpad base-address slot is 0 — the framework-allocated base was not delivered.";
+    std::vector<uint32_t> u = launch_and_read();
+    EXPECT_EQ(u[0], kNamed0Upd) << "partial update: named CRTA 0 landed at the wrong offset";
+    EXPECT_EQ(u[1], kNamed1Upd) << "partial update: named CRTA 1 landed at the wrong offset";
+    EXPECT_EQ(u[4], kVararg0Upd)
+        << "partial update: vararg 0 landed at the wrong offset — the vararg base must be "
+           "named + tensor-binding + scratchpad section words (the A1 sum, all three non-empty here).";
+    EXPECT_EQ(u[5], kVararg1Upd) << "partial update: vararg 1 landed at the wrong offset";
+    // Not touched by this update — must survive it (the A1 clobber guard, generalized).
+    EXPECT_EQ(u[2], tensor_base) << "tensor-binding slot was clobbered by the named/vararg partial update";
+    EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";
 }
 
 // ============================================================================
