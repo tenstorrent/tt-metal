@@ -93,7 +93,8 @@ Tensor group_norm(
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& negative_mask,
-    bool use_welford) {
+    bool use_welford,
+    bool synthesize_negative_mask) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -115,6 +116,14 @@ Tensor group_norm(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
+
+    TT_FATAL(
+        !(synthesize_negative_mask && negative_mask.has_value()),
+        "group_norm: synthesize_negative_mask=True is mutually exclusive with a caller-supplied negative_mask tensor.");
+    TT_FATAL(
+        !synthesize_negative_mask || input_tensor.is_sharded(),
+        "group_norm: synthesize_negative_mask=True is only supported for sharded inputs (the interleaved factories "
+        "have no negative-mask code path).");
 
     // The non-sharded (interleaved) group_norm only has a correct TILE-input /
     // TILE-output compute path. See #47972 and #48142
@@ -318,7 +327,8 @@ Tensor group_norm(
             beta,
             input_mask,
             negative_mask,
-            reciprocals);
+            reciprocals,
+            synthesize_negative_mask);
     }
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).

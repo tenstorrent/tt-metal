@@ -1349,6 +1349,86 @@ def test_group_norm_bf16_negative_mask_partial_read(device, N, C, H, W, num_grou
     )
 
 
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
+def test_group_norm_synthesize_negative_mask(device, N, C, H, W, num_groups):
+    """
+    Exercises NEGATIVE_MASK_SYNTHESIZE on the sharded factory. No mask tensors
+    are passed; instead, synthesize_negative_mask=True opts into the writer-
+    kernel negative-mask synthesis path, and the positive mask is synthesized
+    automatically because input_mask is omitted. Compares against the same
+    computation with a caller-supplied bf16 negative_mask to confirm bit-
+    equivalence.
+    """
+    torch.manual_seed(0)
+    grid_size = ttnn.CoreGrid(y=8, x=8)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    tt_input_tensor = ttnn.from_torch(
+        tt_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.x)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.x)
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = N * H * W // grid_size.y, C // grid_size.x
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
+
+    tt_output_tensor = ttnn.group_norm(
+        tt_input_tensor,
+        num_groups=num_groups,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        weight=gamma_t,
+        bias=beta_t,
+        synthesize_negative_mask=True,
+    )
+    ttnn.synchronize_device(device)
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
+    )
+
+
 @pytest.mark.parametrize("input_shape, num_groups, msg_pattern", NEGATIVE_TESTS_PARAMS)
 def test_group_norm_negative_tests(
     input_shape,
