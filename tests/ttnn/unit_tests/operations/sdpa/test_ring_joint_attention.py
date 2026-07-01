@@ -1,0 +1,537 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+import torch.nn.functional as F
+from loguru import logger
+from tracy.process_model_log import post_process_ops_log, run_device_profiler
+
+import ttnn
+from models.tt_dit.utils.padding import get_padded_vision_seq_len
+
+# Op-level tests for ttnn.transformer.ring_joint_scaled_dot_product_attention.
+# Shared helpers/configs/decorators live in the sibling ring_joint_sdpa_test_common
+# module; the per-arch nightly tests (t3000/tg/blackhole) consume the same helpers.
+from tests.ttnn.unit_tests.operations.sdpa.ring_joint_sdpa_test_common import (
+    create_ring_joint_sdpa_submesh,
+    run_ring_joint_sdpa,
+    run_test_ring_joint_sdpa,
+    benchmark_model_input_shapes,
+    parallel_config_map,
+    mesh_device_map,
+    get_parallel_config_id,
+    all_parallel_configs,
+    all_parallel_config_ids,
+    wh_t3k_unit_test_params,
+    bh_qb_ge_unit_test_params,
+    wh_glx_unit_test_params,
+    bh_glx_unit_test_params,
+)
+
+
+def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
+    scale = k.size(-1) ** -0.5
+    seq_len = k.size(2)
+    slice_seq_len = seq_len // num_devices
+    out = None
+    lse = None
+    lse_list = []
+    Q = torch.cat([q, joint_q], dim=2)
+    for ring_id in range(num_devices):
+        k_slice = k[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
+        v_slice = v[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
+        if ring_id == num_devices - 1:
+            k_slice = torch.cat([k_slice, joint_k], dim=2)
+            v_slice = torch.cat([v_slice, joint_v], dim=2)
+        attn_weights = torch.matmul(Q, k_slice.transpose(-2, -1)) * scale
+        cur_max, _ = torch.max(attn_weights, dim=-1, keepdim=True)
+        attn_weights = torch.exp(attn_weights - cur_max)
+        cur_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
+        cur_out = torch.matmul(attn_weights, v_slice)
+        cur_out = cur_out / cur_sum
+        cur_lse = cur_max + torch.log(cur_sum)
+        if ring_id == 0:
+            out = cur_out
+            lse = cur_lse
+        else:
+            sig = F.sigmoid(cur_lse - lse)
+            out = out - sig * (out - cur_out)
+            lse = lse - F.logsigmoid(lse - cur_lse)
+        lse_list.append(lse)
+
+    return out, lse_list
+
+
+@pytest.fixture(scope="function")
+def mesh_shape_or_skip(request):
+    """Skip test when requested mesh shape cannot be satisfied, without opening a mesh device."""
+    param = request.param
+
+    assert isinstance(param, tuple)
+    num_devices_requested = param[0] * param[1]
+
+    if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
+        pytest.skip(
+            f"Requested more devices {num_devices_requested} than available {ttnn.get_num_devices()}. Test not applicable for machine"
+        )
+
+    return param
+
+
+@pytest.mark.parametrize(
+    "model_input_shape",
+    benchmark_model_input_shapes.values(),
+    ids=benchmark_model_input_shapes.keys(),
+)
+@pytest.mark.parametrize("parallel_config", all_parallel_configs, ids=all_parallel_config_ids)
+@pytest.mark.parametrize("q_chunk_size", [64, 128, 256], ids=["q64", "q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512], ids=["k64", "k128", "k256", "k512"])
+@pytest.mark.parametrize(
+    "n_iters, trace_enabled, skip_check",
+    [(1, False, False), (1, False, True)],
+    ids=["no_trace_check", "no_trace_no_check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    mesh_device_map.values(),
+    ids=mesh_device_map.keys(),
+    indirect=["mesh_device"],
+)
+def test_ring_joint_sdpa(
+    mesh_device,
+    model_input_shape,
+    parallel_config,
+    q_chunk_size,
+    k_chunk_size,
+    n_iters,
+    trace_enabled,
+    num_links,
+    all_gather_topology,
+    skip_check,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        model_input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device_id, mesh_shape_or_skip",
+    [(k, v[0]) for k, v in mesh_device_map.items()],
+    ids=mesh_device_map.keys(),
+    indirect=["mesh_shape_or_skip"],
+)
+@pytest.mark.skip(
+    reason=(
+        "Calling pytest within pytest in ttnn is problematic right now. "
+        "The parent process maintains an open handle to the device which prevents the child process "
+        "from using the device, leading to deadlock. "
+        "TODO: This test should be re-enabled when functionality for releasing handles is exposed in ttnn "
+        "(currently this exists in C++ as release_ownership but does not exist in python at the moment). "
+        "Also, this test doesn't actually test anything so maybe we need to actually do some assertions that might make sense here."
+    )
+)
+def test_ring_joint_sdpa_perf_table(mesh_device_id, mesh_shape_or_skip):
+    results = []
+    for model_input_id, model_input_shape in benchmark_model_input_shapes.items():
+        parallel_config = parallel_config_map[mesh_device_id][model_input_id]
+        rp_axis, rp_factor, up_axis, up_factor = parallel_config
+        parallel_name = get_parallel_config_id(rp_factor, up_factor)
+        k_expr = f"{model_input_id} and {parallel_name} and {mesh_device_id} and no_trace_no_check"
+        command = f"-m 'pytest tests/ttnn/unit_tests/operations/sdpa/test_ring_joint_attention.py::test_ring_joint_sdpa -k \"{k_expr}\"'"
+
+        run_device_profiler(
+            command,
+            "ring_joint_sdpa",
+            check_test_return_code=False,
+            device_analysis_types=["device_kernel_duration"],
+            is_command_binary_exe=True,
+        )
+        r = post_process_ops_log("ring_joint_sdpa", sum_vals=False, has_signposts=False)
+        attrs = r["ATTRIBUTES"].tolist()
+        durations = r["DEVICE KERNEL DURATION [ns]"].tolist()
+        result = sorted(zip(durations, attrs), key=lambda x: x[0])[0]
+        best_duration, best_attrs = result
+        results.append([model_input_shape, model_input_id, parallel_name, best_duration, best_attrs])
+
+    header = "| model_input_id | model_input_shape | parallel_name | padded seq | qchunk, kchunk | measured perf (ms) |"
+    sep = "|---:|---:|---:|---:|---:|---:|"
+    print(header)
+    print(sep)
+    for result in results:
+        model_input_shape, model_input_id, parallel_name, duration, attrs = result
+        q_chunk = attrs.split("q_chunk_size=")[1].split(";")[0]
+        k_chunk = attrs.split("k_chunk_size=")[1].split(";")[0]
+        new_seqlen = get_padded_vision_seq_len(int(model_input_shape[2]), rp_factor)
+        print(
+            f"| {model_input_id} | {model_input_shape} | {parallel_name} | {new_seqlen} | {q_chunk}, {k_chunk} | {duration / 1e6:.3f} |"
+        )
+
+
+model_input_shapes = [
+    # original smoke cases
+    (1, 24, 4096, 512, 128),  # padded-divisible spatial, joint > 0
+    (1, 38, 4096, 333, 64),  # many heads, smaller head dim, uneven joint
+    (1, 24, 4224, 128, 128),  # N not divisible by chunk, moderate joint
+    (1, 2, 3072, 0, 128),  # small head count, no joint
+    (1, 2, 4000, 2, 128),  # tiny joint, near-multiple-of-chunk
+    # additional stress cases
+    (1, 24, 8192, 0, 128),  # long sequence, no joint
+    (1, 24, 8200, 64, 128),  # long, non-multiple N, small joint
+    (1, 16, 1024, 256, 128),  # mid length, significant joint
+    (1, 16, 1056, 128, 64),  # mid length, smaller head dim
+    (1, 8, 2048, 0, 256),  # wider head dim
+    (1, 8, 2176, 128, 128),  # mid length, non-multiple, modest joint
+    (1, 4, 512, 64, 128),  # short length with joint
+    (1, 4, 4096, 128, 128),
+    (1, 2, 256, 16, 64),  # minimal heads/dim
+]
+
+model_input_ids = [
+    "wan_14b_720p",
+    "wan_14b_480p",
+    "wan_5b_720p",
+    "mochi",
+    "flux",
+    "long_no_joint",
+    "long_unaligned_joint",
+    "mid_joint",
+    "mid_small_d",
+    "wide_d",
+    "mid_unaligned_joint",
+    "short_joint",
+    "batch2",
+    "tiny_head",
+]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "b, nh, base_seq_len, joint_seq_len, d",
+    model_input_shapes,
+    ids=model_input_ids,
+)
+@pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 256], ids=["q32", "q64", "q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 256], ids=["k32", "k64", "k128", "k256"])
+@pytest.mark.parametrize(
+    "n_iters, trace_enabled, skip_check",
+    [
+        (1, False, False),
+    ],
+    ids=["no_trace"],
+)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(2, 4)],
+    ids=["2x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, rp_factor, up_axis, up_factor",
+    [
+        [1, 4, 0, 2],
+    ],
+    ids=[
+        "4rpx2up",
+    ],
+)
+def test_ring_joint_sdpa_shapes(
+    mesh_device,
+    b,
+    nh,
+    base_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
+    all_gather_topology,
+    skip_check,
+    reset_seeds,
+):
+    mesh_device_shape = list(mesh_device.shape)
+    if not (mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor):
+        pytest.skip(
+            f"Mesh shape {mesh_device.shape} cannot satisfy parallel config "
+            f"rp_axis={rp_axis} rp_factor={rp_factor}, up_axis={up_axis} up_factor={up_factor}"
+        )
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
+
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        0.999,
+    )
+
+
+@wh_t3k_unit_test_params
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_t3k"]], ids=["2x4"], indirect=["mesh_device"])
+def test_ring_joint_sdpa_dit_wh_t3k(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold, max_mse = expected_correctness
+    q_chunk_size, k_chunk_size = chunk_sizes
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+        pcc_threshold=pcc_threshold,
+        max_mse=max_mse,
+    )
+
+
+@bh_qb_ge_unit_test_params
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_qb_ge"]], ids=["2x2"], indirect=["mesh_device"])
+def test_ring_joint_sdpa_dit_bh_qb_ge(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold, max_mse = expected_correctness
+    q_chunk_size, k_chunk_size = chunk_sizes
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+        pcc_threshold=pcc_threshold,
+        max_mse=max_mse,
+    )
+
+
+@wh_glx_unit_test_params
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.skipif(
+    ttnn.cluster.get_cluster_type() not in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG),
+    reason="test_ring_joint_sdpa_dit_wh_glx requires a Wormhole Galaxy (6U/TG) cluster",
+)
+def test_ring_joint_sdpa_dit_wh_glx(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold, max_mse = expected_correctness
+    q_chunk_size, k_chunk_size = chunk_sizes
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+        pcc_threshold=pcc_threshold,
+        max_mse=max_mse,
+    )
+
+
+@bh_glx_unit_test_params
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.skipif(
+    ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    reason="test_ring_joint_sdpa_dit_bh_glx requires a Blackhole Galaxy cluster",
+)
+def test_ring_joint_sdpa_dit_bh_glx(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold, max_mse = expected_correctness
+    q_chunk_size, k_chunk_size = chunk_sizes
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+        pcc_threshold=pcc_threshold,
+        max_mse=max_mse,
+    )
