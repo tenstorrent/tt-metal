@@ -133,7 +133,7 @@ public:
         frequency_validated_ = true;
         return true;
     }
-
+// TODO: Fix Eth Heartbeat Failures --> https://github.com/tenstorrent/tt-metal/issues/45740
     // Validate fabric ethernet link health before running performance benchmarks.
     //
     // Bandwidth microbenchmarks measure cycles-to-move-bytes at a clock that is already gated to
