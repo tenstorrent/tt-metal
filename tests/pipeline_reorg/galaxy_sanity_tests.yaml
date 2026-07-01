@@ -27,6 +27,7 @@
     pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "Wan_shape_17 and check" --timeout=300
     pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "medium_5d_h0w1 and general_4x8_1link" --timeout=300
 
+    # TODO: Enable these tests once Fabric Manager is ready
     # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
     # ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
     # pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_combine_fabric_manager_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_manager_enabled_2d]" --timeout=300

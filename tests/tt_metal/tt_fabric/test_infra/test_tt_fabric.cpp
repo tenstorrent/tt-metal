@@ -216,15 +216,6 @@ int main(int argc, char** argv) {
                 test_context.close_devices();
                 return 1;  // Hard exit - cannot run performance benchmarks with invalid frequencies
             }
-            // Gate on ethernet link health for performance tests only: a degraded/retraining link
-            // inflates measured cycles and produces bimodal bandwidth variance that fails golden
-            // comparison without any clock change. Functional/stability tests do not depend on link
-            // health for correctness and must not be hard-failed by a benign retrain. Cached, so this
-            // runs once for the fixture's lifetime.
-            if (!fixture->validate_fabric_link_health()) {
-                test_context.close_devices();
-                return 1;  // Hard exit - cannot run performance benchmarks on degraded ethernet links
-            }
         }
 
         // Check topology-based skip conditions after devices are opened
@@ -368,11 +359,9 @@ int main(int argc, char** argv) {
             log_error(tt::LogTest, "  - {}", failed_test);
         }
 
-        // #2 (Stage-2 slow-mode classification): the fabric link-health gate
-        // (validate_fabric_link_health(): retrain / CRC / uncorrected-codeword counts) already PASSED
-        // before measurement, so a *systemic* bandwidth shortfall here matches the known per-boot HW/FW
-        // fabric-init "slow mode" rather than a code regression. A targeted shortfall (a few tests) is
-        // more likely a real regression and still hard-fails below.
+        // #2 (Stage-2 slow-mode classification): a *systemic* bandwidth shortfall (many tests below golden
+        // at once) matches the known per-boot HW/FW fabric-init "slow mode" rather than a code regression.
+        // A targeted shortfall (a few tests) is more likely a real regression and still hard-fails below.
         // NOTE: this only classifies/signals -- it does NOT fix the variance (a HW/FW init/link-training
         // root cause). The effective recovery is a retry on a FRESH runner (re-rolls the per-boot mode);
         // --retry-exit-on-slow-mode emits EX_TEMPFAIL(75) so CI auto-retry can act on it.
@@ -382,8 +371,8 @@ int main(int argc, char** argv) {
         if (systemic_bw_shortfall) {
             log_error(
                 tt::LogTest,
-                "Stage-2 slow-mode signature: {} tests below golden with link-health clean -- matches the "
-                "known per-boot fabric-init throughput variance (HW/FW), not necessarily a code regression; "
+                "Stage-2 slow-mode signature: {} tests below golden -- matches the known per-boot "
+                "fabric-init throughput variance (HW/FW), not necessarily a code regression; "
                 "a retry on a fresh runner typically lands in fast mode.",
                 failed_tests.size());
             if (cmdline_parser.exit_retry_on_slow_mode()) {

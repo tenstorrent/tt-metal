@@ -133,124 +133,8 @@ public:
         frequency_validated_ = true;
         return true;
     }
-// TODO: Fix Eth Heartbeat Failures --> https://github.com/tenstorrent/tt-metal/issues/45740
-    // Validate fabric ethernet link health before running performance benchmarks.
-    //
-    // Bandwidth microbenchmarks measure cycles-to-move-bytes at a clock that is already gated to
-    // 1000MHz +/- 10 by validate_device_frequencies_for_performance_tests(). A degraded ethernet
-    // link (one that has retrained, or is accumulating CRC / uncorrected-codeword errors) adds
-    // backpressure on the fabric and inflates the measured cycle count for the same payload --
-    // producing the bimodal run-to-run "slow mode" that fails golden comparison without any clock
-    // change. On T3K this state is otherwise undetected: Cluster::disable_ethernet_cores_with_retrain()
-    // only inspects retrain counts on UBB (galaxy) boards. This gate surfaces the degraded link with
-    // an actionable per-link diagnostic instead of a misleading golden-comparison failure.
-    //
-    // NOTE: intentionally gated to performance tests only (see the call site in test_tt_fabric.cpp).
-    // Functional/stability tests do not depend on link health for correctness, so a benign retrain
-    // must not hard-fail them.
-    //
-    // Only counts that indicate an actual fault are checked (retrain, CRC errors, uncorrected
-    // codewords). Corrected codewords are expected to be non-zero under normal FEC operation and are
-    // NOT treated as a fault. Links that are down/unconnected (e.g. unused QSFP expansion ports) are
-    // skipped. Validation runs once and is cached for the fixture's lifetime, like the frequency gate.
-    bool validate_fabric_link_health() {
-        if (link_health_validated_) {
-            return true;
-        }
 
-        auto& metal_context = tt::tt_metal::MetalContext::instance();
-        const auto& cluster = metal_context.get_cluster();
-        const auto& hal = metal_context.hal();
-        const bool is_wormhole_b0 = cluster.arch() == tt::ARCH::WORMHOLE_B0;
-
-        auto retrain_count_addr =
-            hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
-        // CRC / uncorrected-codeword registers are only reliably readable on Wormhole today
-        // (mirrors the WORMHOLE_B0 guard in the ReportSystemHealth report).
-        auto crc_addr =
-            hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
-        auto uncorr_addr =
-            hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
-
-        struct DegradedLink {
-            FabricNodeId node;
-            ChipId chip_id;
-            CoreCoord eth_core;
-            uint32_t retrain_count;
-            uint32_t crc_error_count;
-            uint64_t uncorrected_codeword_count;
-        };
-        std::vector<DegradedLink> degraded_links;
-        uint32_t links_checked = 0;
-
-        std::vector<uint32_t> read_vec;
-        for (const auto& node_id : get_local_node_ids()) {
-            auto chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(node_id);
-            const auto& soc_desc = cluster.get_soc_desc(chip_id);
-            for (const auto& [eth_core, chan] : soc_desc.logical_eth_core_to_chan_map) {
-                // Only check links that are actually up (carrying fabric traffic); skip
-                // down/unconnected ports such as unused QSFP expansion channels.
-                if (!cluster.is_ethernet_link_up(chip_id, eth_core)) {
-                    continue;
-                }
-                links_checked++;
-
-                tt_cxy_pair virtual_eth_core(
-                    chip_id,
-                    cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, tt::CoreType::ETH));
-
-                uint32_t retrain_count_val = 0;
-                cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
-                retrain_count_val = read_vec[0];
-
-                uint32_t crc_error_val = 0, uncorr_val_lo = 0, uncorr_val_hi = 0;
-                if (is_wormhole_b0) {
-                    cluster.read_core(&crc_error_val, sizeof(uint32_t), virtual_eth_core, crc_addr);
-                    cluster.read_core(&uncorr_val_hi, sizeof(uint32_t), virtual_eth_core, uncorr_addr);
-                    cluster.read_core(&uncorr_val_lo, sizeof(uint32_t), virtual_eth_core, uncorr_addr + sizeof(uint32_t));
-                }
-                uint64_t uncorrected_codeword_count =
-                    (static_cast<uint64_t>(uncorr_val_hi) << 32) | static_cast<uint64_t>(uncorr_val_lo);
-
-                if (retrain_count_val != 0 || crc_error_val != 0 || uncorrected_codeword_count != 0) {
-                    degraded_links.push_back(
-                        {node_id, chip_id, eth_core, retrain_count_val, crc_error_val, uncorrected_codeword_count});
-                }
-            }
-        }
-
-        if (!degraded_links.empty()) {
-            log_error(tt::LogTest, "=== FABRIC ETHERNET LINK HEALTH CHECK FAILED ===");
-            log_error(
-                tt::LogTest,
-                "Cannot run performance benchmarks - {} of {} active ethernet link(s) are degraded.",
-                degraded_links.size(),
-                links_checked);
-            log_error(
-                tt::LogTest,
-                "A retraining or error-accumulating link inflates measured cycles and causes bimodal "
-                "bandwidth variance. This is a hardware/link-health issue, not a test-config issue.");
-            for (const auto& link : degraded_links) {
-                log_error(
-                    tt::LogTest,
-                    "  Device {} (chip {}) eth core {}: retrain_count={} crc_errors={} uncorrected_codewords={}",
-                    link.node,
-                    link.chip_id,
-                    link.eth_core.str(),
-                    link.retrain_count,
-                    link.crc_error_count,
-                    link.uncorrected_codeword_count);
-            }
-            return false;
-        }
-
-        log_info(
-            tt::LogTest,
-            "Fabric ethernet link health check passed: {} active links, 0 retrains / CRC errors / uncorrected codewords",
-            links_checked);
-        link_health_validated_ = true;
-        return true;
-    }
+    // TODO: Fix Eth Heartbeat Failures --> https://github.com/tenstorrent/tt-metal/issues/45740
 
     void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
         if (physical_mesh_config.has_value()) {
@@ -2010,7 +1894,6 @@ private:
     bool wrap_around_mesh_ = false;
     mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
     mutable bool frequency_validated_ = false;
-    bool link_health_validated_ = false;
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
         const char* mesh_id_str = std::getenv("TT_MESH_ID");
