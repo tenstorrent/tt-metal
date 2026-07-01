@@ -145,7 +145,7 @@ void kernel_main() {
     tile_regs_release();
     cb_c2c_ones_tile.push_back(1);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_s2c_in2_id);
 
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2_id);

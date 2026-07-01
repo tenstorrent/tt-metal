@@ -314,13 +314,6 @@ void kernel_main() {
     CircularBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
     CircularBuffer cb_remote_counts(remote_counts_cb_id);
 
-    // Endpoints (for TensorAccessor-based reads/writes)
-    UnicastEndpoint mapping_tensor_endpoint(mapping_tensor_addr_gen);
-    UnicastEndpoint input_tensor_endpoint(input_tensor_addr_gen);
-    UnicastEndpoint expert_activation_output_endpoint(expert_activation_output_tensor_addr_gen);
-    UnicastEndpoint per_expert_total_tokens_output_endpoint(per_expert_total_tokens_output_tensor_addr_gen);
-    UnicastEndpoint e_t_output_endpoint(e_t_output_tensor_addr_gen);
-
     // Constants
     constexpr uint32_t one_page = 1;
 
