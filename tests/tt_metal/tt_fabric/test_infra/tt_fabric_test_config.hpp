@@ -335,9 +335,6 @@ public:
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
-    // --no-golden-gate (#5): measure + emit BW data but do not hard-fail on golden comparison
-    // (for profiler/Tracy builds whose ~10% overhead cannot meet the non-profiler golden).
-    bool no_golden_gate();
     // --retry-exit-on-slow-mode (#2): on a systemic BW shortfall with clean link-health, exit 75
     // (EX_TEMPFAIL) to signal a CI runner retry instead of a hard golden-comparison failure.
     bool exit_retry_on_slow_mode();
