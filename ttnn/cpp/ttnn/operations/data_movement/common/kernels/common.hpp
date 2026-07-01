@@ -309,19 +309,28 @@ FORCE_INLINE void noc_async_write_sharded(
     }
 }
 
+// QSR: previously a self/loopback NOC write (destination page resolves to the issuing core's own L1)
+// was routed through a CPU L1->L1 copy to dodge the craq-sim sub-tile DFB credit bug. That bug is now
+// fixed in the sim (TTSIM_QSR_SUBTILE_AUTOPOST_FIX: sub-tile transfers no longer auto-credit a whole
+// tile), so a plain NOC self-write is credited correctly. Kept as a thin wrapper so call sites are
+// unchanged.
+template <typename AddrGenType>
+FORCE_INLINE void qsr_async_write_page(
+    Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t page_id, uint32_t offset, uint32_t size) {
+    noc.async_write(CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = page_id, .offset_bytes = offset});
+}
+
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_write_sharded(
     Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
     if constexpr (AddrGenType::DSpec::is_interleaved) {
-        noc.async_write(
-            CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
+        qsr_async_write_page(noc, l1_addr, tensor, dest_id, offset, size);
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
         const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
         if (pages_per_row <= 1) {
-            noc.async_write(
-                CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
+            qsr_async_write_page(noc, l1_addr, tensor, dest_id, offset, size);
             return;
         }
         const uint32_t page_size = tensor.get_aligned_page_size();
@@ -330,12 +339,7 @@ FORCE_INLINE void noc_async_write_sharded(
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         for (uint32_t i = 0; i < num_pages; i++) {
             uint32_t write_size = std::min(size - i * page_size, page_size - sharded_offset);
-            noc.async_write(
-                CoreLocalMem<uint32_t>(l1_addr),
-                tensor,
-                write_size,
-                {},
-                {.page_id = sharded_dest_id, .offset_bytes = sharded_offset});
+            qsr_async_write_page(noc, l1_addr, tensor, sharded_dest_id, sharded_offset, write_size);
             sharded_dest_id++;
             sharded_offset = 0;
             l1_addr += write_size;
@@ -371,18 +375,28 @@ FORCE_INLINE void noc_async_read_sharded(
     }
 }
 
+// QSR: previously a self/loopback NOC read (source page resolves to the issuing core's own L1) was
+// routed through a CPU L1->L1 copy to dodge the craq-sim sub-tile DFB credit bug (the sim could not
+// match a sub-tile self-read to a tile slot -> event=post-no-match -> lost producer credit -> consumer
+// UPAW / reader RBW). That bug is now fixed in the sim (TTSIM_QSR_SUBTILE_AUTOPOST_FIX), so a plain NOC
+// self-read is credited correctly. Kept as a thin wrapper so call sites are unchanged.
+template <typename AddrGenType>
+FORCE_INLINE void qsr_async_read_page(
+    Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t page_id, uint32_t offset, uint32_t size) {
+    noc.async_read(tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = page_id, .offset_bytes = offset}, {});
+}
+
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_read_sharded(
     Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t src_id, uint32_t offset, uint32_t size) {
     if constexpr (AddrGenType::DSpec::is_interleaved) {
-        noc.async_read(tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});
+        qsr_async_read_page(noc, l1_addr, tensor, src_id, offset, size);
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
         const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
         if (pages_per_row <= 1) {
-            noc.async_read(
-                tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});
+            qsr_async_read_page(noc, l1_addr, tensor, src_id, offset, size);
             return;
         }
         const uint32_t page_size = tensor.get_aligned_page_size();
@@ -391,12 +405,7 @@ FORCE_INLINE void noc_async_read_sharded(
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         for (uint32_t i = 0; i < num_pages; i++) {
             uint32_t read_size = std::min(size - i * page_size, page_size - sharded_offset);
-            noc.async_read(
-                tensor,
-                CoreLocalMem<uint32_t>(l1_addr),
-                read_size,
-                {.page_id = sharded_src_id, .offset_bytes = sharded_offset},
-                {});
+            qsr_async_read_page(noc, l1_addr, tensor, sharded_src_id, sharded_offset, read_size);
             sharded_src_id++;
             sharded_offset = 0;
             l1_addr += read_size;
