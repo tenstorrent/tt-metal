@@ -375,6 +375,15 @@ def _upsample_nearest_axis1(x_nlc: ttnn.Tensor, *, scale: int, memory_config: tt
 # module
 # ---------------------------------------------------------------------------
 
+# L1-resident loop guard. The upsample/resblock loop keeps activations in interleaved L1 only when a
+# conservative estimate of its peak footprint fits; otherwise it falls back to DRAM (long utterances
+# would overflow L1). ``_LOOP_L1_CONCURRENCY`` is the worst-case count of full-size activations live
+# at the peak (final stage: the stage ``x``, the noise ``x_source``, the resblock accumulator + the
+# current resblock output + its internal intermediate); ``_LOOP_L1_USABLE_FRACTION`` reserves the
+# rest of usable L1 for conv working buffers (halo / sharded blocks) and fragmentation.
+_LOOP_L1_CONCURRENCY = 10
+_LOOP_L1_USABLE_FRACTION = 0.35
+
 
 class TTGenerator:
     """TTNN port of ``Generator`` (``TorchSTFT`` only).
@@ -490,6 +499,33 @@ class TTGenerator:
         ttnn.deallocate(har_bct)
         return har_nlc
 
+    def _loop_l1_safe(self, batch: int, activ_dtype) -> bool:
+        """Whether the upsample/resblock loop's peak L1 footprint is safe to keep resident.
+
+        Peak activations occur at the final upsample stage: length ``time_len_x * prod(upsample_rates)``
+        with the last stage's (smallest) channel count, and several such tensors are live at once. The
+        loop stays L1-resident only when a conservative multiple of that peak fits the device's usable
+        interleaved L1; otherwise it uses DRAM (prevents OOM on long inputs). The harmonic/STFT path is
+        unaffected — it always uses the caller's ``memory_config``.
+        """
+        p = self.params
+        up = 1
+        for r in p.upsample_rates:
+            up *= int(r)
+        l_final = int(p.time_len_x) * up
+        c_last = int(p.stages[-1].resblocks[0].channels)
+
+        def _tile(n: int) -> int:
+            return ((n + 31) // 32) * 32
+
+        elem_bytes = 4 if activ_dtype == ttnn.float32 else 2
+        peak_bytes = _LOOP_L1_CONCURRENCY * batch * _tile(l_final) * _tile(c_last) * elem_bytes
+
+        per_core = ttnn.get_max_worker_l1_unreserved_size()
+        grid = self.device.compute_with_storage_grid_size()
+        usable = per_core * int(grid.x) * int(grid.y)
+        return peak_bytes < _LOOP_L1_USABLE_FRACTION * usable
+
     def forward(
         self,
         x_nlc: ttnn.Tensor,
@@ -512,10 +548,6 @@ class TTGenerator:
         """
         p = self.params
         ck = self.compute_kernel_config
-        # Upsample/resblock loop runs in L1 when opted in (see ``activations_in_l1``); the harmonic
-        # source / STFT path always uses the caller's ``memory_config``. When the flag is off,
-        # ``activ_mc == memory_config`` and the path is byte-for-byte the original behaviour.
-        activ_mc = ttnn.L1_MEMORY_CONFIG if self._activations_in_l1 else memory_config
 
         har_nlc = self._harmonic_source_path(
             f0,
@@ -526,6 +558,13 @@ class TTGenerator:
         )
 
         target_dtype = har_nlc.dtype
+        # Upsample/resblock loop runs in L1 when opted in AND its peak footprint fits (see
+        # ``_loop_l1_safe``); the harmonic source / STFT path always uses the caller's
+        # ``memory_config``. When the loop uses ``memory_config`` (flag off or footprint too large)
+        # the path is byte-for-byte the original behaviour.
+        use_l1 = self._activations_in_l1 and self._loop_l1_safe(int(x_nlc.shape[0]), target_dtype)
+        activ_mc = ttnn.L1_MEMORY_CONFIG if use_l1 else memory_config
+
         if x_nlc.dtype != target_dtype:
             x_cast = ttnn.typecast(x_nlc, target_dtype, memory_config=activ_mc)
             x = x_cast

@@ -363,6 +363,9 @@ class TTAdaIN1d:
                 style_bs, c, compute_kernel_config=compute_kernel_config, memory_config=memory_config
             )
             act_dtype = y.dtype
+            # Cast coef/shift to the activation dtype in a dedicated typecast rather than packing them
+            # straight out of the style matmul: the matmul packer's fp32→bf16 rounding differs from
+            # ttnn.typecast and measurably lowers pipeline PCC (0.99592 → 0.99530), so keep the cast.
             if coef.dtype != act_dtype:
                 coef = _cast_to_dtype(coef, act_dtype, memory_config=memory_config)
                 shift = _cast_to_dtype(shift, act_dtype, memory_config=memory_config)
