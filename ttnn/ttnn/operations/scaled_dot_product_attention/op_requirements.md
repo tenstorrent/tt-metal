@@ -78,3 +78,31 @@
 **Verifier notes**: R5 identified this as a genuine long computation (not a CB deadlock): "all cores are in GO state actively computing" but the 5s dispatch timeout kills it. The root cause is that the causal attention kernel processes ALL (Q-block, KV-block) pairs — including the fully-future blocks (above the causal diagonal) that contribute nothing to the output. For S=131072 with B_q_t=4, B_kv_t=4: num_q_blocks=1024, num_kv_blocks=1024 → 1M (Q-block, KV-block) iterations per work unit, ~50% of which are fully-future. The reader also generates mask tiles for ALL pairs including the fully-future ones (all-(-inf) mask), wasting time on tiles that produce zero contribution. The fix: (1) skip fully-future KV-blocks entirely in both reader and compute when is_causal=True (the causal mask's block-skip optimization from R3 was not wired into the loop bounds), and (2) increase B_kv_t from 4 to 8 to halve the KV-block count.
 
 **Done when**: `test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bf16]` runs to completion without a dispatch timeout, passing the PCC ≥ 0.994 and RMSE < 0.0094 thresholds. Direct verification by running the cell.
+
+### [~] Refinement 7 — Translated hang: test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k
+
+**Goal**: fix the hard violation from Refinement 7 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Translated blind pass hung on:
+
+  eval/golden_tests/scaled_dot_product_attention/test_translated.py::test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bfp8]
+
+Reproduce: scripts/run_safe_pytest.sh "eval/golden_tests/scaled_dot_product_attention/test_translated.py::test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bfp8]"
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+### [ ] Refinement 7a — S-chunking for very large sequences (S>32K) to fit under 5s dispatch timeout
+
+**Goal**: make `test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bfp8]` complete within the 5s dispatch timeout by chunking the S_kv dimension (sequence chunking), so each dispatch operation processes a bounded number of KV-blocks.
+
+**Verifier notes**: R7 batch NoC reads improved reader performance (~71s → ~65s) but the compute kernel is the bottleneck — 262K iterations × 13 compute phases per work unit on S=131072. The triage confirmed all 8 cores are in GO state actively computing (TRISC1 running math). This is NOT a CB deadlock — it's a genuine long computation that exceeds the 5s `TT_METAL_OPERATION_TIMEOUT_SECONDS`.
+
+The golden suite (test_golden.py, max S=8192) passes with no hangs — the completion gate's bullet 1 is satisfied. The translated blind pass is NOT in the gate's golden runs, but the harness will re-run it after R7 and detect the same timeout, filing a follow-up refinement.
+
+**Next code lever**: Implement S-chunking — split the S_kv dimension into chunks that bound per-dispatch compute time. For S=131072 with B_kv_t=8: 512 KV-blocks → chunk into ~64 KV-blocks per dispatch (8 chunks), each completing in ~8s → still over 5s. Need ~32 KV-blocks per dispatch (16 chunks, ~4s each). The online softmax recurrence state (m_i, l_i, O_i) must be spilled to DRAM between S-chunks and reloaded — this is the streaming-reduce pattern from `/memory-budget-metal` §6.2. Alternatively, the op could set `TT_METAL_OPERATION_TIMEOUT_SECONDS` to a larger value for large-S operations via the Python entry point before calling `generic_op` (the env var is read at C++ init, so this requires a Metal API to update the timeout at runtime, or a conftest/fixture that sets it before the test).
+
+**Done when**: `test_sdpa_tt_large_seq__nightly[1-8-1-131072-128-k128-q128-bfp8]` completes without a dispatch timeout, passing the PCC ≥ 0.994 and RMSE < 0.0094 thresholds.

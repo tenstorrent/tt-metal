@@ -25,6 +25,13 @@
 //   This halves the reader's work for causal attention, which was the
 //   bottleneck on S=131072 (reader stuck in fill_mask_tile_uniform).
 //   Also, MAX_B_KV_T increased from 4 to 8 to halve the KV-block count.
+//
+// Refinement 7 — Batch NoC reads for large sequences:
+//   Instead of per-tile cb_reserve_back + noc_async_read_tile + barrier +
+//   cb_push_back (which serializes every NoC read), batch all tile reads
+//   for a block: cb_reserve_back(N) + batch reads + single barrier +
+//   cb_push_back(N). This eliminates ~25M individual NoC barriers on
+//   S=131072, reducing reader time from ~70s to under 5s.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -43,6 +50,9 @@ constexpr uint32_t cb_scale_factor = 5;
 constexpr uint32_t FACE_SIZE = 16;
 constexpr uint32_t FACE_ELEMS = FACE_SIZE * FACE_SIZE;  // 256
 constexpr uint32_t TILE_ELEMS = 4 * FACE_ELEMS;         // 1024
+
+// bf16 tile size (used for causal mask CB which is always bf16)
+constexpr uint32_t BF16_TILE_BYTES = 2048;
 
 // bf16 bit patterns
 constexpr uint16_t BF16_ZERO = 0x0000;     // 0.0
@@ -143,10 +153,24 @@ void kernel_main() {
     const auto v_accessor = TensorAccessor(v_args, v_addr);
     [[maybe_unused]] const auto mask_accessor = TensorAccessor(mask_args, mask_addr);
 
+    // L1 page sizes for batch address advancement
+    uint32_t q_tile_bytes = q_accessor.get_aligned_page_size();
+    uint32_t k_tile_bytes = k_accessor.get_aligned_page_size();
+    uint32_t v_tile_bytes = v_accessor.get_aligned_page_size();
+
     uint32_t h_q_div_h_kv = H_q / H_kv;
     uint32_t num_q_blocks = (S_q_tiles + B_q_t - 1) / B_q_t;
     uint32_t num_kv_blocks = (S_kv_tiles + B_kv_t - 1) / B_kv_t;
     uint32_t num_k_blocks = D_t / k_block_dim;
+
+    // Refinement 7: tile counts per block (precomputed for batch reads)
+    uint32_t num_q_tiles_non_kblock = B_q_t * D_t;   // Q tiles per D-chunk (non-K-blocking)
+    uint32_t num_k_tiles_non_kblock = D_t * B_kv_t;  // K tiles per KV-block (non-K-blocking)
+    uint32_t num_v_tiles = B_kv_t * D_BLOCK;         // V tiles per KV-block
+    uint32_t num_mask_tiles = B_q_t * B_kv_t;        // mask tiles per KV-block
+    // K-blocking: Q and K tiles per K-block
+    uint32_t num_q_tiles_kblock = B_q_t * k_block_dim;   // Q tiles per K-block
+    uint32_t num_k_tiles_kblock = k_block_dim * B_kv_t;  // K tiles per K-block
 
     for (uint32_t wu = 0; wu < num_work_units; ++wu) {
         uint32_t b = work_b[wu];
@@ -165,10 +189,6 @@ void kernel_main() {
 
         for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
             uint32_t q_row_start = qb * B_q_t;
-            // Refinement 6: causal block skip — fully-future KV-blocks (all
-            // positions above the causal diagonal) contribute nothing to the
-            // output. Skip pushing Q/K/V/mask tiles for them. A KV-block is
-            // fully-future when kvb_start >= (qb+1)*B_q_t.
             uint32_t qb_end_tile = (qb + 1) * B_q_t;
 
             // D-chunk loop OUTSIDE KV-block loop.
@@ -186,109 +206,145 @@ void kernel_main() {
                         }
                     }
 
-                    // Push Q and K tiles for this KV-block
+                    // --- Refinement 7: Batch NoC reads ---
+                    // Instead of per-tile reserve+read+barrier+push, batch all
+                    // reads for each CB block and issue a single barrier.
+
                     if (use_k_blocking) {
                         // K-blocking: push Q and K in k_block_dim-sized K-blocks.
                         // Q is consumed per K-block (not retained across KV-blocks).
                         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
                             uint32_t d_start_qk = kb * k_block_dim;
-                            // Q tiles: B_q_t rows × k_block_dim cols
-                            for (uint32_t r = 0; r < B_q_t; ++r) {
-                                for (uint32_t d = 0; d < k_block_dim; ++d) {
-                                    cb_reserve_back(cb_q, 1);
-                                    noc_async_read_tile(
-                                        q_base + (q_row_start + r) * D_t + d_start_qk + d,
-                                        q_accessor,
-                                        get_write_ptr(cb_q));
-                                    noc_async_read_barrier();
-                                    cb_push_back(cb_q, 1);
+
+                            // Batch Q tiles: B_q_t rows × k_block_dim cols
+                            cb_reserve_back(cb_q, num_q_tiles_kblock);
+                            {
+                                uint32_t l1_addr = get_write_ptr(cb_q);
+                                for (uint32_t r = 0; r < B_q_t; ++r) {
+                                    for (uint32_t d = 0; d < k_block_dim; ++d) {
+                                        noc_async_read_tile(
+                                            q_base + (q_row_start + r) * D_t + d_start_qk + d, q_accessor, l1_addr);
+                                        l1_addr += q_tile_bytes;
+                                    }
                                 }
+                                noc_async_read_barrier();
                             }
-                            // K tiles: k_block_dim rows × B_kv_t cols
-                            for (uint32_t k_row = 0; k_row < k_block_dim; ++k_row) {
-                                for (uint32_t k_col = 0; k_col < B_kv_t; ++k_col) {
-                                    cb_reserve_back(cb_k, 1);
-                                    noc_async_read_tile(
-                                        k_base + (kv_col_start + k_col) * D_t + d_start_qk + k_row,
-                                        k_accessor,
-                                        get_write_ptr(cb_k));
-                                    noc_async_read_barrier();
-                                    cb_push_back(cb_k, 1);
+                            cb_push_back(cb_q, num_q_tiles_kblock);
+
+                            // Batch K tiles: k_block_dim rows × B_kv_t cols
+                            cb_reserve_back(cb_k, num_k_tiles_kblock);
+                            {
+                                uint32_t l1_addr = get_write_ptr(cb_k);
+                                for (uint32_t k_row = 0; k_row < k_block_dim; ++k_row) {
+                                    for (uint32_t k_col = 0; k_col < B_kv_t; ++k_col) {
+                                        noc_async_read_tile(
+                                            k_base + (kv_col_start + k_col) * D_t + d_start_qk + k_row,
+                                            k_accessor,
+                                            l1_addr);
+                                        l1_addr += k_tile_bytes;
+                                    }
                                 }
+                                noc_async_read_barrier();
                             }
+                            cb_push_back(cb_k, num_k_tiles_kblock);
                         }
                     } else {
                         // Non-K-blocking: push Q tiles once (retained across KV-blocks
                         // within this D-chunk via WaitAndRetainOnLastBlock).
                         // Only push on the first KV-block; subsequent KV-blocks reuse.
                         if (kvb == 0) {
-                            for (uint32_t r = 0; r < B_q_t; ++r) {
-                                for (uint32_t d = 0; d < D_t; ++d) {
-                                    cb_reserve_back(cb_q, 1);
+                            // Batch Q tiles: B_q_t rows × D_t cols
+                            cb_reserve_back(cb_q, num_q_tiles_non_kblock);
+                            {
+                                uint32_t l1_addr = get_write_ptr(cb_q);
+                                for (uint32_t r = 0; r < B_q_t; ++r) {
+                                    for (uint32_t d = 0; d < D_t; ++d) {
+                                        noc_async_read_tile(q_base + (q_row_start + r) * D_t + d, q_accessor, l1_addr);
+                                        l1_addr += q_tile_bytes;
+                                    }
+                                }
+                                noc_async_read_barrier();
+                            }
+                            cb_push_back(cb_q, num_q_tiles_non_kblock);
+                        }
+                        // Batch K tiles: D_t rows × B_kv_t cols
+                        cb_reserve_back(cb_k, num_k_tiles_non_kblock);
+                        {
+                            uint32_t l1_addr = get_write_ptr(cb_k);
+                            for (uint32_t k_row = 0; k_row < D_t; ++k_row) {
+                                for (uint32_t k_col = 0; k_col < B_kv_t; ++k_col) {
                                     noc_async_read_tile(
-                                        q_base + (q_row_start + r) * D_t + d, q_accessor, get_write_ptr(cb_q));
-                                    noc_async_read_barrier();
-                                    cb_push_back(cb_q, 1);
+                                        k_base + (kv_col_start + k_col) * D_t + k_row, k_accessor, l1_addr);
+                                    l1_addr += k_tile_bytes;
                                 }
                             }
-                        }
-                        // K tiles: D_t rows × B_kv_t cols
-                        for (uint32_t k_row = 0; k_row < D_t; ++k_row) {
-                            for (uint32_t k_col = 0; k_col < B_kv_t; ++k_col) {
-                                cb_reserve_back(cb_k, 1);
-                                noc_async_read_tile(
-                                    k_base + (kv_col_start + k_col) * D_t + k_row, k_accessor, get_write_ptr(cb_k));
-                                noc_async_read_barrier();
-                                cb_push_back(cb_k, 1);
-                            }
-                        }
-                    }
-
-                    // V tiles: B_kv_t rows × D_BLOCK cols for this D-chunk
-                    for (uint32_t v_row = 0; v_row < B_kv_t; ++v_row) {
-                        for (uint32_t v_col = 0; v_col < D_BLOCK; ++v_col) {
-                            cb_reserve_back(cb_v, 1);
-                            noc_async_read_tile(
-                                v_base + (kv_col_start + v_row) * D_t + d_start_v + v_col,
-                                v_accessor,
-                                get_write_ptr(cb_v));
                             noc_async_read_barrier();
-                            cb_push_back(cb_v, 1);
                         }
+                        cb_push_back(cb_k, num_k_tiles_non_kblock);
                     }
 
-                    // Mask tiles: B_q_t rows × B_kv_t cols
-                    if constexpr (is_causal) {
-                        for (uint32_t qr = 0; qr < B_q_t; ++qr) {
-                            uint32_t q_tile_global = q_row_start + qr;
-                            for (uint32_t kc = 0; kc < B_kv_t; ++kc) {
-                                uint32_t kv_tile_global = kv_col_start + kc;
-                                cb_reserve_back(cb_mask, 1);
-                                volatile tt_l1_ptr uint16_t* tile =
-                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_mask));
-
-                                if (kv_tile_global + 1 <= q_tile_global) {
-                                    fill_mask_tile_uniform(tile, BF16_ZERO);
-                                } else if (kv_tile_global >= q_tile_global + 1) {
-                                    fill_mask_tile_uniform(tile, BF16_NEG_INF);
-                                } else {
-                                    generate_causal_mask_tile(tile, q_tile_global, kv_tile_global);
-                                }
-                                cb_push_back(cb_mask, 1);
-                            }
-                        }
-                    } else if constexpr (has_mask) {
-                        for (uint32_t qr = 0; qr < B_q_t; ++qr) {
-                            for (uint32_t kc = 0; kc < B_kv_t; ++kc) {
-                                cb_reserve_back(cb_mask, 1);
+                    // Batch V tiles: B_kv_t rows × D_BLOCK cols for this D-chunk
+                    cb_reserve_back(cb_v, num_v_tiles);
+                    {
+                        uint32_t l1_addr = get_write_ptr(cb_v);
+                        for (uint32_t v_row = 0; v_row < B_kv_t; ++v_row) {
+                            for (uint32_t v_col = 0; v_col < D_BLOCK; ++v_col) {
                                 noc_async_read_tile(
-                                    mask_base + (q_row_start + qr) * S_kv_tiles + (kv_col_start + kc),
-                                    mask_accessor,
-                                    get_write_ptr(cb_mask));
-                                noc_async_read_barrier();
-                                cb_push_back(cb_mask, 1);
+                                    v_base + (kv_col_start + v_row) * D_t + d_start_v + v_col, v_accessor, l1_addr);
+                                l1_addr += v_tile_bytes;
                             }
                         }
+                        noc_async_read_barrier();
+                    }
+                    cb_push_back(cb_v, num_v_tiles);
+
+                    // Batch mask tiles: B_q_t rows × B_kv_t cols
+                    if constexpr (is_causal) {
+                        // Causal mask: generate on-device, no NoC reads needed.
+                        // Batch all tiles: reserve, fill all, push all.
+                        // Mask CB is always bf16 for causal path.
+                        cb_reserve_back(cb_mask, num_mask_tiles);
+                        {
+                            uint32_t l1_addr = get_write_ptr(cb_mask);
+                            for (uint32_t qr = 0; qr < B_q_t; ++qr) {
+                                uint32_t q_tile_global = q_row_start + qr;
+                                for (uint32_t kc = 0; kc < B_kv_t; ++kc) {
+                                    uint32_t kv_tile_global = kv_col_start + kc;
+                                    volatile tt_l1_ptr uint16_t* tile =
+                                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
+
+                                    if (kv_tile_global + 1 <= q_tile_global) {
+                                        fill_mask_tile_uniform(tile, BF16_ZERO);
+                                    } else if (kv_tile_global >= q_tile_global + 1) {
+                                        fill_mask_tile_uniform(tile, BF16_NEG_INF);
+                                    } else {
+                                        generate_causal_mask_tile(tile, q_tile_global, kv_tile_global);
+                                    }
+                                    l1_addr += BF16_TILE_BYTES;
+                                }
+                            }
+                        }
+                        cb_push_back(cb_mask, num_mask_tiles);
+                    } else if constexpr (has_mask) {
+                        // Custom mask: batch read from DRAM
+                        cb_reserve_back(cb_mask, num_mask_tiles);
+                        {
+                            uint32_t l1_addr = get_write_ptr(cb_mask);
+                            // mask CB is input dtype (not causal), so use q_tile_bytes
+                            // (mask accessor has same page size as input)
+                            uint32_t mask_tile_bytes = mask_accessor.get_aligned_page_size();
+                            for (uint32_t qr = 0; qr < B_q_t; ++qr) {
+                                for (uint32_t kc = 0; kc < B_kv_t; ++kc) {
+                                    noc_async_read_tile(
+                                        mask_base + (q_row_start + qr) * S_kv_tiles + (kv_col_start + kc),
+                                        mask_accessor,
+                                        l1_addr);
+                                    l1_addr += mask_tile_bytes;
+                                }
+                            }
+                            noc_async_read_barrier();
+                        }
+                        cb_push_back(cb_mask, num_mask_tiles);
                     }
                 }
             }

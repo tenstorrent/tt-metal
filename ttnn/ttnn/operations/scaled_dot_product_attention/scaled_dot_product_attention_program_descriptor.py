@@ -40,10 +40,13 @@ def create_program_descriptor(
     S_q_tiles = (S_q + TILE_DIM - 1) // TILE_DIM
     S_kv_tiles = (S_kv + TILE_DIM - 1) // TILE_DIM
     B_q_t = min(MAX_B_Q_T, S_q_tiles)
-    # Refinement 6: use larger B_kv_t for non-fp32 dtypes to reduce KV-block
+    # Refinement 6/7: use larger B_kv_t for non-fp32 dtypes to reduce KV-block
     # count (fewer softmax recurrence steps → better accuracy on long sequences).
     # fp32 tiles are 4x larger → B_kv_t=8 causes OOM with fp32 input.
-    max_b_kv_t = MAX_B_KV_T_LARGE if query.dtype != ttnn.float32 else MAX_B_KV_T
+    if query.dtype != ttnn.float32:
+        max_b_kv_t = MAX_B_KV_T_LARGE
+    else:
+        max_b_kv_t = MAX_B_KV_T
     B_kv_t = min(max_b_kv_t, S_kv_tiles)
     # Ensure B_q_t divides S_q_tiles so every Q-block is full (no partial last block).
     # The kernel uses B_q_t as a compile-time constant for CB sizing and loop bounds,
