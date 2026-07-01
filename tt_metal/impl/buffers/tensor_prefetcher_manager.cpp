@@ -101,6 +101,35 @@ LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t t
     return LayoutMode::KRowMajor;
 }
 
+// Receiver enumeration order for a streaming (receiver-contiguous) weight: how the host maps a
+// receiver's (bank, bank-local slab index) to a global receiver position when slicing the rotation
+// table. This is the consumer's concept (a ring matmul calls it a "ring position"), derived from
+// the tensor's shard distribution — the GCB stays order-agnostic (see receiver_slab_indices).
+enum class ReceiverOrder : uint8_t {
+    Strided,     // ROUND_ROBIN_1D: global = bank + slab_idx * num_banks
+    Contiguous,  // CONTIGUOUS_1D:  global = bank * receivers_per_bank + slab_idx
+};
+
+// Map a streaming weight's shard distribution to its ReceiverOrder. TT_FATALs on a non-recv-contig
+// (no BDS) tensor or an unsupported distribution strategy.
+ReceiverOrder receiver_order_for_streaming_tensor(const MeshTensor& t, uint32_t tensor_idx) {
+    const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
+    const auto& bds_opt = ref_buffer->buffer_distribution_spec();
+    TT_FATAL(
+        bds_opt.has_value(),
+        "Streaming Tensor prefetcher tensor {} must be a receiver-contiguous (nd-sharded) weight, but it has no "
+        "buffer distribution spec (it looks K-row-major / legacy-sharded).",
+        tensor_idx);
+    const auto strategy = bds_opt->shard_distribution_strategy();
+    TT_FATAL(
+        strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
+        "Streaming Tensor prefetcher tensor {} uses an unsupported shard distribution strategy ({}); only "
+        "ROUND_ROBIN_1D (strided) and CONTIGUOUS_1D (contiguous) receiver-contiguous weights are supported.",
+        tensor_idx,
+        static_cast<int>(strategy));
+    return strategy == ShardDistributionStrategy::CONTIGUOUS_1D ? ReceiverOrder::Contiguous : ReceiverOrder::Strided;
+}
+
 // Address-independent per-tensor geometry for the K-row-major DRAM layout — see
 // TensorPrefetcherTensorLayout in impl/buffers/tensor_prefetcher_request.hpp for
 // the field-by-field documentation, and tt_metal/impl/buffers/prefetcher_matmul_design.md
@@ -605,10 +634,12 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     }
     const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
 
-    // Per-socket global ring-index map, needed only when a tensor streams. The GCB owns the
-    // strided recv-contig topology, so the ring indices (g_r) come from its experimental accessor
-    // (single source of truth) rather than being re-derived here; the accessor TT_FATALs on a
-    // non-dense bank set. Reindex from GCB-mapping order to socket (sender_logical_cores_) order.
+    // Per-socket bank-local slab index map, needed only when a tensor streams. The GCB owns the
+    // recv_index_base accounting, so the slab indices come from its experimental accessor (single
+    // source of truth) rather than being re-derived here. It is order-agnostic: this function maps
+    // each receiver's (bank, slab index) to a global receiver position per tensor using that
+    // tensor's shard distribution. Reindex from GCB-mapping order to socket (sender_logical_cores_)
+    // order.
     bool any_streaming = false;
     for (const auto& input : data_tensors) {
         if (!input.rotation.empty()) {
@@ -616,35 +647,48 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             break;
         }
     }
-    std::vector<std::vector<uint32_t>> ring_idx_by_socket(num_senders_);
+    std::vector<std::vector<uint32_t>> slab_idx_by_socket(num_senders_);
     if (any_streaming) {
-        const std::vector<std::vector<uint32_t>> ring_by_sender = experimental::sender_ring_indices(gcb);
+        const std::vector<std::vector<uint32_t>> slab_by_sender = experimental::receiver_slab_indices(gcb);
         for (uint32_t s = 0; s < num_senders_; ++s) {
             for (size_t m = 0; m < mapping.size(); ++m) {
                 if (mapping[m].first == sender_logical_cores_[s]) {
-                    ring_idx_by_socket[s] = ring_by_sender[m];
+                    slab_idx_by_socket[s] = slab_by_sender[m];
                     break;
                 }
             }
-            // Validate the ring indices once here (a topology property) so the per-sender
-            // rotation fill below is a plain rot[r] = rotation[ring[r]] with no inner-loop guard.
-            // Streaming tensors are validated to have rotation.size() == total_receivers.
             TT_FATAL(
-                !ring_idx_by_socket[s].empty(),
+                !slab_idx_by_socket[s].empty(),
                 "Tensor prefetcher: streaming request but sender core ({}, {}) is not in the GCB's sender "
-                "mapping, so it has no ring indices to slice the rotation by.",
+                "mapping, so it has no slab indices to slice the rotation by.",
                 sender_logical_cores_[s].x,
                 sender_logical_cores_[s].y);
-            for (uint32_t v : ring_idx_by_socket[s]) {
-                TT_FATAL(
-                    v < total_receivers,
-                    "Tensor prefetcher: ring index {} for sender core ({}, {}) is out of range for a rotation "
-                    "table of total_receivers ({}); streaming requires the uniform strided recv-contig topology.",
-                    v,
-                    sender_logical_cores_[s].x,
-                    sender_logical_cores_[s].y,
-                    total_receivers);
-            }
+        }
+
+        // Both the strided and contiguous (bank, slab index) -> global position formulas are
+        // bijections onto [0, total_receivers) only when the DRAM banks are dense 0..num_banks-1 and
+        // every bank has exactly receivers_per_bank receivers. Guard that topology invariant once
+        // here so the per-sender rotation fill below is a plain gather with no inner-loop range check.
+        std::vector<uint32_t> bank_receiver_count(num_banks_, 0);
+        for (const auto& [sender_logical, receivers] : mapping) {
+            const uint32_t bank = static_cast<uint32_t>(sender_logical.x);
+            TT_FATAL(
+                bank < num_banks_,
+                "Tensor prefetcher: streaming requires dense DRAM bank ids 0..{}, but a sender occupies bank {}.",
+                num_banks_ - 1,
+                bank);
+            bank_receiver_count[bank] += receivers.num_cores();
+        }
+        for (uint32_t b = 0; b < num_banks_; ++b) {
+            TT_FATAL(
+                bank_receiver_count[b] == receivers_per_bank,
+                "Tensor prefetcher: streaming requires a uniform receiver-contiguous topology — bank {} has {} "
+                "receivers but expected receivers_per_bank ({} = total_receivers {} / num_banks {}).",
+                b,
+                bank_receiver_count[b],
+                receivers_per_bank,
+                total_receivers,
+                num_banks_);
         }
     }
     TT_FATAL(
@@ -662,6 +706,10 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     struct Slot {
         TensorPrefetcherTensorLayout geom;
         std::vector<uint32_t> rotation;  // caller's global rotation (total_receivers entries), or empty == batched
+        // Enumeration used to slice `rotation` per receiver; only meaningful when streaming. Part of
+        // slot identity: two tensors with the same geometry+rotation but different orders pack
+        // different per-sender rotation bytes, so they must not dedup together.
+        ReceiverOrder order = ReceiverOrder::Strided;
     };
     struct PlanEntry {
         uint32_t bank_local_base = 0;
@@ -672,7 +720,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         std::vector<Slot> slots;
     };
     auto slot_equal = [](const Slot& a, const Slot& b) {
-        return layout_equal(a.geom, b.geom) && a.rotation == b.rotation;
+        return layout_equal(a.geom, b.geom) && a.rotation == b.rotation && a.order == b.order;
     };
     std::vector<PagePlan> plans(1);
 
@@ -692,7 +740,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             TT_FATAL(
                 input.rotation.size() == total_receivers,
                 "Streaming rotation for tensor {} has {} entries but must have total_receivers ({}); it is indexed "
-                "by global ring position.",
+                "by global receiver position.",
                 tensor_idx,
                 input.rotation.size(),
                 total_receivers);
@@ -743,7 +791,13 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         Slot slot;
         slot.geom = layout;
         if (streaming) {
+            TT_FATAL(
+                layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
+                "Streaming Tensor prefetcher requires a receiver-contiguous weight, but input tensor {} is "
+                "K-row-major.",
+                tensor_idx);
             slot.rotation = input.rotation;
+            slot.order = receiver_order_for_streaming_tensor(input.tensor.get(), static_cast<uint32_t>(tensor_idx));
         }
 
         // Find this slot in the current page (dedup), or decide it needs adding.
@@ -813,18 +867,24 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         std::vector<std::vector<uint8_t>> per_sender(num_variants);
         for (uint32_t s = 0; s < num_variants; ++s) {
             std::vector<uint8_t> page = templ;
-            const auto& ring = ring_idx_by_socket[s];
+            const auto& slab = slab_idx_by_socket[s];
+            const uint32_t bank = static_cast<uint32_t>(sender_logical_cores_[s].x);
             if (page_has_rotation) {
                 for (uint32_t i = 0; i < plan.slots.size(); ++i) {
                     if (plan.slots[i].rotation.empty()) {
                         continue;
                     }
                     const uint32_t slot_start = kRequestPageBytes - (i + 1) * layout_stride;
-                    // ring indices were range-checked once when ring_idx_by_socket was built, so
-                    // this is a plain gather of this sender's slice of the global rotation table.
+                    // Map each receiver's (bank, bank-local slab index) to its global receiver
+                    // position, then gather this sender's slice of the caller's global rotation. The
+                    // topology guard above makes both formulas a bijection onto [0, total_receivers),
+                    // so no inner-loop range check is needed.
+                    const ReceiverOrder order = plan.slots[i].order;
                     auto* rot = reinterpret_cast<uint32_t*>(page.data() + slot_start + kLayoutBytes);
-                    for (uint32_t r = 0; r < ring.size(); ++r) {
-                        rot[r] = plan.slots[i].rotation[ring[r]];
+                    for (uint32_t r = 0; r < slab.size(); ++r) {
+                        const uint32_t g = (order == ReceiverOrder::Strided) ? (bank + slab[r] * num_banks_)
+                                                                             : (bank * receivers_per_bank + slab[r]);
+                        rot[r] = plan.slots[i].rotation[g];
                     }
                 }
             }

@@ -73,17 +73,20 @@ struct TensorPrefetcherInput {
     uint32_t block_count = 0;
     // Per-receiver streaming rotation (receiver-contiguous layout only). Empty = batched
     // (whole-tensor) delivery. When non-empty, the kernel delivers this tensor's K-blocks in
-    // the host-specified ring-rotated order: at push step p, the receiver at global ring
+    // the host-specified rotated order: at push step p, the receiver at global receiver
     // position r sources physical block (rotation[r] + p) mod block_count. This lets the
     // consuming matmul stream blocks in FIFO order and start before the whole tensor arrives
     // (allowing a shallow GCB), and gives the host full control over which block leads each
-    // receiver rather than fixing it to the topology ring index.
+    // receiver rather than fixing it to the topology position.
     //
     // When non-empty, `rotation` must have exactly `total_receivers` (== ring size ==
-    // block_count) entries, each in [0, block_count), indexed by global ring position. For the
-    // standard ring matmul, rotation[r] = r reproduces the natural topology order. The matmul
-    // must be built to consume in the matching order, else it deadlocks. The host is
-    // responsible for supplying a rotation consistent with the consumer's ring topology.
+    // block_count) entries, each in [0, block_count), indexed by global receiver position. That
+    // position is derived from the weight's shard distribution: ROUND_ROBIN_1D (strided) and
+    // CONTIGUOUS_1D (contiguous) receiver-contiguous weights are both supported; the host maps
+    // each receiver's (bank, slab index) to its global position accordingly. For the standard
+    // ring matmul, rotation[r] = r reproduces the natural topology order. The matmul must be
+    // built to consume in the matching order, else it deadlocks. The host is responsible for
+    // supplying a rotation consistent with the consumer's ring topology.
     std::vector<uint32_t> rotation = {};
 };
 

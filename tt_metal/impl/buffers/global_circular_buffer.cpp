@@ -193,7 +193,7 @@ namespace {
 // Per-sender bank-local recv_index_base. Senders are ordered [bank b s0, bank b s1, bank b+1 s0,
 // ...] (sender_logical.x == bank_id); recv_index_base resets to 0 on a bank change and accumulates
 // within a bank (dual senders share a bank). Returns one value per sender in mapping order. Single
-// source for both the L1 state-block stamping and the experimental ring-index accessor.
+// source for both the L1 state-block stamping and the experimental receiver_slab_indices accessor.
 std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping) {
     std::vector<uint32_t> bases(mapping.size(), 0);
     uint32_t recv_index_base = 0;
@@ -452,7 +452,7 @@ struct GlobalCircularBufferDramSenderInternals {
     static DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
     static DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
     static const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
-    static std::vector<std::vector<uint32_t>> sender_ring_indices(const GlobalCircularBuffer& gcb);
+    static std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb);
 };
 
 GlobalCircularBuffer GlobalCircularBufferDramSenderInternals::make_dram_sender(
@@ -485,39 +485,23 @@ const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInterna
     return gcb.receiver_coords_per_sender_;
 }
 
-std::vector<std::vector<uint32_t>> GlobalCircularBufferDramSenderInternals::sender_ring_indices(
+std::vector<std::vector<uint32_t>> GlobalCircularBufferDramSenderInternals::receiver_slab_indices(
     const GlobalCircularBuffer& gcb) {
+    // Order-agnostic: just the bank-local slab index (recv_index_base + r) each receiver reads.
+    // The caller maps (bank, slab index) -> a global position using the tensor's shard
+    // distribution; that ordering is not a GCB concept, so it is not applied here. This is always
+    // well-defined regardless of bank density/uniformity.
     const auto& mapping = gcb.sender_receiver_core_mapping();
-    // num_dram_banks = number of distinct DRAM bank columns. The strided ring-index stride relies
-    // on bank ids being dense 0..num_dram_banks-1 (the recv-contig GCB layout), so guard it: a
-    // sparse/offset bank set would silently permute block delivery rather than error.
-    uint32_t num_dram_banks = 0;
-    for (const auto& [sender_logical, _receivers] : mapping) {
-        num_dram_banks = std::max(num_dram_banks, static_cast<uint32_t>(sender_logical.x) + 1u);
-    }
-    std::vector<bool> bank_seen(num_dram_banks, false);
-    for (const auto& [sender_logical, _receivers] : mapping) {
-        bank_seen[static_cast<uint32_t>(sender_logical.x)] = true;
-    }
-    for (uint32_t b = 0; b < num_dram_banks; ++b) {
-        TT_FATAL(
-            bank_seen[b],
-            "GlobalCircularBuffer ring-index map requires dense DRAM bank ids 0..{}, but no sender occupies "
-            "bank {}; the streaming Tensor prefetcher's g_r stride assumes a contiguous bank set.",
-            num_dram_banks - 1,
-            b);
-    }
     const std::vector<uint32_t> bases = recv_index_bases_per_sender(mapping);
-    std::vector<std::vector<uint32_t>> ring(mapping.size());
+    std::vector<std::vector<uint32_t>> slab(mapping.size());
     for (size_t s = 0; s < mapping.size(); ++s) {
-        const uint32_t bank = static_cast<uint32_t>(mapping[s].first.x);
         const uint32_t n = mapping[s].second.num_cores();
-        ring[s].resize(n);
+        slab[s].resize(n);
         for (uint32_t r = 0; r < n; ++r) {
-            ring[s][r] = bank + (bases[s] + r) * num_dram_banks;
+            slab[s][r] = bases[s] + r;
         }
     }
-    return ring;
+    return slab;
 }
 
 }  // namespace global_circular_buffer_dram_sender
@@ -609,8 +593,8 @@ const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const Glob
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::receiver_coords_per_sender(gcb);
 }
 
-std::vector<std::vector<uint32_t>> sender_ring_indices(const GlobalCircularBuffer& gcb) {
-    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::sender_ring_indices(gcb);
+std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::receiver_slab_indices(gcb);
 }
 
 }  // namespace tt::tt_metal::experimental
