@@ -97,3 +97,74 @@ _MASK_NEG = -1.0e9
 class DeepSeekV4Module:
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         return self.forward(*args, **kwds)
+
+
+def rectangular_core_grid(num_cores: int, device) -> ttnn.CoreGrid:
+    """A rectangular ``x x y`` core grid of exactly ``num_cores`` cores on ``device``.
+
+    Finds the widest ``x`` that divides ``num_cores`` and fits ``grid.x``, giving a
+    ``(x, num_cores // x)`` rectangle. Raises if no such rectangle fits the device grid.
+    """
+    grid = device.compute_with_storage_grid_size()
+    x = grid.x
+    while x > 0 and num_cores % x != 0:
+        x -= 1
+    y = num_cores // x if x > 0 else 0
+    if x == 0 or y > grid.y:
+        raise ValueError(f"cannot form a rectangular grid of {num_cores} cores within a {grid.x}x{grid.y} device grid")
+    return ttnn.CoreGrid(y=y, x=x)
+
+
+def print_l1_tensors(device):
+    device_info = ttnn._ttnn.reports.get_buffers(device)
+    l1_buffers = [b for b in device_info if b.buffer_type == ttnn.BufferType.L1]
+    if not l1_buffers:
+        print("No L1 buffers found.")
+        return
+
+    headers = ("#", "Address", "Size (bytes)", "Layout")
+    rows = [
+        (str(i), f"{b.address}", f"{b.max_size_per_bank:,}", str(b.buffer_layout)) for i, b in enumerate(l1_buffers)
+    ]
+    total_l1_size = sum(b.max_size_per_bank for b in l1_buffers)
+    rows.append(("", "Total", f"{total_l1_size:,}", ""))
+
+    widths = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(len(headers))]
+
+    def _row(cells):
+        return " | ".join(
+            cells[i].rjust(widths[i]) if i == 2 else cells[i].ljust(widths[i]) for i in range(len(headers))
+        )
+
+    print(_row(headers))
+    print("-+-".join("-" * w for w in widths))
+    for row in rows:
+        print(_row(row))
+    print("\n\n")
+
+
+def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
+    """``CoreRangeSet`` for :func:`rectangular_core_grid`."""
+    core_grid = rectangular_core_grid(num_cores, device)
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))})
+
+
+def width_sharded_l1_config(height: int, width: int, device, num_cores: int | None = None) -> ttnn.MemoryConfig:
+    """Width-sharded L1 config: one tile-width (32 cols) per core over ``width // TILE_SIZE`` cores.
+
+    Mirror of :func:`_rope_height_sharded_config` along the width axis: for a
+    ``[..., height, width]`` tensor each core holds a ``[height_padded, TILE_SIZE]`` shard
+    (``height_padded`` is ``height`` rounded up to a tile boundary), ROW_MAJOR orientation.
+    """
+    assert width % ttnn.TILE_SIZE == 0, f"width {width} must be tile-aligned"
+    if num_cores is None:
+        num_cores = width // ttnn.TILE_SIZE
+    device_grid_size = device.compute_with_storage_grid_size()
+    device_cores = device_grid_size.x * device_grid_size.y
+    while num_cores > device_cores:
+        num_cores //= 2
+    shard_width = width // num_cores
+    grid = rectangular_core_range_set(num_cores, device)
+    height_padded = ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    shard_spec = ttnn.ShardSpec(grid, [height_padded, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)

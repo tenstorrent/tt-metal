@@ -97,7 +97,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // Each core's weight slice is its 2 gate tiles + 2 paired up tiles per k-row.
     const uint32_t weight_slice_tiles = k_tiles * (2u * kTilesPerCore);
     // Double-buffer the weight slice so the reader can prefetch the next expert.
-    const uint32_t weights_cb_bytes = 2u * weight_slice_tiles * weight_tile_bytes;
+    const uint32_t weights_cb_bytes = weight_slice_tiles * weight_tile_bytes;
 
     // down weights are [I, H] per expert (TILE layout), DRAM ND-sharded into [I, H/64]
     // column blocks (one per core). Core idx owns the H output cols [idx*64, idx*64+64) ->
