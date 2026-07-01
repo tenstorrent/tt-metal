@@ -1,6 +1,6 @@
 import sys
 
-sys.path.insert(0, "/home/iguser/Christy/tt-metal")
+sys.path.insert(0, "/home/iguser/ign-tt/tt-metal")
 import pytest, torch, ttnn
 from loguru import logger
 from models.common.utility_functions import comp_pcc

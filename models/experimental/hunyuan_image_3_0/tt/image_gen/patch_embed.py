@@ -281,10 +281,13 @@ class HunyuanTtUNetDown(LightweightModule):
         """x_bchw: torch [B, in_ch, H, W] or ttnn NHWC flat [1,1,B*H*W,in_ch].
         Returns (tokens [1,1,B*H*W,out], token_h, token_w)."""
         x_flat, B, H, W = _to_flat_nhwc(self.device, x_bchw, self.in_channels)
+        return self.forward_latent(x_flat, t_emb, B, H, W)
+
+    def forward_latent(self, x_flat, t_emb, B: int, H: int, W: int):
+        """Run conv+resblock from flat NHWC ``[1,1,B*H*W,C]`` (already on device)."""
         x_flat, H, W = self.conv0(x_flat, B, H, W)
         out, H, W = self.resblock(x_flat, t_emb, B, H, W)
         ttnn.deallocate(x_flat)
-        # NHWC flat [1,1,B*H*W,out] is already `b (h w) c`.
         return out, H, W
 
 
@@ -350,7 +353,7 @@ class HunyuanTtUNetUp(LightweightModule):
 
 # ---------------------------------------------------------------------------
 def _to_flat_nhwc(device, x, in_channels):
-    """Accept torch [B,C,H,W] or ttnn flat NHWC; return (ttnn flat [1,1,BHW,C], B,H,W)."""
+    """Accept torch [B,C,H,W], ttnn BTHWC ``[B,1,H,W,C]``, or flat NHWC; return (flat, B,H,W)."""
     import torch
 
     if isinstance(x, torch.Tensor):
@@ -359,4 +362,17 @@ def _to_flat_nhwc(device, x, in_channels):
         nhwc = x.permute(0, 2, 3, 1).contiguous().reshape(1, 1, B * H * W, C)
         xf = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         return xf, B, H, W
-    raise TypeError("ttnn flat input requires explicit (B,H,W); pass torch NCHW for UNetDown entry")
+    if isinstance(x, ttnn.Tensor):
+        if len(x.shape) == 5:
+            B, T, H, W, C = (int(x.shape[i]) for i in range(5))
+            assert C == in_channels
+            if T != 1:
+                x = ttnn.slice(x, [0, 0, 0, 0, 0], [B, 1, H, W, C])
+            xf = ttnn.reshape(x, [1, 1, B * H * W, C])
+            return xf, B, H, W
+        if len(x.shape) == 4 and int(x.shape[0]) == 1:
+            B = 1
+            _, n, C = (int(x.shape[i]) for i in range(3))
+            H = W = int(n**0.5)
+            return x, B, H, W
+    raise TypeError("UNetDown entry: pass torch NCHW or ttnn BTHWC / flat NHWC")

@@ -27,9 +27,9 @@ import os, sys, json, glob, gc
 import torch
 from safetensors import safe_open
 
-ROOT = "/home/iguser/Christy/tt-metal"
-HUNYUAN = "/home/iguser/Christy/tt-metal/HunyuanImage-3.0"
-WEIGHTS = "/home/iguser/Christy/HunyuanImage-3"
+ROOT = "/home/iguser/ign-tt/tt-metal"
+HUNYUAN = "/home/iguser/ign-tt/hunyan_instruct"
+WEIGHTS = "/home/iguser/ign-tt/base"
 for p in (ROOT, HUNYUAN):
     if p not in sys.path:
         sys.path.insert(0, p)

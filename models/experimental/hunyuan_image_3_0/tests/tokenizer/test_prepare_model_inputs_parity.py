@@ -27,7 +27,7 @@ IMAGE_SIZE = 1024
 HF_IMAGE_SIZE = "1024x1024"
 MAX_LENGTH = 10000
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "ref/tokenizer/assets/config.json"
-UPSTREAM = Path("/home/iguser/tt-ign/HunyuanImage-3.0")
+UPSTREAM = Path("/home/iguser/ign-tt/hunyan_instruct")
 HAS_WEIGHTS = (MODEL_DIR / "model.safetensors.index.json").is_file()
 HAS_UPSTREAM = UPSTREAM.is_dir()
 
