@@ -25,6 +25,13 @@ from models.tt_transformers.tt.model_config import determine_device_name
 GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 
 
+def _load_text_tokenizer(model_path):
+    # The 12B tokenizer config can advertise multimodal extra_special_tokens as
+    # a list (for example ["<|video|>"]), while this transformers version expects
+    # a dict. The text-only demo does not need those model-specific aliases.
+    return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, extra_special_tokens={})
+
+
 def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded_sliding):
     """Padded prefill buckets for which capturing a prefill trace is correct AND
     a net win for Gemma4.
@@ -334,7 +341,7 @@ class Gemma4Generator(Generator):
         paged_attention_config=None,
         bounded_sliding_kv_cache=False,
     ):
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer = _load_text_tokenizer(model_path)
         if not hasattr(tokenizer, "stop_tokens"):
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
 
