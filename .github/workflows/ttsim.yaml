@@ -403,7 +403,10 @@ jobs:
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
             ./build/test/tt_metal/unit_tests_eth
-            ./build/test/tt_metal/unit_tests_legacy
+            # Exclude *Quasar* (configure_mock_mode issues, same as unit_tests_api above) and
+            # MeshDeviceSingleCardFixture.TransposeHC (BH RISCV kernel compilation exceeds remaining
+            # step-time budget in debug mode; see tenstorrent/tt-metal#47615).
+            ./build/test/tt_metal/unit_tests_legacy --gtest_filter="-*Quasar*:MeshDeviceSingleCardFixture.TransposeHC"
           fi
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
