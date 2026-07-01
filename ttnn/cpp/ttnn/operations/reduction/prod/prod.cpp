@@ -110,10 +110,8 @@ Tensor prod_impl(
         return result;
     }
 
-    // Block-float (bfp8_b/bfp4_b) tiles can't seed the per-dim reduction's identity (1.0) tile, and
-    // permuting them reshuffles elements across shared-exponent groups (lossy, esp. for bfp4_b). So
-    // upcast to FLOAT32 up front — before any permute — and return FLOAT32, consistent with the
-    // full-product (prod_all) path.
+    // Block-float can't seed the reduction's identity tile and loses precision under permute, so
+    // compute the dim reduction in FLOAT32 (the public prod re-quantizes the result to the input dtype).
     const Tensor dim_input = (input_a_padded.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
                               input_a_padded.dtype() == tt::tt_metal::DataType::BFLOAT4_B)
                                  ? ttnn::typecast(input_a_padded, tt::tt_metal::DataType::FLOAT32)
@@ -230,7 +228,13 @@ namespace ttnn {
 
 Tensor prod(
     const Tensor& input, std::optional<int64_t> dim, bool keepdim, const std::optional<MemoryConfig>& memory_config) {
-    return operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+    Tensor result = operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+    // Block-float is computed in FLOAT32; return the result in the input dtype to match it
+    if ((input.dtype() == tt::tt_metal::DataType::BFLOAT8_B || input.dtype() == tt::tt_metal::DataType::BFLOAT4_B) &&
+        result.dtype() != input.dtype()) {
+        result = ttnn::typecast(result, input.dtype());
+    }
+    return result;
 }
 
 Tensor prod(

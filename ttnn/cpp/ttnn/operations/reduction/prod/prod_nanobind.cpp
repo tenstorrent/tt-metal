@@ -69,6 +69,8 @@ void bind_reduction_prod_operation(nb::module_& mod) {
                       - layout
                     * - BFLOAT16, FLOAT32
                       - TILE
+                    * - BFLOAT8_B, BFLOAT4_B
+                      - TILE
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -76,7 +78,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
             Limitations:
                 - All input tensors must be on-device.
                 - When :attr:`dim` is not specified (i.e. full product), keepdim=True is not supported  (as this operation results in a scalar).
-                - BFLOAT8_B and BFLOAT4_B inputs must be TILE layout and are upcast to FLOAT32 internally, so the result is returned as FLOAT32. This applies to the full product and to dim-based reductions via ``ttnn.prod(input, dim=...)``; the explicit :attr:`output_tensor` (``dims=...``) overload requires BFLOAT16 or FLOAT32.
+                - BFLOAT8_B and BFLOAT4_B inputs must be TILE layout. They are computed in FLOAT32 internally and the result is returned in the input dtype (re-quantized to block-float on output, like ``ttnn.sum``). This applies to the full product and to dim-based reductions via ``ttnn.prod(input, dim=...)``; the explicit :attr:`output_tensor` (``dims=...``) overload requires BFLOAT16 or FLOAT32.
                 - Sharding is not supported for this operation
         )doc",
         "prod",
