@@ -139,12 +139,12 @@ def test_unary_broadcast_quasar(
         "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(

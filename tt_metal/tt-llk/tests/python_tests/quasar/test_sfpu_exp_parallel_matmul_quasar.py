@@ -231,10 +231,10 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
-            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-            NUM_FACES(num_faces, num_faces, num_faces),
         ],
         runtimes=[
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+            NUM_FACES(num_faces, num_faces, num_faces),
             TILE_COUNT(tile_cnt_exp),
         ],
         variant_stimuli=stimuli,

@@ -209,11 +209,11 @@ def test_pack_l1_acc_quasar(
         "sources/quasar/pack_l1_acc_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(
