@@ -115,8 +115,7 @@ class TtnnBevProj(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         xt = ttnn.from_torch(x.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=self._d)
-        y = ttnn.linear(xt, self._lw, bias=self._lb)
-        y = ttnn.relu(y)
+        y = ttnn.linear(xt, self._lw, bias=self._lb, activation="relu")  # fused ReLU
         y = ttnn.layer_norm(y, weight=self._g, bias=self._beta, epsilon=self._eps)
         return ttnn.to_torch(y).float()
 
@@ -205,8 +204,7 @@ class _TtnnDecoderLayer:
         tgt = self._ln(ttnn.add(tgt, sa), self._n1)
         ca = self._cross_attn(tgt, memory, B, Sq, Skv)
         tgt = self._ln(ttnn.add(tgt, ca), self._n2)
-        ff = ttnn.linear(tgt, self._l1w, bias=self._l1b)
-        ff = ttnn.relu(ff)
+        ff = ttnn.linear(tgt, self._l1w, bias=self._l1b, activation="relu")  # fused ReLU (FFN)
         ff = ttnn.linear(ff, self._l2w, bias=self._l2b)
         tgt = self._ln(ttnn.add(tgt, ff), self._n3)
         return tgt

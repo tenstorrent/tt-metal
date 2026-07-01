@@ -89,7 +89,7 @@ class _TtnnGPTBlock:
 
     def __call__(self, x, B, T, C):
         x = ttnn.add(x, self._attn(_ln(x, self._ln1), B, T, C))
-        h = ttnn.relu(ttnn.linear(_ln(x, self._ln2), self._fc1w, bias=self._fc1b))
+        h = ttnn.linear(_ln(x, self._ln2), self._fc1w, bias=self._fc1b, activation="relu")  # fused ReLU (MLP)
         h = ttnn.linear(h, self._fc2w, bias=self._fc2b)
         return ttnn.add(x, h)
 
