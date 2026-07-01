@@ -6,6 +6,7 @@
 import contextlib
 import math
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -47,6 +48,21 @@ FUSED_MULTI_STEP_DECODE_PCC_BASELINE = [
     0.99048,
 ]
 PREFILL_ISL_SWEEP_LENGTHS = [32, 64, 128, 256, 512, 1024]
+PREFILL_ISL_EXTENDED_SWEEP_LENGTHS = [
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+]
+PREFILL_ISL_EXTENDED_TARGET = 65536
 PREFILL_CHUNK_SIZE = 256
 L0_ATTENTION_STAGE_NAMES = (
     "q_proj",
@@ -1778,8 +1794,18 @@ def assert_tt_decode_positions_monotonic(tt_positions: list[int], prefill_len: i
         raise AssertionError(f"TT decode positions {tt_positions} != expected {expected}")
 
 
-def compare_prefill_hidden_pcc(ref_prefill: torch.Tensor, tt_prefill: torch.Tensor, seq_len: int):
-    """Compare prefill hidden states; returns (passed, overall_pcc, per_position_pcc)."""
+def compare_prefill_hidden_pcc(
+    ref_prefill: torch.Tensor,
+    tt_prefill: torch.Tensor,
+    seq_len: int,
+    *,
+    per_token: bool = True,
+):
+    """Compare prefill hidden states; returns (passed, overall_pcc, per_position_pcc).
+
+    Set ``per_token=False`` for long ISL sweeps — per-position ``comp_pcc`` in a Python loop
+    scales linearly with sequence length and makes 2k+ runs impractically slow.
+    """
     ref_f = ref_prefill.to(torch.float32)
     tt_f = tt_prefill.to(torch.float32)
     if ref_f.shape != tt_f.shape:
@@ -1787,8 +1813,114 @@ def compare_prefill_hidden_pcc(ref_prefill: torch.Tensor, tt_prefill: torch.Tens
             f"Prefill hidden shape mismatch for seq_len={seq_len}: ref={tuple(ref_f.shape)} tt={tuple(tt_f.shape)}"
         )
     passed_p, pcc_p = comp_pcc(ref_f, tt_f, pcc=PCC_THRESHOLD)
+    if not per_token:
+        return passed_p, pcc_p, []
     per_pos = [comp_pcc(ref_f[:, p], tt_f[:, p], pcc=PCC_THRESHOLD)[1] for p in range(seq_len)]
     return passed_p, pcc_p, per_pos
+
+
+def prefill_isl_sweep_effective_lengths(vv_config, isl_lengths=None) -> tuple[list[int], int]:
+    """Return ISL list capped by ``decoder.max_position_embeddings`` and the model limit."""
+    lengths = list(isl_lengths or PREFILL_ISL_EXTENDED_SWEEP_LENGTHS)
+    max_pos = vv_config.decoder.max_position_embeddings
+    effective = [n for n in lengths if n <= max_pos]
+    return effective, max_pos
+
+
+def run_prefill_isl_sweep_timed(
+    mesh_device,
+    lm_state,
+    vv_config,
+    isl_lengths=None,
+    *,
+    verbose_debug_max: int = 0,
+    per_token_pcc_max: int = 1024,
+) -> list[dict]:
+    """Run prefill PCC sweep with HF/TT wall times per input sequence length."""
+    cfg = vv_config.decoder
+    effective_lengths, max_pos = prefill_isl_sweep_effective_lengths(vv_config, isl_lengths)
+    skipped = [n for n in (isl_lengths or PREFILL_ISL_EXTENDED_SWEEP_LENGTHS) if n > max_pos]
+
+    lm_tt = build_tt_lm(lm_state, mesh_device, cfg)
+    results: list[dict] = []
+
+    if skipped:
+        print(
+            f"[prefill ISL sweep] skipping lengths > max_position_embeddings={max_pos}: "
+            + ", ".join(str(n) for n in skipped),
+            flush=True,
+        )
+
+    for seq_len in effective_lengths:
+        print(f"[prefill ISL sweep] ISL={seq_len} starting...", flush=True)
+        torch.manual_seed(0)
+        input_ids = torch.randint(0, cfg.vocab_size, (1, seq_len), dtype=torch.long)
+        row: dict = {"seq_len": seq_len, "max_position_embeddings": max_pos}
+
+        try:
+            t0 = time.perf_counter()
+            ref_prefill = reference_lm_forward(lm_state, input_ids, vv_config)
+            row["hf_sec"] = time.perf_counter() - t0
+            print(f"[prefill ISL sweep] ISL={seq_len} HF done in {row['hf_sec']:.1f}s", flush=True)
+
+            kv_cache = lm_tt.alloc_kv_cache(seq_len + 8)
+            row["kv_cache_requested"] = seq_len + 8
+            row["kv_cache_aligned"] = kv_cache.max_seq
+
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            tt_prefill = tt_prefill_hidden(lm_tt, input_ids, kv_cache)
+            ttnn.synchronize_device(mesh_device)
+            row["tt_sec"] = time.perf_counter() - t0
+            print(f"[prefill ISL sweep] ISL={seq_len} TT done in {row['tt_sec']:.1f}s", flush=True)
+
+            if verbose_debug_max and seq_len <= verbose_debug_max:
+                print_prefill_pcc_isl_debug(ref_prefill, tt_prefill, seq_len)
+
+            per_token = seq_len <= per_token_pcc_max
+            passed_p, pcc_p, per_pos = compare_prefill_hidden_pcc(ref_prefill, tt_prefill, seq_len, per_token=per_token)
+            row.update(
+                {
+                    "status": "ok",
+                    "overall_pcc": pcc_p,
+                    "min_pcc": min(per_pos) if per_pos else pcc_p,
+                    "median_pcc": sorted(per_pos)[seq_len // 2] if per_pos else pcc_p,
+                    "last_pcc": per_pos[-1] if per_pos else pcc_p,
+                    "pcc_pass": passed_p,
+                    "total_sec": row["hf_sec"] + row["tt_sec"],
+                }
+            )
+            print(
+                f"[prefill ISL sweep] ISL={seq_len} overall_PCC={pcc_p:.5f} "
+                f"pass={'yes' if passed_p else 'no'} total={row['total_sec']:.1f}s",
+                flush=True,
+            )
+        except Exception as exc:
+            row.update({"status": "error", "error": str(exc)})
+            print(f"[prefill ISL sweep] ISL={seq_len} ERROR: {exc}", flush=True)
+
+        results.append(row)
+
+    return results
+
+
+def print_prefill_isl_sweep_timing_table(results: list[dict]) -> None:
+    """Print ISL sweep summary: timing + PCC per sequence length."""
+    print("\n[prefill ISL sweep] timing + PCC summary")
+    print("ISL    | HF(s)  | TT(s)  | Total(s) | KV aligned | Overall PCC | Min PCC | Pass | Status")
+    print("-------|--------|--------|----------|------------|-------------|---------|------|-------")
+    for row in results:
+        if row.get("status") != "ok":
+            print(
+                f"{row['seq_len']:6d} |   —    |   —    |     —    |     —      |      —      |    —    |  —   | "
+                f"ERROR: {row.get('error', 'unknown')}"
+            )
+            continue
+        print(
+            f"{row['seq_len']:6d} | {row['hf_sec']:6.2f} | {row['tt_sec']:6.2f} | {row['total_sec']:8.2f} | "
+            f"{row['kv_cache_aligned']:10d} | {row['overall_pcc']:11.5f} | {row['min_pcc']:7.5f} | "
+            f"{'yes' if row['pcc_pass'] else 'no':4s} | ok"
+        )
 
 
 def print_prefill_pcc_isl_debug(
