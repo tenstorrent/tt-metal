@@ -1191,7 +1191,7 @@ def hf_aligned_generation_kwargs(generation_config: Any = None, **overrides: Any
             "do_sample": False,
             "num_beams": 1,
             "max_new_tokens": 256,
-            "repetition_penalty": 1.3,
+            "repetition_penalty": 1.0,
             "eos_token_id": 3,
             "pad_token_id": 0,
         }
@@ -1201,7 +1201,7 @@ def hf_aligned_generation_kwargs(generation_config: Any = None, **overrides: Any
             "do_sample": bool(getattr(gc, "do_sample", False)),
             "num_beams": int(getattr(gc, "num_beams", 1) or 1),
             "max_new_tokens": int(getattr(gc, "max_new_tokens", 256) or 256),
-            "repetition_penalty": float(getattr(gc, "repetition_penalty", 1.3) or 1.3),
+            "repetition_penalty": float(getattr(gc, "repetition_penalty", 1.0) or 1.0),
             "eos_token_id": int(getattr(gc, "eos_token_id", 3)),
             "pad_token_id": int(getattr(gc, "pad_token_id", 0)),
         }
