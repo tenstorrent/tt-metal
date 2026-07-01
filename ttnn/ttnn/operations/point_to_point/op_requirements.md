@@ -38,62 +38,61 @@
 - **SUPPORTED layout**: `[TILE, ROW_MAJOR]`
 - **SUPPORTED topology**: `[Linear, Ring]`
 - **SUPPORTED shape-derived axes**: `alignment ∈ {tile_aligned, non_tile_aligned}`
-  (added during verification — see changelog)
 - **Memory**: interleaved (DRAM or L1); sharded rejected by `validate()`
 - **Cores**: single core `(0,0)` per endpoint (sender + receiver programs)
 - **Coordination**: one cached op-internal `GlobalSemaphore`; fabric atomic-inc
   handshake (ready → done) with cache-reuse reset ordering
-- **Golden baseline (analytical)**: 432 cells = **396 expected-supported + 36
-  INVALID-skipped** (bf8b×ROW_MAJOR); **0 xfail_expected**. On-device-observed
-  counts are **not available** — the golden/acceptance suites could not run (no
-  `test_golden.py` scaffold; sim fabric bring-up fails on this single-device host).
-  See `verification_report.md` → "On-device verification (BLOCKED)".
+- **Compute config**: n/a (no compute stage — pure data movement)
+- **Golden baseline (OBSERVED, this pass):** verified on the graded `bh_8xP150_p2p`
+  sim topology (mesh (2,4), FABRIC_1D). 30-cell sample: **28 supported_pass +
+  2 invalid_skipped** (bf8b×ROW_MAJOR); **0 supported_fail / 0 xpass_drift /
+  0 xfail_wrong_mode / 0 xfail_expected**. Sample spans every axis value. Full
+  cartesian = 432 (396 supported + 36 INVALID). See `verifier_report.json`.
 
 ---
 
 ## Refinement queue — EMPTY (no axis-expansion work outstanding)
 
-After the Phase-0 registry-conformance fix (adding the `alignment` axis + tagger),
-**`SUPPORTED` covers `TARGET` on every axis**:
+**`SUPPORTED` covers `TARGET` on every axis** — verified against
+`eval/golden_tests/point_to_point/feature_spec.py` and confirmed by the observed
+golden run (`by_category.xfail_expected == 0`, i.e. there are no xfail-decorated
+cells anywhere in the cartesian, because every non-INVALID cell is supported):
 
-| Axis | TARGET | SUPPORTED | TARGET − SUPPORTED |
-|------|--------|-----------|--------------------|
-| dtype | bf16, f32, bf8b, uint16, int32, uint32 | (all 6) | ∅ |
-| layout | TILE, ROW_MAJOR | TILE, ROW_MAJOR | ∅ |
-| topology | Linear, Ring | Linear, Ring | ∅ |
-| alignment | tile_aligned, non_tile_aligned | (both) | ∅ |
+| Axis | TARGET | SUPPORTED | TARGET − SUPPORTED | Disposition |
+|------|--------|-----------|--------------------|-------------|
+| dtype | bf16, f32, bf8b, uint16, int32, uint32 | (all 6) | ∅ | — |
+| layout | TILE, ROW_MAJOR | TILE, ROW_MAJOR | ∅ | — |
+| topology | Linear, Ring | Linear, Ring | ∅ | — |
+| alignment | tile_aligned, non_tile_aligned | (both) | ∅ | — |
 
 The only structurally-removed region — `{bf8b, ROW_MAJOR}` — is covered by the
-`INVALID` entry in `feature_spec.py`, so it is correctly *skipped*, not queued.
+`INVALID` entry in `feature_spec.py` (observed skipped in the golden run), so it is
+correctly *skipped*, not queued.
 
-Every `(axis, missing_value)` pair from `TARGET − SUPPORTED` is therefore the empty
-set: there are no refinements to file. This is the expected end state for a
-**pure-data-movement op whose kernels are dtype/layout/alignment-agnostic byte
-movers** — full TARGET coverage is reachable in the Phase-0 build, with no
-per-axis kernel branching to add later.
+**Every `(axis, missing_value)` pair from `TARGET − SUPPORTED` is the empty set** →
+there are no refinements to file. This is the expected end state for a
+**pure-data-movement op whose kernels are dtype/layout/alignment/topology-agnostic
+byte movers** — full TARGET coverage is reachable in the Phase-0 build with no
+per-axis kernel branching to add later. (The op reaches every dtype because it
+copies physical pages verbatim; both layouts because it never tilizes/untilizes;
+both alignments because it copies padded tiles / RM rows as-is; both topologies
+because `ccl_dm_route` owns the routing.)
 
-Per the agent contract, items that are **not** axis-expansions and **not** moves
-out of a tracked failure category do **not** belong in this queue. The two
-remaining concerns are recorded where they belong:
+Per the agent contract, items that are **not** axis-expansions and **not** moves out
+of a tracked failure category (`OOM` / `numerical-precision` / `numerical-bug` /
+`hang`) do **not** belong in this queue. There are no such failures — every observed
+cell passes. The two forward-looking scope items are recorded where they belong:
 
-1. **Verification debt (a task, not a refinement).** The Phase-0 `SUPPORTED` claims
-   are verified by code review + analytical gap analysis only; **no cell has been
-   observed passing on hardware**. Re-running the acceptance + precision +
-   golden suites on real ≥2-device Blackhole hardware (or a repaired sim-bh fabric
-   model) is required to confirm them. This is verification work — explicitly *not*
-   a refinement — and is tracked in `verification_report.md` → Recommendations #1.
-   Highest-risk unverified paths to exercise first: bf8b/uint16/int32/uint32 framing,
-   the segmented packet regime (`page_segments > 1`), Ring routing, and
-   program-cache reuse (the semaphore-reset footgun).
-
-2. **Out-of-TARGET enhancements (need a TARGET expansion first, via `/golden-tests`).**
-   - *Sharded memory config* — `validate()` rejects sharded input; TARGET has no
-     `memory_config` axis, so this is not a refinement candidate today.
-   - *Multi-link / multi-core fan-out* — single-core per endpoint by design; a
-     performance change with no SUPPORTED axis or failing cell to point at.
-   Both are noted in `verification_report.md` → Recommendations #3 as performance/
-   scope items, deliberately kept out of this queue.
+1. **Sharded memory config** — `validate()` rejects sharded input; TARGET has no
+   `memory_config` axis, so this is not a refinement candidate today. Needs a
+   `/golden-tests` TARGET expansion first. (`verification_report.md` → Recommendations #2.)
+2. **Multi-link / multi-core fan-out** — single-core per endpoint by design; a
+   throughput change with no SUPPORTED axis or failing cell, and *not*
+   embarrassingly-parallel (the fabric route + handshake are shared). Performance,
+   not capability. (`verification_report.md` → Recommendations #3.)
 
 > If a future `/golden-tests` pass widens `TARGET` (e.g. adds a `memory_config`
 > axis for sharded I/O), the new `(axis, value)` pairs become the first real
-> refinements here, named `Refinement 1`, `Refinement 2`, … at that time.
+> refinements here, named `Refinement 1`, `Refinement 2`, … at that time. Sharded
+> I/O would bundle with the memory-config refinement (a different reader/writer),
+> not stand alone — see `/memory-layouts` for the in-kernel data-access pattern.

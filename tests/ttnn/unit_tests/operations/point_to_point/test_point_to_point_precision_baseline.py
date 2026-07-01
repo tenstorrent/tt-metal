@@ -13,9 +13,12 @@ happened at ``from_torch`` time (e.g. bfloat8_b).
 
 This is a multi-device op (needs a >=2-device ``ttnn.MeshDevice`` with the
 fabric enabled), so — exactly like the acceptance suite — it must be run under
-the deterministic multi-device sim runner, NOT ``run_safe_pytest.sh``:
+the deterministic multi-device sim runner, NOT ``run_safe_pytest.sh``. It opens
+exactly the graded topology's mesh shape (2, 4) + FABRIC_1D, so drive it by the
+matching topology (``--op`` fans across all p2p topologies whose mesh shapes
+differ and would hang fabric init):
 
-    scripts/run_multidevice_sim_pytest.py --op point_to_point -- \
+    scripts/run_multidevice_sim_pytest.py --topology bh_8xP150_p2p -- \
         tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point_precision_baseline.py -v
 
 It records PCC, max abs error, mean abs error, and relative RMS error per shape.
@@ -93,7 +96,7 @@ def _metrics(golden: torch.Tensor, calc: torch.Tensor):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT), (ttnn.float32, ttnn.TILE_LAYOUT)])
 @pytest.mark.parametrize("shard_shape", SHAPES)
 def test_point_to_point_precision_baseline(mesh_device, topology, dtype, layout, shard_shape):

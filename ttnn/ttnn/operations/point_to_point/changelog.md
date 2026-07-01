@@ -195,3 +195,64 @@ shapes differ from the test's hardcoded (2,4), which would hang their fabric ini
 ### Tests added
 None (implementation unchanged). The existing acceptance suite and the Phase-0
 precision baseline both run under the sim runner.
+
+## 2026-07-01 — Verifier hardening pass (observed golden + precision + verify_supported CLI)
+
+### What was done
+Full verifier pass with **mechanical, on-device (sim) confirmation** — the prior
+verifier's numbers were analytical/blocked; these are observed. No op-code changes
+(the four kernels, program descriptor, and entry point were reviewed clean).
+
+### Issues encountered / fixed
+- **Test bug fixed (precision baseline mesh shape).** `test_point_to_point_precision_baseline.py`
+  opened `mesh_device=(1, 2)`, mismatching the graded `bh_8xP150_p2p` topology's fixed
+  **(2, 4)** torus-x mesh-graph descriptor — that mismatch hangs fabric init
+  (`Fabric Router Sync: Timeout`), a test/topology error, not an op defect. Changed the
+  fixture to `(2, 4)` and corrected the docstring runner command to
+  `--topology bh_8xP150_p2p` (from `--op point_to_point`, which fans across the
+  `(4,2)`/`(8,4)` p2p topologies whose shapes would hang the (2,4)-hardcoded test).
+  The fixed test now runs green (8/8, PCC=1.0).
+- **Code review — clean, no op changes.** Confirmed helper usage is idiomatic
+  (`sender_writer`: full `open→arm_unicast_write/arm_inc→write_page loop→inc→close`;
+  `receiver_reader`: one-shot `signal(num_hops, sem)` for the ready handshake), CB
+  push==wait balance, coalesce/de-coalesce (both regimes + short-last-packet), fabric
+  RT-arg block at `conn_arg_idx=9`, handshake/cache-reuse reset ordering, and the
+  helper-vs-raw split all correct against `ccl_helpers_dataflow.hpp`.
+- **Registry conformance re-confirmed**: INPUT_TAGGERS/SUPPORTED/EXCLUSIONS/validate()
+  present + wired; op file declares no INVALID; feature_spec INVALID well-formed.
+
+### Accuracy achieved (MEASURED)
+Precision baseline on `bh_8xP150_p2p` (mesh (2,4), FABRIC_1D, Linear), 8 cells
+(4 shapes × {bf16, f32}, incl. large (1,1,512,512)): **PCC = 1.000000,
+max_abs = mean_abs = rel_rms = 0** for every cell — bit-exact identity byte copy.
+
+### Golden suite + verify_supported (OBSERVED)
+Ran two golden-suite slices on the sim (`eval.axes_plugin` sidecar + junit →
+`eval.classify_failures` → `eval.verify_supported`), sampling 30 of 432 cartesian
+cells spanning every axis value (both topologies × all 6 dtypes × both layouts ×
+both alignments × single/multi-tile):
+- **supported_pass = 28, invalid_skipped = 2** (bf8b×ROW_MAJOR),
+  **supported_fail = 0, xpass_drift = 0, xfail_wrong_mode = 0, xfail_expected = 0.**
+- Slice 1: `1x1x32x32 & Linear` → 11 pass + 1 invalid_skip; Slice 2:
+  `1x1x32x32 & Ring` (11+1) + `1x1x24x24 & bf16` non-aligned (4) + `1x1x64x128 & bf16 & Linear` (2).
+- Merged report at `eval/results/point_to_point/verifier_report.json` (with a
+  `_provenance` block documenting the sampling rationale). `xfail_expected == 0` is
+  structural (SUPPORTED == TARGET → no xfail cells exist), not a coverage gap.
+
+### Refinement queue
+**EMPTY** — `TARGET − SUPPORTED = ∅` on every axis (dtype/layout/topology/alignment),
+and the sole structural hole (`bf8b×ROW_MAJOR`) is an `INVALID` skip. No
+axis-expansion refinements and no failing-cell refinements. Sharded memory config and
+multi-link fan-out are out-of-TARGET scope notes in `verification_report.md`, not
+queue entries.
+
+### Tests modified / added
+- Modified `test_point_to_point_precision_baseline.py` (mesh-shape fix + docstring).
+- No new tests (existing acceptance + precision suites are sufficient; the op is a
+  pure byte mover with full TARGET coverage at Phase 0).
+
+### Artifacts written
+- `verification_report.md` (rewritten with observed data), `op_requirements.md`
+  (refreshed empty queue with the observed per-axis gap table), this changelog entry,
+  and `eval/results/point_to_point/verifier_report.json` (+ `test_results.json`,
+  `test_axes.json`, `junit*.xml`).
