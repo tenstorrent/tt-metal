@@ -49,13 +49,13 @@ def test_worker_l1_size(device, layout, dtype):
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_worker_l1_fail(device, layout, dtype):
+def test_worker_l1_fail(device, layout, dtype, expect_error):
     torch_tensor = torch.rand((1, 1, 32, 1024), dtype=torch.bfloat16)
 
     core_grid = ttnn.CoreGrid(y=1, x=1)
     memory_config = ttnn.create_sharded_memory_config(torch_tensor.shape, core_grid, ttnn.ShardStrategy.BLOCK)
     ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
-    with pytest.raises(RuntimeError, match=".*Out of Memory:.*"):
+    with expect_error(RuntimeError, ".*Out of Memory:.*"):
         ttnn_tensor = ttnn.to_device(
             ttnn_tensor,
             device,
@@ -87,3 +87,12 @@ def test_async_sd_state_preserved_across_fd(mesh_device):
         pass
 
     assert ttnn.device.is_asynchronous_slow_dispatch_enabled(mesh_device)
+
+
+def test_pad_to_tile_shape_removed():
+    """ttnn.pad_to_tile_shape has been removed; verify it is no longer accessible."""
+    assert not hasattr(ttnn, "pad_to_tile_shape"), (
+        "ttnn.pad_to_tile_shape should be removed. "
+        "Use ttnn.to_layout(tensor, ttnn.TILE_LAYOUT) or "
+        "models.common.tensor_utils.align_shape_to_tile instead."
+    )
