@@ -1049,27 +1049,44 @@ class Qwen36Model:
     def warmup_prefill_masked_buckets(self, page_table, buckets=None):
         """Compile every masked-bucket prefill program up front (warmup).
 
-        For each bucket runs two dummy prefills: one at the exact bucket length (the no-mask
-        program) and one shorter (the masked program — the GDN mask multiply + the conv-state
-        and logit one-hot matmuls). After this, a real short prompt of ANY length rounds up to
-        an already-compiled bucket and never compiles at request time — the root cause of the
-        trace-clobber hang. MUST run while the GDN is in its serving state mode and BEFORE any
-        trace is parked; capture_prefill_trace_chunked calls this just before begin_trace_capture.
-        Requires page_table to cover the largest bucket (max 2048 -> 32 blocks of 64)."""
+        For each bucket runs dummy prefills covering both the no-mask program (actual_len ==
+        bucket) and the masked program (actual_len < bucket — the GDN valid-len mask multiply,
+        conv-state capture, and logit one-hot select), plus one length per distinct
+        paged_fill_cache FILL WIDTH ceil(actual_len/block_size) reachable within the bucket.
+        After this, a real short prompt of ANY length rounds up to an already-compiled bucket and
+        never compiles at request time — the root cause of the trace-clobber hang. MUST run while
+        the GDN is in its serving state mode and BEFORE any trace is parked;
+        capture_prefill_trace_chunked calls this just before begin_trace_capture. page_table must
+        cover the largest bucket.
+
+        Drive the sweep from the BUCKET set, not from block_size. This hybrid GDN model's
+        attention KV page size is unified with the large recurrent-state page, so
+        get_block_size() is big (e.g. ~800 tokens/block, NOT 64). The old
+        `max_width = max(buckets) // block_size` collapsed to 1-2 iterations at
+        vlen = w * block_size (~800, ~1600), which only warmed buckets 1024/2048 and NEVER the
+        small 128/256/512 buckets that short prompts use. Those short prompts then compiled ~the
+        whole forward at request time, clobbering the parked decode/chunk traces -> second-request
+        device hang (issue #48536)."""
         if buckets is None:
             buckets = self._PREFILL_MASK_BUCKETS
         block_size = get_block_size(self._paged_kv_caches)
-        # The masked GDN/SDPA/sel programs key on the bucket; paged_fill_cache keys on the
-        # real-block FILL WIDTH = ceil(valid_len/64), which a real prompt/tail can land on at any
-        # value in 1..max_width. Warm each width via a vlen=width*block_size: w*64 rounds to its
-        # bucket and produces fill width w. This sweep also covers, per bucket, both the no-mask
-        # variant (vlen == bucket) and the masked variant (vlen < bucket).
-        max_width = max(buckets) // block_size
-        for w in range(1, max_width + 1):
-            vlen = w * block_size
-            b = self._mask_bucket_for(vlen)
-            toks = torch.zeros(1, vlen, dtype=torch.int32)
-            self.prefill_masked_bucket(toks, page_table, actual_len=vlen, bucket=b)
+        seen = set()
+        for bucket in sorted(buckets):
+            # Lengths that a real prompt rounding up to `bucket` can produce. The (bucket,
+            # fill_width, is_full_bucket) key dedupes to the distinct program variants.
+            lengths = {bucket, max(1, bucket // 2)}
+            for w in range(1, num_blocks_in_seq(bucket, block_size) + 1):
+                lengths.add(min(w * block_size, bucket))  # no-mask-ish at fill width w
+                if bucket > 1:
+                    lengths.add(min(w * block_size, bucket - 1))  # masked at fill width w
+            for actual_len in sorted(lengths):
+                actual_len = max(1, min(actual_len, bucket))
+                key = (bucket, num_blocks_in_seq(actual_len, block_size), actual_len == bucket)
+                if key in seen:
+                    continue
+                seen.add(key)
+                toks = torch.zeros(1, actual_len, dtype=torch.int32)
+                self.prefill_masked_bucket(toks, page_table, actual_len=actual_len, bucket=bucket)
         ttnn.synchronize_device(self.device)
 
     def prefill_traced_chunked(self, token_ids, page_table, actual_len):
@@ -1105,6 +1122,27 @@ class Qwen36Model:
         # shared by short prompts and the long-prompt tail; prefill_dispatch routes every traced
         # prefill here so the short/long seam is defined once.
         if num_full == 0:
+            # Match the full-attention SDPA page-table width to the warmed/captured width so the
+            # short-prompt forward REPLAYS the pre-warmed program set instead of recompiling at
+            # request time (a request-time compile clobbers the parked decode/chunk traces -> the
+            # second-request hang). vLLM pads the request page table to its own
+            # max_num_blocks_per_req, which differs from the width warmup used; pad/clip to the
+            # captured buffer width. Trailing entries index blocks past the prompt and are never
+            # read by causal SDPA up to actual_len (same rationale as the long-prompt branch
+            # below). No-op when no chunk buffer was captured or the widths already match.
+            buf = getattr(self, "_chunk_full_page_table_buf", None)
+            if buf is not None:
+                buf_blocks = int(buf.shape[-1])
+                if page_table.shape[1] < buf_blocks:
+                    page_table = torch.cat(
+                        [
+                            page_table,
+                            torch.zeros(page_table.shape[0], buf_blocks - page_table.shape[1], dtype=page_table.dtype),
+                        ],
+                        dim=1,
+                    )
+                elif page_table.shape[1] > buf_blocks:
+                    page_table = page_table[:, :buf_blocks]
             return self.prefill_masked_bucket(
                 token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0
             )

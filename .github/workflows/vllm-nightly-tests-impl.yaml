@@ -199,6 +199,7 @@ jobs:
               "mesh-device": "P150x4",
               "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "default-chat-template-kwargs": "{\"enable_thinking\": false}",
               "multimodal": false,
               "owner_id": "U08HL8X1ECD"
             },
@@ -443,7 +444,7 @@ jobs:
         PYTHONPATH: /work:/work/vllm
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        HF_HUB_OFFLINE: 0
+        HF_HUB_OFFLINE: 1
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
@@ -531,6 +532,20 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
+          # Server-side default chat-template kwargs (e.g. reasoning models like
+          # Qwen3.6 default to thinking on; turn it off by default so the server
+          # answers directly). vLLM merges these with request-level
+          # chat_template_kwargs, with request values taking precedence — so a
+          # client can still opt back in with {"enable_thinking": true}. Kept in
+          # its own quoted arg (not additional-server-args) so the JSON survives
+          # the unquoted word-splitting expansion above.
+          DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
+          if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
+            DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
+          else
+            DEFAULT_CHAT_TEMPLATE_KWARGS=()
+          fi
+
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
@@ -573,6 +588,7 @@ jobs:
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"

@@ -50,9 +50,8 @@ class Qwen36ModelArgs(ModelArgs):
         if not os.path.isfile(os.path.join(hf_model, "config.json")):
             from huggingface_hub import snapshot_download
 
-            # Resolve from the local cache only
-            # offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
-            os.environ["HF_MODEL"] = snapshot_download(hf_model, local_files_only=False)
+            offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
+            os.environ["HF_MODEL"] = snapshot_download(hf_model, local_files_only=offline)
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
 
         # The base resolves the checkpoint dir from HF_MODEL into self.CKPT_DIR; mirror
