@@ -228,6 +228,15 @@ class Qwen36ModelArgs(ModelArgs):
     def weight_cache_path(self, dtype=None):
         """Return cache directory path for converted weight tensors.
 
+        Rooted at the framework ``model_cache_path`` (i.e. ``TT_CACHE_PATH`` +
+        device name, e.g. ``/mnt/.../tt_cache/Qwen/Qwen3.6-27B/P150x4``), NOT the
+        HF checkpoint snapshot. The snapshot dir is frequently mounted read-only
+        in CI, so caching there silently never persists — every run regenerates
+        all weights, which for the full 64-layer model exceeds the test timeout.
+        ``TT_CACHE_PATH`` points at a writable / pre-warmable tree, matching how
+        the shared tt_transformers models cache their weights. Falls back to the
+        checkpoint dir only if no cache path was resolved.
+
         Directory is created automatically by ttnn.as_tensor when first cache file is written.
 
         Multi-device (TP) caches are qualified by mesh shape. Per-device weight
@@ -250,7 +259,8 @@ class Qwen36ModelArgs(ModelArgs):
             suffix = "tensor_cache_bf16"
         if self.num_devices > 1:
             suffix += "_mesh" + "x".join(str(d) for d in self.cluster_shape)
-        return Path(self.checkpoint_dir) / suffix
+        root = getattr(self, "model_cache_path", None) or Path(self.checkpoint_dir)
+        return Path(root) / suffix
 
     def load_state_dict(self):
         """Load + remap this checkpoint's weights via transformers from_pretrained.
