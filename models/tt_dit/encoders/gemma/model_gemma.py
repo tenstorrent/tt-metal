@@ -364,9 +364,6 @@ class GemmaFF(Module):
         self.pre_feedforward_layernorm = GemmaRMSNorm(config, mesh_device)
         self.post_feedforward_layernorm = GemmaRMSNorm(config, mesh_device)
 
-        # down_proj matmul + reduce-scatter fuse on Ring (4x8); Linear (2x4) uses the plain path.
-        self._tp_ring = ccl_manager.topology == ttnn.Topology.Ring
-
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -388,11 +385,7 @@ class GemmaFF(Module):
         up = self.up_proj(x, compute_kernel_config=self.compute_config)
         x = gate * up
 
-        # down_proj is RowParallel (matmul + reduce_scatter). On Ring the two fuse into one op.
-        if self.parallel_config.tensor_parallel.factor > 1 and self._tp_ring:
-            x = self.down_proj.forward_fused_reduce_scatter(x, compute_kernel_config=self.compute_config)
-        else:
-            x = self.down_proj(x, compute_kernel_config=self.compute_config)
+        x = self.down_proj(x, compute_kernel_config=self.compute_config)
         x = ttnn.unsqueeze(x, 0)
         if self.parallel_config.tensor_parallel.factor > 1:
             x = self.ccl_manager.all_gather(

@@ -63,7 +63,11 @@ class ConnectorBlock(Module):
         # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(x)), applied to attn output.
         # dtype=float32 routes the matmul through HiFi4 + fp32 dest acc to match the host fp32
         # baseline (mirrors attention_ltx; the gate is precision-sensitive over 8 blocks).
-        self.to_gate_logits = Linear(dim, num_heads, bias=True, dtype=ttnn.float32, mesh_device=mesh_device)
+        # Column-parallel on heads so the gate is sharded to match the head-split SDPA output and
+        # multiplies in BHNE before concatenate_heads (no full-activation reshape).
+        self.to_gate_logits = ColParallelLinear(
+            dim, num_heads, bias=True, dtype=ttnn.float32, mesh_device=mesh_device, mesh_axis=tp_axis
+        )
 
         # Feed-forward (GELU gated)
         self.ff1 = ColParallelLinear(
@@ -203,10 +207,18 @@ class ConnectorBlock(Module):
             is_causal=False,
             program_config=sdpa_config,
             compute_kernel_config=self.compute_config,
-        )
+        )  # (B, n_local_heads, T, D)
+
+        # Per-head gate applied in BHNE, before concatenate_heads: gates = 2*sigmoid(...) are
+        # sharded on heads (ColParallel) to match, so each head's output scales by its gate with a
+        # broadcast over head_dim — no reshape of the full (B,T,H*D) activation. Mirrors attention_ltx.
+        gate_logits = self.to_gate_logits(attn_in)  # (B, T, n_local_heads)
+        gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
+        gate = ttnn.unsqueeze(ttnn.permute(gate, (0, 2, 1)), -1)  # (B, n_local_heads, T, 1)
+        attn_out = ttnn.multiply(attn_out, gate)
+
         attn_out = ttnn.transformer.concatenate_heads(attn_out)
         attn_out = ttnn.unsqueeze(attn_out, 0)
-
         if tp > 1:
             attn_out = self.ccl_manager.all_gather(
                 attn_out,
@@ -215,17 +227,6 @@ class ConnectorBlock(Module):
                 use_hyperparams=True,
             )
         attn_out = ttnn.squeeze(attn_out, 0)  # (B, T, H*D), full
-
-        # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(attn_in)), each head's
-        # output scaled by its gate. Done on device (matmul accumulates in fp32 via
-        # compute_config); the gate is a smooth scalar in (0,2) so bf16 sigmoid is adequate.
-        # No compute_kernel_config override: the fp32 weight selects HiFi4 (matching attention_ltx).
-        gate_logits = self.to_gate_logits(attn_in)  # (B,T,H)
-        gates = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)  # (B,T,H)
-        b, t = attn_out.shape[0], attn_out.shape[1]
-        ao = ttnn.reshape(attn_out, (b, t, self.num_heads, self.head_dim))
-        ao = ttnn.multiply(ao, ttnn.reshape(gates, (b, t, self.num_heads, 1)))
-        attn_out = ttnn.reshape(ao, (b, t, self.num_heads * self.head_dim))
 
         attn_out = self.to_out(attn_out, compute_kernel_config=self.compute_config)
         x = attn_out + residual
