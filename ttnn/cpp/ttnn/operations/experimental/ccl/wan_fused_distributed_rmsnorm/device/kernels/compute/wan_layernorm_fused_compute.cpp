@@ -256,22 +256,77 @@ void kernel_main() {
             cb_push_back(invstd_cb, 1);
         } else {
             DeviceZoneScopedN("LN_MERGE");
-            // Parallel-Welford merge of the ring_size per-shard partials (equal counts
-            // = reduce_width). combine_welford_partials consumes the gathered
-            // [mean_d, var_d] tiles (waits internally) and writes [global_mean,
-            // 1/std] (row 0) into combine_cb. NOTE: combine_welford_partials does
-            // reserve_back(2) + pack_tile but does NOT push_back — the caller must
-            // (mirrors layernorm_post_allgather_welford.cpp).
-            CircularBuffer gathered_obj(stats_gathered_cb);
-            CircularBuffer combined_obj(combine_cb);
-            combine_welford_partials(
-                gathered_obj,
-                combined_obj,
-                ring_size,
-                [](uint32_t) { return reduce_width; },
-                // legacy=true: match the composite dit_layernorm rsqrt (rsqrt_tile<true>);
-                // the non-legacy default diverges on low-variance rows -> in-block PCC loss.
-                RSqrtPolicy{/*compute=*/true, /*eps=*/eps_bits, /*legacy=*/true});
+            // Equal-count Welford combine. All ring_size shards have identical count
+            // n_i == reduce_width, so the EXACT parallel-Welford (Chan) combine collapses to
+            //   mean_g = mean(mean_i)
+            //   var_g  = mean(var_i) + (1/K) Σ (mean_i - mean_g)^2
+            // The second term is the between-shard sum-of-squared-deviations / N -- computed
+            // here in the STABLE deviation form (Welford/Chan's delta identity), NOT the
+            // algebraically-equal-but-cancellation-prone mean(mean_i^2) - mean_g^2. So this is
+            // exactly Welford's parallel merge for equal counts, just in closed form: the
+            // per-shard M2 (var_i) stays additive and the cross-shard term squares the small
+            // deviations (mean_i - mean_g), never large means. The per-shard PRE Welford is
+            // unchanged. Replaces the sequential pairwise combine_welford_partials (~11 ops/
+            // shard, was 62.8% of LN compute) with FPU pairwise sums + one deviation-square
+            // per shard. Gathered CB interleaves [mean_0, var_0, mean_1, var_1, ...] (row 0),
+            // mean_i at 2i, var_i at 2i+1. Output [mean_g, 1/std] (row 0) -> combine_cb for the
+            // downstream transpose. legacy rsqrt matches the composite dit_layernorm baseline.
+            constexpr uint32_t DM = 0;   // Σ mean_i  -> mean_g
+            constexpr uint32_t DV = 1;   // Σ var_i   -> 1/std
+            constexpr uint32_t DMM = 2;  // Σ (mean_i - mean_g)^2
+            constexpr uint32_t DT = 3;   // scratch
+            constexpr uint32_t two_ring = 2u * ring_size;
+            constexpr uint32_t recip_k_bits = __builtin_bit_cast(uint32_t, 1.0f / static_cast<float>(ring_size));
+            cb_wait_front(stats_gathered_cb, two_ring);
+            reconfig_data_format(stats_gathered_cb, stats_gathered_cb);
+            pack_reconfig_data_format(combine_cb);
+            tile_regs_acquire();
+            // Σ mean_i (even tile indices) via FPU pairwise add + dst-accumulate.
+            binary_tiles_init<true, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, false);
+            add_tiles(stats_gathered_cb, stats_gathered_cb, 0, 2, DM);
+            binary_tiles_init<false, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, true);
+            for (uint32_t k = 4; k < two_ring; k += 4) {
+                add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 2, DM);
+            }
+            // Σ var_i (odd tile indices).
+            binary_tiles_init<true, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, false);
+            add_tiles(stats_gathered_cb, stats_gathered_cb, 1, 3, DV);
+            binary_tiles_init<false, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, true);
+            for (uint32_t k = 5; k < two_ring; k += 4) {
+                add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 2, DV);
+            }
+            // mean_g = (1/K) Σ mean_i  (needed before the deviation form below).
+            binop_with_scalar_tile_init();
+            mul_unary_tile(DM, recip_k_bits);  // DM = mean_g
+            // Between-shard term via the STABLE deviation form: Σ (mean_i - mean_g)^2. Squares
+            // only the small deviations, so no catastrophic cancellation (unlike Σmean^2-mean_g^2).
+            fill_tile_init();
+            fill_tile(DMM, 0.f);
+            for (uint32_t i = 0; i < ring_size; i++) {
+                copy_tile_to_dst_init_short(stats_gathered_cb);
+                copy_tile(stats_gathered_cb, 2u * i, DT);  // DT = mean_i
+                sub_binary_tile_init();
+                sub_binary_tile(DT, DM, DT);  // DT = mean_i - mean_g
+                square_tile_init();
+                square_tile(DT);  // DT = (mean_i - mean_g)^2
+                add_binary_tile_init();
+                add_binary_tile(DMM, DT, DMM);  // Σ (mean_i - mean_g)^2
+            }
+            // var_g = (1/K) Σ var_i + (1/K) Σ (mean_i - mean_g)^2 = (Σvar + Σdev^2) / K
+            add_binary_tile_init();
+            add_binary_tile(DV, DMM, DV);  // DV = Σvar + Σdev^2
+            binop_with_scalar_tile_init();
+            mul_unary_tile(DV, recip_k_bits);  // DV = var_g
+            add_unary_tile(DV, eps_bits);      // var_g + eps
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(DV);  // DV = 1/std (legacy, matches baseline)
+            tile_regs_commit();
+            cb_reserve_back(combine_cb, 2);
+            tile_regs_wait();
+            pack_tile(DM, combine_cb);  // mean_g -> tile 0
+            pack_tile(DV, combine_cb);  // 1/std  -> tile 1
+            tile_regs_release();
+            cb_pop_front(stats_gathered_cb, two_ring);
             cb_push_back(combine_cb, 2);
 
             // Transpose merged mean / 1/std row 0 -> col 0.

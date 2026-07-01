@@ -62,4 +62,25 @@ merge only (don't touch the shared fn: keeps baseline honest + 4 other consumers
 4. After each change: test_layernorm_corr (PCC>=99.9%, det) + the FLUX LN bench; log deltas.
 
 ## Results log
-- Profiling checkpoint: merge = 62.8% (this commit).
+- Profiling checkpoint: merge = 62.8% (commit b1e78b39b20).
+- **Opt 1 — equal-count merge** (numerically stable, EXACT Welford for equal counts).
+  Replaced the sequential pairwise combine_welford_partials with FPU pairwise sums +
+  the between-shard term computed in Welford's STABLE deviation form
+  Σ(mean_i - mean_g)^2 (NOT Σmean_i^2 - mean_g^2 -- squares only small deviations, no
+  cancellation). Per-shard PRE Welford unchanged. PCC unchanged (100.0003-100.0010%,
+  det=OK, 5/5 LN corr). FLUX LN speedup (delta form):
+
+  | shape | before | after |
+  |--|--:|--:|
+  | tp8 N16384 | 1.44x | **1.87x** |
+  | tp8 N4096  | 1.46x | **1.79x** |
+  | tp8 N1024  | 1.28x | **1.55x** |
+  | tp8 N128   | 1.23x | **1.58x** |
+  | tp4 N8192  | 1.31x | **1.42x** |
+  | tp4 N2048  | 1.01x | 1.05x |
+  | tp4 N512   | 1.02x | 1.11x |
+  | tp4 N64    | 0.61x | 0.68x |
+
+  TP8 now 1.55-1.87x (RMS target 2.0-2.6x). TP4 gains smaller (ring_size=4 -> merge less
+  dominant). Next: re-profile; likely PRE Welford (was 22.8%) is now the top zone, and
+  TP4/small-N still lag. Candidates: cheaper PRE, POST-pass fusion, worker sweep.
