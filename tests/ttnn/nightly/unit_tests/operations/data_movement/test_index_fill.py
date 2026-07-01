@@ -464,3 +464,35 @@ def test_index_fill_width_block_dtypes(device, torch_dtype, ttnn_dtype, value, d
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
 
+
+@pytest.mark.parametrize(
+    "shape, dim, num_indices, value",
+    [
+        ((2, 4, 8, 32), 0, 2, 1.5),
+        ((2, 4, 8, 32), 2, 5, -0.5),
+        ((2, 4, 8, 32), 3, 8, 2.0),  # last dim
+    ],
+    ids=["dim0", "dim2", "dim3-last"],
+)
+@pytest.mark.parametrize("direction", ["interleaved_to_height", "height_to_interleaved"])
+def test_index_fill_interleaved_height_conversion(device, shape, dim, num_indices, value, direction):
+    """INTERLEAVED <-> HEIGHT_SHARDED conversion (full-row pages on both sides)."""
+    interleaved_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    height_cfg = ttnn.create_sharded_memory_config(
+        shape=shape, core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    in_cfg, out_cfg = (
+        (interleaved_cfg, height_cfg) if direction == "interleaved_to_height" else (height_cfg, interleaved_cfg)
+    )
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_index = torch.randint(0, shape[dim], (num_indices,), dtype=torch.int32)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+    )
+    tt_index = _make_index_tensor(torch_index, device)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
+
+    golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
+    assert_equal(ttnn.to_torch(tt_out), golden)
