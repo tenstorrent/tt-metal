@@ -152,6 +152,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"W_size_bytes", W * input_tensor.element_size()},
                  {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
+            // QSR: cb_in0 is filled with many sub-tile (448B) NOC reads per 2048B tile, both cross-core
+            // and self/loopback (height-sharded resident input). This used to require both a CPU-copy
+            // self-read path and disable_implicit_sync_for={CB_IN0} to work around the craq-sim sub-tile
+            // credit bug. That bug is now fixed in the sim (TTSIM_QSR_SUBTILE_AUTOPOST_FIX): sub-tile
+            // transfers no longer auto-credit a whole tile or gate on occupancy, so the kernel's explicit
+            // reserve_back/push_back is the authoritative credit on every core. Plain implicit sync is
+            // correct now; no opt-out needed.
             .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
         };
 
@@ -173,6 +180,11 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"H_size_bytes", H * output_tensor.element_size()},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
+            // QSR: the writer NOC-writes each output row as a sub-tile (H-stick) read FROM cb_out0. This
+            // used to need disable_implicit_sync_for={CB_OUT0} to stop the sim auto-acking per sub-tile op
+            // and spinning. The craq-sim sub-tile credit bug is now fixed (TTSIM_QSR_SUBTILE_AUTOPOST_FIX):
+            // sub-tile transfers no longer auto-ack a whole tile or gate, so the explicit push_back/pop_front
+            // is the authoritative credit. No opt-out needed.
             .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
         };
 

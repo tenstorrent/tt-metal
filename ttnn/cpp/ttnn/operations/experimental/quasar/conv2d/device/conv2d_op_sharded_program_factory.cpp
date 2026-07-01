@@ -964,6 +964,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // Non-block-sharded paths consume ACT_TILIZED from compute:
         // - depthwise path emits/consumes ACT_TILIZED in compute
         // - height-sharded non-depthwise path tilizes ACT internally in compute
+        // (The 2x ACT_TILIZED double-buffering diagnostic was reverted: a 392-tile K-block is ~800 KB
+        //  = 50,176 units of 16 B, and 2x = 100,352 units overflows the uint16_t DFB ring-extent field
+        //  (max 65,536 = 1 MB). Capacity double-buffering of a full K-block is structurally impossible
+        //  on Quasar — see dfb_conv2d_analysis.md.)
         spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
     }
 
