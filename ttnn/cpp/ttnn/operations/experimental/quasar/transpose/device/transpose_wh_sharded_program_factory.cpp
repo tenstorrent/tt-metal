@@ -138,9 +138,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
                 .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
-    ComputeHardwareConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_cfg{
+        .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
     if (src0_cb_data_format == tt::DataFormat::Float32) {
-        compute_cfg.unpack_to_dest_mode = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+        compute_cfg.gen2_config->unpack_to_dest_mode = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
     }
 
     KernelSpec compute_spec{

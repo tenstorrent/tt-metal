@@ -821,6 +821,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
+        // Read the shared fields from the sub-config matching the target architecture — the
+        // same sub-config the dispatcher (is_gen2_arch()) will hand to the resolver at runtime.
+        const auto unpack_to_dest_mode =
+            is_gen2_arch()
+                ? compute_config.gen2_config.value_or(ComputeHardwareConfig::Gen2Config{}).unpack_to_dest_mode
+                : compute_config.gen1_config.value_or(ComputeHardwareConfig::Gen1Config{}).unpack_to_dest_mode;
+        const bool fp32_dest_acc_en =
+            is_gen2_arch() ? compute_config.gen2_config.value_or(ComputeHardwareConfig::Gen2Config{}).fp32_dest_acc_en
+                           : compute_config.gen1_config.value_or(ComputeHardwareConfig::Gen1Config{}).fp32_dest_acc_en;
+
         // Index the kernel's DFB bindings: which DFBs it binds.
         std::unordered_set<DFBSpecName> bound_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
@@ -832,7 +842,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // Duplicate DFB entries are impossible now that unpack_to_dest_mode is a
         // Table with unique keys: a repeated DFB overwrites the prior value.
         std::unordered_set<DFBSpecName> entries_seen;
-        for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+        for (const auto& [dfb_name, mode] : unpack_to_dest_mode) {
             entries_seen.insert(dfb_name);
             TT_FATAL(
                 bound_dfbs.contains(dfb_name),
@@ -848,7 +858,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // unconditionally). Reject only the incoherent case: full-precision FP32 in Dest is
             // impossible without fp32_dest_acc_en (otherwise Dest is 16-bit).
             TT_FATAL(
-                compute_config.fp32_dest_acc_en,
+                fp32_dest_acc_en,
                 "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
                 "but fp32_dest_acc_en is false. Full-precision FP32 in the Dest register requires "
                 "fp32_dest_acc_en=true (otherwise Dest is 16-bit and the mode is incoherent).",
@@ -858,7 +868,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
         // Require an explicit entry where the choice is real:
         // CONSUMER binding + FP32 data format + fp32_dest_acc_en=true.
-        if (!compute_config.fp32_dest_acc_en) {
+        if (!fp32_dest_acc_en) {
             continue;
         }
         for (const auto& binding : kernel.dfb_bindings) {
@@ -2396,17 +2406,17 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
+    const auto gen1 = compute_config.gen1_config.value_or(ComputeHardwareConfig::Gen1Config{});
 
-    std::vector<UnpackToDestMode> unpack_modes =
-        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen1.unpack_to_dest_mode, dfb_name_to_id);
 
     return ComputeConfig{
-        .math_fidelity = compute_config.math_fidelity,
-        .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
-        .dst_full_sync_en = compute_config.dst_full_sync_en,
+        .math_fidelity = gen1.math_fidelity,
+        .fp32_dest_acc_en = gen1.fp32_dest_acc_en,
+        .dst_full_sync_en = gen1.dst_full_sync_en,
         .unpack_to_dest_mode = unpack_modes,
-        .bfp8_pack_precise = compute_config.bfp8_pack_precise,
-        .math_approx_mode = compute_config.math_approx_mode,
+        .bfp8_pack_precise = gen1.bfp8_pack_precise,
+        .math_approx_mode = gen1.math_approx_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -2441,20 +2451,19 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
+    const auto gen2 = compute_config.gen2_config.value_or(ComputeHardwareConfig::Gen2Config{});
 
-    std::vector<UnpackToDestMode> unpack_modes =
-        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen2.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
-        .math_fidelity = compute_config.math_fidelity,
-        .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
-        .dst_full_sync_en = compute_config.dst_full_sync_en,
+        .math_fidelity = gen2.math_fidelity,
+        .fp32_dest_acc_en = gen2.fp32_dest_acc_en,
+        .dst_full_sync_en = gen2.dst_full_sync_en,
         .unpack_to_dest_mode = unpack_modes,
-        .bfp8_pack_precise = compute_config.bfp8_pack_precise,
-        .math_approx_mode = compute_config.math_approx_mode,
-        .enable_2x_src_format = compute_config.enable_2x_src_format,
-        .unpack_to_dest_en = compute_config.unpack_to_dest_en,
+        .math_approx_mode = gen2.math_approx_mode,
+        .enable_2x_src_format = gen2.enable_2x_src_format,
+        .unpack_to_dest_en = gen2.unpack_to_dest_en,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),

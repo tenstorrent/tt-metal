@@ -1417,7 +1417,8 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     // Set unpack_to_dest_mode referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
     auto& compute_config = std::get<ComputeHardwareConfig>(consumer.hw_config);
-    compute_config.unpack_to_dest_mode = {{DFBSpecName{"nonexistent_dfb"}, UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.gen2_config->unpack_to_dest_mode = {
+        {DFBSpecName{"nonexistent_dfb"}, UnpackToDestMode::UnpackToDestFp32}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1448,7 +1449,7 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            config.gen2_config->unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -1463,8 +1464,8 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.gen2_config->fp32_dest_acc_en = true;
+            config.gen2_config->unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -1481,7 +1482,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.fp32_dest_acc_en = true;
+            config.gen2_config->fp32_dest_acc_en = true;
         }
     }
     // Compute kernel intentionally has no unpack_to_dest_mode entry.
@@ -1516,7 +1517,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
-    producer_config.fp32_dest_acc_en = true;
+    producer_config.gen2_config->fp32_dest_acc_en = true;
 
     auto consumer_dm = MakeMinimalDMKernel("consumer_dm");
 
@@ -1544,8 +1545,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
-    producer_config.fp32_dest_acc_en = true;
-    producer_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+    producer_config.gen2_config->fp32_dest_acc_en = true;
+    producer_config.gen2_config->unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
 
     auto consumer_dm = MakeMinimalDMKernel("consumer_dm");
 
@@ -1575,7 +1576,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
             // fp32_dest_acc_en stays at its default (false).
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.gen2_config->unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
     EXPECT_THAT(
@@ -1595,8 +1596,8 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            config.gen2_config->fp32_dest_acc_en = true;
+            config.gen2_config->unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -2106,9 +2107,9 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.math_fidelity = MathFidelity::LoFi;
-            config.fp32_dest_acc_en = true;
-            config.math_approx_mode = true;
+            config.gen2_config->math_fidelity = MathFidelity::LoFi;
+            config.gen2_config->fp32_dest_acc_en = true;
+            config.gen2_config->math_approx_mode = true;
         }
     }
 
@@ -2128,8 +2129,8 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.gen2_config->fp32_dest_acc_en = true;
+            config.gen2_config->unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
 
@@ -2162,8 +2163,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
 
     auto& compute_config = std::get<ComputeHardwareConfig>(consumer.hw_config);
-    compute_config.fp32_dest_acc_en = true;
-    compute_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.gen2_config->fp32_dest_acc_en = true;
+    compute_config.gen2_config->unpack_to_dest_mode = {{DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb0, dfb1};
@@ -2515,8 +2516,11 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
             },
         .hw_config =
             ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::LoFi,
-                .fp32_dest_acc_en = true,
+                .gen2_config =
+                    ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = MathFidelity::LoFi,
+                        .fp32_dest_acc_en = true,
+                    },
             },
     };
 

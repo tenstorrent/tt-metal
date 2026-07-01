@@ -159,7 +159,9 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
                      .dfb_spec_name = SRC1, .accessor_name = "src1", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_tile_cnt", tiles_per_channel_dim}},
-            .hw_config = ComputeHardwareConfig{.fp32_dest_acc_en = fp32_dest_acc_en},
+            .hw_config =
+                ComputeHardwareConfig{
+                    .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}},
         };
     };
     KernelSpec compute_main = make_compute(COMPUTE_MAIN, nblocks_per_core * tiles_per_width_dim);

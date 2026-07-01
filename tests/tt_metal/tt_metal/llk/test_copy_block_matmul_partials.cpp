@@ -175,17 +175,30 @@ void run_single_core_copy_block_matmul_partials(
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
                 // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
                 // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
                 // Default is unpack via SrcA/B, ~19-bit precision.
-                .unpack_to_dest_mode = test_config.fp32_dest_acc_en
-                                           ? experimental::ComputeHardwareConfig::
-                                                 UnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                                           : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+                auto unpack_modes = test_config.fp32_dest_acc_en
+                                        ? experimental::ComputeHardwareConfig::
+                                              UnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                                        : experimental::ComputeHardwareConfig::UnpackToDestModes{};
+                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .unpack_to_dest_mode = unpack_modes,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .unpack_to_dest_mode = unpack_modes,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{

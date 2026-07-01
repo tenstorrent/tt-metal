@@ -497,11 +497,14 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
             experimental::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                .gen2_config =
+                    experimental::ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = MathFidelity::HiFi4,
+                        .fp32_dest_acc_en = true,
+                        .unpack_to_dest_mode =
+                            {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
+                             {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                    },
             },
     };
 
@@ -840,11 +843,14 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
              dfb_binding(OUT2_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
             experimental::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                .gen2_config =
+                    experimental::ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = MathFidelity::HiFi4,
+                        .fp32_dest_acc_en = true,
+                        .unpack_to_dest_mode =
+                            {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
+                             {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                    },
             },
     };
 

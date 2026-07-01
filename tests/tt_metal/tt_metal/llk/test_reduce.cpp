@@ -449,12 +449,24 @@ void run_single_core_reduce_program(
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = test_config.math_fidelity,
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .enable_2x_src_format = test_config.enable_2x_src_format,
-            },
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = test_config.math_fidelity,
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .enable_2x_src_format = test_config.enable_2x_src_format,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .math_fidelity = test_config.math_fidelity,
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{

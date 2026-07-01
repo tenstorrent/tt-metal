@@ -343,10 +343,21 @@ void run_single_core_tilize_program(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-            },
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{
@@ -665,10 +676,21 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .compile_time_args =
             {{"per_core_block_cnt", test_config.num_tiles_r}, {"per_core_block_tile_cnt", test_config.num_tiles_c}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-            },
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{
@@ -1007,10 +1029,21 @@ static void run_quasar_tilize_untilize_test(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-            },
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{

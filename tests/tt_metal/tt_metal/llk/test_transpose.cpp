@@ -268,16 +268,29 @@ void run_single_core_transpose(
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode =
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
+                auto unpack_modes =
                     fp32_dest_acc_en
                         ? experimental::ComputeHardwareConfig::
                               UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+                        : experimental::ComputeHardwareConfig::UnpackToDestModes{};
+                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .unpack_to_dest_mode = unpack_modes,
+                        .unpack_to_dest_en = fp32_dest_acc_en,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .unpack_to_dest_mode = unpack_modes,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{

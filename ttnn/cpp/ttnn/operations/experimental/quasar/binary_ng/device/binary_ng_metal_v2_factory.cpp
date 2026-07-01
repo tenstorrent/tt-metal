@@ -264,8 +264,11 @@ ProgramArtifacts create_sharded_artifacts(
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
             m2::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .gen2_config =
+                    m2::ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = MathFidelity::HiFi4,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                    },
             },
     };
 

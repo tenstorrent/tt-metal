@@ -357,11 +357,23 @@ static void matmul_tile_block(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = cfg.math_fidelity,
-                .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-                .dst_full_sync_en = cfg.dst_full_sync_en,
-            },
+            [&] {
+                experimental::ComputeHardwareConfig hw_cfg;
+                if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                    hw_cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = cfg.math_fidelity,
+                        .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+                        .dst_full_sync_en = cfg.dst_full_sync_en,
+                    };
+                } else {
+                    hw_cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .math_fidelity = cfg.math_fidelity,
+                        .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+                        .dst_full_sync_en = cfg.dst_full_sync_en,
+                    };
+                }
+                return hw_cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{

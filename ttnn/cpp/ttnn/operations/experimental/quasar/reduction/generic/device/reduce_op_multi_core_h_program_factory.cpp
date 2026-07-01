@@ -177,9 +177,11 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                 {{"Ht", Ht}, {"Wt", compute_Wt}, {"NC", 1u}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
             .hw_config =
                 ComputeHardwareConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en},
+                    .gen2_config =
+                        ComputeHardwareConfig::Gen2Config{
+                            .math_fidelity = math_fidelity,
+                            .fp32_dest_acc_en = fp32_dest_acc_en,
+                            .dst_full_sync_en = dst_full_sync_en}},
         };
     };
 
