@@ -16,7 +16,7 @@
 /**
  * @brief Initialize eltwise unary datacopy operations
  *
- * For a 32-bit unpack-to-dest operand the unpacker writes DEST directly and math has no MOP to
+ * For an unpack-to-dest operand the unpacker writes DEST directly and math has no MOP to
  * program; that case is gated on the `unpack_to_dest` template parameter and the math init is skipped.
  *
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
