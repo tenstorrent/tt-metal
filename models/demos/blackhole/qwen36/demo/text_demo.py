@@ -468,15 +468,6 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     profiler.end("compile_prefill")
     logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
 
-    # ---- Chunk-outer prefill (real prompt only; the tail is masked internally). ----
-    t0 = time.time()
-    signpost("inference_prefill")
-    profiler.start("inference_prefill")
-    logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
-    ttnn.synchronize_device(model.device)
-    profiler.end("inference_prefill")
-    ttft = time.time() - t0
-
     # Decode token selection: greedy by default; QWEN35_TEMP>0 enables temperature sampling.
     _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
     # Anti-repetition (both default OFF, decoding-only). On soft long-context logits (>=64k) greedy
@@ -504,10 +495,21 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             return int(torch.multinomial(torch.softmax(v / _temp, dim=-1), 1).item())
         return int(torch.argmax(v).item())
 
+    # ---- Chunk-outer prefill (real prompt only; the tail is masked internally). ----
+    # TTFT = time to first token: the logits gather/readback + first-token sampling are inside the
+    # window, matching the tt_transformers reference demo (simple_text_demo.py), whose
+    # inference_prefill window ends only after torch.argmax produces the first token.
+    t0 = time.time()
+    signpost("inference_prefill")
+    profiler.start("inference_prefill")
+    logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
+    ttnn.synchronize_device(model.device)
     # Logits are replicated across the mesh ([1,1,vocab]); gather one replica.
     lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
     nxt = _pick(lt.reshape(-1, vocab)[0])
     generated.append(nxt)
+    profiler.end("inference_prefill")
+    ttft = time.time() - t0
 
     # ---- Traced paged single-token decode, continuing from the carried GDN + KV state. ----
     # Decode is captured ONCE as a trace and replayed with ttnn.execute_trace, so each step costs
@@ -532,6 +534,30 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     def _read(out):
         return _pick(model.process_output_decode(out, B=1, S=1).reshape(-1)[:vocab])
+
+    # On-device greedy argmax (DEFAULT for pure-greedy traced decode): PER-SHARD — each device
+    # argmaxes its own 62080-wide vocab shard (cheap: ~2ms vs ~8ms for the full 248320) plus its max
+    # value, we read back only the 4 (idx,val) pairs and combine on host. This skips the full-vocab
+    # all-gather AND the 248320-wide host readback (~4.4ms). argmax is deterministic → tokens identical
+    # to host argmax. Requires model._ondev_argmax=True so _forward_decode returns pre-gather sharded
+    # logits. Only for pure greedy (temp/rep-pen/no-repeat need full logits on host → _read fallback).
+    _greedy = (not eager) and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0
+    model._ondev_argmax = _greedy
+    _per_shard = vocab // model.num_devices  # column offset per device (vocab-sharded LM head)
+
+    def _argmax_dev(sharded_logits):
+        # sharded_logits: [1,1,vocab/nd] TILE, distinct per device. Return per-device (local argmax
+        # index, max value). ttnn.argmax works on the TILE tensor directly (do NOT untilize — the
+        # ROW_MAJOR multicore argmax path returns garbage on this width).
+        return ttnn.argmax(sharded_logits, dim=-1, keepdim=False), ttnn.max(sharded_logits, dim=-1)
+
+    def _read_tok(idx_t, val_t):
+        # Combine the 4 per-device (local_idx, max_val): winner device d = argmax of the 4 max vals;
+        # global token = d * per_shard + local_idx[d].
+        idxs = [int(ttnn.to_torch(t).reshape(-1)[0]) for t in ttnn.get_device_tensors(idx_t)]
+        vals = [float(ttnn.to_torch(t).reshape(-1)[0]) for t in ttnn.get_device_tensors(val_t)]
+        d = max(range(len(vals)), key=lambda i: vals[i])
+        return d * _per_shard + idxs[d]
 
     def _update(token, position):
         host = model.prepare_decode_inputs_host(
@@ -582,15 +608,27 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     trace_id = None
     tt_logits = None
+    tt_idx = tt_val = None  # on-device per-shard (argmax idx, max val), captured in the trace when _greedy
     signpost("compile_decode")
     profiler.start("compile_decode")
     if not eager:
         gdn_snap = _snapshot_gdn()  # exact post-prefill GDN state
         # Compile the decode programs (eager) then capture a throwaway trace; both advance GDN
-        # state, so restore the snapshot afterward.
-        model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        # state, so restore the snapshot afterward. The argmax/max kernels must be compiled into the
+        # program cache BEFORE trace capture (traces can't JIT new binaries), so warm them on the
+        # compile pass too when greedy. (model._ondev_argmax makes the forward return sharded logits.)
+        _warm_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        if _greedy:
+            _wi, _wv = _argmax_dev(_warm_logits)
+            ttnn.deallocate(_wi)
+            ttnn.deallocate(_wv)
         trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
         tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        # Greedy: fold the per-shard argmax+max into the trace so replay emits the tiny (idx,val)
+        # tensors directly (read back 4 pairs, not the full vocab). Their buffer addresses are baked
+        # into the trace, so we hold the handles and read them after each execute_trace.
+        if _greedy:
+            tt_idx, tt_val = _argmax_dev(tt_logits)
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(gdn_snap)
     profiler.end("compile_decode")
@@ -610,7 +648,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         else:
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
-        nxt = _read(tt_logits)
+        nxt = _read_tok(tt_idx, tt_val) if (_greedy and not eager) else _read(tt_logits)
         decode_times.append(time.time() - t_step)
         generated.append(nxt)
         pos += 1
@@ -672,6 +710,11 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     padded_token_ids = torch.cat([token_ids, last_token], dim=1)
 
     signpost("inference_prefill")
+    # TTFT = time to first token: the logits readback + first-token sampling are inside the window,
+    # matching the tt_transformers reference demo (simple_text_demo.py), whose inference_prefill
+    # window ends only after torch.argmax produces the first token. The readback (ttnn.to_torch)
+    # also forces the device to finish, so this is a true time-to-first-token even for the async
+    # traced prefill (which has no explicit synchronize_device before this point).
     t0 = time.time()
     if T < chunk_size:
         # Short prompt (whole prompt fits under one chunk): masked fixed-bucket prefill —
@@ -681,11 +724,11 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         logits = model.prefill_masked_bucket(token_ids, page_table, actual_len=T)
     else:
         logits = model.prefill_traced_chunked(padded_token_ids, page_table, actual_len=T)
+    logits_torch = ttnn.to_torch(logits).squeeze()
+    next_token = logits_torch.argmax().item()
     ttft = time.time() - t0
 
-    logits_torch = ttnn.to_torch(logits).squeeze()
     assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
-    next_token = logits_torch.argmax().item()
     gen = Generator([model], [model.args], device)
 
     # Capture the decode trace once with GDN-state save/restore so the loop replays from the
@@ -747,14 +790,17 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
 
     # Prefill
     signpost("inference_prefill")
+    # TTFT = time to first token: the logits readback + first-token sampling are inside the window,
+    # matching the tt_transformers reference demo (simple_text_demo.py), whose inference_prefill
+    # window ends only after torch.argmax produces the first token.
     t0 = time.time()
     logits = model.prefill_paged(token_ids, page_table)
     ttnn.synchronize_device(device)
+    logits_torch = ttnn.to_torch(logits).squeeze()
+    next_token = logits_torch.argmax().item()
     ttft = time.time() - t0
 
-    logits_torch = ttnn.to_torch(logits).squeeze()
     assert not torch.isnan(logits_torch).any(), "NaN in paged prefill logits"
-    next_token = logits_torch.argmax().item()
 
     gen = Generator([model], [model.args], device)
 
