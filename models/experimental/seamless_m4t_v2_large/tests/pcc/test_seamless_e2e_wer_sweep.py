@@ -8,6 +8,10 @@ T2ST; mel frames for S2ST — same as ``demo_perf_sweep.py``), run full TT
 ``generate(generate_speech=True)``, and compare intermediate translation text to offline HF
 references via ``jiwer.wer`` (Whisper-demo pattern).
 
+T2ST text inputs use *A Tale of Two Cities* from
+``models/tt_transformers/tests/tale-of-two-cities.txt.bz2`` (via ``demo_perf_sweep.ensure_long_story``,
+same corpus as tt-transformers / Devstral prefill tests). S2ST uses concatenated preamble audio.
+
 Text-output tasks (T2TT, S2TT, ASR) use ``test_seamless_e2e_token_matching_sweep.py`` instead.
 
 Run::

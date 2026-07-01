@@ -45,7 +45,7 @@ SWEEP_EVAL_STEPS = 128
 SANITY_SWEEP_LENGTHS = (32, 64, 128)
 
 # Sweep-only (task, seq_len) gates — default thresholds target fixed demo inputs; these lengths
-# showed marginal drift on BH 1×4 full sweep (Alice @ 256 tokens; preamble mel @ 2048 frames).
+# showed marginal drift on BH 1×4 full sweep (Tale of Two Cities @ 256 tokens; preamble mel @ 2048 frames).
 # Mel @ 2048 observed ~81% top-1 / ~85% top-5 (S2TT/ASR) on bh-qbge-06.
 _SWEEP_LEN_THRESHOLD_OVERRIDES: dict[tuple[str, int], tuple[float, float]] = {
     ("t2tt", 256): (0.94, T2TT_TOP5_THRESHOLD),
