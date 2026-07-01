@@ -158,7 +158,7 @@ void emit_noc_send_types(
         uint16_t type_bitfield = capture.used_noc_send_type_by_vc_bitfield[vc];
         emitter << YAML::Key << "types" << YAML::Value;
         emitter << YAML::Flow << YAML::BeginSeq;
-        for (uint8_t t = 0; t <= NocSendType::NOC_SEND_TYPE_LAST; t++) {
+        for (uint8_t t = 0; t <= NocSendType::NOC_SEND_TYPE_MAX; t++) {
             if (type_bitfield & (1u << t)) {
                 emitter << noc_send_type_to_string(t);
             }

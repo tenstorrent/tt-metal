@@ -18,7 +18,10 @@ FORCE_INLINE bool is_valid(const PacketHeader& packet_header) {
 
 FORCE_INLINE void validate(const LowLatencyPacketHeader& packet_header) {}
 FORCE_INLINE bool is_valid(const LowLatencyPacketHeader& packet_header) {
-    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
+    // Sparse mcast is a 1D-only write type numbered above NOC_SEND_TYPE_LAST; LowLatency is the only
+    // header allowed to carry it, so accept it here in addition to the standard range.
+    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST) ||
+           (packet_header.noc_send_type == NOC_SPARSE_MCAST_WRITE);
 }
 
 FORCE_INLINE void validate(const HybridMeshPacketHeader& packet_header) {
