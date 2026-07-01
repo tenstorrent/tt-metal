@@ -188,10 +188,10 @@ def test_perf_eltwise_unary_sfpu(
 
 
 # =============================================================================
-# PR #48696 (WH SFPU medium cleanup) — MATH_ISOLATE probes for the kernels this
-# PR rewrote raw TT/TTI -> sfpi. These reuse the shared eltwise_unary_sfpu_perf.cpp
-# dispatch (call_unary_sfpu_operation) rather than a bespoke source: the scalar
-# ops bake their constant in sfpu_operations.h exactly like `threshold`/`relu_min`.
+# WH SFPU medium cleanup — MATH_ISOLATE probes for the kernels rewritten from
+# raw TT/TTI -> sfpi. These reuse the shared eltwise_unary_sfpu_perf.cpp dispatch
+# (call_unary_sfpu_operation) rather than a bespoke source: the scalar ops bake
+# their constant in sfpu_operations.h exactly like `threshold`/`relu_min`.
 #   lrelu       -> tt-llk _calculate_lrelu_            (float)
 #   relu_min    -> tt-llk _relu_min_ (vFloat / vInt)   (float + int32 branches)
 #   add_int32   -> metal calculate_add_int32           (int32)
@@ -201,12 +201,12 @@ def test_perf_eltwise_unary_sfpu(
 # swiglu/where) to be measured on-device.
 # =============================================================================
 
-_PR48696_FLOAT_OPS = [
+_SFPU_CLEANUP_FLOAT_OPS = [
     MathOperation.Lrelu,
     MathOperation.ReluMin,
 ]
 
-_PR48696_INT_OPS = [
+_SFPU_CLEANUP_INT_OPS = [
     MathOperation.AddInt32,
     MathOperation.SubInt32,
     MathOperation.ReluMin,
@@ -255,18 +255,18 @@ def _run_math_isolate(formats, mathop, input_dimensions):
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=_PR48696_FLOAT_OPS,
+    mathop=_SFPU_CLEANUP_FLOAT_OPS,
     input_dimensions=[[128, 64]],
 )
-def test_perf_pr48696_unary_float(perf_report, formats, mathop, input_dimensions):
+def test_perf_sfpu_cleanup_unary_float(perf_report, formats, mathop, input_dimensions):
     _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)
 
 
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
-    mathop=_PR48696_INT_OPS,
+    mathop=_SFPU_CLEANUP_INT_OPS,
     input_dimensions=[[128, 64]],
 )
-def test_perf_pr48696_unary_int(perf_report, formats, mathop, input_dimensions):
+def test_perf_sfpu_cleanup_unary_int(perf_report, formats, mathop, input_dimensions):
     _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)
