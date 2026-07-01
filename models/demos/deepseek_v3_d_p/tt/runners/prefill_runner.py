@@ -295,6 +295,7 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<trace default>")),
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
@@ -381,6 +382,29 @@ def main() -> None:
             chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
             path=table_path,
             wait_ready_timeout_ms=wait_ready_ms,
+        )
+    elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
+        # Mock integration (prefill_h2d_producer.py): serialize the KV chunk table so an external
+        # producer can read it back via ttnn.experimental.disaggregation.import_from_protobuf_file
+        # and locate each chunk — WITHOUT the migration_endpoint worker (no MigrationLayerClient,
+        # no WORKER_READY). One galaxy => one complete table spanning all NUM_LAYERS / NUM_USERS.
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import build_and_serialize_kv_chunk_table
+
+        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        build_and_serialize_kv_chunk_table(
+            mesh_device=mesh_device,
+            kvpe_cache=pipeline.kvpe_cache,
+            seq_len=MAX_SEQ_LEN,
+            num_layers=NUM_LAYERS,
+            mesh_shape=GLOBAL_MESH_SHAPE,
+            sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
+            num_users=NUM_USERS,
+            chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
+            path=table_path,
+        )
+        logger.info(
+            f"[mock-migration] KV chunk table serialized to {table_path} "
+            f"(no migration worker); prefill_h2d_producer can import it"
         )
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":

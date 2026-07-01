@@ -19,6 +19,9 @@ namespace tt::tt_metal::experimental::disaggregation {
 // compiled into the `impl` target). Forward-declared here to bind without the impl header.
 std::string export_to_protobuf(const KvChunkAddressTable& table);
 void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path);
+// Deserializers — same TU/target as the exporters above, so they link the same way.
+KvChunkAddressTable import_from_protobuf(const std::string& data);
+KvChunkAddressTable import_from_protobuf_file(const std::string& path);
 }  // namespace tt::tt_metal::experimental::disaggregation
 
 namespace ttnn::disaggregation {
@@ -222,6 +225,21 @@ void bind_disaggregation_api(nb::module_& mod) {
         nb::arg("table"),
         nb::arg("path"),
         "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
+
+    // Deserialization — an external consumer (e.g. the prefill_h2d producer) reconstructs the
+    // table the runner exported. Pure data: builds the KvChunkAddressTable from the protobuf with
+    // no device / ControlPlane access, so it is safe to call from a device-less process. (Only a
+    // subsequent read_device_chunk() needs the device to be open in the caller's process.)
+    mod.def(
+        "import_from_protobuf_file",
+        &import_from_protobuf_file,
+        nb::arg("path"),
+        "Deserialize a KvChunkAddressTable from a protobuf file at `path`.");
+    mod.def(
+        "import_from_protobuf",
+        &import_from_protobuf,
+        nb::arg("data"),
+        "Deserialize a KvChunkAddressTable from a serialized protobuf byte string.");
 }
 
 }  // namespace ttnn::disaggregation
