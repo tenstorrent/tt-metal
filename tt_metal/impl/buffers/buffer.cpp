@@ -63,9 +63,19 @@ bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 o
 // hardware this returns false, so registration is skipped; the LiveL1Ranges /
 // LiveDramRanges symbols are always linked but never touched. Uses the device's own
 // context (matching the Tracy lookups below) so it is correct under multiple contexts.
+//
+// extract_context_id() calls MeshDevice::get_mesh_device() -> shared_from_this(), which
+// throws std::bad_weak_ptr when the MeshDevice is mid-destruction (e.g. buffers freed from
+// ~ProgramImpl during device teardown). This runs inside ~Buffer (noexcept), so an escaping
+// throw would std::terminate. Treat that case as non-emule: the range registry is being torn
+// down anyway, so skipping the removal is harmless (and hardware already returns false here).
 inline bool is_emule_device(const IDevice* device) {
-    return MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-           tt::TargetDevice::Emule;
+    try {
+        return MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
+               tt::TargetDevice::Emule;
+    } catch (const std::bad_weak_ptr&) {
+        return false;
+    }
 }
 
 void validate_buffer_parameters(
