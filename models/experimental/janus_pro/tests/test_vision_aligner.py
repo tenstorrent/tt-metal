@@ -12,7 +12,6 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.experimental.janus_pro.tt.janus_pro_vision_aligner import TtJanusProVisionAligner
 from models.experimental.janus_pro.tt.model_config import ModelArgs
-from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @pytest.mark.parametrize(
@@ -50,7 +49,6 @@ def test_aligner_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     tt_model = TtJanusProVisionAligner(
         mesh_device=mesh_device,
-        tt_ccl=TT_CCL(mesh_device),
         args=model_args,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
@@ -73,9 +71,8 @@ def test_aligner_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     tt_output = tt_model(tt_input)
 
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-        :, :1, :, :
-    ].squeeze()
+    # Weights are replicated, so every device holds the same result; take one copy.
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:1].squeeze()
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
