@@ -459,6 +459,16 @@ void insert_stall_cmds(
         0);
 }
 
+// Watcher only: pre-fill an RTA payload region with 0xBEEF0000 | rand16 so unused runtime-arg slots are
+// obviously unset on device (equality tests are likely to fail). With watcher off the region stays zero.
+void fill_runtime_args_watcher_pattern(uint32_t* dst, uint32_t num_words) {
+    thread_local static std::mt19937 gen(std::random_device{}());
+    std::uniform_int_distribution<int> dist(0, 65535);
+    for (uint32_t i = 0; i < num_words; i++) {
+        dst[i] = WATCHER_RTA_UNSET_PATTERN | static_cast<uint16_t>(dist(gen));
+    }
+}
+
 template <typename PackedSubCmd>
 void generate_runtime_args_cmds(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
@@ -529,20 +539,12 @@ void generate_runtime_args_cmds(
             no_stride);
         auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
         uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
-        // Watcher only: pre-fill the RTA payload region with 0xBEEF0000 | rand16
-        // With watcher off, the buffer stays zero-initialized by HostMemDeviceCommand
-        // This makes any unused runtime-arg slots obvious on device (equality tests likely to fail)
+        // With watcher off, the buffer stays zero-initialized by HostMemDeviceCommand.
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
             uint32_t total_words = (calculator.write_offset_bytes() - data_offset) / sizeof(uint32_t);
             uint32_t* command_start_ptr =
                 reinterpret_cast<uint32_t*>(command_obj.data()) + (data_offset / sizeof(uint32_t));
-            thread_local static std::mt19937 gen(std::random_device{}());
-            std::uniform_int_distribution<int> dist(0, 65535);
-            for (uint32_t count = 0; count < total_words; count++) {
-                uint16_t rnd = static_cast<uint16_t>(dist(gen));
-                const uint32_t known_garbage = WATCHER_RTA_UNSET_PATTERN | rnd;
-                command_start_ptr[count] = known_garbage;
-            }
+            fill_runtime_args_watcher_pattern(command_start_ptr, total_words);
         }
 
         runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
@@ -641,15 +643,10 @@ void generate_runtime_args_cmds_large_unicast(
 
             auto& buf = core_payloads[k];
             buf.assign(aligned_core_payload, 0);
-            // Watcher only: pre-fill unused arg slots with 0xBEEF0000 | rand16 so they are obviously unset
-            // on device (mirrors the packed path). With watcher off the buffer stays zero.
+            // With watcher off the buffer stays zero; mirrors the packed path.
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
-                thread_local static std::mt19937 gen(std::random_device{}());
-                std::uniform_int_distribution<int> dist(0, 65535);
-                auto* words = reinterpret_cast<uint32_t*>(buf.data());
-                for (uint32_t w = 0; w < aligned_core_payload / sizeof(uint32_t); ++w) {
-                    words[w] = WATCHER_RTA_UNSET_PATTERN | static_cast<uint16_t>(dist(gen));
-                }
+                fill_runtime_args_watcher_pattern(
+                    reinterpret_cast<uint32_t*>(buf.data()), aligned_core_payload / sizeof(uint32_t));
             }
             // Lay out each kernel's [count | args] data at the same per-kernel stride the packed path uses.
             uint32_t offset = 0;
