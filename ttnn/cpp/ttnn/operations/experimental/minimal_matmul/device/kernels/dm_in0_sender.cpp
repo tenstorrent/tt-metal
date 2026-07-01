@@ -12,6 +12,7 @@
 #include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -242,8 +243,10 @@ void kernel_main() {
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                DeviceZoneScopedN("AVAILABLE");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+                        DeviceZoneScopedN("DEFER-WRITE");
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
                         uint32_t out_read_ptr_swiglu = get_read_ptr(cb_out_id);
@@ -311,6 +314,7 @@ void kernel_main() {
 
                 uint32_t in0_start_address = get_write_ptr(cb_in0_id);
                 if constexpr (is_injector_core) {
+                    DeviceZoneScopedN("DRAM-Latency");
 #ifdef FUSE_AG
                     if (is_injector_core) {
                         k_block =
@@ -333,6 +337,7 @@ void kernel_main() {
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
                 } else {
+                    DeviceZoneScopedN("RECV-WAIT");
                     // Get from previous device
                     in0_receiver_sem.set(INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
@@ -344,6 +349,7 @@ void kernel_main() {
                 cb_in0.push_back(in0_block_num_tiles);
 
                 if (!is_sink_core) {
+                    DeviceZoneScopedN("MCAST-SEND");
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 
@@ -428,6 +434,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+                    DeviceZoneScopedN("OUT-WRITE");
 #ifdef FUSE_SWIGLU
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
