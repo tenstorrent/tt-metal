@@ -210,13 +210,19 @@ def prefill_forward(
         tt_v = ttnn.to_layout(tt_v_padded, ttnn.TILE_LAYOUT)
         tt_v_padded.deallocate(True)
 
-        # SDPA requires Sq == Sk for is_causal=True, so pad Q with actual_pad zero
-        # rows at the front to match the extended K/V length. The causal mask then
-        # correctly lets real Q row i attend to K rows 0..actual_pad+i, which spans
-        # the ring-shifted predecessor tokens plus local tokens up to position i.
-        # We slice away the fake rows from the output.
+        # SDPA requires Sq == Sk for is_causal=True. Prepend actual_pad zero rows to Q
+        # to match the extended K/V length. ttnn.pad doesn't support front-padding in
+        # tile layout, so simulate it with concat of a zeros tensor instead.
         tt_q_orig = tt_q
-        tt_q = ttnn.pad(tt_q_orig, ((0, 0), (0, 0), (actual_pad, 0), (0, 0)), value=0.0)
+        zeros_q = ttnn.zeros(
+            [tt_q_orig.shape[0], tt_q_orig.shape[1], actual_pad, tt_q_orig.shape[3]],
+            dtype=tt_q_orig.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_q = ttnn.concat([zeros_q, tt_q_orig], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        zeros_q.deallocate(True)
         tt_q_orig.deallocate(True)
 
         tt_sdpa_out_padded = ttnn.transformer.scaled_dot_product_attention(
