@@ -550,13 +550,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             prefetcher = getattr(self.model[i], "prefetcher", None)
             if prefetcher is not None and prefetcher.is_initialized:
                 self.model_args[i].mesh_device.clear_loaded_sub_device_manager()
-                # #47820 diagnostic (throwaway): dump the resident L1 map once, right before prefill
-                # norms, to identify what persistent prefetcher buffer occupies core (0,0) (global_cb
-                # vs address tensor) and clashes with the origin-anchored sharded RMSNorm.
-                if not getattr(self, "_dumped_l1_prefill", False):
-                    logger.info(f"[#47820] Dumping L1 state before prefill norm (model {i}, prefetcher active)")
-                    ttnn.dump_device_memory_state(self.model_args[i].mesh_device, prefix=f"prefill_m{i}_")
-                    self._dumped_l1_prefill = True
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
