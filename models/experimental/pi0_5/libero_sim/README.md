@@ -51,7 +51,7 @@ python_env/bin/python -u models/experimental/pi0_5/libero_sim/libero_rollout.py 
   --backend ttnn --replan-steps 5
 # → 40 episodes (1 init/task × 4 suites). Add --video-dir <dir> for per-episode mp4s;
 #   scale up with --num-episodes N (up to 50 canonical inits/task).
-#   Use --backend ttnn_1x8 (needs TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15) for the 1×8 mesh.
+#   Use --backend ttnn_1x8 for the 1×8 mesh (pin devices with TT_VISIBLE_DEVICES if needed).
 ```
 
 Machine-specific env vars (not in `pi05_production.env`): `PI0_TOKENIZER_PATH`,

@@ -16,7 +16,7 @@ On by default (runs a slow CPU torch ref; set PI05_E2E_PCC=0 to skip):
     test_pcc_1x8_all_stages — per-stage (vision / prefill) + e2e PCC vs torch.
 
 Run:
-    export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
+    # optional: pin the 1×8 mesh to a device subset, e.g. TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
     export PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
     export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
     # Inherits production env defaults — set explicit flags before running.
@@ -39,7 +39,6 @@ for _k, _v in {
     "PI0_TP8_ATTN_HEADPAR": "1",  # head-parallel attention split
     "PI0_MLP_BS": "1",  # block-sharded MLP (TP=8 tuned)
     "PI0_MLP_FUSED_RS": "0",  # fused reduce-scatter off (TP=8 uses split RS+AG)
-    "TT_VISIBLE_DEVICES": "8,9,10,11,12,13,14,15",  # the second tray on this box
 }.items():
     os.environ.setdefault(_k, _v)
 
@@ -90,7 +89,6 @@ _PROD_ENV_KEYS = (
     "PI0_MLP_BS",
     "PI0_MLP_FUSED_RS",
     "PI05_NUM_DENOISE_STEPS",
-    "TT_VISIBLE_DEVICES",
 )
 
 

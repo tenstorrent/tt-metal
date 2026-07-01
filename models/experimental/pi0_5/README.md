@@ -142,8 +142,8 @@ export PYTHONPATH=$PWD TT_METAL_HOME=$PWD PI05_CHECKPOINT_DIR=/path/to/pi05_libe
 
 ### TTNN — e2e trace + 2CQ perf (Blackhole)
 
-The 1×8 test self-selects chips 8–15 (override with `TT_VISIBLE_DEVICES`). Two knobs
-vary the workload (defaults from `pi05_production.env`):
+The 1×8 test uses the visible devices (pin a subset with `TT_VISIBLE_DEVICES` on a
+shared box). Two knobs vary the workload (defaults from `pi05_production.env`):
 
 - `PI0_NUM_CAMERAS` — 2 or 3 cameras (3 = training spec; 2 also set `PI0_VLM_CHUNK_SIZE=768`).
 - `PI05_NUM_DENOISE_STEPS` — denoise steps (5 = perf-tuned, 10 = training default).
@@ -159,7 +159,7 @@ PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
 
 Full setup + all flags in [`libero_sim/README.md`](libero_sim/README.md). Prefix the
 LIBERO env vars (`PI0_TOKENIZER_PATH`, `LIBERO_REPO_PATH`, `MUJOCO_GL=osmesa`) and pick
-`--backend ttnn` (single chip) or `ttnn_1x8` (`TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15`):
+`--backend ttnn` (single chip) or `ttnn_1x8` (1×8 mesh; pin devices with `TT_VISIBLE_DEVICES` if needed):
 
 ```bash
 ROLL="models/experimental/pi0_5/libero_sim/libero_rollout.py --checkpoint $PI05_CHECKPOINT_DIR \
