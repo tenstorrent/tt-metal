@@ -356,9 +356,12 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
 #     the final core one partially-valid tile (8 of its 32 columns valid) and one fully-padding tile.
 # In both, the op must normalize over the logical width, not the padded per-core width.
 @pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+)
+@pytest.mark.parametrize(
     ("w", "num_cores_w"),
     [(96, 2), (224, 3), (72, 2), (200, 3)],
     ids=["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"],
 )
-def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w):
-    run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w)
+def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
+    run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)

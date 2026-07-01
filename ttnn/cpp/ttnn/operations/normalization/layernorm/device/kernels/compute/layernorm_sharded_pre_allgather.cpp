@@ -231,8 +231,7 @@ void kernel_main() {
     // The mean-of-squares reduce (RMSNorm's statistic, and LayerNorm's E[x^2]) squares the raw input,
     // which leaves the padding columns holding (pad_value)^2; zero them in place before the reduce so
     // they do not enter the mean of squares. The writer-generated mask (cb_col_mask_packed) carries
-    // each block's own validity (full, partial, or all-padding tiles), in the same data format as the
-    // squared tiles it multiplies, so both operands of the FPU multiply match. It was waited on near the
+    // each block's own validity (full, partial, or all-padding tiles). It was waited on near the
     // top of the kernel and is read by tile index here (never popped).
     reconfig_data_format(cb_x2_id, cb_col_mask_packed_id);
     mul_tiles_init(cb_x2_id, cb_col_mask_packed_id);

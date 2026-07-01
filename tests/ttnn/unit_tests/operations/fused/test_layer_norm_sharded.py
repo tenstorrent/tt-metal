@@ -500,13 +500,16 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
 #     the final core one partially-valid tile (8 of its 32 columns valid) and one fully-padding tile.
 # In both, the op must normalize over the logical width, not the padded per-core width. Test covers
 # both the legacy path and Welford.
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+)
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize(
     ("w", "num_cores_w"),
     [(96, 2), (224, 3), (72, 2), (200, 3)],
     ids=["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"],
 )
-def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford):
+def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford, dtype):
     run_sharded_norm_logical_width_multicore(
-        device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, use_welford=use_welford
+        device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, dtype=dtype, use_welford=use_welford
     )
