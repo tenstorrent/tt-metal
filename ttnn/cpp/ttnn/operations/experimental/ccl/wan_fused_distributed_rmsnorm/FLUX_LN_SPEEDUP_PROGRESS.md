@@ -82,5 +82,41 @@ merge only (don't touch the shared fn: keeps baseline honest + 4 other consumers
   | tp4 N64    | 0.61x | 0.68x |
 
   TP8 now 1.55-1.87x (RMS target 2.0-2.6x). TP4 gains smaller (ring_size=4 -> merge less
-  dominant). Next: re-profile; likely PRE Welford (was 22.8%) is now the top zone, and
-  TP4/small-N still lag. Candidates: cheaper PRE, POST-pass fusion, worker sweep.
+  dominant).
+
+  **Same-shape fused TIME gap (the real metric): tp8/N16384/dim6144 fused LN 683 -> 526 us
+  vs fused RMS 407 us. LN was 68% slower than RMS, now 29% slower -- the fused LN/RMS time
+  gap MORE THAN HALVED.**
+
+## Re-profile after Opt 1 (FLUX TP8 N2368)
+
+| zone | before | after | note |
+|--|--:|--:|--|
+| LN_MERGE | 62.8% | **50.7%** | 49679 -> 30199 cyc; still #1 |
+| LN_PRE_WELFORD | 22.8% | 30.2% | unchanged absolute (18014 cyc) |
+| POST (4 passes) | 14% | ~19% | unchanged absolute |
+| TOTAL | 421M | 318M cyc | -25% |
+
+## Why the residual gap to RMS is Welford-inherent (analysis)
+
+- **Merge (50.7%) is at its stable floor.** The equal-count combine still needs the
+  between-shard correction Σ(mean_i-mean_g)^2 = one deviation-square per shard (K squares,
+  full-tile fp32 SFPU). Tried batching the loop to cut SFPU init churn -> **no measurable
+  change** (the tile OPS, not inits, are the cost), so reverted. Dropping the correction
+  term or using sum/sumsq (E[x^2]-E[x]^2) would be faster but LOWERS fidelity/stability ->
+  disallowed. RMS avoids this entirely: 1 stat (sum of squares), combined by pairwise adds.
+- **PRE (30.2%) is LLK-bound.** welford_update reduces over tile ROWS, so each input tile
+  needs a transpose first; there is no column-reduce Welford variant. RMS uses mul_tiles +
+  matmul-reduce (no transpose, no per-tile iterative update).
+- **POST (19%) is 4 CB round-trips** (x-mean -> *1/std -> *w -> +b). The FPU broadcast ops
+  read only from CBs (not DST), so the passes can't be fused into one tile_regs cycle.
+
+Net: preserving Welford numerical stability (required) means LN keeps 2-stat Welford
+overhead that RMS's 1-stat sum-of-squares does not have. Opt 1 removed the biggest
+non-inherent cost (the O(ring_size) sequential pairwise merge).
+
+## Further headroom (higher risk, not done)
+- **32-row stat batching:** each stat tile uses only row 0 (32 of 1024 elements); packing
+  ~num_tile_rows tile-rows' stats into full tiles would amortize the merge + stat handling
+  up to 32x. Big rework of the PRE finalize + gather cadence + shared forwarder/writer.
+- POST fusion would need an SFPU op that multiplies a DST tile by a col/row-broadcast tile.
