@@ -1,6 +1,8 @@
 # Walks through all four pack relu modes in separate stages:
 # no relu, zero relu, min threshold at 0.5, and max threshold at 0.5.
 
+supported_archs: ["wormhole", "blackhole"]
+
 operands:
   - name: "input_A"
     dims: [32, 32]

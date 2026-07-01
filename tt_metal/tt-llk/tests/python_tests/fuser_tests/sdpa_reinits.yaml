@@ -2,6 +2,8 @@
 # column broadcast elwadd, and matmul again. Each stage uses a different
 # unpacker type, so the init and uninit transitions all get exercised.
 
+supported_archs: ["wormhole", "blackhole"]
+
 operands:
   - name: "input_A"
     dims: [32, 32]

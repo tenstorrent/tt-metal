@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
+from helpers.chip_architecture import ChipArchitecture
 from helpers.golden_generators import PackGolden
 from helpers.llk_params import L1Accumulation, PackerReluType
 
@@ -47,9 +48,17 @@ class PackNode:
         relu_config = PackGolden.generate_relu_config(
             self.pack_relu, self.relu_threshold, pack_src_format
         )
+        if config.architecture == ChipArchitecture.QUASAR:
+            en_32bit_dest = "true" if config.dest_acc.value else "false"
+            return f"_llk_pack_relu_config_<p_pacr::PACK0, {en_32bit_dest}>(ReluConfig::from_packed({relu_config}));\n"
         return f"_llk_pack_relu_config_(ReluConfig::from_packed({relu_config}));\n"
 
-    def _l1_accumulation_config(self) -> str:
+    def _l1_accumulation_config(self, config: "GlobalConfig") -> str:
+        if config.architecture == ChipArchitecture.QUASAR:
+            l1_acc = (
+                "true" if self.pack_l1_accumulation == L1Accumulation.Yes else "false"
+            )
+            return f"_llk_pack_set_l1_acc_<p_pacr::PACK0>({l1_acc});\n"
         l1_acc = self.pack_l1_accumulation.cpp_enum_value
         return f"_llk_pack_reconfig_l1_acc_({l1_acc});\n"
 
@@ -66,9 +75,10 @@ class PackNode:
         config: "GlobalConfig",
         block: BlockData,
     ) -> str:
+        config.sentinel.ensure_pack_buf_desc_id(self)
         code = self.packer.init(self, operation, config, block)
         code += self._relu_config(config)
-        code += self._l1_accumulation_config()
+        code += self._l1_accumulation_config(config)
         return code
 
     def pack_loop(

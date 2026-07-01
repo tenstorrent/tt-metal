@@ -1,5 +1,7 @@
 # Datacopy test that reads through the tilize unpack path.
 
+supported_archs: ["wormhole", "blackhole"]
+
 operands:
   - name: "input_A"
     dims: [256, 256]

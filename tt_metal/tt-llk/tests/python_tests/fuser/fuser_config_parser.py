@@ -39,6 +39,8 @@ if arch == ChipArchitecture.WORMHOLE:
     from .wormhole.parser import OperationSchema
 elif arch == ChipArchitecture.BLACKHOLE:
     from .blackhole.parser import OperationSchema
+elif arch == ChipArchitecture.QUASAR:
+    from .quasar.parser import OperationSchema
 else:
     pytest.skip("Architecture is not supported", allow_module_level=True)
 
