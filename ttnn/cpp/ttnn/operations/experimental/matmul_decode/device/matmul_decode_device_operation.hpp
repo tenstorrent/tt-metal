@@ -38,7 +38,7 @@ struct MatmulDecodeDeviceOperation {
         int M;
         int N;
         int K;
-        MemoryConfig output_mem_config;
+        std::optional<MemoryConfig> output_mem_config;
         std::optional<DataType> output_dtype;
         // Selects the program factory: true -> PartialWidthSharded (B sharded along both
         // K and N with a cross-core K-reduction); false -> FullWidthSharded (B width(N)-sharded).
@@ -102,5 +102,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
-    std::optional<const DataType> dtype = std::nullopt);
+    std::optional<const DataType> dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 }  // namespace ttnn::prim

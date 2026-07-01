@@ -33,6 +33,23 @@ def num_cores_to_rectangle_grid(num_cores, device):
     return (x, num_cores // x)
 
 
+def num_cores_to_rectangle_core_range_set(num_cores, device):
+    """A single rectangular ``CoreRangeSet`` of exactly ``num_cores`` cores.
+
+    Mirrors ``LinearDecode``'s ``_num_cores_to_rectangle_core_range_set`` in
+    deepseek_v4_flash: finds the widest ``x`` dividing ``num_cores`` that fits the
+    device grid, giving an ``(x, num_cores // x)`` rectangle.
+    """
+    grid = device.compute_with_storage_grid_size()
+    x = grid.x
+    while x > 0 and num_cores % x != 0:
+        x -= 1
+    y = num_cores // x if x > 0 else 0
+    if x == 0 or y > grid.y:
+        raise ValueError(f"cannot form a rectangular grid of {num_cores} cores within a {grid.x}x{grid.y} device grid")
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x - 1, y - 1))})
+
+
 def find_subblock(per_core_m, per_core_n):
     """Pick (out_subblock_h, out_subblock_w) dividing the block dims with h*w <= 8."""
     for h in range(per_core_m, 0, -1):
@@ -72,12 +89,8 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
     torch_input_tensor_b = torch.randn((k, n), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor_a.to(torch.float32) @ torch_input_tensor_b.to(torch.float32)
 
-    input_a_core_range_set = ttnn.num_cores_to_corerangeset(
-        num_inputA_cores, device.compute_with_storage_grid_size(), True
-    )
-    input_b_core_range_set = ttnn.num_cores_to_corerangeset(
-        num_inputB_cores, device.compute_with_storage_grid_size(), True
-    )
+    input_a_core_range_set = num_cores_to_rectangle_core_range_set(num_inputA_cores, device)
+    input_b_core_range_set = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
     in0_memory_config = ttnn.create_sharded_memory_config(
         (m, k // num_inputA_cores),
         core_grid=input_a_core_range_set,
@@ -220,6 +233,7 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
     torch_input_tensor_b = torch.randn((k, n), dtype=torch.bfloat16)
 
     ref = torch_input_tensor_a.to(torch.float32) @ torch_input_tensor_b.to(torch.float32)
+    m_padded = ((m + 31) // 32) * 32
 
     # Reshape + permute B so that a width-sharded tensor distributes a 2D (K x N)
     # block grid across cores: core c (row-major) holds B[kb*kc:(kb+1)*kc, nb*nc:(nb+1)*nc]
@@ -229,14 +243,10 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
     print("torch_input_tensor_b_reshaped.shape:", torch_input_tensor_b_reshaped.shape)
     torch_input_tensor_b_reshaped = torch_input_tensor_b_reshaped.reshape(kc, n * k_blocks)
 
-    input_a_core_range_set = ttnn.num_cores_to_corerangeset(
-        num_inputA_cores, device.compute_with_storage_grid_size(), True
-    )
-    input_b_core_range_set = ttnn.num_cores_to_corerangeset(
-        num_inputB_cores, device.compute_with_storage_grid_size(), True
-    )
+    input_a_core_range_set = num_cores_to_rectangle_core_range_set(num_inputA_cores, device)
+    input_b_core_range_set = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
     in0_memory_config = ttnn.create_sharded_memory_config(
-        (m, k // num_inputA_cores),
+        (m_padded, k // num_inputA_cores),
         core_grid=input_a_core_range_set,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -252,7 +262,6 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         layout=ttnn.TILE_LAYOUT,
-        tile=inputA_tile_size,
         device=device,
         memory_config=in0_memory_config,
         dtype=ttnn.bfloat16,
@@ -266,7 +275,19 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
     )
     print("input_tensor_a.shape:", input_tensor_a.shape)
     print("input_tensor_b.shape:", input_tensor_b.shape)
-    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, partial_width_sharded=True)
+
+    # Mirror LinearDecode.forward (deepseek_v4_flash q_a_proj): the partial layout reduces the
+    # K-partials onto n_blocks output cores, so shard the output WIDTH_SHARDED across n_blocks
+    # cores (shard [padded_m, n / n_blocks]).
+    output_core_range_set = num_cores_to_rectangle_core_range_set(n_blocks, device)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(output_core_range_set, [m_padded, n // n_blocks], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_tensor = ttnn.experimental.matmul_decode(
+        input_tensor_a, input_tensor_b, partial_width_sharded=True, output_mem_config=output_mem_config
+    )
 
     assert output_tensor.shape == (m, n)
 

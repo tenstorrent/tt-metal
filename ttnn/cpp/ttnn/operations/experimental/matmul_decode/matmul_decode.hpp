@@ -23,6 +23,7 @@ Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
-    std::optional<const DataType> dtype = std::nullopt);
+    std::optional<const DataType> dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 }  // namespace ttnn::experimental
