@@ -18,9 +18,11 @@ import glob
 from tracy.noc_bandwidth import (
     aggregate_fabric_bytes_per_op,
     aggregate_noc_bytes_per_op,
+    aggregate_noc_links_per_op,
     eth_bw_util_pct,
     noc_bw_util_pct,
     noc_bytes_from_trace_dir,
+    noc_port_peak_gbps,
     per_op_noc_bw_pct,
     read_trained_link_bw_gbps,
 )
@@ -137,6 +139,39 @@ def test_fabric_bytes_and_link_count():
     erisc = [_fab(2, 500, proc="ERISC", sx=18, sy=0), _fab(2, 500, proc="ERISC", sx=19, sy=0)]
     agg2 = aggregate_fabric_bytes_per_op(erisc)
     assert agg2[2]["links"] == 2
+
+
+def test_fabric_link_count_prefers_real_eth_chan():
+    """eth_chan is the channel the profiler actually resolved; it must win over the
+    dst-coord heuristic (many workers can funnel through one eth link, or one dst
+    can fan out across links)."""
+    events = [
+        # 4 workers, 3 dst coords, but only 2 real eth channels -> links must be 2.
+        {"run_host_id": 5, "num_bytes": 100, "dx": 1, "dy": 9, "fabric_send": {"eth_chan": 0}},
+        {"run_host_id": 5, "num_bytes": 100, "dx": 2, "dy": 9, "fabric_send": {"eth_chan": 0}},
+        {"run_host_id": 5, "num_bytes": 100, "dx": 3, "dy": 9, "fabric_send": {"eth_chan": 1}},
+        {"run_host_id": 5, "num_bytes": 100, "dx": 3, "dy": 9, "fabric_send": {"eth_chan": 1}},
+    ]
+    agg = aggregate_fabric_bytes_per_op(events)
+    assert agg[5]["bytes"] == 400
+    assert agg[5]["links"] == 2
+
+
+def test_noc_links_and_aiclk_derived_peak():
+    """NoC BW% divisor must be (#active ports x per-port peak) with the per-port peak
+    coming from the REAL measured AICLK, not a hardcoded GB/s."""
+    events = [
+        _ev(1, "NOC_0", 1000, sx=0),
+        _ev(1, "NOC_1", 1000, sx=0),  # same core, other NoC -> distinct port
+        _ev(1, "NOC_0", 1000, sx=1),  # other core -> distinct port
+    ]
+    agg = aggregate_noc_links_per_op(events)
+    assert agg[1]["bytes"] == 3000
+    assert agg[1]["links"] == 3
+    # 32 B/cycle at 1350 MHz -> 43.2 GB/s per port; unknown clock -> None (never fabricated).
+    assert noc_port_peak_gbps(1350.0) == pytest.approx(43.2)
+    assert noc_port_peak_gbps(0) is None
+    assert noc_port_peak_gbps(None) is None
 
 
 def test_eth_bw_util_reproduces_allgather_measurement():

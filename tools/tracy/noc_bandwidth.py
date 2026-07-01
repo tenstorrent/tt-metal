@@ -105,12 +105,15 @@ def aggregate_fabric_bytes_per_op(events, op_key="run_host_id"):
     """Per-op ethernet-fabric bytes and the distinct fabric links each op drove.
 
     Fabric bytes are the payload injected into the fabric by an op's worker cores (events with a
-    'fabric_send' block). ``links`` counts distinct eth links carrying the op's traffic: when the
-    eth cores themselves are profiled we count distinct ERISC cores (proc == 'ERISC'); otherwise
-    we fall back to the distinct fabric-ingress destinations (dx, dy) of the worker sends.
+    'fabric_send' block). ``links`` counts the distinct eth links carrying the op's traffic, in
+    order of fidelity: (1) the real ``fabric_send.eth_chan`` the profiler resolved (the eth channel
+    actually used on the src device); (2) distinct ERISC cores when the eth cores are themselves
+    profiled; (3) the distinct fabric-ingress destinations (dx, dy) of the worker sends. The link
+    count is the divisor for ETH BW-util %, so getting it from eth_chan (not a heuristic) matters.
     Returns {op_id: {"bytes": int, "links": int}}.
     """
     by_op_bytes = {}
+    by_op_chan = {}
     by_op_erisc = {}
     by_op_dst = {}
     for ev in events:
@@ -121,6 +124,9 @@ def aggregate_fabric_bytes_per_op(events, op_key="run_host_id"):
             continue
         op_id = ev[op_key]
         by_op_bytes[op_id] = by_op_bytes.get(op_id, 0) + nbytes
+        eth_chan = (ev.get("fabric_send") or {}).get("eth_chan")
+        if eth_chan is not None:
+            by_op_chan.setdefault(op_id, set()).add((ev.get("src_device_id"), eth_chan))
         if str(ev.get("proc", "")).upper().startswith("ERISC"):
             by_op_erisc.setdefault(op_id, set()).add((ev.get("src_device_id"), ev.get("sx"), ev.get("sy")))
         if ev.get("dx") is not None and ev.get("dy") is not None:
@@ -128,9 +134,44 @@ def aggregate_fabric_bytes_per_op(events, op_key="run_host_id"):
 
     out = {}
     for op_id, nbytes in by_op_bytes.items():
-        links = len(by_op_erisc.get(op_id, ())) or len(by_op_dst.get(op_id, ())) or 1
+        links = len(by_op_chan.get(op_id, ())) or len(by_op_erisc.get(op_id, ())) or len(by_op_dst.get(op_id, ())) or 1
         out[op_id] = {"bytes": nbytes, "links": links}
     return out
+
+
+def aggregate_noc_links_per_op(events, op_key="run_host_id"):
+    """Per-op total NoC bytes + the distinct (core, NoC) injection ports the op drove.
+
+    A per-link NoC BW-util % needs a physically meaningful divisor: each Tensix core injects on
+    NOC_0/NOC_1 independently, and each port's peak is AICLK x datapath width. Counting distinct
+    (src_device, sx, sy, noc) ports lets util% be measured against (#ports x per-port peak) rather
+    than an ill-defined aggregate. Returns {op_id: {"bytes": int, "links": int}}.
+    """
+    by_op_bytes = {}
+    by_op_ports = {}
+    for ev in events:
+        nbytes = ev.get("num_bytes")
+        if nbytes is None:
+            continue
+        op_id = ev[op_key]
+        by_op_bytes[op_id] = by_op_bytes.get(op_id, 0) + nbytes
+        by_op_ports.setdefault(op_id, set()).add(
+            (ev.get("src_device_id"), ev.get("sx"), ev.get("sy"), ev.get("noc", "NOC_0"))
+        )
+    return {op_id: {"bytes": b, "links": len(by_op_ports.get(op_id, ())) or 1} for op_id, b in by_op_bytes.items()}
+
+
+# NoC datapath is 32 B/cycle (256-bit) per port on both Wormhole and Blackhole; the per-port peak
+# scales with the real AICLK, so deriving it from the measured clock (never a hardcoded GB/s) keeps
+# NoC BW-util % honest across parts and clock states.
+_NOC_BYTES_PER_CYCLE = 32.0
+
+
+def noc_port_peak_gbps(aiclk_mhz, bytes_per_cycle=_NOC_BYTES_PER_CYCLE):
+    """Per-port NoC injection peak (GB/s) from the real AICLK. None if the clock is unknown."""
+    if not aiclk_mhz or aiclk_mhz <= 0:
+        return None
+    return aiclk_mhz * 1e6 * bytes_per_cycle / 1e9
 
 
 def eth_bw_util_pct(fabric_bytes, duration_ns, per_link_gbps, num_links):
@@ -145,8 +186,7 @@ def eth_bw_util_pct(fabric_bytes, duration_ns, per_link_gbps, num_links):
     return achieved_gbps / (per_link_gbps * num_links) * 100.0
 
 
-def fabric_bytes_from_trace_dir(log_folder, op_key="run_host_id"):
-    """Per-op fabric bytes + link counts from every noc_trace*.json in a .logs dir."""
+def _load_trace_events(log_folder):
     import glob
     import json
     import os
@@ -155,4 +195,14 @@ def fabric_bytes_from_trace_dir(log_folder, op_key="run_host_id"):
     for path in sorted(glob.glob(os.path.join(str(log_folder), "noc_trace*.json"))):
         with open(path) as f:
             events.extend(json.load(f))
-    return aggregate_fabric_bytes_per_op(events, op_key=op_key)
+    return events
+
+
+def fabric_bytes_from_trace_dir(log_folder, op_key="run_host_id"):
+    """Per-op fabric bytes + link counts from every noc_trace*.json in a .logs dir."""
+    return aggregate_fabric_bytes_per_op(_load_trace_events(log_folder), op_key=op_key)
+
+
+def noc_links_from_trace_dir(log_folder, op_key="run_host_id"):
+    """Per-op total NoC bytes + distinct (core, NoC) ports from every noc_trace*.json in a dir."""
+    return aggregate_noc_links_per_op(_load_trace_events(log_folder), op_key=op_key)

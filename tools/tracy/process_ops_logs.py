@@ -38,7 +38,14 @@ from tracy.common import (
 )
 from tracy import device_post_proc_config
 from tracy.perf_counter_scope import sample_cores_per_op
-from tracy.noc_bandwidth import noc_bytes_from_trace_dir
+from tracy.noc_bandwidth import (
+    eth_bw_util_pct,
+    fabric_bytes_from_trace_dir,
+    noc_bw_util_pct,
+    noc_links_from_trace_dir,
+    noc_port_peak_gbps,
+    read_trained_link_bw_gbps,
+)
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
     compute_device_only_metrics,
@@ -130,9 +137,13 @@ OPS_CSV_HEADER = [
     "ETH BW UTIL (%)",
     "NPE CONG IMPACT (%)",
     # On-device NoC bytes per op (sum over the op's cores), independent of tt-npe.
-    # BW % = bytes / (DEVICE FW DURATION [ns] x peak) is applied by the analysis
-    # layer, which knows the part's peak (see tools/tracy/noc_bandwidth.py).
     "NOC BYTES FROM COUNTERS",
+    # Counter-derived BW-util %, computed against REAL peaks so the number is honest
+    # across machines: NoC vs the per-port peak from the op's measured AICLK, ETH vs
+    # the per-link speed the fabric actually trained to (fabric_link_bw_<id>.json).
+    # NaN (blank) when the peak can't be sourced -- never a fabricated number.
+    "NOC BW UTIL FROM COUNTERS (%)",
+    "ETH BW UTIL FROM COUNTERS (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -1049,6 +1060,45 @@ def _build_trace_ops_mapping(host_ops_by_device: DeviceOpsDict, ops: Dict[int, O
     return trace_ops_by_augmented_id
 
 
+def _attach_counter_derived_bw(ops_iter, logFolder: Path) -> int:
+    """Attach counter-derived NoC/ETH bytes + BW-util % from the profiler's own noc-trace JSON.
+
+    Independent of tt-npe and computed against REAL peaks so the % is honest on any machine:
+    NoC vs the per-port peak derived from each op's *measured* AICLK (never a hardcoded GB/s), and
+    ETH vs the per-link speed the fabric actually trained to (the fabric_link_bw_<id>.json sidecar,
+    200/400/800G). No-ops when no noc-trace JSON is present; a missing peak or duration leaves the
+    column blank rather than printing a fabricated number. Returns the count of ops touched.
+    """
+    noc = noc_links_from_trace_dir(logFolder)
+    fabric = fabric_bytes_from_trace_dir(logFolder)
+    if not noc and not fabric:
+        return 0
+    link_gbps = read_trained_link_bw_gbps(logFolder)  # real trained per-link GB/s, or None
+    found = 0
+    for op in ops_iter:
+        run_host_id = op["global_call_count"] & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
+        duration_ns = op.get("DEVICE FW DURATION [ns]")
+        nb = noc.get(run_host_id)
+        fb = fabric.get(run_host_id)
+        if nb is None and fb is None:
+            continue
+        found += 1
+        if nb is not None:
+            op["NOC BYTES FROM COUNTERS"] = nb["bytes"]
+            ns_per_cycle = compute_ns_per_cycle(op)
+            aiclk_mhz = (1000.0 / ns_per_cycle) if ns_per_cycle else op.get("freq")
+            port_peak = noc_port_peak_gbps(aiclk_mhz)
+            if port_peak:
+                pct = noc_bw_util_pct(nb["bytes"], duration_ns, port_peak * nb["links"])
+                if not isnan(pct):
+                    op["NOC BW UTIL FROM COUNTERS (%)"] = round(pct, 1)
+        if fb is not None and link_gbps:
+            pct = eth_bw_util_pct(fb["bytes"], duration_ns, link_gbps, fb["links"])
+            if not isnan(pct):
+                op["ETH BW UTIL FROM COUNTERS (%)"] = round(pct, 1)
+    return found
+
+
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(
     ops: Dict[int, OpDict],
@@ -1113,19 +1163,16 @@ def append_device_data(
                     op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
                     op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
-        else:
-            # tt-npe absent: fall back to the on-device noc_status counters so a
-            # per-op NoC bytes column is still produced (BW % applied downstream).
-            noc_bytes = noc_bytes_from_trace_dir(logFolder)
-            if noc_bytes:
-                ops_found = 0
-                for op in chain(*host_ops_by_device.values(), trace_ops_by_augmented_id.values()):
-                    run_host_id = op["global_call_count"] & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
-                    bucket = noc_bytes.get(run_host_id)
-                    if bucket is not None:
-                        ops_found += 1
-                        op["NOC BYTES FROM COUNTERS"] = bucket["total"]
-                logger.info(f"Analyzed {ops_found} operations with on-device NoC counters (tt-npe absent).")
+
+        # Always attach the counter-derived bytes + BW-util % from the profiler's own noc-trace
+        # JSON, whether or not tt-npe ran. These use real peaks (measured AICLK for NoC, trained
+        # link speed for ETH) so they are the honest cross-machine number and cover the tt-npe-absent
+        # host; tt-npe's own columns (which assume a fixed link model) stay next to them for compare.
+        counter_ops = _attach_counter_derived_bw(
+            chain(*host_ops_by_device.values(), trace_ops_by_augmented_id.values()), logFolder
+        )
+        if counter_ops:
+            logger.info(f"Attached counter-derived NoC/ETH BW-util % to {counter_ops} operations.")
 
     return host_ops_by_device, trace_ops_by_augmented_id
 
