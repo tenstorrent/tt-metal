@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "adamw_device_operation_types.hpp"
+#include "autograd/auto_context.hpp"
 #include "metal/common/program_utils.hpp"
 
 namespace {
@@ -79,6 +80,25 @@ struct AdamWKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
+namespace {
+
+// Per-core seeds for stochastic rounding, drawn from the framework's seeded RNG
+// (ttml::autograd::ctx) so SR-enabled runs stay reproducible. All-zero when SR is
+// off, which disables rounding in the compute kernel.
+std::vector<uint32_t> make_stochastic_rounding_seeds(uint32_t num_cores, StochasticRounding mode) {
+    std::vector<uint32_t> seeds(num_cores, 0U);
+    if (mode == StochasticRounding::Enabled) {
+        auto& generator = ttml::autograd::ctx().get_generator();
+        std::uniform_int_distribution<uint32_t> dis(1U, 0xFFFFFFFFU);
+        for (auto& seed : seeds) {
+            seed = dis(generator);
+        }
+    }
+    return seeds;
+}
+
+}  // namespace
+
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
@@ -108,16 +128,7 @@ void assign_per_core_runtime_args(
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
     float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
 
-    // Generate seeds for stochastic rounding (0 if disabled)
-    std::vector<uint32_t> seeds(num_cores, 0);
-    if (attrs.stochastic_rounding == StochasticRounding::Enabled) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
-        for (uint32_t i = 0; i < num_cores; i++) {
-            seeds[i] = dis(gen);
-        }
-    }
+    std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(num_cores, attrs.stochastic_rounding);
 
     // Compute runtime args (same for all cores except seed)
     std::vector<uint32_t> compute_args{
@@ -457,16 +468,7 @@ void AdamWProgramFactory::override_runtime_arguments(
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
     float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
 
-    // Generate seeds for stochastic rounding (0 if disabled)
-    std::vector<uint32_t> seeds(num_cores, 0);
-    if (attrs.stochastic_rounding == StochasticRounding::Enabled) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
-        for (uint32_t i = 0; i < num_cores; i++) {
-            seeds[i] = dis(gen);
-        }
-    }
+    std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(num_cores, attrs.stochastic_rounding);
 
     // Helper to select correct compute runtime args with error handling
     auto get_compute_runtime_args = [&](const tt::tt_metal::CoreCoord& core) -> auto& {

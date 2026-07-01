@@ -52,6 +52,7 @@ from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
 from model_builders import FLOPS_REGISTRY, Model, ModelConfig, instantiate_model_from_config, parse_model_config
 from callbacks import (
     AverageLossCallback,
+    EpochCallback,
     MemoryTrackerCallback,
     MoECallback,
     ThroughputCallback,
@@ -74,6 +75,10 @@ MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # ── Training config ───────────────────────────────────────────────────────────
 
+# Defaults for the warmup_linear schedule; overridable via training_config.
+_WARMUP_LINEAR_WARMUP_FRACTION = 0.1
+_WARMUP_LINEAR_MIN_LR_FRACTION = 0.01
+
 
 class TrainingConfig(BaseTrainingConfig):
     """Base training config + NanoGPT-specific defaults + legacy field-name aliases."""
@@ -86,6 +91,10 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
+        # warmup_linear knobs: warmup_steps (absolute) overrides warmup_ratio (fraction of the run).
+        self.warmup_ratio = float(tc.get("warmup_ratio", _WARMUP_LINEAR_WARMUP_FRACTION))
+        self.warmup_steps = int(tc.get("warmup_steps", 0))
+        self.min_lr_ratio = float(tc.get("min_lr_ratio", _WARMUP_LINEAR_MIN_LR_FRACTION))
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
@@ -93,8 +102,10 @@ class TrainingConfig(BaseTrainingConfig):
         self.seed = int(tc.get("seed", 5489))
         self.max_steps = int(tc.get("max_steps", 5000))
 
-        # Legacy field names kept alive for callers that still read them.
-        self.num_epochs = self.epochs
+        # 0 = no epoch cap; max_steps controls the run. (A real epoch is one pass over the
+        # corpus's tokens; the epoch bound scales by that, not by overlapping window count.)
+        self.num_epochs = int(tc.get("num_epochs", 0))
+        # Legacy field name kept alive for callers that still read it.
         self.model_save_interval = self.save_every
 
 
@@ -228,8 +239,10 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
 
 # ── LR schedule ───────────────────────────────────────────────────────────────
 
-_WARMUP_LINEAR_WARMUP_FRACTION = 0.1
-_WARMUP_LINEAR_MIN_LR_FRACTION = 0.01
+
+def resolve_warmup_steps(training_cfg: TrainingConfig, max_steps: int) -> int:
+    """Absolute warmup length: explicit `warmup_steps` wins, else `warmup_ratio` of the run."""
+    return training_cfg.warmup_steps or round(max_steps * training_cfg.warmup_ratio)
 
 
 def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, max_steps: int) -> Callable[[int], float]:
@@ -237,12 +250,11 @@ def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, max_steps: i
     base_lr = optimizer.get_lr()
 
     if training_cfg.scheduler_type == "warmup_linear":
-        warmup_steps = int(max_steps * _WARMUP_LINEAR_WARMUP_FRACTION)
         sched = SpeedrunScheduler(
             SpeedrunSchedulerConfig(
                 max_lr=base_lr,
-                min_lr=base_lr * _WARMUP_LINEAR_MIN_LR_FRACTION,
-                warmup_steps=warmup_steps,
+                min_lr=base_lr * training_cfg.min_lr_ratio,
+                warmup_steps=resolve_warmup_steps(training_cfg, max_steps),
                 hold_steps=0,
                 total_steps=max_steps,
             )
@@ -534,6 +546,25 @@ def run_training(
 
     peak_tflops = get_device_peak_tflops_bf16() * mesh.num_devices() if flops_per_token > 0 else 0.0
 
+    grad_accum = max(1, training_cfg.gradient_accumulation_steps)
+    dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
+    global_batch = training_cfg.batch_size * grad_accum * dp_size
+
+    corpus_tokens = len(dataset.tokens)
+    tokens_per_step = global_batch * seq_len
+    steps_per_epoch = corpus_tokens / tokens_per_step
+
+    # Either knob caps the run; 0 disables that knob. Stop at whichever active cap comes first,
+    # so max_steps and num_epochs are symmetric (0 = no limit) rather than 0 meaning "no steps".
+    caps = []
+    if training_cfg.max_steps > 0:
+        caps.append(training_cfg.max_steps)
+    if training_cfg.num_epochs > 0:
+        caps.append(max(1, int(training_cfg.num_epochs * steps_per_epoch)))
+    if not caps:
+        raise ValueError("No stop condition: set max_steps > 0 or num_epochs > 0 in training_config.")
+    effective_max_steps = min(caps)
+
     callbacks: list[TrainerCallback] = []
 
     if model_cfg.model_type == "deepseek":
@@ -541,6 +572,8 @@ def run_training(
 
     # Metrics.
     callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, log_interval=1))
+    if steps_per_epoch > 0:
+        callbacks.append(EpochCallback(steps_per_epoch))
     avg_loss_cb = AverageLossCallback()
     callbacks.append(avg_loss_cb)
 
@@ -552,12 +585,6 @@ def run_training(
         raise ValueError("Clip grad norm is not supported with TP or FSDP")
 
     saver, loader = build_checkpoint_io(tokenizer, model_cfg)
-
-    # Match old train_nanogpt.py: training stops at min(max_steps, num_epochs × batches_per_epoch / grad_accum).
-    batches_per_epoch = len(dataloader)
-    grad_accum = max(1, training_cfg.gradient_accumulation_steps)
-    epoch_bound = (training_cfg.num_epochs * batches_per_epoch) // grad_accum
-    effective_max_steps = min(training_cfg.max_steps, epoch_bound) if epoch_bound > 0 else training_cfg.max_steps
 
     # Schedule over the steps actually run, so warmup + decay complete by the end of training.
     schedule = build_lr_schedule(training_cfg, optimizer, effective_max_steps)
@@ -605,8 +632,8 @@ def run_training(
         vocab_str = f"{model_cfg.vocab_size}"
 
     if training_cfg.scheduler_type == "warmup_linear":
-        warmup = int(effective_max_steps * _WARMUP_LINEAR_WARMUP_FRACTION)
-        schedule_str = f"warmup_linear ; {warmup:,} warmup ; {effective_max_steps - warmup:,} decay"
+        warmup_steps = resolve_warmup_steps(training_cfg, effective_max_steps)
+        schedule_str = f"warmup_linear ; {warmup_steps:,} warmup ; {effective_max_steps - warmup_steps:,} decay"
     else:
         schedule_str = "constant"
 
@@ -634,15 +661,16 @@ def run_training(
     steps_str = f"{effective_max_steps:,}"
     if effective_max_steps < training_cfg.max_steps:
         steps_str += f" (epoch-capped from {training_cfg.max_steps:,})"
-    passes = effective_max_steps * grad_accum / batches_per_epoch if batches_per_epoch else 0.0
+    tokens_to_process = effective_max_steps * tokens_per_step
+    epochs = effective_max_steps / steps_per_epoch if steps_per_epoch else 0.0
+    epoch_cap = f"{training_cfg.num_epochs} cap" if training_cfg.num_epochs > 0 else "no cap"
     training_fields: list[tuple[str, str]] = [
         ("steps", steps_str),
-        ("epochs", f"{passes:.3g} ({training_cfg.num_epochs} configured)"),
+        ("tokens", f"{tokens_to_process:,}"),
+        ("epochs", f"{epochs:.3g} ({epoch_cap})"),
         ("seed", str(training_cfg.seed)),
     ]
 
-    dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
-    global_batch = training_cfg.batch_size * grad_accum * dp_size
     batch_str = (
         f"size {training_cfg.batch_size} ; accum {training_cfg.gradient_accumulation_steps} "
         f"; global {global_batch:,} ; dropout {model_cfg.dropout_prob}"
@@ -674,7 +702,8 @@ def run_training(
             "data",
             [
                 ("path", shorten_home(data_path)),
-                ("samples", f"{len(dataset):,}"),
+                ("tokens", f"{corpus_tokens:,}"),
+                ("windows", f"{len(dataset):,}"),
                 ("vocab", vocab_str),
             ],
         ),
