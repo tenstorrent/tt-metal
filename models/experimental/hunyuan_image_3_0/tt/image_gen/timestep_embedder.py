@@ -154,6 +154,21 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        else:
+            rank = len(t.shape)
+            if rank == 1:
+                n = int(t.shape[0])
+                t = ttnn.reshape(t, (1, 1, n, 1))
+            elif rank == 2:
+                n = int(t.shape[-1])
+                t = ttnn.reshape(t, (1, 1, n, 1))
+            elif rank == 4 and int(t.shape[-1]) != 1:
+                n = int(t.shape[2])
+                t = ttnn.reshape(t, (1, 1, n, 1))
+            if t.layout != ttnn.TILE_LAYOUT:
+                t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+            if t.dtype != ttnn.float32:
+                t = ttnn.typecast(t, ttnn.float32)
 
         freq = self._timestep_embedding(t)  # [1,1,N,freq] fp32
         x = ttnn.typecast(freq, ttnn.bfloat16)  # match ref cast to MLP weight dtype

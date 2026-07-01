@@ -844,7 +844,7 @@ if __name__ == "__main__":
     from pathlib import Path
 
     ROOT = Path(__file__).resolve().parents[4]
-    UPSTREAM = Path("/home/iguser/tt-ign/HunyuanImage-3.0")
+    UPSTREAM = Path("/home/iguser/ign-tt/hunyan_instruct")
     for p in (str(ROOT), str(UPSTREAM)):
         if p not in sys.path:
             sys.path.insert(0, p)

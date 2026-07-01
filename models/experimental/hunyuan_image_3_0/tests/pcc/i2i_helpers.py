@@ -14,7 +14,7 @@ from PIL import Image
 from safetensors import safe_open
 
 ROOT = Path(__file__).resolve().parents[5]
-HUNYUAN = Path(os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/tt-ign/HunyuanImage-3.0"))
+HUNYUAN = Path(os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/ign-tt/hunyan_instruct"))
 for p in (str(ROOT), str(HUNYUAN)):
     if p not in sys.path:
         sys.path.insert(0, p)
