@@ -71,7 +71,7 @@ def test_lm_decode_hidden_state_pcc(mesh_device, vv_config, lm_state):
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_lm_decode_multi_step_hidden_state_pcc(mesh_device, vv_config, lm_state):
-    """Ten consecutive decode steps after a 32-token prefill (Devstral-style decode PCC sweep)."""
+    """Ten consecutive decode steps after a 32-token prefill (full-LM integration sweep)."""
     torch.manual_seed(0)
     cfg = vv_config.decoder
 
