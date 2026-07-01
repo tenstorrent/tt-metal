@@ -52,6 +52,51 @@ def classify_pipeline(demo_dir: Path) -> str:
     return "emitted" if (Path(demo_dir) / "bringup_status.json").is_file() else "existing"
 
 
+def _stage_untracked_data(repo_root: Path, rel: Path, wt: Path) -> None:
+    scope = str(rel)
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--others", "--directory", "--", scope],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return
+    if out.returncode != 0:
+        return
+    staged = []
+    for line in out.stdout.splitlines():
+        entry = line.strip().rstrip("/")
+        if not entry or Path(entry).name == "__pycache__":
+            continue
+        src = repo_root / entry
+        if not src.is_dir():
+            continue
+        dst = wt / entry
+        if dst.exists() or dst.is_symlink():
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.symlink_to(src)
+            staged.append(entry)
+            print(f"  [optimize/cc] isolation: staged untracked data {entry} -> worktree (no re-download)")
+        except OSError as exc:  # noqa: BLE001
+            print(f"  [optimize/cc] isolation: WARN could not stage {entry}: {exc}")
+    if staged:
+        try:
+            gp = subprocess.run(
+                ["git", "-C", str(wt), "rev-parse", "--git-path", "info/exclude"], capture_output=True, text=True
+            )
+            excl = Path(gp.stdout.strip())
+            if not excl.is_absolute():
+                excl = wt / excl
+            excl.parent.mkdir(parents=True, exist_ok=True)
+            with open(excl, "a") as fh:
+                fh.write("\n" + "\n".join("/" + e for e in staged) + "\n")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [optimize/cc] isolation: WARN could not exclude staged data: {exc}")
+
+
 def _setup_isolation(repo_root: Path, demo_dir: Path):
     """Isolate an EXISTING tt-metal demo's optimization in a throwaway git worktree on a fresh
     branch, so the user's working tree + current branch are never mutated. The cc engine derives
@@ -86,6 +131,7 @@ def _setup_isolation(repo_root: Path, demo_dir: Path):
                     dst.symlink_to(src)
                 except OSError as exc:  # noqa: BLE001
                     print(f"  [optimize/cc] isolation: WARN could not symlink {d}: {exc}")
+        _stage_untracked_data(repo_root, rel, wt)
         return {"wt": wt, "branch": branch, "demo_in_wt": wt / rel, "session": session}
     except Exception as exc:  # noqa: BLE001
         print(f"  [optimize/cc] isolation setup failed: {exc}")

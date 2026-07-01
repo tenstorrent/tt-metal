@@ -293,7 +293,7 @@ def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path) -
     TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -r -p -o <out> -m pytest ... -sv
     Run directly (never via profile_this.py: it swallows the exit code).
     """
-    cmd = ["python", "-m", "tracy", "-v", "-r", "-p", "-o", str(out_dir), "-m", "pytest", perf_test]
+    cmd = ["python", "-m", "tracy", "-v", "-r", "-p", "-o", str(out_dir), "-m", "pytest", "-o", "timeout=0", perf_test]
     if case:
         cmd += ["-k", case]
     cmd += ["-sv"]
