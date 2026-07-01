@@ -24,13 +24,12 @@ namespace ttnn::transformer {
 // Preconditions: d, v_dim, and block_size are multiples of 32; block_size divides T; TOPK*4 and output row
 // bytes meet DRAM alignment; each index row has at least one valid block; all valid block ids are < T/block_size.
 //
-// Causality: block selection in `indices` bounds it to block granularity. Pass `chunk_start_idx` (the global
-// position of query row 0) to additionally enforce a token-level causal mask on the diagonal block — required
-// for correct causal prefill, where a query's own block holds future tokens that must not be attended. Unset
-// (default) keeps the legacy block-only behavior. `cluster_axis` derives the per-device start under sequence
-// parallelism (chunk_start = chunk_start_idx + rank*S), mirroring `indexer_score_msa`. Causal masking requires
-// bf16 q: with fp8 q the mask is numerically wrong (fp8-specific; root cause not identified), so fp8 q with
-// `chunk_start_idx` is rejected.
+// `chunk_start_idx` needs to be passed (the global position of query row 0) to enforce a token-level causal
+// mask on the diagonal block — required for correct causal prefill, where a query's own block holds future
+// tokens that must not be attended. Unset (default) can be used for full attention.
+// `cluster_axis` derives the per-device start under sequence parallelism (chunk_start = chunk_start_idx + rank*S).
+// Causal masking requires bf16 q: with fp8 q the mask is numerically wrong (fp8-specific;
+// root cause not identified), so fp8 q with `chunk_start_idx` asserts.
 ttnn::Tensor sparse_sdpa_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
