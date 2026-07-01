@@ -24,11 +24,11 @@ You can delete the repo snapshot and the service keeps running. You cannot delet
 
 ## First-time setup on a new machine
 
-### What you need to provide (3 secrets + 1 path)
+### What you need to provide (2 secrets + 1 login + 1 path)
 
 | Input | Where to get it | Goes into |
 |---|---|---|
-| Anthropic API key (`sk-ant-...`) | https://console.anthropic.com/settings/keys | `~/.sdpa-watch/api_key` (chmod 600) |
+| Claude Enterprise login | Run `claude` once interactively and log in via your org (SSO) | `~/.claude/.credentials.json` (OAuth, auto-managed) |
 | GitHub PAT (`ghp_...`, scope `public_repo`) | https://github.com/settings/tokens | `gh auth login --with-token` |
 | Slack incoming webhook URL | https://api.slack.com/apps → existing `sdpa-watch` app → Incoming Webhooks (or create a new app + admin approval) | `~/.sdpa-watch/slack_webhook` (chmod 600) |
 | Path to your tt-metal clone | `pwd` inside the clone | `TT_METAL_DIR=` in `~/.sdpa-watch/config.sh` |
@@ -46,9 +46,9 @@ cp /path/to/tt-metal/.sdpa-watch/{config.sh,watch.sh,agent_prompt.txt,README.md,
 chmod +x ~/.sdpa-watch/watch.sh
 echo '{}' > ~/.sdpa-watch/state.json
 
-# 3. Drop in the 3 secrets
+# 3. Authenticate claude (Claude Enterprise OAuth) + drop in the 2 secrets
+claude   # run once, log in via your org SSO; writes ~/.claude/.credentials.json
 umask 077
-printf 'sk-ant-YOUR-KEY'              > ~/.sdpa-watch/api_key && chmod 600 ~/.sdpa-watch/api_key
 printf 'https://hooks.slack.com/...' > ~/.sdpa-watch/slack_webhook && chmod 600 ~/.sdpa-watch/slack_webhook
 echo 'ghp_YOUR-PAT' | gh auth login --with-token
 
@@ -156,7 +156,7 @@ Edit `MODEL=` in `config.sh`:
 
 | Model | Cost relative | Output quality |
 |---|---|---|
-| `claude-opus-4-7` (current) | 1× | best diagnoses |
+| `claude-opus-4-8` (current) | 1× | best diagnoses |
 | `claude-sonnet-4-6` | ~0.2× | very good |
 | `claude-haiku-4-5-20251001` | ~0.05× | acceptable for triage |
 
@@ -178,7 +178,7 @@ Edit `MODEL=` in `config.sh`:
 | `~/.sdpa-watch/watch.sh` | The driver. Runs once per tick. |
 | `~/.sdpa-watch/agent_prompt.txt` | Global LLM policy. |
 | `~/.sdpa-watch/state.json` | Per-pipeline cache. |
-| `~/.sdpa-watch/api_key` | Anthropic API key (chmod 600). |
+| `~/.claude/.credentials.json` | Claude Enterprise OAuth token (auto-managed by `claude`; not under `.sdpa-watch/`). |
 | `~/.sdpa-watch/slack_webhook` | Slack webhook URL (chmod 600). |
 | `~/.sdpa-watch/watch.log` | Append-only tick log. |
 | `~/.sdpa-watch/agent_errors.log` | Stderr from `claude -p` (only useful on agent errors). |
@@ -194,7 +194,7 @@ See "Where things live" at the top of this README for the runtime-vs-snapshot di
 |---|---|---|
 | No Slack message at expected time | cron daemon stopped | `service cron status`; `sudo service cron start` |
 | Slack response not "ok" in log | Webhook revoked or rate-limited | Reinstall the app, replace `~/.sdpa-watch/slack_webhook` |
-| Block says `(agent error — see <url>)` | `claude -p` failed | `cat ~/.sdpa-watch/agent_errors.log`; usually means API key invalid |
+| Block says `(agent error — see <url>)` | `claude -p` failed | `cat ~/.sdpa-watch/agent_errors.log`. Usually auth: run `env -u ANTHROPIC_API_KEY claude -p <<<hi` to check the Enterprise OAuth token; re-login with `claude` if it 401s. A stale `ANTHROPIC_API_KEY` in the env also 401s (watch.sh unsets it). |
 | `gh: HTTP 401` in `watch.log` | GitHub PAT expired | `gh auth login --with-token` with a fresh PAT (scope `public_repo`) |
 | Same message every tick | Cache is doing its job; nothing changed upstream | Expected. Use `rm state.json` if you want to force fresh. |
 | Digest is huge | Too many pipelines or too many failures listed | Trim `PIPELINES=()` or tighten an in-scope hint |
