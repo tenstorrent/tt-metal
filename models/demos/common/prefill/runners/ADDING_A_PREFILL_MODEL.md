@@ -6,7 +6,7 @@ every model:
 
 - rank topology and the per-rank contiguous layer split (pipeline parallel),
 - the H2D input socket (rank 0) and the D2D inter-rank activation sockets,
-- the request (unbounded, production) and standalone (bounded, bring-up) loops,
+- the request (unbounded, producer-driven) serving loop,
 - fabric-link lease/reclaim per chunk, per-layer LayerAck, and shutdown,
 - KV-chunk-table publish + WORKER_READY handshake for cache migration.
 
@@ -127,15 +127,10 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output)."""
 
-    # --- OPTIONAL hooks; only if the model supports golden-trace bring-up / cache migration. The
-    #     engine guards kv_cache_pcc_check with getattr, so a model that omits it just can't run
-    #     PREFILL_STANDALONE_PCC=1. Production serving never calls any of these. Keep the heavy PCC /
-    #     table logic in your model's own validation module (a thin forwarder on the runtime), not
-    #     inline here — see deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
-    def kv_cache_pcc_check(self, kv_cache, *, slot_id, n_chunks, trace_dir, first_layer_idx) -> float:
-        """PCC `kv_cache` for `slot_id` against the golden trace; return the min per-layer
-        PCC (asserting on failure). Called only when PREFILL_STANDALONE_PCC=1."""
-
+    # --- OPTIONAL hook; only if the model supports cache migration. Production serving never calls it.
+    #     Keep the heavy table logic in your model's own module, not inline here —
+    #     see deepseek_v3_d_p/tt/runners/kv_chunk_table.py. (KV-PCC bring-up validation is the
+    #     producer's job, reading device KV directly — not a runtime hook.) ---
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's
         block-cyclic layout) to `path` and return it. The engine then PUBLISHES it to the
@@ -198,18 +193,11 @@ KV-migration validation; see `_apply_manifest_env`.)
 
 ## 4. Validate
 
-There is no compile step — the first chunk pays a one-time lazy-compile cost, so treat chunk 0 as
-warm-up (the standalone loop's first chunk; a synthetic first request in production) and measure from
-chunk 1.
+There is no compile step — the first chunk pays a one-time lazy-compile cost, so the producer sends a
+throwaway warm-up chunk 0 and measures from chunk 1. Bring-up / KV-PCC / benchmarking are all driven
+by the producer (it reads device KV directly for PCC); the runner only serves the request loop.
 
-**Standalone + KV PCC** — single galaxy, golden-trace input, no external producer:
-
-```bash
-PREFILL_MODEL=my_model PREFILL_STANDALONE=1 PREFILL_STANDALONE_PCC=1 \
-  python -m models.demos.common.prefill.runners.prefill_runner
-```
-
-**Request mode + producer** — production path (request mode is the default). The
+**Request mode + producer** — the only path (request mode is the default). The
 runner builds the H2D service and exports its descriptor; the producer connects to it
 by `PREFILL_H2D_SERVICE_ID` and pushes token chunks. Run two terminals; the shared
 env (`PREFILL_MODEL`, `PREFILL_SP/TP`, `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`,
@@ -227,7 +215,7 @@ PREFILL_STANDALONE_NCHUNKS=11 \
 ```
 
 **Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the
-migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
+migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_chunk_table.py`).
 
 ## Checklist
 
@@ -238,4 +226,4 @@ migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
 - [ ] No reference-modeling / heavy imports at module load (lazy inside methods).
 - [ ] Registered in `ADAPTER_PATHS` (`models/demos/common/prefill/adapter.py`).
 - [ ] Weight cache populated; golden trace staged.
-- [ ] Standalone PCC run passes; request + (if applicable) migration paths exercised.
+- [ ] Producer-driven request run passes (incl. KV-PCC); (if applicable) migration path exercised.
