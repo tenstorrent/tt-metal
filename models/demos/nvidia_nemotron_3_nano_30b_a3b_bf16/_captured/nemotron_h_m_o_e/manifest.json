@@ -1,0 +1,31 @@
+{
+  "component": "nemotron_h_m_o_e",
+  "submodule_path": "backbone.layers.1.mixer",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          25,
+          2688
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      25,
+      2688
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}
