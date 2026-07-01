@@ -393,7 +393,10 @@ jobs:
             # assertion in TTSim) and ProgramSpecHWTest.* (real HW tests that time out in TTSim)
             # until they gain TTSim-aware GTEST_SKIP() guards in SetUp().
             ./build/test/tt_metal/unit_tests_api --gtest_filter="-ProgramRunArgsTestQuasar.*:ProgramSpecTestQuasar.*:ProgramSpecHWTest.*"
-            ./build/test/tt_metal/unit_tests_data_movement
+            # MeshDeviceSingleCardFixture.* tests compile RISC-V kernels at runtime via the SFPI
+            # compiler (riscv-tt-elf-g++) which is slow under TTSim — they exhaust the 30-min
+            # step budget in LLK-asserts mode. Exclude until a TTSim-aware GTEST_SKIP() is added.
+            ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="-MeshDeviceSingleCardFixture.*"
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DevicePrintFixture.IdleEthTestPrint"
             # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
             # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
