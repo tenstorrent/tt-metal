@@ -219,9 +219,8 @@ class GroupNorm:
         self.num_groups = self.num_groups // num_splits
         self.channels = self.channels // num_splits
 
-        # Generate input mask
-        input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y, ttnn.bfloat16)
-        input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+        # Positive mask is synthesized in the writer kernel (see #48640); no DRAM tensor needed.
+        # Negative mask, if requested, is still built on host (synthesis needs a fuse_negative_mask opt-in).
         if negative_mask:
             input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(
                 self.channels, self.num_groups, grid_y, ttnn.bfloat16
@@ -273,7 +272,6 @@ class GroupNorm:
         tt_output_tensor = ttnn.group_norm(
             input_tensor,
             num_groups=self.num_groups,
-            input_mask=input_mask_tensor,
             negative_mask=input_nmask_tensor,
             weight=gamma_t,
             bias=beta_t,
@@ -326,16 +324,15 @@ class GroupNormDRAM:
         logger.debug(
             f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
         )
-        [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
-            [self.weight, self.bias], self.channels, self.num_groups, device, core_grid=grid_size, return_mask=True
+        [gamma_t, beta_t] = ttnn.dram_group_norm_params_from_torch(
+            [self.weight, self.bias], self.channels, self.num_groups, device, core_grid=grid_size, return_mask=False
         )
 
-        # groupnorm
+        # groupnorm — mask synthesized in the writer kernel (see #48640)
         logger.debug(f"DRAM {grid_size=}")
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
             num_groups=self.num_groups,
-            input_mask=input_mask_tensor,
             weight=gamma_t,
             bias=beta_t,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
