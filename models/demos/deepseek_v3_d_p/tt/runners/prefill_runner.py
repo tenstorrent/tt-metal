@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     resolve_trace_dir,
     resolve_weight_cache_path,
 )
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
 
@@ -543,6 +544,11 @@ def main() -> None:
     )
 
     mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
+    # Per-axis CCL topology derived from the opened fabric: Ring on a physically-wrapped axis
+    # (e.g. the [LINE,RING] pipeline descriptor + FABRIC_2D_TORUS_X rings the TP/X axis), Linear
+    # otherwise. Querying the active fabric keeps topology consistent with what open_mesh_device set.
+    topology = per_axis_topology()
+    logger.info(f"Per-axis CCL topology (sp, tp) = {topology}")
 
     hf_config = load_hf_config(VARIANT)
     hf_config.max_seq_len = MAX_SEQ_LEN
@@ -555,6 +561,7 @@ def main() -> None:
         chunk_size=CHUNK_SIZE,
         num_users=NUM_USERS,
         num_links=2 if is_blackhole() else 1,  # Blackhole trains 2 fabric routing planes, others 1
+        topology=topology,
         capacity_factor=CAPACITY_FACTOR,
         gate_fallback_mode=GateComputeMode[_gate_mode_name],
         weight_cache_path=cache_path,
