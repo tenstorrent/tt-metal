@@ -231,15 +231,25 @@ def test_transformer_block(
     padded_len = _sp_padded_len(seq_len, sp_factor)
     cos4 = cos.unsqueeze(1)  # (B, 1, L, head_dim) to broadcast over heads in _apply_rope
     sin4 = sin.unsqueeze(1)
+    # The residual stream is FRACTURED on hidden (TP axis) and sharded on sequence (SP).
+    # Shard x on both axes when tp>1: SP on the sequence dim, TP on the hidden dim.
     if sp_factor > 1:
         x = torch.nn.functional.pad(x, (0, 0, 0, padded_len - seq_len))
         cos4 = torch.nn.functional.pad(cos4, (0, 0, 0, padded_len - seq_len))
         sin4 = torch.nn.functional.pad(sin4, (0, 0, 0, padded_len - seq_len))
-        tt_x = bf16_tensor(x, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
+        if tp_factor > 1:
+            from ....utils.tensor import bf16_tensor_2dshard
+
+            tt_x = bf16_tensor_2dshard(x, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
+        else:
+            tt_x = bf16_tensor(x, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
         tt_cos = bf16_tensor(cos4, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
         tt_sin = bf16_tensor(sin4, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
     else:
-        tt_x = bf16_tensor(x, device=submesh_device)
+        if tp_factor > 1:
+            tt_x = bf16_tensor(x, device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
+        else:
+            tt_x = bf16_tensor(x, device=submesh_device)
         tt_cos = bf16_tensor(cos4, device=submesh_device)
         tt_sin = bf16_tensor(sin4, device=submesh_device)
     tt_adaln = bf16_tensor(adaln_input, device=submesh_device)
@@ -272,8 +282,10 @@ def test_transformer_block(
         spatial_sequence_length=seq_len,
     )
 
-    # Output is replicated on TP, sharded on SP -> concat the SP shards, take a TP replica.
-    tt_out_torch = tensor.to_torch(tt_out, mesh_axes=[None, sp_axis, None])
+    # Output is FRACTURED on hidden (TP), sharded on SP. mesh_axes maps tensor dim ->
+    # mesh axis: sequence (dim 1) on sp_axis, hidden (dim 2) on tp_axis.
+    out_mesh_axes = [None, sp_axis, tp_axis if tp_factor > 1 else None]
+    tt_out_torch = tensor.to_torch(tt_out, mesh_axes=out_mesh_axes)
     tt_out_torch = tt_out_torch[:, :seq_len, :]
 
     logger.info(

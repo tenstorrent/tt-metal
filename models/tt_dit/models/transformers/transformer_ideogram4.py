@@ -26,10 +26,9 @@ import torch
 import ttnn
 
 from ...layers.embeddings import Embedding
-from ...layers.feedforward import ParallelFeedForward
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList
-from ...layers.normalization import LayerNorm, RMSNorm
+from ...layers.normalization import DistributedRMSNorm, LayerNorm, RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.padding import pad_weight_tensor
@@ -76,14 +75,23 @@ class Ideogram4TransformerBlock(Module):
         x = x + gate_msa * attention_norm2(attn_out)
         x = x + gate_mlp * ffn_norm2(feed_forward(ffn_norm1(x) * scale_mlp))
 
-    Parallelism (Megatron-style TP + ring sequence parallelism):
-      * The residual stream stays REPLICATED on hidden and SHARDED on sequence
-        ([B, L/sp, hidden]). Norms / AdaLN run replicated (regular RMSNorm/Linear),
-        so their numerics match the TP=1 validated path exactly.
-      * Only the four big matmuls are sharded across the TP axis: qkv is
-        ColParallel (heads fractured), o is RowParallel, and the SwiGLU FFN is a
-        ParallelFeedForward (ff1 col, ff2 row). Each sub-block reduces back to a
-        replicated-hidden activation via an all-gather, i.e. an all-reduce.
+    Parallelism (Wan-style TP-fractured residual + ring sequence parallelism):
+      * The residual stream stays FRACTURED on hidden (TP axis) and SHARDED on
+        sequence (SP axis): [B, L/sp, hidden/tp]. This is the Wan layout — the four
+        block norms are DistributedRMSNorm (cross-device stats via one small stats
+        all-gather), which removes the AllGather-to-replicated that the old
+        replicated-hidden residual forced after every RowParallel reduce-scatter.
+      * The four big matmuls are ColParallel: qkv/ff1 fracture their output on
+        heads/inner; o/ff2 fracture their OUTPUT on hidden (Wan's `to_out` scheme)
+        so the residual add lands on the fractured stream directly — no RowParallel
+        reduce-scatter + separate all-gather. On Linear topology (the loudbox) the
+        fractured-hidden input to each ColParallel matmul is all-gathered to
+        replicated first (`use_nonfused_agmm`), matching Wan's Linear path. The
+        Ring-only fused input-AG-matmul / MM+RS ops are NOT used here (SP axis size
+        4 on the (4,2) loudbox runs Linear, exactly as Wan does for axes <= 4).
+      * AdaLN (scale_msa, gate_msa, scale_mlp, gate_mlp) is projected fractured on
+        hidden (ColParallel-style interleave) so the 4 branches align with the
+        fractured norm outputs / residual.
       * 18 heads are not mesh-friendly; head padding (PaddingConfig) rounds the head
         count up to a multiple of tp_factor with zero-initialized heads, so the
         padded heads/o-proj columns contribute nothing.
@@ -134,8 +142,11 @@ class Ideogram4TransformerBlock(Module):
         padded_inner_dim = self.head_dim * self.padded_heads
 
         # --- attention projections (fused QKV, no bias; matches reference qkv/o) ---
-        # qkv is column-parallel (output heads fractured across TP); o is row-parallel
-        # (input heads fractured, partial sums reduce-scattered then all-gathered).
+        # qkv is column-parallel (output heads fractured across TP). o is ALSO
+        # ColParallel (Wan `to_out` scheme): its input is the concatenated-heads
+        # activation (fractured on heads -> all-gathered to replicated under Linear
+        # topology), and its output is fractured on HIDDEN, matching the fractured
+        # residual stream. No RowParallel reduce-scatter + separate all-gather.
         self.qkv = ColParallelLinear(
             hidden_size,
             3 * padded_inner_dim,
@@ -144,7 +155,7 @@ class Ideogram4TransformerBlock(Module):
             mesh_axis=self.tp_axis,
             ccl_manager=ccl_manager,
         )
-        self.o = RowParallelLinear(
+        self.o = ColParallelLinear(
             padded_inner_dim,
             hidden_size,
             bias=False,
@@ -158,24 +169,45 @@ class Ideogram4TransformerBlock(Module):
         self.norm_q = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
         self.norm_k = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
 
-        # --- the four block RMSNorms (no affine bias; weight only) ---
-        self.attention_norm1 = RMSNorm(
-            embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device
-        )
-        self.attention_norm2 = RMSNorm(
-            embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device
-        )
-        self.ffn_norm1 = RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
-        self.ffn_norm2 = RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
+        # --- the four block RMSNorms (weight only, no bias) ---
+        # DistributedRMSNorm operates on the TP-fractured hidden dim, computing the
+        # RMS statistic across devices via a small stats all-gather (Wan scheme). When
+        # tp_factor == 1 this degrades to a single-device RMSNorm (one no-op AG).
+        def _block_norm():
+            if self.tp_factor > 1:
+                return DistributedRMSNorm(
+                    embedding_dim=hidden_size,
+                    norm_eps=norm_eps,
+                    norm_elementwise_affine=True,
+                    bias=False,
+                    mesh_axis=self.tp_axis,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                )
+            return RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
+
+        self.attention_norm1 = _block_norm()
+        self.attention_norm2 = _block_norm()
+        self.ffn_norm1 = _block_norm()
+        self.ffn_norm2 = _block_norm()
 
         # --- SwiGLU MLP: w2(silu(w1(x)) * w3(x)) ---
-        # ParallelFeedForward fuses w1 (gate) and w3 (value) into ff1 (ColParallel)
-        # via the "swiglu" activation; ff2 (RowParallel) reduce-scatters its output.
-        self.feed_forward = ParallelFeedForward(
-            dim=hidden_size,
-            dim_out=hidden_size,
-            inner_dim=intermediate_size,
+        # ff1 (ColParallel, swiglu) fuses w1 (gate) + w3 (value) and fractures its
+        # inner output; ff2 (ColParallel) fractures its OUTPUT on hidden to match the
+        # fractured residual (Wan scheme). ff2's input (fractured on inner) is
+        # all-gathered to replicated under Linear topology before the matmul.
+        self.ff1 = ColParallelLinear(
+            hidden_size,
+            intermediate_size,
+            bias=False,
             activation_fn="swiglu",
+            mesh_device=mesh_device,
+            mesh_axis=self.tp_axis,
+            ccl_manager=ccl_manager,
+        )
+        self.ff2 = ColParallelLinear(
+            intermediate_size,
+            hidden_size,
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=self.tp_axis,
@@ -183,7 +215,22 @@ class Ideogram4TransformerBlock(Module):
         )
 
         # --- AdaLN: project adaln_input -> 4 * hidden_size (with bias) ---
-        self.adaln_modulation = Linear(adaln_dim, 4 * hidden_size, bias=True, mesh_device=mesh_device)
+        # ColParallel so the output is fractured on hidden; the weight is interleaved
+        # (device-outer, branch-inner) so each device's contiguous 4*hidden/tp slice
+        # is [s_msa | g_msa | s_mlp | g_mlp] for its hidden-shard, and chunk(4) yields
+        # the local hidden-shard of each of the 4 branches — aligned with the
+        # fractured norm outputs and residual. Degrades to a plain Linear at tp==1.
+        if self.tp_factor > 1:
+            self.adaln_modulation = ColParallelLinear(
+                adaln_dim,
+                4 * hidden_size,
+                bias=True,
+                mesh_device=mesh_device,
+                mesh_axis=self.tp_axis,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.adaln_modulation = Linear(adaln_dim, 4 * hidden_size, bias=True, mesh_device=mesh_device)
 
         # SDPA config (fidelity recipe §4 — HiFi2, fp32 acc off; flip on if attn PCC suffers).
         # head_dim=256 (2x the usual 128) doubles SDPA's per-core K/V/score CBs;
@@ -321,9 +368,11 @@ class Ideogram4TransformerBlock(Module):
         if "qkv.weight" in attn:
             state["qkv.weight"] = self._merge_qkv_for_tp(attn["qkv.weight"])
         if "o.weight" in attn:
-            # o is nn.Linear [hidden_out, inner_in]. Pad the input (head) dim at the end
-            # with zeros to padded_inner so the padded heads contribute nothing; the
-            # RowParallel _prepare then transposes [out, in] -> [in, out].
+            # o is nn.Linear [hidden_out, inner_in], now a ColParallelLinear that
+            # fractures its hidden OUTPUT. Pad the input (inner/head) column dim with
+            # zeros to padded_inner so the padded heads (and the AG'd zero head slots)
+            # contribute nothing; ColParallel._prepare then transposes [out, in] ->
+            # [in, out] and shards the hidden output on TP.
             o_weight = attn["o.weight"]
             if self.padding_config is not None:
                 o_weight = pad_weight_tensor(o_weight, self.padding_config, pad_input_dim=False, pad_output_dim=True)
@@ -334,27 +383,55 @@ class Ideogram4TransformerBlock(Module):
             state["norm_k.weight"] = attn["norm_k.weight"]
 
         # SwiGLU: reference is w2(silu(w1(x)) * w3(x)).
-        # FeedForward.ff1 with "swiglu" computes: chunk(ff1_out,2) -> a, gate; a * silu(gate).
-        # So a must be w3 (value) and gate must be w1 (silu'd). ff1.weight = [w3; w1] stacked
-        # on the output dim, then transposed by Linear._prepare_torch_state.
+        # ff1 (ColParallel, swiglu) computes: chunk(ff1_out,2) -> a, gate; a * silu(gate).
+        # So a must be w3 (value) and gate must be w1 (silu'd). ff1.weight = [w3; w1]
+        # stacked on the output dim; ColParallel._prepare transposes + swiglu-permutes.
+        # ff2 (ColParallel) fractures its hidden output: keep nn.Linear [hidden, inner]
+        # and ColParallel._prepare transposes [out, in] -> [in, out], shards hidden.
         ff = pop_substate(state, "feed_forward")
         if "w1.weight" in ff and "w3.weight" in ff:
-            # nn.Linear weight is [out, in]; stack along out so first half=value, second half=gate.
             w_value = ff["w3.weight"]  # value branch -> "a"
             w_gate = ff["w1.weight"]  # gate branch -> silu(gate)
-            state["feed_forward.ff1.weight"] = torch.cat([w_value, w_gate], dim=0)
+            state["ff1.weight"] = torch.cat([w_value, w_gate], dim=0)
         if "w2.weight" in ff:
-            state["feed_forward.ff2.weight"] = ff["w2.weight"]
+            state["ff2.weight"] = ff["w2.weight"]
+
+        # AdaLN modulation: at tp>1 the ColParallel output must be interleaved
+        # device-outer / branch-inner so device d's contiguous 4*hidden/tp slice is
+        # [s_msa_d | g_msa_d | s_mlp_d | g_mlp_d] (each hidden/tp wide). Then chunk(4)
+        # on the local output yields the 4 branch shards in order.
+        if self.tp_factor > 1 and "adaln_modulation.weight" in state:
+            n_dev = self.tp_factor
+            hs = self.hidden_size
+            w = state["adaln_modulation.weight"]  # nn.Linear [4*hidden, adaln_dim]
+            # [4, n_dev, hidden/tp, adaln_dim] -> [n_dev, 4, hidden/tp, adaln_dim]
+            w = w.reshape(4, n_dev, hs // n_dev, w.shape[1]).permute(1, 0, 2, 3).reshape(4 * hs, w.shape[1])
+            state["adaln_modulation.weight"] = w
+            if "adaln_modulation.bias" in state:
+                b = state["adaln_modulation.bias"]  # [4*hidden]
+                b = b.reshape(4, n_dev, hs // n_dev).permute(1, 0, 2).reshape(4 * hs)
+                state["adaln_modulation.bias"] = b
 
     def _all_gather_hidden(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        """All-gather a TP-fractured-on-hidden activation back to replicated hidden.
+        """All-gather a TP-fractured-on-hidden activation to replicated hidden.
 
-        No-op when TP is disabled. Together with the RowParallel reduce-scatter inside
-        o / ff2 this forms an all-reduce, restoring the replicated-hidden residual.
+        No-op when TP is disabled. Used to feed the fractured residual/norm output
+        into a ColParallel matmul (which expects replicated input) under Linear
+        topology (`use_nonfused_agmm` — the Ring fused input-AG-matmul is not used
+        on the size-4 SP axis of the (4,2) loudbox).
         """
         if self.tp_factor <= 1:
             return t
         return self.ccl_manager.all_gather_persistent_buffer(t, dim=2, mesh_axis=self.tp_axis, use_hyperparams=True)
+
+    def _block_norm(self, norm, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Apply a block RMSNorm. DistributedRMSNorm (tp>1) requires 4-D input, so
+        unsqueeze [B, L, D/tp] -> [1, B, L, D/tp] around it and squeeze back."""
+        if self.tp_factor <= 1:
+            return norm(x)
+        x = ttnn.unsqueeze(x, 0)
+        x = norm(x)
+        return ttnn.squeeze(x, 0)
 
     def forward(
         self,
@@ -369,8 +446,8 @@ class Ideogram4TransformerBlock(Module):
         """Single-stream block forward.
 
         Args:
-            x: [B, L/sp, hidden_size] unified text+image sequence. Replicated on the TP
-                axis, sharded on the SP axis (full L when sp_factor == 1).
+            x: [B, L/sp, hidden/tp] unified text+image sequence. FRACTURED on the TP
+                axis (hidden) and sharded on the SP axis (full L when sp_factor == 1).
             cos, sin: [B, 1, L/sp, head_dim] rotary tables (rotate-half convention),
                 precomputed on host from Ideogram4MRoPE. Broadcast over heads; sharded
                 on sequence to match x when sp_factor > 1.
@@ -381,12 +458,16 @@ class Ideogram4TransformerBlock(Module):
                 all-gathers K/V instead of using ring attention.
             spatial_sequence_length: logical (unpadded) full sequence length. Required
                 when sp_factor > 1; defaults to x.shape[1] otherwise.
+
+        Returns [B, L/sp, hidden/tp] — fractured on TP (hidden), sharded on SP.
         """
         batch_size, local_seq_len, _ = x.shape
         if spatial_sequence_length is None:
             spatial_sequence_length = local_seq_len
 
-        # --- AdaLN: 4-branch, tanh gates, (1 + scale). Replicated on all TP devices. ---
+        # --- AdaLN: 4-branch, tanh gates, (1 + scale). Fractured on hidden (TP). ---
+        # ColParallel adaln_modulation output is interleaved so chunk(4) gives each
+        # branch's local hidden-shard, aligned with the fractured norm outputs.
         mod = self.adaln_modulation(adaln_input, compute_kernel_config=self.adaln_compute_kernel_config)
         scale_msa, gate_msa, scale_mlp, gate_mlp = ttnn.chunk(mod, 4, -1)
         gate_msa = ttnn.tanh(gate_msa, fast_and_approximate_mode=False)
@@ -395,18 +476,23 @@ class Ideogram4TransformerBlock(Module):
         scale_mlp = scale_mlp + 1.0
 
         # ----------------- attention sub-block -----------------
-        attn_in = self.attention_norm1(x) * scale_msa
+        # norm1(x): DistributedRMSNorm on fractured hidden (cross-device RMS stats) ->
+        # fractured out. * scale_msa (fractured). Reference applies the affine-weighted
+        # RMSNorm THEN the adaLN scale, so scale is a separate elementwise multiply.
+        attn_in = self._block_norm(self.attention_norm1, x) * scale_msa
         attn_out = self._attention(
             attn_in, cos=cos, sin=sin, attn_mask=attn_mask, spatial_sequence_length=spatial_sequence_length
-        )
-        # x = x + gate_msa * norm2(attn_out); norm2 needs replicated hidden (see _attention).
-        x = ttnn.addcmul(x, gate_msa, self.attention_norm2(attn_out), value=1.0)
+        )  # fractured on hidden
+        # x = x + gate_msa * norm2(attn_out); all fractured on hidden.
+        x = ttnn.addcmul(x, gate_msa, self._block_norm(self.attention_norm2, attn_out), value=1.0)
 
         # ----------------- feed-forward sub-block -----------------
-        ff_in = self.ffn_norm1(x) * scale_mlp
-        ff_out = self.feed_forward(ff_in, compute_kernel_config=self.matmul_compute_kernel_config)
-        ff_out = self._all_gather_hidden(ff_out)  # fractured -> replicated hidden
-        x = ttnn.addcmul(x, gate_mlp, self.ffn_norm2(ff_out), value=1.0)
+        ff_in = self._block_norm(self.ffn_norm1, x) * scale_mlp  # fractured
+        ff_in = self._all_gather_hidden(ff_in)  # fractured -> replicated for ColParallel ff1
+        ff_hidden = self.ff1(ff_in, compute_kernel_config=self.matmul_compute_kernel_config)  # fractured on inner
+        ff_hidden = self._all_gather_hidden(ff_hidden)  # inner fractured -> replicated for ColParallel ff2
+        ff_out = self.ff2(ff_hidden, compute_kernel_config=self.matmul_compute_kernel_config)  # fractured on hidden
+        x = ttnn.addcmul(x, gate_mlp, self._block_norm(self.ffn_norm2, ff_out), value=1.0)
 
         return x
 
@@ -419,6 +505,9 @@ class Ideogram4TransformerBlock(Module):
         attn_mask: ttnn.Tensor | None,
         spatial_sequence_length: int,
     ) -> ttnn.Tensor:
+        # x arrives fractured on hidden; qkv is ColParallel and expects replicated
+        # input, so all-gather to replicated first (Linear-topology `use_nonfused_agmm`).
+        x = self._all_gather_hidden(x)
         # qkv is ColParallel: replicated-hidden input -> output fractured on heads, so
         # the per-device output slice is [q_local | k_local | v_local] for n_local_heads.
         qkv = self.qkv(
@@ -493,11 +582,13 @@ class Ideogram4TransformerBlock(Module):
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )  # [B, n_local_heads, L/sp, head_dim]
 
-        out = ttnn.transformer.concatenate_heads(out)  # [B, L/sp, n_local_heads * head_dim] (fractured on TP)
-        # o is RowParallel: fractured-heads input -> reduce-scatter -> fractured hidden;
-        # all-gather restores the replicated-hidden residual stream.
-        out = self.o(out, compute_kernel_config=self.matmul_compute_kernel_config)
-        return self._all_gather_hidden(out)
+        out = ttnn.transformer.concatenate_heads(out)  # [B, L/sp, n_local_heads * head_dim] (fractured on heads)
+        # o is ColParallel: all-gather the concatenated-heads activation to the full
+        # (padded) inner dim, then matmul -> output FRACTURED on hidden, matching the
+        # fractured residual. No RowParallel reduce-scatter + separate all-gather.
+        out = self._all_gather_hidden(out)  # heads fractured -> replicated padded_inner
+        out = self.o(out, compute_kernel_config=self.matmul_compute_kernel_config)  # fractured on hidden
+        return out
 
 
 class _EmbedScalarMLP(Module):
@@ -555,10 +646,12 @@ class Ideogram4Transformer(Module):
         for layer: h = layer(h, cos, sin, adaln_input, mask)
         out = final_layer(h, adaln_input)
 
-    Parallelism is delegated to the blocks: TP shards heads/FFN internally and keeps
-    the residual replicated on hidden, so the replicated wrapper embeddings compose
-    with TP unchanged. SP shards the sequence (sequence-parallel wrapper handling is
-    threaded through forward via pre-sharded inputs + spatial_sequence_length).
+    Parallelism is delegated to the blocks (Wan-style TP-fractured residual): the
+    wrapper embeddings build h replicated on hidden, the model fractures it on the TP
+    axis (a local mesh_partition slice) before the block loop, the block stack runs on
+    the fractured stream, and the model all-gathers back to replicated hidden for the
+    (replicated) final layer. SP shards the sequence (sequence-parallel wrapper handling
+    is threaded through forward via pre-sharded inputs + spatial_sequence_length).
     """
 
     def __init__(
@@ -584,6 +677,13 @@ class Ideogram4Transformer(Module):
         self.llm_features_dim = llm_features_dim
         self.head_dim = emb_dim // num_heads
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+        # The residual stream is TP-fractured on hidden inside the blocks. The wrapper
+        # embeddings build h replicated on hidden; fracture it before the block loop and
+        # gather back to replicated for the (replicated) final layer.
+        self.tp_factor = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
+        self.tp_axis = parallel_config.tensor_parallel.mesh_axis if parallel_config is not None else 0
 
         # --- input / conditioning embeddings (replicated) ---
         self.input_proj = Linear(in_channels, emb_dim, bias=True, mesh_device=mesh_device)
@@ -684,6 +784,12 @@ class Ideogram4Transformer(Module):
 
         adaln_input = ttnn.silu(self.adaln_proj(self.t_embedding(t_sin)))
 
+        # Fracture the replicated-hidden residual on the TP axis (local slice, the
+        # inverse of all-gather — no cross-device movement) so the block stack runs on
+        # [B, L/sp, hidden/tp].
+        if self.tp_factor > 1:
+            h = ttnn.mesh_partition(h, dim=-1, cluster_axis=self.tp_axis)
+
         for layer in self.layers:
             h = layer(
                 h,
@@ -693,5 +799,10 @@ class Ideogram4Transformer(Module):
                 attn_mask=attn_mask,
                 spatial_sequence_length=spatial_sequence_length,
             )
+
+        # Gather the fractured residual back to replicated hidden for the final layer
+        # (norm_final / adaln / proj_out all run replicated).
+        if self.tp_factor > 1:
+            h = self.ccl_manager.all_gather_persistent_buffer(h, dim=2, mesh_axis=self.tp_axis, use_hyperparams=True)
 
         return self.final_layer(h, adaln_input)

@@ -111,15 +111,25 @@ def test_transformer_block_perf(
     padded_len = _sp_padded_len(seq_len, sp_factor)
     cos4 = cos.unsqueeze(1)
     sin4 = sin.unsqueeze(1)
+    # Residual is TP-fractured on hidden + SP-sharded on sequence (Wan-style layout).
     if sp_factor > 1:
         x = torch.nn.functional.pad(x, (0, 0, 0, padded_len - seq_len))
         cos4 = torch.nn.functional.pad(cos4, (0, 0, 0, padded_len - seq_len))
         sin4 = torch.nn.functional.pad(sin4, (0, 0, 0, padded_len - seq_len))
-        tt_x = bf16_tensor(x, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
+        if tp_factor > 1:
+            from ....utils.tensor import bf16_tensor_2dshard
+
+            tt_x = bf16_tensor_2dshard(x, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
+        else:
+            tt_x = bf16_tensor(x, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
         tt_cos = bf16_tensor(cos4, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
         tt_sin = bf16_tensor(sin4, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
     else:
-        tt_x = bf16_tensor(x, device=submesh_device)
+        tt_x = (
+            bf16_tensor(x, device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
+            if tp_factor > 1
+            else bf16_tensor(x, device=submesh_device)
+        )
         tt_cos = bf16_tensor(cos4, device=submesh_device)
         tt_sin = bf16_tensor(sin4, device=submesh_device)
     tt_adaln = bf16_tensor(adaln_input, device=submesh_device)
