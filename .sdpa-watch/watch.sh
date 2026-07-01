@@ -131,9 +131,15 @@ $ctx"
 }
 
 # ---------- prerequisites ----------
-[[ -f "$API_KEY_FILE" ]] || { log "FATAL: $API_KEY_FILE missing"; exit 1; }
-export ANTHROPIC_API_KEY
-ANTHROPIC_API_KEY="$(cat "$API_KEY_FILE")"
+# Auth via Claude Enterprise (subscription OAuth), NOT a console API key —
+# the org retired console API keys (2026-07). `claude -p` picks up the OAuth
+# credentials in ~/.claude/.credentials.json, which are auto-refreshed on
+# every invocation, so an hourly cron tick keeps the token alive on its own.
+# A stale ANTHROPIC_API_KEY in the environment would OVERRIDE OAuth and 401,
+# so unset it defensively before every run.
+unset ANTHROPIC_API_KEY
+CREDS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+[[ -f "$CREDS_FILE" ]] || { log "FATAL: no Claude OAuth credentials at $CREDS_FILE — run 'claude' once interactively to log in via Enterprise"; exit 1; }
 
 SLACK_URL=""
 if [[ -f "$SLACK_WEBHOOK_FILE" ]]; then
