@@ -296,6 +296,21 @@ FORCE_INLINE
             }
         } break;
 
+        case tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE: {
+            // write_idx selects this chip's destination; the router advances it before forwarding,
+            // so the value read here is guaranteed to be this chip's slot (see receiver_forward_packet).
+            const auto& sparse = header.command_fields.sparse_mcast_write;
+            const uint64_t dest_address = sparse.noc_address[sparse.write_idx];
+            noc_async_write_one_packet_with_trid<update_counter, false>(
+                payload_start_address,
+                dest_address,
+                payload_size_bytes,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
+        } break;
+
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
         default: {

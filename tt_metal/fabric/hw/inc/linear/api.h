@@ -2313,4 +2313,41 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     });
 }
 
+// clang-format off
+/**
+ * Sparse multicast with a distinct destination address per writing chip: delivers a single payload to
+ * the non-contiguous colinear chips selected by the hop bitmask, writing it to sparse_mcast_command_header
+ * .noc_address[i] on the i-th writing chip (in ascending hop order). Unlike scatter (many addresses, one
+ * chip), each address here targets a different chip. 1D only.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                      | Type                                          | Required |
+ * |----------------------------|--------------------------------------------------|-----------------------------------------------|----------|
+ * | client_interface           | Fabric sender interface                          | tt_l1_ptr FabricSenderType*                   | True     |
+ * | packet_header              | Packet header to use                             | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | src_addr                   | Source L1 address                                | uint32_t                                      | True     |
+ * | size                       | Payload size in bytes                            | uint32_t                                      | True     |
+ * | sparse_mcast_command_header| Per-writing-chip destination addresses (hop order)| tt::tt_fabric::NocSparseMulticastWriteCommandHeader | True |
+ * | hops                       | Sparse multicast hop bitmask                     | uint16_t                                      | True     |
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_sparse_multicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocSparseMulticastWriteCommandHeader sparse_mcast_command_header,
+    uint16_t hops) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+
+    packet_header->to_chip_sparse_multicast(
+        tt::tt_fabric::SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE>{hops});
+    packet_header->to_noc_sparse_mcast_write(sparse_mcast_command_header, size);
+    client_interface->wait_for_empty_write_slot();
+    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
+    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
 }  // namespace tt::tt_fabric::linear::experimental
