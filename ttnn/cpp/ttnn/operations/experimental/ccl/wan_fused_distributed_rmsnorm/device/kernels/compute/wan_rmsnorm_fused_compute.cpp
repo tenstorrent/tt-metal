@@ -156,16 +156,13 @@ void kernel_main() {
     constexpr uint32_t mul_weight_result_cb = (fuse_rope || has_bias) ? intermediate_cb : output_cb;
     constexpr uint32_t add_bias_result_cb = fuse_rope ? intermediate_cb : output_cb;
 
-    // Process the core's tile rows in chunks of chunk_size_rows.
-    uint32_t row_processed = 0;
-    while (row_processed < num_tile_rows) {
-        const uint32_t rows_in_chunk =
-            (row_processed + chunk_size_rows <= num_tile_rows) ? chunk_size_rows : (num_tile_rows - row_processed);
-        const uint32_t chunk_input_tiles = rows_in_chunk * num_tile_cols;
-        // per_head_norm produces num_heads_per_device stats per row (one per
-        // head) instead of stats_tiles_cols (== ring_size) for the AG path.
-        constexpr uint32_t per_row_stats_count = (per_head_norm != 0) ? num_heads_per_device : stats_tiles_cols;
-        const uint32_t chunk_stats_tiles = rows_in_chunk * per_row_stats_count;
+    // Process the core's tile rows one at a time (chunk size is always 1).
+    // per_head_norm produces num_heads_per_device stats per row (one per
+    // head) instead of stats_tiles_cols (== ring_size) for the AG path.
+    constexpr uint32_t per_row_stats_count = (per_head_norm != 0) ? num_heads_per_device : stats_tiles_cols;
+    for (uint32_t row_processed = 0; row_processed < num_tile_rows; ++row_processed) {
+        const uint32_t chunk_input_tiles = num_tile_cols;
+        const uint32_t chunk_stats_tiles = per_row_stats_count;
 
         // -------- PHASE 1: PRE — sum(x**2) per row --------
         // Cumulative input wait: instead of one cb_wait_front for the whole
@@ -190,13 +187,13 @@ void kernel_main() {
             // mul_tiles_init must re-run each row; it's FPU-throughput-bound, not
             // init-bound).
             if constexpr (streaming_low_l1) {
-                // Streamed whole-row PRE (rows_in_chunk == 1, one group). Input
+                // Streamed whole-row PRE (one group). Input
                 // arrives block by block from the reader's first pass; each
                 // block is popped after its x**2 is accumulated into
                 // pre_intermediate_cb[0]. The accumulation order (and l1_acc
                 // sequencing) is identical to the resident path, so the stat
                 // tile is bit-exact — only the input residency window differs.
-                for (uint32_t r = 0; r < rows_in_chunk; r++) {
+                {  // single row per iteration (chunk size is 1)
                     reconfig_data_format(input_cb, input_cb);
                     pack_reconfig_data_format(pre_intermediate_cb);
                     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -234,8 +231,8 @@ void kernel_main() {
                 }
             } else {
                 uint32_t input_tiles_waited = 0;
-                for (uint32_t r = 0; r < rows_in_chunk; r++) {
-                    const uint32_t row_base = r * num_tile_cols;
+                {  // single row per iteration (chunk size is 1)
+                    constexpr uint32_t row_base = 0u;
 
                     for (uint32_t g = 0; g < pre_groups_per_row; g++) {
                         const uint32_t group_base = row_base + g * pre_group_width;
@@ -302,7 +299,7 @@ void kernel_main() {
         if constexpr (packed_ag_enabled != 0) {
             transpose_wh_init_short(stats_local_cb);
             pack_reconfig_data_format(stats_transposed_local_cb);
-            for (uint32_t r = 0; r < rows_in_chunk; r++) {
+            {  // single row per iteration (chunk size is 1)
                 cb_wait_front(stats_local_cb, 1);
                 cb_reserve_back(stats_transposed_local_cb, 1);
                 tile_regs_acquire();
@@ -325,8 +322,8 @@ void kernel_main() {
 
         // -------- PHASE 3: POST — finalize normalization --------
         {
-            for (uint32_t r = 0; r < rows_in_chunk; r++) {
-                const uint32_t row_base = r * num_tile_cols;
+            {  // single row per iteration (chunk size is 1)
+                constexpr uint32_t row_base = 0u;
                 // Single shared cos/sin tile cursor: in broadcast RoPE the cos
                 // and sin sequences cycle identically over head_dim_tiles, and
                 // the fused finalize multiplies both with the same index.
@@ -1190,11 +1187,9 @@ void kernel_main() {
         }
         // NOTE: stats_gathered_cb is NOT popped here — the reduce<AVG> with
         // default WaitAndPopPerTile policy already drains chunk_stats_tiles
-        // (4 tiles × 3 rows for the AG path, or num_heads × rows for per_head).
-        // A manual pop here would be a DOUBLE-POP, advancing rd_ptr past
-        // wr_ptr and causing subsequent chunks to read stale L1 contents.
-
-        row_processed += rows_in_chunk;
+        // (num_heads × 1 for per_head, else ring_size × 1). A manual pop here would
+        // be a DOUBLE-POP, advancing rd_ptr past wr_ptr and causing subsequent rows
+        // to read stale L1 contents.
     }
 
     cb_pop_front(reduce_scalar_sum_cb, 1);
