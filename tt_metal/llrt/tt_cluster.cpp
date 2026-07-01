@@ -761,7 +761,7 @@ uint32_t Cluster::get_arc_timer_heartbeat(const ChipId& chip_id) const {
 
 bool Cluster::is_arc_telemetry_available(const ChipId& chip_id) const {
     auto* tt_device = driver_->get_chip(chip_id)->get_tt_device();
-    return tt_device && (tt_device->get_firmware_info_provider() != nullptr);
+    return tt_device && tt_device->get_firmware_info_provider();
 }
 
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->get_cluster_desc()->get_bus_id(chip); }
