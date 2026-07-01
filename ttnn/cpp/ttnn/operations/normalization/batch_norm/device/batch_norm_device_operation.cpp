@@ -118,10 +118,6 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
-}
-
 }  // namespace ttnn::operations::normalization
 
 namespace ttnn::prim {

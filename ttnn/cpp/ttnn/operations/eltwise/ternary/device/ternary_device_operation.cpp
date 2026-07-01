@@ -250,18 +250,6 @@ static MemoryConfig resolve_mem_config_actual(
 
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
-ttsl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(
-        ternary_op_type,
-        ternary_variant,
-        broadcast_type,
-        memory_config,
-        get_dtype(),
-        compute_kernel_config,
-        sub_core_grids,
-        worker_grid);
-}
-
 void TernaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;

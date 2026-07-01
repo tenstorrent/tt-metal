@@ -34,9 +34,33 @@ struct TernaryDeviceOperation {
         std::optional<ScalarVariant> scalar_input_a;
         std::optional<ScalarVariant> scalar_input_b;
 
-        ttsl::hash::hash_t to_hash() const;
-
         DataType get_dtype() const;
+
+        // Structural attribute reflection: canonical_key walks these fields byte-for-byte, so a
+        // 64-bit hash collision is resolved by exact equality on the canonical string (issue #45821).
+        // Fields intentionally excluded from the cache key: input_dtype, dtype (subsumed by
+        // get_dtype()), scalar_input_a/b (re-applied each dispatch as runtime args, not baked into
+        // the compiled program).
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "ternary_op_type",
+            "ternary_variant",
+            "broadcast_type",
+            "memory_config",
+            "get_dtype",
+            "compute_kernel_config",
+            "sub_core_grids",
+            "worker_grid");
+        auto attribute_values() const {
+            return std::make_tuple(
+                ternary_op_type,
+                ternary_variant,
+                broadcast_type,
+                memory_config,
+                get_dtype(),
+                compute_kernel_config,
+                sub_core_grids,
+                worker_grid);
+        }
     };
 
     struct tensor_args_t {

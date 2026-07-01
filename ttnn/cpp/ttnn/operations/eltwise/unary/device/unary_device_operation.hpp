@@ -30,7 +30,29 @@ struct UnaryDeviceOperation {
         const CoreRangeSet worker_grid;
         std::optional<CoreRangeSet> sub_core_grids;
 
-        tt::stl::hash::hash_t to_hash() const;
+        // Structural attribute reflection: canonical_key walks these fields byte-for-byte, so a
+        // 64-bit hash collision is resolved by exact equality on the canonical string (issue #45821).
+        // The previous `to_hash()` override folded to 8 lossy bytes.
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "op_chain",
+            "output_dtype",
+            "memory_config",
+            "fp32_dest_acc_en",
+            "preserve_fp32_precision",
+            "bfp8_pack_precise",
+            "worker_grid",
+            "sub_core_grids");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                op_chain,
+                output_dtype,
+                memory_config,
+                fp32_dest_acc_en,
+                preserve_fp32_precision,
+                bfp8_pack_precise,
+                worker_grid,
+                sub_core_grids);
+        }
     };
 
     struct tensor_args_t {

@@ -19,8 +19,17 @@ struct BatchNormOperation {
 
         DataType input_dtype;
         std::optional<DataType> dtype;
-        ttsl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
+
+        // Structural attribute reflection: canonical_key walks these fields byte-for-byte, so a
+        // 64-bit hash collision is resolved by exact equality on the canonical string (issue #45821).
+        // Fields intentionally excluded from the cache key: input_dtype, dtype (subsumed by
+        // get_dtype()).
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("eps", "memory_config", "get_dtype", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::make_tuple(eps, memory_config, get_dtype(), compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
