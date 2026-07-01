@@ -1,0 +1,52 @@
+# Mesh Graph Descriptor for the minimal socket-transfer reproducer (asymmetric 2 -> 6).
+#
+# Two meshes (one per rank), connected by a FABRIC graph so
+# ttnn.experimental.send_async/recv_async can route across them:
+#
+#   Rank 0 (sender)   -> mesh_id 0, a [1, 2] line (ONE eth-linked N300 board = 2 chips).
+#   Rank 1 (receiver) -> mesh_id 1, a [1, 6] line (THREE eth-linked N300 boards = 6 chips).
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# This declares a [1, 2] line for the sender and a [1, 6] line for the receiver. The exact
+# device_topology, channel counts, and inter-mesh connection MUST match your physical wiring
+# (the 2 sender chips must be an eth-linked line, the 6 receiver chips must be an eth-linked
+# line, and sender chip (0,0) must be eth-reachable from receiver chip (0,0)). Adjust for your
+# machine. Pairs with configurations/local8/rank_bindings.yaml (TT_VISIBLE_DEVICES "0" for the
+# sender board, "1,2,3" for the three receiver boards).
+
+mesh_descriptors {
+  name: "M_SEND"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+mesh_descriptors {
+  name: "M_RECV"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 6 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M_SEND" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M_RECV" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M_SEND" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M_RECV" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
