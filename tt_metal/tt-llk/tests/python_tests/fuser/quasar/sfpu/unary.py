@@ -83,7 +83,6 @@ class UnarySfpu(Sfpu):
     ) -> str:
         stage = operation.stage_id
         op = f"SfpuType::{self.operation.cpp_enum_value}"
-        en_32bit_dest = "true" if config.dest_acc.value else "false"
 
         return (
             f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
@@ -99,9 +98,8 @@ class UnarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         op = f"SfpuType::{self.operation.cpp_enum_value}"
-        en_32bit_dest = "true" if config.dest_acc.value else "false"
-
-        sfpu_format = f"DataFormat::{config.sentinel._math_format.name}"
+        en_32bit_dest = config.dest_acc.cpp_enum_value
+        sfpu_format = config.sentinel._math_format.cpp_enum_value
         return (
             f"    test_utils::call_unary_sfpu_operation_quasar<"
             f"{op}, {en_32bit_dest}, {self.iterations}"

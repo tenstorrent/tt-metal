@@ -46,12 +46,11 @@ class ReduceUnpacker(Unpacker):
         buf_desc_id_a = compute_unit.src_a.buf_desc_id
         buf_desc_id_b = compute_unit.src_b.buf_desc_id
         reduce_dim = self.reduce_dim.cpp_enum_value
-        tile_shape = compute_unit.src_a.tile_shape
 
         return (
             f"_llk_unpack_reduce_init_<{reduce_dim}>"
             f"({buf_desc_id_a}, {buf_desc_id_b}, "
-            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}, "
+            f"{compute_unit.src_a.tile_shape.cpp_value}, "
             f"1);\n"
         )
 

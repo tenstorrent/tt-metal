@@ -98,7 +98,7 @@ class BinarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
-        en_32bit_dest = "true" if config.dest_acc.value else "false"
+        en_32bit_dest = config.dest_acc.cpp_enum_value
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
         dst = self.dst_index_out

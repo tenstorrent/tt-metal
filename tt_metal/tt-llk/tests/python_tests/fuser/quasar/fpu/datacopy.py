@@ -58,7 +58,7 @@ class DatacopyFpu(Fpu):
         num_faces = operation.tile_shape.total_num_faces()
         face_r_dim = operation.tile_shape.face_r_dim
         num_rows_per_matrix = face_r_dim * num_faces
-        en_32bit_dest = "true" if config.dest_acc.value else "false"
+        en_32bit_dest = config.dest_acc.cpp_enum_value
 
         return (
             f"// Operation {stage}: Datacopy FPU\n"

@@ -45,17 +45,13 @@ class UnpackerA(Unpacker):
         block: BlockData,
     ) -> str:
         buf_desc_id = compute_unit.src_a.buf_desc_id
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        face_c_dim = compute_unit.src_a.tile_shape.face_c_dim
-        num_faces_r = compute_unit.src_a.tile_shape.num_faces_r_dim
-        num_faces_c = compute_unit.src_a.tile_shape.num_faces_c_dim
-        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        en_32bit_dest = "true" if config.dest_acc.value else "false"
+        en_32bit_dest = config.dest_acc.cpp_enum_value
 
         return (
             f"_llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, {en_32bit_dest}, {reuse_dest}>"
-            f"({buf_desc_id}, ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r}, {num_faces_c}}}, 1);\n"
+            f"({buf_desc_id}, {tensor_shape}, 1);\n"
         )
 
     def unpack(
@@ -65,15 +61,12 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        face_c_dim = compute_unit.src_a.tile_shape.face_c_dim
-        num_faces_r = compute_unit.src_a.tile_shape.num_faces_r_dim
-        num_faces_c = compute_unit.src_a.tile_shape.num_faces_c_dim
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
 
         return (
             f"_llk_unpack_unary_operand_<p_unpacr::UNP_A, {reuse_dest}>"
-            f"({block.tile_id_global}, ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r}, {num_faces_c}}});\n"
+            f"({block.tile_id_global}, {tensor_shape});\n"
         )
 
     def uninit(

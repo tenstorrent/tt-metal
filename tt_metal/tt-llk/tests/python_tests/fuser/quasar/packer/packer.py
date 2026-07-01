@@ -46,14 +46,10 @@ class Packer(BasePacker):
         block: BlockData,
     ) -> str:
         buf_desc_id = pack_node.output.buf_desc_id
-        face_r_dim = pack_node.output.tile_shape.face_r_dim
-        face_c_dim = pack_node.output.tile_shape.face_c_dim
-        num_faces_r_dim = pack_node.output.tile_shape.total_row_dim() // face_r_dim
-        num_faces_c_dim = pack_node.output.tile_shape.total_col_dim() // face_c_dim
-        en_32bit_dest = "true" if config.dest_acc.value else "false"
+        tensor_shape = pack_node.output.tile_shape.cpp_value
+        en_32bit_dest = config.dest_acc.cpp_enum_value
         return (
-            f"_llk_pack_init_<{en_32bit_dest}>({buf_desc_id}, "
-            f"ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, 1);\n"
+            f"_llk_pack_init_<{en_32bit_dest}>({buf_desc_id}, " f"{tensor_shape}, 1);\n"
         )
 
     def pack(

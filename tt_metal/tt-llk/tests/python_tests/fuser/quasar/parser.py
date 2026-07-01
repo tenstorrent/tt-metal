@@ -40,7 +40,6 @@ from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
-from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
@@ -128,10 +127,6 @@ UNPACKER_MAP = {
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [_no_broadcast, _no_transpose],
-    ),
-    "UnpackerTilizeA": (
-        lambda s: UnpackerTilizeA(),
         [_no_broadcast, _no_transpose],
     ),
     "MatmulUnpacker": (
