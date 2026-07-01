@@ -42,9 +42,12 @@ def _save_synthetic_adapter(
     dim: int = 128,
     ffn_dim: int = 256,
     rank: int = 8,
+    alpha: float | None = None,
 ) -> None:
     """Write a fake LoRA safetensors that covers all 6 LoRA-targeted Linears
-    per block, using the lightx2v naming convention."""
+    per block, using the lightx2v naming convention. When ``alpha`` is given,
+    a matching ``.alpha`` scalar is written for every pair (block-prefixed,
+    exactly as real lightx2v/Seko adapters ship them)."""
     from safetensors.torch import save_file
 
     state: dict[str, torch.Tensor] = {}
@@ -53,6 +56,8 @@ def _save_synthetic_adapter(
     def add_pair(base: str, in_dim: int, out_dim: int):
         state[f"{base}.lora_A.weight"] = torch.randn(rank, in_dim, dtype=dtype) * 0.02
         state[f"{base}.lora_B.weight"] = torch.randn(out_dim, rank, dtype=dtype) * 0.02
+        if alpha is not None:
+            state[f"{base}.alpha"] = torch.tensor(float(alpha), dtype=torch.float32)
 
     for i in range(num_blocks):
         # self-attn Q, K, V, O
@@ -222,3 +227,68 @@ def test_pipeline_bind_unbind_walks_all_modules(mesh_device: ttnn.MeshDevice) ->
             cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
         assert not cur.is_lora_active
         assert cur.active_idx is None
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_fused_qkv_alpha_scaling_matches_singletons(mesh_device: ttnn.MeshDevice) -> None:
+    """Regression: fused-QKV targets must honor the adapter's per-key ``alpha``
+    just like singletons. The alpha lookup is block-prefixed
+    (``blocks.N.self_attn.q``); a key built without the block index silently
+    misses and falls back to ``rank`` → the delta is applied (rank/alpha)x too
+    strong (8x for the Seko V2 lightning LoRAs: alpha=8, rank=64), which wrecks
+    the high-noise expert. See _lightx2v_qkv_key / _register_fused_qkv.
+    """
+    num_heads = 4
+    head_dim = 32
+    dim = num_heads * head_dim
+    ffn_dim = 2 * dim
+    rank = 8
+    alpha = 2.0  # alpha != rank so a missed lookup (→ eff_scale=scale) is detectable
+    scale = 1.0
+    expected_eff = scale * (alpha / rank)  # 0.25
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        sequence_parallel=ParallelFactor(factor=1, mesh_axis=0),
+    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    transformer = WanTransformer3DModel(
+        patch_size=(1, 2, 2),
+        num_heads=num_heads,
+        dim=dim,
+        in_channels=16,
+        out_channels=16,
+        text_dim=128,
+        freq_dim=64,
+        ffn_dim=ffn_dim,
+        num_layers=1,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=False,
+        lora_enabled=True,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        adapter_path = Path(tmp) / "synthetic.safetensors"
+        _save_synthetic_adapter(adapter_path, num_blocks=1, dim=dim, ffn_dim=ffn_dim, rank=rank, alpha=alpha)
+        load_adapter_into(transformer, str(adapter_path), scale=scale, name="synthetic")
+
+    block0 = transformer.blocks[0]
+    fused_targets = {
+        "attn1.to_qkv": block0.attn1.to_qkv,  # self-attn fused QKV
+        "attn2.to_kv": block0.attn2.to_kv,  # cross-attn fused KV
+    }
+    singleton_targets = {
+        "attn2.to_q": block0.attn2.to_q,
+        "attn1.to_out": block0.attn1.to_out,
+        "ffn.ff1": block0.ffn.ff1,
+    }
+    for label, mod in {**fused_targets, **singleton_targets}.items():
+        got = mod.lora_bank[0].scale
+        assert got == pytest.approx(expected_eff), (
+            f"{label}: eff_scale={got}, expected {expected_eff} "
+            f"(alpha={alpha}/rank={rank}); a value of {scale} means the alpha "
+            "lookup missed and fell back to rank"
+        )
