@@ -134,7 +134,7 @@ CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 # Chunks this run drives. The per-user KV cache is sized to exactly hold them
 # (max_seq_len = chunk_size * num_chunks), so there is no separate cache-length knob to keep in sync.
 # PREFILL_MAX_SEQ_LEN still overrides if a larger cache is wanted.
-NUM_CHUNKS = int(os.environ.get("PREFILL_STANDALONE_NCHUNKS", 4))
+NUM_CHUNKS = int(os.environ.get("PREFILL_STANDALONE_NCHUNKS", 11))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * NUM_CHUNKS))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
@@ -380,12 +380,16 @@ def _drain_and_log_e2e(
 
 def run_request_loop(
     runtime: TtPrefillRuntime, rank: int, num_ranks: int, *, h2d_service=None, d2d_in=None, d2d_out=None
-) -> None:
+) -> dict:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until SIGTERM. There is no
     end-of-stream marker, so shutdown is rough: ranks block in the recv device op and exit on mesh
     teardown / SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see run_standalone_loop
-    for those."""
+    for those.
+
+    Returns ``real_end_per_slot``: {slot_id -> max actual_end seen} — the real (non-pad) prefilled
+    length per slot, the analog of blaze's ``len(prompt_ids)``. Used to size the migrate position
+    range for the in-loop migration self-test."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -393,20 +397,38 @@ def run_request_loop(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
+    # Self-test bound: PREFILL_MIGRATION_SELFTEST=1 makes the loop run exactly NUM_CHUNKS chunks then
+    # exit CLEANLY so the post-loop migrate + verify can run — without it the unbounded loop blocks in
+    # recv and only SIGKILL exits, which kills before the verify. NUM_CHUNKS is the run's single chunk
+    # count (the per-user KV cache is sized to exactly hold it, max_seq_len = chunk_size * NUM_CHUNKS),
+    # and the producer pushes the same count, so they match by construction. 0 == unbounded serving.
+    n_selftest = NUM_CHUNKS if os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1" else 0
     t0 = time.perf_counter()
     c = 0
     first = None
+    real_end_per_slot: dict = {}
     while not _shutdown:
+        if n_selftest and c >= n_selftest:
+            break
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
             inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
             inp, meta = _d2d_recv(d2d_in)
         t = _compute_and_send(runtime, rank, c, inp, meta, d2d_out)
+        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
+        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
+        s = meta["slot_id"]
+        real_end_per_slot[s] = max(real_end_per_slot.get(s, 0), meta["actual_end"])
         if first is None:
             first = t
         c += 1
+    # Bounded self-test: every rank must finish receiving + forwarding the final chunk before any
+    # rank reclaims its outbound fabric link in the drain (mirrors run_standalone_loop's tail barrier).
+    if num_ranks > 1 and n_selftest:
+        ttnn.distributed_context_barrier()
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+    return real_end_per_slot
 
 
 def run_standalone_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
@@ -630,14 +652,6 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
 
-    # Migration is only wired for the single-rank case; on the pipeline it would silently no-op. Fail
-    # loud so an enabled-migration pipeline run can't be mistaken for a working one.
-    if not single_rank and os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
-        raise ValueError(
-            f"PREFILL_ENABLE_MIGRATION=1 is unsupported for num_ranks={num_ranks} (pipelined migration "
-            "is not implemented); run single-rank or unset PREFILL_ENABLE_MIGRATION."
-        )
-
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
     # H2D input service lives on the first rank only (downstream ranks read from D2D). compile() leaves
@@ -667,37 +681,58 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 
-    # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
     ack_channel = None
-    if single_rank:
-        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
+    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+
+    # Migration KV-chunk-table publish: runs for ANY rank count. Every rank participates in the
+    # cross-host all-gather that merges the table, but only the first rank builds it and sends it to
+    # the worker (the gating lives inside publish_kv_chunk_table_and_wait_ready, mirroring tt-blaze
+    # where all ranks all-gather but only mesh 0 builds + sends). Previously single-rank only.
+    migration_endpoint = None
+    # Single opt-in: PREFILL_MIGRATION_SELFTEST=1 runs the migrate + slot==slot verify AND implies the
+    # table publish it depends on, so you don't also have to set PREFILL_ENABLE_MIGRATION. The latter
+    # still works on its own for production publish-without-selftest.
+    _selftest = os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1"
+    _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1" or _selftest
+    if _migration_enabled:
+        if is_first_rank:
             # Clear a stale DONE sentinel from a prior run so the validator can't read its pairs.
+            # First rank only -- it owns the publish + validation handshake.
             _done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
             if os.path.exists(_done_file):
                 logger.warning(f"[migration] removing stale DONE sentinel {_done_file} from a prior run")
                 os.remove(_done_file)
 
-            # Full migration bring-up: publish the KV chunk table + device map, then block on
-            # WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
-            from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import publish_kv_chunk_table_and_wait_ready
+        # Full migration bring-up: publish the KV chunk table + device map, then block on
+        # WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
+        # COLLECTIVE: all ranks must call this so the table all-gather completes; only the first rank
+        # attaches to the worker and sends.
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import publish_kv_chunk_table_and_wait_ready
 
-            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-            wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-            publish_kv_chunk_table_and_wait_ready(
-                mesh_device=mesh_device,
-                kvpe_cache=runtime.kvpe_cache,
-                seq_len=MAX_SEQ_LEN,
-                num_layers=NUM_LAYERS,
-                mesh_shape=GLOBAL_MESH_SHAPE,
-                sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
-                num_users=NUM_USERS,
-                chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
-                path=table_path,
-                wait_ready_timeout_ms=wait_ready_ms,
-            )
+        # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
+        # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
+        # rank's range (same split the runtime/cache was built with).
+        first_layer_idx, num_my_layers = compute_layer_split(NUM_LAYERS, num_ranks)[rank]
+        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
+        migration_endpoint = publish_kv_chunk_table_and_wait_ready(
+            mesh_device=mesh_device,
+            kvpe_cache=runtime.kvpe_cache,
+            seq_len=MAX_SEQ_LEN,
+            num_layers=NUM_LAYERS,
+            mesh_shape=GLOBAL_MESH_SHAPE,
+            sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
+            num_users=NUM_USERS,
+            chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
+            path=table_path,
+            first_layer_idx=first_layer_idx,
+            num_my_layers=num_my_layers,
+            wait_ready_timeout_ms=wait_ready_ms,
+        )
 
-        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler reads the delta.
+    # Per-layer LayerAck: single-rank only for now (pipelined migration is future work).
+    if single_rank:
+        # The runner bumps a counter once per layer; the scheduler reads the delta.
         ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
         _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
         if os.path.exists(_stale_ack_shm):
@@ -709,7 +744,57 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
+
+    # Prefill into the src slot (slot 0). Returns {slot_id -> real (non-pad) end position}.
+    real_end_per_slot = run_request_loop(
+        runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out
+    )
+
+    # In-loop migration self-test: rank 0 loopback-migrates src->dst, then EVERY rank asserts its
+    # local dst KV slice equals its src slice (validate_migrations_pairwise). Env-gated so ALL ranks
+    # take the same branch (the barrier below requires it); production serving is unaffected.
+    if _selftest:
+        src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
+        dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1"))
+
+        # PRECONDITION: every stage must have finished writing all its layers' KV before rank 0
+        # migrates. The bounded loop's tail barrier got all ranks through the last chunk; now flush
+        # THIS rank's device writes and barrier so rank 0 reads fully-written KV on every stage.
+        ttnn.synchronize_device(runtime.mesh_device)
+        if num_ranks > 1:
+            ttnn.distributed_context_barrier()
+
+        # RANK 0 ONLY issues the migrate (it holds the MigrationLayerClient).
+        if is_first_rank:
+            assert migration_endpoint is not None, "rank 0 must hold the migration client for the self-test"
+            # Loopback target is THIS endpoint's own id (A->B loopback; no peer, no connect_to).
+            self_ep = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
+            # Position range = the src slot's real prefilled length, aligned UP to the 32-token KV
+            # migration chunk (blaze's _align_up(S)). Migrate the FULL global layer range [0, NUM_LAYERS)
+            # the merged table was built for — the worker routes each layer to its owning stage.
+            POS_CHUNK = 32
+            real_end = real_end_per_slot.get(src_slot, 0)
+            pos_end = ((real_end + POS_CHUNK - 1) // POS_CHUNK) * POS_CHUNK
+            logger.info(
+                f"[migration-selftest] loopback migrate slot{src_slot}->slot{dst_slot} "
+                f"layers[0,{NUM_LAYERS}) pos[0,{pos_end}) (real_end={real_end}, self_ep={self_ep})"
+            )
+            # wait_complete's C++ default is only 30s; a full-prefill loopback copy (here ~2 GB:
+            # 56320 pos x 61 layers) can exceed that, so make it configurable.
+            wait_complete_ms = int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000"))
+            tok = migration_endpoint.migrate(1, self_ep, src_slot, dst_slot, 0, NUM_LAYERS, 0, pos_end)
+            migration_endpoint.wait_complete(tok, wait_complete_ms)
+            logger.success(f"[migration-selftest] migrate slot{src_slot}->slot{dst_slot} complete")
+
+        # Barrier: every rank must wait for rank 0's migrate to finish before reading its local
+        # dst slot (the migrate covers all stages; each rank then verifies its own layers).
+        if num_ranks > 1:
+            ttnn.distributed_context_barrier()
+        ttnn.synchronize_device(runtime.mesh_device)
+
+        from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_migrations_pairwise
+
+        validate_migrations_pairwise(runtime, [(src_slot, dst_slot)])
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).

@@ -33,8 +33,10 @@ NOTE: per-layer LayerAck channel + scheduler-driven migration are NOT here
 (owned by the scheduler/worker side).
 """
 
+import glob
 import os
 import sys
+import time
 
 from loguru import logger
 
@@ -42,6 +44,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
+    allgather_kv_stage_layout,
     create_kv_chunk_address_table_kimi,
 )
 
@@ -108,6 +111,57 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
+def _deliver_local_device_map(device_map, timeout_s=120.0) -> None:
+    """Push THIS rank's local FNID->UMD device map to its co-located host migration worker(s).
+
+    Direct port of tt-blaze's ``_deliver_local_device_map``. The migration endpoint spawns TWO
+    internal device workers per host -- an "A" master/sender and a "B" loopback receiver -- each with
+    its OWN shmem queues named ``/ep_<pid>_{a,b}_{cmd,table,resp}`` (endpoint_orchestrator.cpp::
+    run_loopback); a subordinate rank adds a ``_r<rank>`` suffix. BOTH the A worker and the B receiver
+    need the map, so we deliver to every match.
+
+    The device map does NOT go to the outward control queues (``PREFILL_MIGRATION_*_QUEUE``, e.g.
+    ``/mig_ep1_*``) -- those are a DIFFERENT, master-only channel used for SET_TABLE/WORKER_READY. We
+    discover the worker queues by globbing ``/dev/shm/ep_*_{a,b}_cmd*`` on THIS host (POSIX shm is
+    host-local, so the glob finds exactly the worker(s) co-located with this rank), exactly like blaze
+    -- NOT the ``mig_ep*`` control name, which never matches a device-map queue.
+    """
+    mod = _import_migration_client()
+
+    def _discover():
+        trios = []
+        for side in ("a", "b"):
+            for c in sorted(glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")):
+                name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
+                trios.append(
+                    (
+                        name,
+                        name.replace(f"_{side}_cmd", f"_{side}_table"),
+                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
+                    )
+                )
+        return trios
+
+    deadline = time.monotonic() + timeout_s
+    trios = _discover()
+    while not trios:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
+                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
+                "master-only control channel, NOT the device-map queues.)"
+            )
+        time.sleep(0.25)
+        trios = _discover()
+
+    for cmd, table, resp in trios:
+        try:
+            mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
+            logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
+        except RuntimeError as e:
+            raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
+
+
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
     """Row-major ``(umd_chip_id, fabric_mesh_id, fabric_chip_id)`` for this rank's local mesh.
 
@@ -153,7 +207,19 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
 
 
 def build_and_serialize_kv_chunk_table(
-    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, chunk_size_global, path
+    *,
+    mesh_device,
+    kvpe_cache,
+    seq_len,
+    num_layers,
+    mesh_shape,
+    sp_axis,
+    num_users,
+    chunk_size_global,
+    path,
+    first_layer_idx=0,
+    num_my_layers=None,
+    stage_layout=None,
 ) -> str:
     """Build the KV chunk address table from the device KV layout and serialize it to ``path``
     for the inference server to forward via SET_TABLE. Returns the path on success.
@@ -175,6 +241,8 @@ def build_and_serialize_kv_chunk_table(
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
     cfg = _disaggregation().KvChunkAddressTableConfig()
+    # cfg.num_layers is the GLOBAL layer total; the builder overwrites it with the gathered sum of all
+    # stages' layer counts, so this is just an initial value (== num_layers when stages tile cleanly).
     cfg.num_layers = num_layers
     cfg.max_sequence_length = seq_len
     cfg.num_slots = num_users
@@ -189,6 +257,9 @@ def build_and_serialize_kv_chunk_table(
         tt_kvpe_cache=kvpe_cache,
         chunk_size_bytes=_CHUNK_SIZE_BYTES,
         num_users=num_users,
+        first_layer_idx=first_layer_idx,
+        num_my_layers=num_my_layers,
+        stage_layout=stage_layout,
     )
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
@@ -206,8 +277,10 @@ def publish_kv_chunk_table_and_wait_ready(
     num_users: int,
     chunk_size_global: int,
     path: str,
+    first_layer_idx: int = 0,
+    num_my_layers: int = None,
     wait_ready_timeout_ms: int = 120_000,
-) -> None:
+):
     """Full migration bring-up from the prefill runner side.
 
     Builds + serializes the KV chunk address table, attaches a
@@ -226,7 +299,80 @@ def publish_kv_chunk_table_and_wait_ready(
     Strict-by-default: any failure to import the extension, attach to the
     queues, or reach WORKER_READY raises. Callers that only need the serialized
     table (no publish) can use ``build_and_serialize_kv_chunk_table`` directly.
+
+    Rank gating (mirrors tt-blaze's ``connect_with_migration_worker``):
+      * ALL RANKS deliver their OWN local FNID->UMD device map to the worker co-located on THEIR host
+        and join the cross-host all-gather that feeds rank 0's merged table -- see
+        ``_deliver_device_map_and_gather``. The worker needs every rank's local map before SET_TABLE
+        (a rank knows only its own chips; the map is never gathered worker-side).
+      * ONLY RANK 0 inits the endpoint ``MigrationLayerClient`` on the master cmd/table/resp queues,
+        builds + SET_TABLEs the merged table, and blocks on WORKER_READY -- see
+        ``_publish_table_and_wait_ready``. The resp queue is single-consumer, so exactly one rank may
+        attach (tt-blaze gates this to ``mesh_id == 0``).
     """
+    rank = int(ttnn.distributed_context_get_rank())
+
+    # ALL RANKS: deliver this rank's local device map + join the collective all-gather (barrier).
+    stage_layout = _deliver_device_map_and_gather(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
+
+    if rank != 0:
+        logger.info(
+            f"[migration] rank {rank}: delivered its local device map + contributed its stage "
+            f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
+        )
+        return
+
+    # RANK 0 ONLY: build the merged table, init the MigrationLayerClient, SET_TABLE, wait for ready.
+    return _publish_table_and_wait_ready(
+        mesh_device=mesh_device,
+        kvpe_cache=kvpe_cache,
+        seq_len=seq_len,
+        num_layers=num_layers,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_users=num_users,
+        chunk_size_global=chunk_size_global,
+        path=path,
+        first_layer_idx=first_layer_idx,
+        num_my_layers=num_my_layers,
+        stage_layout=stage_layout,
+        wait_ready_timeout_ms=wait_ready_timeout_ms,
+    )
+
+
+def _deliver_device_map_and_gather(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
+    """ALL RANKS run this. Deliver THIS rank's local FNID->UMD device map to its co-located worker,
+    then join the collective all-gather that merges every stage into rank 0's table. Returns the
+    gathered ``stage_layout`` (used only by rank 0).
+
+    The delivery happens BEFORE the gather so every rank's map is in place before rank 0 SET_TABLEs;
+    the all-gather doubles as the barrier that guarantees it. The gather is an MPI collective -- EVERY
+    rank must reach it or the communicator deadlocks.
+    """
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    _deliver_local_device_map(device_map)
+    return allgather_kv_stage_layout(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
+
+
+def _publish_table_and_wait_ready(
+    *,
+    mesh_device,
+    kvpe_cache,
+    seq_len,
+    num_layers,
+    mesh_shape,
+    sp_axis,
+    num_users,
+    chunk_size_global,
+    path,
+    first_layer_idx,
+    num_my_layers,
+    stage_layout,
+    wait_ready_timeout_ms,
+):
+    """RANK 0 ONLY. Build + serialize the merged KV chunk table, init the endpoint
+    ``MigrationLayerClient`` on the master cmd/table/resp queues, send SET_TABLE, and block on
+    WORKER_READY (emitted once the table is applied and every rank's device map landed)."""
     build_and_serialize_kv_chunk_table(
         mesh_device=mesh_device,
         kvpe_cache=kvpe_cache,
@@ -237,19 +383,18 @@ def publish_kv_chunk_table_and_wait_ready(
         num_users=num_users,
         chunk_size_global=chunk_size_global,
         path=path,
+        first_layer_idx=first_layer_idx,
+        num_my_layers=num_my_layers,
+        stage_layout=stage_layout,
     )
-
-    device_map = _build_device_map(mesh_device, mesh_shape)
 
     client, cmd_q, table_q, resp_q = _attach_migration_client()
-
     logger.info(
-        f"[migration] publishing: table={path} devices={len(device_map)} "
-        f"queues=(cmd={cmd_q}, table={table_q}, resp={resp_q}) wait_ready_ms={wait_ready_timeout_ms}"
+        f"[migration] publishing table={path} (queues cmd={cmd_q}, table={table_q}, resp={resp_q}) "
+        f"wait_ready_ms={wait_ready_timeout_ms}"
     )
     client.send_kv_chunk_table(path)
-    client.send_device_map(device_map)
     client.wait_ready(wait_ready_timeout_ms)
-    logger.info(
-        f"[migration] WORKER_READY: layers={num_layers} slots={num_users} " f"devices={len(device_map)} table={path}"
-    )
+    logger.info(f"[migration] WORKER_READY: layers={num_layers} slots={num_users} table={path}")
+
+    return client
