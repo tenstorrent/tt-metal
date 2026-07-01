@@ -13,10 +13,8 @@ What it covers:
     - Output extraction via ConcatMeshToTensor + slice [:1]
 
 Tests:
-    test_perf_1x8_eager             — shape/finite sanity; one eager call. No timing claims.
-    test_perf_1x8_traced            — full e2e trace; PERF_ITERS replays; eager + traced breakdown.
-    test_perf_1x8_traced_2cq        — 2CQ trace replay (H2D on CQ1 || compute on CQ0).
-    test_perf_1x8_traced_1cq_prestaged — 1CQ replay with host prep pre-staged.
+    test_perf_1x8_traced_2cq        — 2CQ trace replay (H2D on CQ1 || compute on CQ0);
+                                      the headline per-chunk ms (README perf numbers).
     test_perf_1x8_traced_staged     — per-stage traced breakdown via 3 sub-traces.
 
 Run:
@@ -155,143 +153,8 @@ def _make_pipeline(mesh):
     return pipe, cfg
 
 
-def test_perf_1x8_eager():
-    """Eager sample_actions on the 1×8 pipeline.
-
-    Honors PI05_E2E_NUM_WARMUP (default 0) and PI05_E2E_NUM_ITERS (default 1)
-    to mirror the single-chip eager test's interface — useful for tracy
-    profiling where the canonical inference is the LAST one captured.
-    """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
-
-    n_warmup = int(os.environ.get("PI05_E2E_NUM_WARMUP", "0"))
-    n_iters = int(os.environ.get("PI05_E2E_NUM_ITERS", "1"))
-
-    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
-        pipe, cfg = _make_pipeline(mesh)
-        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
-
-        if n_warmup > 0:
-            print(f"\n🔥 Warmup ({n_warmup} call{'s' if n_warmup > 1 else ''}) — full sample_actions (JIT compile)")
-            for _ in range(n_warmup):
-                _ = pipe.sample_actions(images, lang_tokens=lang_tokens)
-
-        print(f"\n⏱️  Measuring steady-state ({n_iters} sample_actions call{'s' if n_iters > 1 else ''})")
-        actions = None
-        for i in range(n_iters):
-            actions = pipe.sample_actions(images, lang_tokens=lang_tokens)
-            print(f"   call {i + 1:2d}: done")
-
-        ah = cfg.action_horizon
-        ad = cfg.action_dim
-        assert actions.shape == (1, ah, ad), f"shape mismatch: {tuple(actions.shape)} vs (1, {ah}, {ad})"
-        assert torch.isfinite(actions).all(), "non-finite values in actions output"
-
-        print(
-            f"\n✅ 1×8 eager: shape={tuple(actions.shape)}  "
-            f"mean={actions.mean().item():.4f} std={actions.std().item():.4f}"
-        )
-
-
 def _mean(xs):
     return sum(xs) / len(xs) if xs else 0.0
-
-
-def test_perf_1x8_traced():
-    """Capture the full e2e trace and time PERF_ITERS replays, broken down.
-
-    Two breakdowns are produced:
-
-    1. EAGER per-stage breakdown — 3 iters of sample_actions_timed, which
-       synchronizes between SigLIP / prefix / prefill / denoise stages and
-       times each. Proportions match the traced replay; absolute numbers will
-       be larger because eager has per-op host dispatch (the "trace dispatch
-       savings" line below quantifies that delta).
-
-    2. TRACED replay breakdown — PERF_ITERS iters of sample_actions_traced_timed,
-       which splits the host-observable parts of the replay loop:
-            - input_upload_ms : pixel + lang + noise refresh (host→device)
-            - trace_exec_ms   : ttnn.execute_trace (pure on-device compute)
-            - output_readback_ms : ttnn.to_torch (single concat → host)
-       These three are the only host-observable knobs once the trace is
-       captured; their sum is the wall-clock per-call cost.
-    """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
-
-    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
-        pipe, cfg = _make_pipeline(mesh)
-        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
-
-        pipe.capture_trace(images, lang_tokens)
-
-        ah = cfg.action_horizon
-        ad = cfg.action_dim
-
-        # ---- EAGER per-stage breakdown (3 iters, average) ----
-        eager_runs = []
-        for _ in range(3):
-            _, t = pipe.sample_actions_timed(images, lang_tokens)
-            eager_runs.append(t)
-        eag = {
-            "input_upload_ms": _mean([r["input_upload_ms"] for r in eager_runs]),
-            "vision_ms": _mean([r["vision_ms"] for r in eager_runs]),
-            "prefix_ms": _mean([r["prefix_ms"] for r in eager_runs]),
-            "prefill_ms": _mean([r["prefill_ms"] for r in eager_runs]),
-            "denoise_ms": _mean([r["denoise_ms"] for r in eager_runs]),
-            "output_readback_ms": _mean([r["output_readback_ms"] for r in eager_runs]),
-            "eager_total_ms": _mean([r["eager_total_ms"] for r in eager_runs]),
-        }
-        # Per-step denoise (averaged across runs and steps).
-        per_step = [r["denoise_step_ms"] for r in eager_runs]
-        n_steps = len(per_step[0]) if per_step else 0
-        eag_step_means = [_mean([per_step[r][s] for r in range(len(per_step))]) for s in range(n_steps)]
-
-        # ---- TRACED replay breakdown ----
-        for _ in range(WARMUP_ITERS):
-            _ = pipe.sample_actions_traced(images, lang_tokens)
-
-        traced_runs = []
-        last_actions = None
-        for _ in range(PERF_ITERS):
-            last_actions, t = pipe.sample_actions_traced_timed(images, lang_tokens)
-            traced_runs.append(t)
-        assert last_actions is not None
-        assert last_actions.shape == (1, ah, ad), f"shape mismatch: {tuple(last_actions.shape)}"
-        assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
-
-        keys = ["input_upload_ms", "trace_exec_ms", "output_readback_ms", "traced_total_ms"]
-        tr_mean = {k: _mean([r[k] for r in traced_runs]) for k in keys}
-        tr_min = {k: min(r[k] for r in traced_runs) for k in keys}
-
-        # ---- Derived overhead numbers ----
-        sum_compute_eager = eag["vision_ms"] + eag["prefix_ms"] + eag["prefill_ms"] + eag["denoise_ms"]
-        trace_dispatch_savings = sum_compute_eager - tr_mean["trace_exec_ms"]
-
-        print("\n" + "=" * 72)
-        print(f"1×8 pi0.5 perf breakdown   (PERF_ITERS={PERF_ITERS}, denoise_steps={n_steps})")
-        print("=" * 72)
-        print(" EAGER per-stage (3-iter mean, with synchronize_device between stages):")
-        print(f"   input_upload     : {eag['input_upload_ms']:7.2f} ms")
-        print(f"   vision (SigLIP)  : {eag['vision_ms']:7.2f} ms")
-        print(f"   prefix concat    : {eag['prefix_ms']:7.2f} ms")
-        print(f"   prefill TP=8     : {eag['prefill_ms']:7.2f} ms")
-        print(f"   denoise (5 step) : {eag['denoise_ms']:7.2f} ms  per-step={['%.2f' % s for s in eag_step_means]}")
-        print(f"   output_readback  : {eag['output_readback_ms']:7.2f} ms")
-        print(f"   ─────────────────────────────────")
-        print(f"   eager_total      : {eag['eager_total_ms']:7.2f} ms")
-        print()
-        print(f" TRACED replay ({PERF_ITERS}-iter mean / min):")
-        print(f"   input_upload     : {tr_mean['input_upload_ms']:7.2f} / {tr_min['input_upload_ms']:7.2f} ms")
-        print(f"   trace_exec       : {tr_mean['trace_exec_ms']:7.2f} / {tr_min['trace_exec_ms']:7.2f} ms")
-        print(f"   output_readback  : {tr_mean['output_readback_ms']:7.2f} / {tr_min['output_readback_ms']:7.2f} ms")
-        print(f"   ─────────────────────────────────")
-        print(f"   traced_total     : {tr_mean['traced_total_ms']:7.2f} / {tr_min['traced_total_ms']:7.2f} ms")
-        print()
-        print(" DERIVED:")
-        print(f"   eager compute sum : {sum_compute_eager:7.2f} ms  (vision+prefix+prefill+denoise)")
-        print(f"   traced compute    : {tr_mean['trace_exec_ms']:7.2f} ms")
-        print(f"   dispatch savings  : {trace_dispatch_savings:7.2f} ms  (eager compute − traced compute)")
-        print("=" * 72)
 
 
 def test_perf_1x8_traced_2cq():
@@ -347,65 +210,6 @@ def test_perf_1x8_traced_2cq():
         print("=" * 72)
 
 
-def test_perf_1x8_traced_1cq_prestaged():
-    """Single-CQ trace replay with host_chunks pre-staged before the timed loop.
-
-    Apples-to-apples comparison with test_perf_1x8_traced_2cq: both pre-stage
-    the host CPU work (tilize / shard / randn) outside the timed window. The
-    only difference is the command queue used for H2D:
-        1CQ-prestaged: DMA on CQ0 SERIAL BEFORE compute on CQ0.
-        2CQ:          DMA on CQ1 PARALLEL with compute on CQ0.
-
-    Use to isolate the actual PCIe-DMA cost from the host-prep cost. The
-    standard test_perf_1x8_traced reports ~50 ms per iter because host prep
-    (~15 ms) runs inside the timed window. This variant should drop to
-    ~36 ms (= compute 34 + actual DMA ~1.4 + D2H ~1.4), which is within
-    ~1 ms of the 2CQ wall-clock.
-    """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
-
-    _print_prod_env_status()
-
-    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
-        pipe, cfg = _make_pipeline(mesh)
-        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
-
-        pipe.capture_trace(images, lang_tokens)
-
-        ah = cfg.action_horizon
-        ad = cfg.action_dim
-
-        for _ in range(WARMUP_ITERS):
-            _ = pipe.sample_actions_traced(images, lang_tokens)
-
-        last_actions, times = pipe.sample_actions_traced_1cq_prestaged_loop(images, lang_tokens, PERF_ITERS)
-        assert last_actions.shape == (1, ah, ad), f"shape mismatch: {tuple(last_actions.shape)}"
-        assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
-
-        mean = _mean(times)
-        mn = min(times)
-        mx = max(times)
-        if len(times) > 1:
-            mean_excl0 = _mean(times[1:])
-        else:
-            mean_excl0 = mean
-
-        print("\n" + "=" * 72)
-        print(f"1×8 pi0.5 TRACED 1CQ-PRESTAGED replay  (PERF_ITERS={PERF_ITERS}, N_CAMS={N_CAMS})")
-        print("=" * 72)
-        print(f"  mean (incl iter 0)     : {mean:.2f} ms")
-        print(f"  mean (excl iter 0)     : {mean_excl0:.2f} ms")
-        print(f"  min                    : {mn:.2f} ms")
-        print(f"  max                    : {mx:.2f} ms")
-        print(f"  per-iter (first 5)     : {[f'{t:.2f}' for t in times[:5]]}")
-        print()
-        print("  Compare:")
-        print(f"    - test_perf_1x8_traced (host prep IN window)        : ~50 ms")
-        print(f"    - this test (host prep PRE-STAGED, DMA on CQ0)      : {mean_excl0:.2f} ms")
-        print(f"    - test_perf_1x8_traced_2cq (DMA on CQ1 || compute) : ~35 ms")
-        print("=" * 72)
-
-
 def test_perf_1x8_traced_staged():
     """Per-stage TRACED breakdown via 3 sub-traces on the single 1×8 mesh.
 
@@ -414,8 +218,7 @@ def test_perf_1x8_traced_staged():
     boundaries via the deterministic trace allocator). Replays each in
     sequence, times each replay with perf_counter + blocking=True.
 
-    These are TRUE traced per-stage numbers (no eager dispatch overhead),
-    unlike the eager-with-sync proportions in test_perf_1x8_traced.
+    These are TRUE traced per-stage numbers (no eager dispatch overhead).
     """
     from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
