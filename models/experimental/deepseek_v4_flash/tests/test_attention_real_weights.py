@@ -311,8 +311,7 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
 @torch.no_grad()
 @pytest.mark.timeout(14400)
-@pytest.mark.parametrize("layer_idx", (1, 5))  # 1 = sliding-only, 5 = HCA compressor
-@pytest.mark.parametrize("seq_len", (256,))
+@pytest.mark.parametrize("layer_idx, seq_len", ((1, 32), (5, 128)))  # 1 = sliding-only, 5 = HCA compressor
 @pytest.mark.parametrize("batch_size", (1,))
 def test_attention_real_weights_decode(
     device, reset_seeds, tmp_path, layer_idx: int, batch_size: int, seq_len: int
@@ -344,12 +343,14 @@ def test_attention_real_weights_decode(
     hidden = bundle["hidden"]  # [B, S, D]
     reference = bundle["output"].to(torch.float32)  # full-prefill output [B, S, D]
 
-    split = seq_len - 32  # one tile of room so the decode steps have reference rows
-    assert split % 32 == 0 and split + _DECODE_STEPS <= seq_len
+    # Compare the last ``steps`` decoded rows; earlier positions only seed the
+    # cache. Clamp to ``seq_len`` so short sequences (e.g. seq_len == 4) still work.
+    steps = min(_DECODE_STEPS, seq_len)
+    split = seq_len - steps
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
     kv_cache = _LayerKVCache(cfg.sliding_window, is_compressor)
-    for pos in range(split + _DECODE_STEPS):
+    for pos in range(seq_len):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
         cos_win_d = sin_win_d = None
         if is_compressor and (pos + 1) // cr > 0:
