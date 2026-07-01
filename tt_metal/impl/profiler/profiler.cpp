@@ -2709,6 +2709,15 @@ void DeviceProfiler::pushTracyDeviceResults(
     // TT: Phase 4 -- per-op HW-counter digest surfaced on the op's FW zone (rendered by
     // TracyTTDevice.hpp). Empty when no counters were captured, so the default profile is unchanged.
     const std::unordered_map<uint64_t, std::string> op_zone_summary = buildOpCounterDigests(device_markers_vec);
+    if (!op_zone_summary.empty()) {
+        // Verifiable evidence the digest reached the Tracy push path (the GUI srcloc label is the
+        // only part that then needs the Tracy GUI to eyeball).
+        log_info(
+            tt::LogMetal,
+            "Phase 4: built HW-counter zone digests for {} ops (e.g. {})",
+            op_zone_summary.size(),
+            op_zone_summary.begin()->second);
+    }
 
     for (auto& marker_ref : device_markers_vec) {
         std::reference_wrapper<const tracy::TTDeviceMarker>& marker_to_push_ref = marker_ref;
