@@ -28,6 +28,8 @@ inline constexpr uint32_t kReaderKBatchOffsetArg = 6;
 inline constexpr uint32_t kReaderVBatchOffsetArg = 7;
 inline constexpr uint32_t kReaderKGroupStrideArg = 8;
 inline constexpr uint32_t kReaderVGroupStrideArg = 9;
+// Per-device causal chunk_start (chunk_start_idx + rank*S); patched at dispatch when causal masking is on.
+inline constexpr uint32_t kReaderChunkStartArg = 10;
 // writer args: {out, work_start, work_count, k, v, k_batch_tile_offset, v_batch_tile_offset,
 //               k_group_tile_stride, v_group_tile_stride}
 inline constexpr uint32_t kWriterKBatchOffsetArg = 5;
@@ -72,6 +74,8 @@ Tensor sparse_sdpa_msa(
     float scale,
     uint32_t block_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<uint32_t> cache_batch_idx = std::nullopt);
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> chunk_start_idx = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt);
 
 }  // namespace ttnn::prim
