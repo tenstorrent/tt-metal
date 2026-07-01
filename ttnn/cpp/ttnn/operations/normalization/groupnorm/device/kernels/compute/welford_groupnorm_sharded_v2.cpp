@@ -327,12 +327,16 @@ void kernel_main() {
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
-                    // The mask multiply is reordered from `((x − μ) · mask) · rsqrt`
-                    // to `((x − μ) · rsqrt) · mask`. Bit-equivalent at the user-visible
-                    // output for mask ∈ {0.0, 1.0}, but puts mask on the RHS row-source
-                    // of mul_tiles_bcast_rows — so synthesized row-0-only mask data
-                    // (face 0 row 0 + face 1 row 0) is sufficient. As a side effect
-                    // cb_xmm only ever holds one tile in flight (was two).
+                    // Reorder: `((x − μ) · rsqrt) · mask`. Bit-equivalent to
+                    // `((x − μ) · mask) · rsqrt` for mask ∈ {0.0, 1.0}, but
+                    // puts mask on the RHS row-source of mul_tiles_bcast_rows —
+                    // so synthesized row-0-only mask data is sufficient.
+                    //
+                    // All three sub-steps read/write the SAME cb_xmm slot; there
+                    // is no producer/consumer handoff between them (all math),
+                    // so we hold one reserve for the whole recipe and push once
+                    // at the end. Splitting into per-step reserve/push measurably
+                    // regressed the DRAM Welford path (see #48640 bisect).
                     cb_xmm.reserve_back(1);
 
                     // // Now let us do the actual computation for the current group here
@@ -350,37 +354,30 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile(dst0, cb_xmm_id);
                     tile_regs_release();
-                    cb_xmm.push_back(1);
 
                     // // b. (x - u) * 1/[sqrt(Var + eps)]
-                    cb_xmm.wait_front(1);
                     reconfig_data_format(cb_in0_id, cb_xmm_id, cb_ex_global_id, cb_ex2pe_id);
                     mul_tiles_bcast_scalar_init_short(cb_xmm_id, cb_ex2pe_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(cb_xmm_id, cb_ex2pe_id, 0, g, dst0);
                     tile_regs_commit();
-                    cb_xmm.pop_front(1);
-                    cb_xmm.reserve_back(1);
                     tile_regs_wait();
                     pack_tile(dst0, cb_xmm_id);
                     tile_regs_release();
-                    cb_xmm.push_back(1);
 
                     // // c. [(x - u) * rsqrt] * mask  (mask is the RHS row-source ✅)
                     const uint32_t mask_offset = g * block_w;
                     const uint32_t mask_index = mask_offset + block_w_index;
 
-                    cb_xmm.wait_front(1);
                     reconfig_data_format(cb_xmm_id, cb_xmm_id, cb_ex2pe_id, cb_input_mask_id);
                     mul_bcast_rows_init_short(cb_xmm_id, cb_input_mask_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_rows(cb_xmm_id, cb_input_mask_id, 0, mask_index, dst0);
                     tile_regs_commit();
-                    cb_xmm.pop_front(1);
-                    cb_xmm.reserve_back(1);
                     tile_regs_wait();
                     pack_tile(dst0, cb_xmm_id);
                     tile_regs_release();
+
                     cb_xmm.push_back(1);
 
                     // Restore srcb to cb_xmm so step (d) — and the do_gamma block
