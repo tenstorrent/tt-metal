@@ -66,21 +66,26 @@ ttnn.experimental.fused_partial_rope(x, cos, sin, rot, rope_dim, memory_config=N
 
 ## Data layout & sharding (v1 target)
 
-- **Single-core, height-sharded L1** input and output (like the existing
-  `_height_sharded_l1_config` helper in `attention.py`). One shard holds the
-  full `[rows, 512]` block; shard width = 512 (16 tiles), height = padded rows.
-- `cos` / `sin`: `[1, 1, rows, 64]`, height-sharded to the same grid (caller
-  slices tables to `rows`).
-- `rot`: `[64, 64]`, resident in L1 (tiny constant).
+- **Multi-core, height-sharded L1** input and output. Parallelize across the
+  height (row) dimension one tile-row per core: `num_cores = round_up(rows/32)`
+  (`ceil(rows / TILE_HEIGHT)`). For H=64 → 2 cores; kv (`rows=1`) → 1 core.
+- Each core owns one shard of shape `[32, 512]` (one tile-row × 16 tiles wide);
+  the last core's shard is zero-padded if `rows` is not a multiple of 32.
+- `cos` / `sin`: `[1, 1, rows, 64]`, height-sharded to the **same core grid /
+  same row split** so each core has the `cos`/`sin` rows matching its `x` rows
+  (caller slices tables to `rows`).
+- `rot`: `[64, 64]`, replicated into every core's L1 (tiny constant, broadcast
+  to all cores in the grid).
 - Output: a new height-sharded tensor with the same config as input.
 - TILE layout throughout.
 
-Trade-off: single-core caps throughput but matches the fixed traced-decode
-shape (H=64 → 2 tile-rows). Multi-core distribution is deferred to v2.
+Because RoPE is independent per row, splitting rows across cores needs no halo
+exchange — each core does the full nope-copy + rotate for its tile-row locally.
 
 ## Kernel plan
 
-One program, three kernels on a single core:
+One program, three kernels replicated across all `num_cores` cores. Each core
+processes its own single tile-row (32 rows × 512) independently:
 
 - **Reader**: input/`cos`/`sin` shards are already resident (sharded-in); set up
   CBs over them and read `rot` into a CB.
@@ -91,7 +96,8 @@ One program, three kernels on a single core:
   3. Write `rotated` into the trailing 2 tiles of the output shard.
 - **Writer**: commit output CB → shard (mostly a no-op with sharded output).
 
-Compile-time args: `D`, `Rd`, `rows`, tile counts (nope tiles, rope tiles).
+Compile-time args: `D`, `Rd`, tile counts (nope tiles, rope tiles) — per core
+each handles one tile-row, so the row count is fixed at one tile-row per core.
 Compute config: `MathFidelity::HiFi4`.
 
 Edge case: when `D == Rd` (no nope), skip the pass-through copy and rotate the
@@ -110,7 +116,6 @@ whole input.
 
 ## Non-goals (v1)
 
-- Multi-core sharding / halo distribution.
 - Wormhole support (Blackhole only).
 - Native (non-matmul) rotate_half formulation.
 - Prefill-optimized (large-seq) layouts.
