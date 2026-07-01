@@ -275,6 +275,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    // Legacy + ROW_MAJOR output requires out_block_h == 1; cross-group untilize corrupts mt>0 tile-rows when
+    // out_block_h > 1 (welford untilizes the full per-core width and is unaffected).
+    if (!use_welford && untilize_out) {
+        num_out_blocks = block_ht_group_1;
+    }
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
