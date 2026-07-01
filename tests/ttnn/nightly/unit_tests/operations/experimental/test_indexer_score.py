@@ -122,6 +122,16 @@ def _extra_kwargs(program_config, compute_kernel_config):
     return kwargs
 
 
+def _slab_kwargs(slab_sp, sq, mid_slab_boundary=False):
+    """Build the explicit slab op-args from a simulated SP `slab_sp` and the q seq len. The slab layout is now
+    PASSED, not derived: slab_sp = the SP the cache was gathered across, slab_chunk_size = slab_sp*sq (the
+    gathered chunk). None -> contiguous (no slab args). mid_slab_boundary=True simulates this single device as
+    the boundary chip whose queries straddle a cache-slab boundary."""
+    if slab_sp is None:
+        return {}
+    return {"slab_sp": slab_sp, "slab_chunk_size": slab_sp * sq, "mid_slab_boundary": mid_slab_boundary}
+
+
 def run_dsa(
     q,
     k,
@@ -132,16 +142,23 @@ def run_dsa(
     q_dtype=ttnn.bfloat16,
     k_dtype=ttnn.bfloat16,
     compute_kernel_config=None,
+    proxy_ring_size=None,
+    proxy_mid_slab=False,
+    kv_len=None,
 ):
     """Run indexer_score_dsa (relu + learned gates + head-sum) and return the bf16 score as torch.
 
-    q (srcB) and k (srcA) may be bfp8_b; weights stay bf16.
+    q (srcB) and k (srcA) may be bfp8_b; weights stay bf16. proxy_ring_size simulates a ring_size-way slab K
+    layout on one chip (single-chip testing only); proxy_mid_slab makes it the straddling boundary chip.
+    kv_len = the valid key prefix (real ISL); keys past it are masked.
     """
     out = ttnn.experimental.indexer_score_dsa(
         to_device(q, device, dtype=q_dtype),
         to_device(k, device, dtype=k_dtype),
         to_device(w, device),
         chunk_start_idx=chunk_start,
+        **({} if kv_len is None else {"kv_len": kv_len}),
+        **_slab_kwargs(proxy_ring_size, q.shape[-2], proxy_mid_slab),
         **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
@@ -159,10 +176,12 @@ def run_msa(
     q_dtype=ttnn.bfloat16,
     k_dtype=ttnn.bfloat16,
     compute_kernel_config=None,
+    proxy_ring_size=None,
 ):
     """Run indexer_score_msa (raw dot, constant `scale` gate, per-group planes) and return torch.
 
     No weights tensor: M3 has no learned gates, only `scale` (run as a constant gate in-op).
+    proxy_ring_size simulates a ring_size-way slab K layout on one chip (single-chip testing only).
     """
     out = ttnn.experimental.indexer_score_msa(
         to_device(q, device, dtype=q_dtype),
@@ -171,6 +190,7 @@ def run_msa(
         scale=scale,
         num_groups=num_groups,
         block_size=block_size,
+        **_slab_kwargs(proxy_ring_size, q.shape[-2]),
         **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
@@ -238,11 +258,21 @@ def test_indexer_score_accuracy(device, sp_rank, q_dtype, case_id, heads):
     below the bf16 sum's noise). Negative gates keep -inf padding distinguishable from low scores.
     """
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
-    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
+    q, k_nat, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
+    # Slab-aware by default: GLX_SQ=640 / GLX_T=56320 picks ring=8 -> the actual deployed slab (chunk=5120).
+    k, ring = _slabify(k_nat, GLX_SQ, GLX_T)
     out = run_dsa(
-        q, k, w, chunk_start, device, program_config=glx_config(heads), q_dtype=q_dtype, k_dtype=ttnn.bfloat8_b
+        q,
+        k,
+        w,
+        chunk_start,
+        device,
+        program_config=glx_config(heads),
+        q_dtype=q_dtype,
+        k_dtype=ttnn.bfloat8_b,
+        proxy_ring_size=ring,
     )
-    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
+    ref = indexer_score_dsa_ref(q, k_nat, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T, check_neg=True)
 
 
@@ -254,11 +284,17 @@ def test_indexer_score_accuracy(device, sp_rank, q_dtype, case_id, heads):
 MINI = dict(heads=64, dim=128, sq=64, t=256)  # 64 heads, D=128, Sq=2 tiles, T=8 tiles
 
 
-def _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
+def _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group, slab=True):
+    # Slab-aware by DEFAULT: the K cache is the deployed (block-cyclic) layout, so build it as a slab (per-shape
+    # ring; a shape too small for a non-trivial slab falls back to contiguous) and let the op read it back in
+    # natural order. The reference is over the natural-order k, so the slab read must reproduce it.
+    # slab=False exercises the CONTIGUOUS K path: no slab args passed -> the reader's SLAB_KTILE is the identity
+    # (byte-identical binary), chunk_start deduces from Sq, no straddle. Same reference either way.
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
-    q, k, w = make_inputs(heads, dim, sq, t)
-    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg)
-    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t) if slab else (k_nat, None)
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, proxy_ring_size=ring)
+    ref = indexer_score_dsa_ref(q, k_nat, w, chunk_start)
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
@@ -320,6 +356,27 @@ def test_indexer_score_shapes(device, heads, dim, sq, t, chunk_start, q_chunk, k
     """Shape/geometry coverage: prefill corners, single/partial k-tiles, narrow/wide head dims, KC not
     dividing Tt (partial last unit), and a multicore QC=2 split."""
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
+# Contiguous (non-slab) K cache: tests are slab-aware by default, but the op must ALSO handle a plain
+# contiguous K (no slab_sp / slab_chunk_size passed -> identity SLAB_KTILE, no invP, no straddle). A few
+# representative shapes through the slab=False path guard that the contiguous reader binary still matches the
+# reference (and that the slab args are truly optional, not silently required).
+@pytest.mark.parametrize(
+    "heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group",
+    [
+        (64, 128, 128, 128, 0, 32, 32, 0),  # prefill square: fully-causal triangle, no history
+        (64, 128, 64, 256, 128, 32, 32, 0),  # mid-buffer chunk_start with history
+        (64, 128, 64, 160, 96, 32, 128, 0),  # KC does not divide Tt (partial last unit)
+        (64, 128, 64, 256, 160, 64, 128, 16),  # QC=2 + KC=4 + head streaming, diagonal mid-group
+        (16, 128, 128, 2048, 512, 64, 32, 0),  # multicore QC=2 split across cores
+    ],
+    ids=["prefill_square", "mid_history", "kc_partial", "qc2_kc4_stream", "multicore"],
+)
+def test_indexer_score_contiguous_kcache(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
+    """CONTIGUOUS K cache (no slab args): the op must read plain natural-order K with the identity SLAB_KTILE
+    and match the reference, across prefill/history/partial-KC/streaming/multicore shapes."""
+    _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group, slab=False)
 
 
 # Indexed KV cache: k is a shared [B, 1, T, D] cache and cache_batch_idx selects the batch slot to score.
@@ -534,9 +591,10 @@ def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
 
 
 def test_indexer_score_rejects_bad_kv_len(device, expect_error):
-    """kv_len must be tile-aligned, within (0, T], and leave room for the causal window
-    (chunk_start + Sq <= kv_len). Each violation is rejected -- on a WARM cache too, since kv_len is excluded
-    from the hash and re-validated on a program-cache hit (validate_on_program_cache_hit)."""
+    """kv_len must be within (0, T]. Each violation is rejected -- on a WARM cache too, since kv_len is excluded
+    from the hash and re-validated on a program-cache hit (validate_on_program_cache_hit). NOTE: kv_len need
+    NOT be tile-aligned (a sub-tile valid length is masked per-column, see test_indexer_score_sub_tile_kv_len),
+    and a causal window past kv_len is NOT rejected (the padded-chunk case, see test_indexer_score_partial_isl)."""
     c = KV_LEN
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
     q, w, k = _kv_len_inputs()
@@ -546,11 +604,103 @@ def test_indexer_score_rejects_bad_kv_len(device, expect_error):
     ttnn.experimental.indexer_score_dsa(
         q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=128
     )
-    for bad, why in [(c["t"] + 32, "above T"), (100, "not tile-aligned"), (32, "causal window > kv_len")]:
+    for bad, why in [(c["t"] + 32, "above T"), (0, "zero")]:
         with expect_error(RuntimeError, "kv_len"):
             ttnn.experimental.indexer_score_dsa(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=bad
             )
+
+
+@pytest.mark.parametrize("proxy_ring_size", [None, 4], ids=["contiguous", "slab_ring4"])
+@pytest.mark.parametrize("kv_len", [100, 200, 228], ids=["100", "200", "228"])
+def test_indexer_score_sub_tile_kv_len(device, kv_len, proxy_ring_size):
+    """Sub-tile valid length: kv_len is NOT a multiple of 32. The last valid tile (floor(kv_len/32)) is
+    partial -- its columns [kv_len%32, 32) are pad and get the per-column -inf mask (mirrors ring_mla's
+    global_n_partial_col), L1-accumulated onto whatever causal mask that tile already carries. chunk_start >=
+    kv_len so causality masks nothing inside [0, kv_len) -- isolates the sub-tile boundary. Run contiguous and
+    on a 4-way slab (the mask is applied in natural order after the slab read). Only [0, kv_len) is meaningful;
+    [kv_len, ceil(kv_len/32)*32) must be exactly -inf; the rest is the stale, sliced-off tail."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 512
+    chunk_start = 256  # >= every kv_len here, so each query sees all valid keys (no causal mask within [0,kv_len))
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k = k_nat if proxy_ring_size is None else _to_slab(k_nat, proxy_ring_size, proxy_ring_size * sq)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, kv_len=kv_len, proxy_ring_size=proxy_ring_size)
+
+    ref = indexer_score_dsa_ref(q, k_nat[:, :, :kv_len, :], w, chunk_start)  # [1,1,sq,kv_len], all valid
+    assert out.shape == (1, 1, sq, t)
+    assert_indexer_match(out[:, :, :, :kv_len], ref, sq, kv_len, check_neg=True)
+    # the partial boundary tile's pad columns [kv_len, ceil(kv_len/32)*32) must be exactly -inf
+    boundary = ((kv_len + 31) // 32) * 32
+    assert torch.all(out[:, :, :, kv_len:boundary] <= torch.finfo(torch.bfloat16).min), "sub-tile pad not masked"
+
+
+@pytest.mark.parametrize("proxy_ring_size", [None, 8], ids=["contiguous", "slab_ring8"])
+def test_indexer_score_partial_isl(device, proxy_ring_size):
+    """Padded chunk: the real ISL (kv_len) is smaller than what the queries' causal window reaches, exactly
+    the ring_mla partially-filled-chunk case. The fixed chunk is padded, so query positions (chunk_start + s)
+    extend PAST the valid keys; those keys must be masked (-inf) and only [0, kv_len) is real. Run both on a
+    contiguous cache and a simulated 8-way slab (proxy), since the kv_len mask is applied in natural order
+    after the slab read.
+
+    Geometry mirrors sp=8 / chunk=5120 / isl=1024 scaled down: chunk_start places the queries well past the
+    1024-key valid prefix, so every query attends to ALL kv_len valid keys (no causal masking within them),
+    and everything past kv_len is -inf."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 2048
+    kv_len, chunk_start = 1024, 1024  # valid prefix 1024; queries at [1024, 1088) -> all 1024 keys in the past
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k = k_nat if proxy_ring_size is None else _to_slab(k_nat, proxy_ring_size, proxy_ring_size * sq)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, kv_len=kv_len, proxy_ring_size=proxy_ring_size)
+
+    # Only [0, kv_len) is meaningful (the tail past kv_len is the stale, sliced-off region, same kv_len
+    # contract as test_indexer_score_runtime_kv_len). chunk_start=1024 >= kv_len so no key is causally masked
+    # within [0, kv_len) -- every query sees all 1024 valid keys. The op MUST NOT have errored on the window
+    # extending past kv_len (the relaxed validation), and the valid prefix must match the reference.
+    ref = indexer_score_dsa_ref(q, k_nat[:, :, :kv_len, :], w, chunk_start)  # [1,1,sq,kv_len], no -inf inside
+    assert out.shape == (1, 1, sq, t)
+    assert_indexer_match(out[:, :, :, :kv_len], ref, sq, kv_len, check_neg=True)
+
+
+def _boundary_chip_positions(chunk_start, ring, sq):
+    """Per-query global token positions for the mid-slab BOUNDARY chip, mirroring the op's host rotation
+    (device_causal_geometry) and update_padded_kv_cache's update_idxt. The test picks chunk_start so device 0
+    IS the boundary chip (boundary_chip == 0, boundary_offset != 0): its q-rows straddle a slab boundary, so
+    rows >= (chunk_local - boundary_offset) jump by (chunk - chunk_local). Returns a [sq] position tensor."""
+    chunk = ring * sq
+    chunk_local = sq  # chunk / ring
+    boundary_chip = (chunk_start // chunk_local) % ring
+    boundary_offset = chunk_start % chunk_local
+    assert boundary_chip == 0 and boundary_offset != 0, "test geometry must put the straddle on device 0"
+    base = (chunk_start // chunk) * chunk + boundary_offset  # this device's q-row-0 global position
+    s = torch.arange(sq)
+    straddle_row = chunk_local - boundary_offset
+    return base + s + torch.where(s >= straddle_row, chunk - chunk_local, 0)
+
+
+@pytest.mark.parametrize("chunk_start", [32, 544], ids=["slab0", "slab1"])
+def test_indexer_score_mid_slab_boundary(device, chunk_start):
+    """Mid-slab boundary chip: chunk_start is NOT a chunk multiple (boundary_offset != 0), so this device's
+    queries straddle a slab boundary and the causal diagonal JUMPS by (chunk - chunk_local) at the straddle
+    row -- exactly update_padded_kv_cache's update_idxt rotation. K is the 8-way slab (read back natural via
+    invP); the reference applies the straddled per-query positions over natural-order K. ring=8, sq=64 (2
+    q-tiles), chunk=512: both keep device 0 the boundary chip (boundary_offset=32, straddle after tile 1);
+    slab0 (cs=32) is in the first slab, slab1 (cs=544) one chunk in (exercises the boundary_slab term)."""
+    ring, sq, dim, t = 8, 64, GLX_DIM, 2048
+    q, k_nat, w = make_inputs(64, dim, sq, t)
+    k = _to_slab(k_nat, ring, ring * sq)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, proxy_ring_size=ring, proxy_mid_slab=True)
+
+    # Reference over natural-order K with the straddled per-query causal positions.
+    pos = _boundary_chip_positions(chunk_start, ring, sq)
+    q_f, k_f, w_f = q.float(), k_nat.float(), w.float()
+    score = torch.zeros(1, sq, t)
+    for h in range(64):
+        score += torch.relu(q_f[:, h] @ k_f[:, 0].transpose(-2, -1)) * w_f[:, h]
+    future = torch.arange(t).unsqueeze(0) > pos.unsqueeze(1)
+    ref = score.masked_fill(future, float("-inf")).unsqueeze(1)
+    assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
 @pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
@@ -561,7 +711,10 @@ def test_indexer_score_determinism(device, case_id, heads):
     num_iterations = 10
     chunk_start = GLX_HISTORY + 7 * GLX_SQ  # sp_rank 7: fullest causal case
     cfg = glx_config(heads)
-    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
+    q, k_nat, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
+    # Slab-aware by default (GLX -> ring=8, the deployed slab); determinism holds regardless of layout.
+    k, ring = _slabify(k_nat, GLX_SQ, GLX_T)
+    proxy = _slab_kwargs(ring, GLX_SQ)
     # Upload once; the same device tensors are reused across all iterations.
     q_dev = to_device(q, device, dtype=ttnn.bfloat16)
     k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
@@ -570,7 +723,9 @@ def test_indexer_score_determinism(device, case_id, heads):
     reference = None
     for i in range(num_iterations):
         out = ttnn.to_torch(
-            ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
+            ttnn.experimental.indexer_score_dsa(
+                q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg, **proxy
+            )
         )
         if reference is None:
             reference = out
@@ -608,11 +763,34 @@ def test_indexer_score_msa_compute_paths(device, q_chunk, k_chunk, head_group):
     heads, dim, sq, t, chunk_start = MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"], 128
     scale = dim**-0.5
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
-    q, k, _ = make_inputs(heads, dim, sq, t)
-    out = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default
+    out = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg, proxy_ring_size=ring)
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # MSA's constant gate = scale
-    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start)
     assert_indexer_match(out, ref, sq, t)
+
+
+@pytest.mark.parametrize("block_size", [0, 64], ids=["unpooled", "pool64"])
+def test_indexer_score_msa_contiguous_kcache(device, block_size):
+    """CONTIGUOUS K cache on the MSA path (no slab args -> identity SLAB_KTILE): raw-dot scores, and the
+    block-max-pool must still pool token-contiguous blocks correctly when K is plain natural order. Uses the
+    proven-fitting heads=4/t=2048 pool shape (KC=1024 -> blocks_per_unit=16, a multiple of 8)."""
+    heads, dim, sq, t, chunk_start = 4, GLX_DIM, 128, 2048, 512
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    unpooled = run_msa(q, k_nat, chunk_start, device, scale=scale, program_config=cfg)  # contiguous: no slab args
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    assert_indexer_match(unpooled, indexer_score_msa_ref(q, k_nat, w_scale, chunk_start), sq, t)
+    if block_size:
+        # Pool the op's OWN unpooled output (not an FP ref) so the contiguous-read pool is pinned exactly,
+        # free of bf16 matmul noise that can flip a block's argmax to a near-equal neighbor.
+        pooled = run_msa(q, k_nat, chunk_start, device, scale=scale, block_size=block_size, program_config=cfg)
+        ref = msa_block_max_pool(unpooled.float(), block_size, chunk_start)
+        masked = ref == float("-inf")
+        assert torch.equal(pooled <= torch.finfo(torch.bfloat16).min, masked)
+        assert torch.equal(pooled[~masked].float(), ref[~masked])
 
 
 def test_indexer_score_dsa_msa_differ(device):
@@ -641,10 +819,21 @@ def test_indexer_score_m3_per_group(device, k_dtype, q_dtype, sp_rank):
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     scale = dim**-0.5
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=512, head_group_size=0)
-    q, k, _ = make_inputs(heads, dim, sq, t)
-    out = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg, q_dtype=q_dtype, k_dtype=k_dtype)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default: GLX shape -> ring=8 (the deployed slab)
+    out = run_msa(
+        q,
+        k,
+        chunk_start,
+        device,
+        scale=scale,
+        program_config=cfg,
+        q_dtype=q_dtype,
+        k_dtype=k_dtype,
+        proxy_ring_size=ring,
+    )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start)
     assert_indexer_match(out, ref, sq, t)
 
 
@@ -665,10 +854,13 @@ def test_indexer_score_multigroup(device, heads, num_groups):
     dim, sq, t, chunk_start = 128, 64, 256, 128
     scale = dim**-0.5
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)  # all resident, KC=2
-    q, k, _ = make_inputs(heads, dim, sq, t)
-    out = run_msa(q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default
+    out = run_msa(
+        q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg, proxy_ring_size=ring
+    )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # MSA's constant gate = scale
-    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start, num_groups)
     assert_grouped_match(out, ref, num_groups, sq, t)
 
 
@@ -681,10 +873,13 @@ def test_indexer_score_multigroup_m3(device):
     sq, t, chunk_start = 128, 256, 128
     scale = dim**-0.5
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0)
-    q, k, _ = make_inputs(heads, dim, sq, t)
-    out = run_msa(q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default
+    out = run_msa(
+        q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg, proxy_ring_size=ring
+    )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start, num_groups)
     assert_grouped_match(out, ref, num_groups, sq, t)
 
 
@@ -696,10 +891,13 @@ def test_indexer_score_multigroup_equals_single(device):
     heads, dim, sq, t, chunk_start = 4, 128, 64, 256, 128
     scale = 1.0  # same constant gate for grouped and single so the comparison is exact
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
-    q, k, _ = make_inputs(heads, dim, sq, t)
-    grouped = run_msa(q, k, chunk_start, device, scale=scale, num_groups=heads, program_config=cfg)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default; same slab K + proxy for grouped and single
+    grouped = run_msa(
+        q, k, chunk_start, device, scale=scale, num_groups=heads, program_config=cfg, proxy_ring_size=ring
+    )
     for g in range(heads):
-        single = run_msa(q[:, g : g + 1], k, chunk_start, device, scale=scale, program_config=cfg)
+        single = run_msa(q[:, g : g + 1], k, chunk_start, device, scale=scale, program_config=cfg, proxy_ring_size=ring)
         assert torch.equal(grouped[:, g : g + 1], single), f"group {g} plane != single-head op"
 
 
@@ -736,9 +934,10 @@ def test_indexer_score_compute_kernel_config(device, math_fidelity):
     heads, dim, sq, t, chunk_start = MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"], 128
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
     ckc = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=math_fidelity)
-    q, k, w = make_inputs(heads, dim, sq, t)
-    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, compute_kernel_config=ckc)
-    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, compute_kernel_config=ckc, proxy_ring_size=ring)
+    ref = indexer_score_dsa_ref(q, k_nat, w, chunk_start)
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
@@ -1030,12 +1229,17 @@ QB_T = QB_HISTORY + QB_CHUNK  # 28160 all-gathered keys (880 tiles)
 
 
 def _shard_1d(mesh_device, heads, seed):
-    """SP=4 inputs: q/w sharded along seq (each device its own 640 rows), k replicated. Deployed dtypes."""
+    """SP=4 inputs: q/w sharded along seq (each device its own 640 rows), k replicated. Deployed dtypes.
+
+    The K cache slab layout is passed explicitly to the op (slab_sp=QB_SP, slab_chunk_size=QB_CHUNK), so the
+    replicated k is built as a slab with that exact layout; the op reads it back in natural token order,
+    matching the natural-order per-SP reference (over k_g)."""
     q_g, k_g, w_g = _global_inputs(heads, QB_CHUNK, QB_T, seed)
+    k_slab = _to_slab(k_g, QB_SP, QB_CHUNK)  # the (slab_sp=QB_SP, chunk=QB_CHUNK) layout passed to the op
     shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
     q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
     w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
-    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    k_dev = _to_mesh(mesh_device, k_slab, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
     return q_g, k_g, w_g, q_dev, k_dev, w_dev
 
 
@@ -1046,9 +1250,11 @@ def test_indexer_score_qb_per_device_chunk_start(mesh_device, case_id, heads):
     Validate each device's output against its own chunk_start reference."""
     q_g, k_g, w_g, q_dev, k_dev, w_dev = _shard_1d(mesh_device, heads, seed=42)
 
-    # chunk_start_idx OMITTED -> the op deduces base = T - sp_ring*Sq = QB_HISTORY (sp_ring = 4 devices,
-    # cluster_axis unset), then device r gets base + r*Sq. No chunk_start passed at all.
-    out = ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, program_config=glx_config(heads))
+    # slab layout passed explicitly (slab_sp=QB_SP, slab_chunk_size=QB_CHUNK). chunk_start_idx OMITTED -> the
+    # op deduces base = T - slab_chunk_size = QB_HISTORY, then device r gets base + r*Sq (cluster_axis unset).
+    out = ttnn.experimental.indexer_score_dsa(
+        q_dev, k_dev, w_dev, program_config=glx_config(heads), slab_sp=QB_SP, slab_chunk_size=QB_CHUNK
+    )
     out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
 
     ref = _per_sp_ref(q_g, k_g, w_g, QB_SP, QB_HISTORY)
@@ -1068,7 +1274,13 @@ def test_indexer_score_qb_one_compile_all_chunk_starts(mesh_device, case_id, hea
     entries_before = mesh_device.num_program_cache_entries()
     for base in bases:
         ttnn.experimental.indexer_score_dsa(
-            q_dev, k_dev, w_dev, chunk_start_idx=base, program_config=glx_config(heads)
+            q_dev,
+            k_dev,
+            w_dev,
+            chunk_start_idx=base,
+            program_config=glx_config(heads),
+            slab_sp=QB_SP,
+            slab_chunk_size=QB_CHUNK,
         ).deallocate()
 
     added = mesh_device.num_program_cache_entries() - entries_before
@@ -1102,6 +1314,9 @@ def test_indexer_score_qb_sp2_tp2(mesh_device, case_id, heads):
     partial head-sum, which the test sums back (the TP all-reduce) and validates per SP rank against
     its own full-head, own-chunk_start reference."""
     q_g, k_g, w_g = _global_inputs(heads, QB2_CHUNK, QB2_T, seed=42)
+    # slab layout passed explicitly (slab_sp=QB2_SP, slab_chunk_size=QB2_CHUNK); the replicated k is built as a
+    # slab with that exact layout and read back in natural order.
+    k_slab = _to_slab(k_g, QB2_SP, QB2_CHUNK)
 
     # q/w: seq (dim 2) sharded along the SP axis, heads (dim 1) along the TP axis. k replicated.
     mesh_shape = tuple(mesh_device.shape)
@@ -1109,17 +1324,18 @@ def test_indexer_score_qb_sp2_tp2(mesh_device, case_id, heads):
     shard_qw = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=qw_dims)
     q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_qw)
     w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_qw)
-    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    k_dev = _to_mesh(mesh_device, k_slab, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
 
-    # chunk_start_idx OMITTED: the op deduces base = T - sp_ring*Sq, where sp_ring is the mesh extent
-    # along cluster_axis (2, the SP axis) -- NOT the total device count (4). Device (sp, tp) then gets
-    # chunk_start = base + sp*Sq -- identical for both TP devices at SP position sp.
+    # chunk_start_idx OMITTED: the op deduces base = T - slab_chunk_size = QB_HISTORY. Device (sp, tp) then
+    # gets chunk_start = base + sp*Sq (sp = index along cluster_axis) -- identical for both TP devices at sp.
     out = ttnn.experimental.indexer_score_dsa(
         q_dev,
         k_dev,
         w_dev,
         cluster_axis=QB2_SP_AXIS,
         program_config=glx_config(heads // QB2_TP),  # per-device head count
+        slab_sp=QB2_SP,
+        slab_chunk_size=QB2_CHUNK,
     )
     # Concat SP shards along seq (dim 2) and the TP head-partials along the size-1 head dim (dim 1), then
     # SUM the partials (the TP all-reduce) -> full [1,1,1280,T] score.
@@ -1156,14 +1372,21 @@ def test_indexer_score_msa_qb_per_device_chunk_start(mesh_device):
     """MSA over 4 BH devices (SP=4), each deriving its own chunk_start from its coordinate (cluster_axis
     unset -> linear order). Raw dot + constant scale, num_groups=1 -> one head-summed [1,1,Sq,T] plane."""
     q_g, k_g, _ = _global_inputs(M3_QB_HEADS, QB_CHUNK, QB_T, seed=42)
+    k_slab = _to_slab(k_g, QB_SP, QB_CHUNK)  # slab built to the explicit (slab_sp=QB_SP, chunk=QB_CHUNK) layout
     shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
     q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
-    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    k_dev = _to_mesh(mesh_device, k_slab, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
 
-    # chunk_start_idx OMITTED -> the op deduces base = T - sp_ring*Sq = QB_HISTORY, then device r gets
+    # chunk_start_idx OMITTED -> the op deduces base = T - slab_chunk_size = QB_HISTORY, then device r gets
     # base + r*Sq (r = linearized index, cluster_axis unset). The constant gate is synthesized per-device.
     out = ttnn.experimental.indexer_score_msa(
-        q_dev, k_dev, scale=M3_QB_SCALE, num_groups=1, program_config=glx_config(M3_QB_HEADS)
+        q_dev,
+        k_dev,
+        scale=M3_QB_SCALE,
+        num_groups=1,
+        program_config=glx_config(M3_QB_HEADS),
+        slab_sp=QB_SP,
+        slab_chunk_size=QB_CHUNK,
     )
     out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
 
@@ -1177,15 +1400,16 @@ def test_indexer_score_msa_qb_sp2_tp2(mesh_device):
     M3 index heads split across TP. Each device head-sums its half (num_groups=1); the test sums the TP
     partials (the all-reduce) and validates per SP rank against its own raw-dot, own-chunk_start reference."""
     q_g, k_g, _ = _global_inputs(M3_QB_HEADS, QB2_CHUNK, QB2_T, seed=42)
+    k_slab = _to_slab(k_g, QB2_SP, QB2_CHUNK)  # slab built to the explicit (slab_sp=QB2_SP, chunk=QB2_CHUNK)
 
     # q: seq (dim 2) sharded along the SP axis, heads (dim 1) along the TP axis. k replicated.
     mesh_shape = tuple(mesh_device.shape)
     q_dims = _axis_dims(sp_dim=2, tp_dim=1)
     shard_q = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=q_dims)
     q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_q)
-    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    k_dev = _to_mesh(mesh_device, k_slab, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
 
-    # chunk_start_idx OMITTED: base deduced as T - sp_ring*Sq, sp_ring = mesh extent along cluster_axis (2,
+    # chunk_start_idx OMITTED: base deduced as T - slab_chunk_size; per device chunk_start = base + sp*Sq (2,
     # the SP axis). Device (sp, tp) gets chunk_start = base + sp*Sq -- identical for both TP devices at sp.
     out = ttnn.experimental.indexer_score_msa(
         q_dev,
@@ -1194,12 +1418,27 @@ def test_indexer_score_msa_qb_sp2_tp2(mesh_device):
         scale=M3_QB_SCALE,
         num_groups=1,
         program_config=glx_config(M3_QB_HEADS // QB2_TP),  # per-device head count
+        slab_sp=QB2_SP,
+        slab_chunk_size=QB2_CHUNK,
     )
     out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=q_dims))
     out_t = out_t.float().sum(dim=1, keepdim=True)  # TP all-reduce: sum the head-partials
 
     ref = _msa_per_sp_ref(q_g, k_g, QB2_SP, QB_HISTORY)
     assert_indexer_match(out_t, ref, QB2_CHUNK, QB2_T, check_neg=True)
+
+
+def test_indexer_score_rejects_partial_slab_args(device, expect_error):
+    """slab_sp and slab_chunk_size define the cache's slab layout and must be passed TOGETHER -- passing only
+    one is a caller error (the per-shard width chunk/sp is undefined). Host-side guard, so a single chip
+    suffices."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 512
+    q, k, w = make_inputs(heads, dim, sq, t)
+    q_dev, k_dev, w_dev = to_device(q, device), to_device(k, device), to_device(w, device)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    for kwargs in [{"slab_sp": 4}, {"slab_chunk_size": 256}]:
+        with expect_error(RuntimeError, "together"):
+            ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=0, program_config=cfg, **kwargs)
 
 
 # MiniMax M3 MSA math-utilization perf check (tracy; no accuracy check). ONE device of an SP=8 x TP=4 mesh:
@@ -1371,7 +1610,8 @@ def test_indexer_score_block_pool(device, k_dtype, num_groups):
     heads, dim, sq, t = 4, GLX_DIM, 128, 2048
     chunk_start = 512  # leaves fully-future blocks for early queries + a straddling block
     scale = dim**-0.5
-    q, k, _ = make_inputs(heads, dim, sq, t)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default (pool over token-contiguous blocks of slab K)
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
     out = run_msa(
         q,
@@ -1383,9 +1623,10 @@ def test_indexer_score_block_pool(device, k_dtype, num_groups):
         block_size=BLOCK_POOL_BS,
         k_dtype=k_dtype,
         program_config=cfg,
+        proxy_ring_size=ring,
     )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups, block_size=BLOCK_POOL_BS)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start, num_groups, block_size=BLOCK_POOL_BS)
     assert_pooled_match(out, ref, num_groups, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
 
 
@@ -1397,7 +1638,8 @@ def test_indexer_score_block_pool_m3(device, k_dtype, sp_rank):
     heads, dim, sq, t = 4, GLX_DIM, GLX_SQ, GLX_T
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     scale = 1.0 / (dim**0.5)
-    q, k, _ = make_inputs(heads, dim, sq, t)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default: GLX shape -> ring=8 (the deployed slab)
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
     out = run_msa(
         q,
@@ -1409,9 +1651,10 @@ def test_indexer_score_block_pool_m3(device, k_dtype, sp_rank):
         block_size=BLOCK_POOL_BS,
         k_dtype=k_dtype,
         program_config=cfg,
+        proxy_ring_size=ring,
     )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, heads, block_size=BLOCK_POOL_BS)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start, heads, block_size=BLOCK_POOL_BS)
     # 0.995 floor: block-max amplifies the bf16 raw-dot error; the exact pool logic is pinned by the -inf
     # map here and by test_indexer_score_block_pool_exact_vs_unpooled.
     assert_pooled_match(out, ref, heads, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
@@ -1423,10 +1666,13 @@ def test_indexer_score_block_pool_exact_vs_unpooled(device):
     differs). Isolates the fused pool from the bf16 q.kT error that relaxes the fp32-reference comparison."""
     heads, dim, sq, t = 4, GLX_DIM, 128, 2048
     chunk_start = 512
-    q, k, _ = make_inputs(heads, dim, sq, t)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default; same slab K + proxy for both device runs
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
-    unpooled = run_msa(q, k, chunk_start, device, num_groups=heads, program_config=cfg)
-    pooled = run_msa(q, k, chunk_start, device, num_groups=heads, block_size=BLOCK_POOL_BS, program_config=cfg)
+    unpooled = run_msa(q, k, chunk_start, device, num_groups=heads, program_config=cfg, proxy_ring_size=ring)
+    pooled = run_msa(
+        q, k, chunk_start, device, num_groups=heads, block_size=BLOCK_POOL_BS, program_config=cfg, proxy_ring_size=ring
+    )
     # torch max over the op's own [1,G,Sq,T] scores, with the same forced-local (+inf) the pooled path applies.
     ref = msa_block_max_pool(unpooled.float(), BLOCK_POOL_BS, chunk_start)
     masked = ref == float("-inf")
@@ -1453,10 +1699,20 @@ def test_indexer_score_block_pool_large_blocks_per_unit(device, num_groups, bloc
     free of bf16 matmul noise, confirming the fallback lands each block max in col 0 as the writer expects."""
     heads, dim, sq, t = 4, GLX_DIM, 128, 2048
     chunk_start = 512
-    q, k, _ = make_inputs(heads, dim, sq, t)
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k, ring = _slabify(k_nat, sq, t)  # slab-aware by default; same slab K + proxy for both device runs
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk_size, head_group_size=0)
-    unpooled = run_msa(q, k, chunk_start, device, num_groups=num_groups, program_config=cfg)
-    pooled = run_msa(q, k, chunk_start, device, num_groups=num_groups, block_size=block_size, program_config=cfg)
+    unpooled = run_msa(q, k, chunk_start, device, num_groups=num_groups, program_config=cfg, proxy_ring_size=ring)
+    pooled = run_msa(
+        q,
+        k,
+        chunk_start,
+        device,
+        num_groups=num_groups,
+        block_size=block_size,
+        program_config=cfg,
+        proxy_ring_size=ring,
+    )
     ref = msa_block_max_pool(unpooled.float(), block_size, chunk_start)
     masked = ref == float("-inf")
     assert torch.equal(pooled <= torch.finfo(torch.bfloat16).min, masked)
@@ -1483,3 +1739,139 @@ def test_indexer_score_block_pool_validation(device, expect_error, block_size, k
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk_size, head_group_size=0)
     with expect_error(RuntimeError, match):
         run_msa(q, k, 512, device, num_groups=heads, block_size=block_size, program_config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# Slab (per-SP-shard) K layout. Chunked prefill packs each SP shard's per-chunk slab (slab_chunk_size/slab_sp
+# keys) back-to-back, so the gathered [B,1,T,D] k is in a PERMUTED physical order and the reader reads it back
+# in natural token order (invP per tile) -- scores (and the block-max-pool over token-contiguous blocks) come
+# out correct. The slab layout is PASSED EXPLICITLY (slab_sp = the SP the cache was gathered across,
+# slab_chunk_size = the global chunk), NOT derived -- decoupled from how this op splits Q. These tests pass
+# slab_sp / slab_chunk_size = ring_size*Sq via _slab_kwargs to exercise a real SP slab on one chip.
+# ---------------------------------------------------------------------------
+def _slab_positions(ring_size, chunk, t):
+    """P[r] = natural token position physically stored at slab row r. Physical row r (shard c = r//sll, local
+    row lr = r%sll) holds natural token (lr//cl)*chunk + c*cl + (lr%cl), where sll = T/ring_size (per-shard
+    local length), cl = chunk/ring_size (per-shard slab width). This is the layout the in-kernel invP inverts.
+    Canonical (production) version: models/demos/deepseek_v3_d_p/tt/mla/utils.py::blockcyclic_positions; kept
+    local here so this op unit test has no model dependency."""
+    sll, cl = t // ring_size, chunk // ring_size
+    c = torch.arange(ring_size).repeat_interleave(sll)
+    lr = torch.arange(sll).repeat(ring_size)
+    return (lr // cl) * chunk + c * cl + (lr % cl)
+
+
+def _to_slab(k_nat, ring_size, chunk):
+    """Permute a natural-order [1,1,T,D] k into its slab physical layout: k_slab[r] = k_nat[P[r]]."""
+    t = k_nat.shape[2]
+    P = _slab_positions(ring_size, chunk, t)
+    k_slab = k_nat.clone()
+    k_slab[0, 0] = k_nat[0, 0][P]
+    return k_slab
+
+
+def _default_slab_ring(sq, t, cap=8):
+    """Pick a ring_size so a single-chip functional test exercises the slab read BY DEFAULT: the largest
+    ring in [2, cap] whose slab chunk (ring*sq) divides T AND leaves >= 2 global chunks (so the permutation is
+    NON-trivial -- a single chunk is the identity). Returns 1 when no such ring exists (T too small), i.e. the
+    test runs contiguous = the degenerate slab. So routing a test through this is safe: ring 1 is a no-op."""
+    best = 1
+    for r in range(2, cap + 1):
+        chunk = r * sq
+        if chunk <= t and t % chunk == 0 and t // chunk >= 2:
+            best = r
+    return best
+
+
+def _slabify(k_nat, sq, t):
+    """Return (k_for_device, proxy_ring_size) for a default-slab functional test: permute k into the slab
+    layout for the picked ring (proxy passed to the op so it reads back in natural order), or pass through
+    contiguous with proxy None when no non-trivial ring fits the shape."""
+    ring = _default_slab_ring(sq, t)
+    if ring == 1:
+        return k_nat, None
+    return _to_slab(k_nat, ring, ring * sq), ring
+
+
+# Simulated SP ring sizes; the chunk is derived per test as ring_size * Sq (so it divides T below).
+SLAB_RINGS = [4, 8]
+SLAB_IDS = ["ring4", "ring8"]
+
+
+@pytest.mark.parametrize("ring_size", SLAB_RINGS, ids=SLAB_IDS)
+@pytest.mark.parametrize("chunk_start", [0, 1024], ids=["cs0", "cs1024"])
+def test_indexer_score_dsa_slab(device, ring_size, chunk_start):
+    """DSA over a slab K cache, SINGLE CHIP: physical K is permuted; slab_sp / slab_chunk_size = ring_size*Sq
+    are passed explicitly to describe a real ring_size-way SP slab, so the reader presents K in natural token
+    order and the score matches the contiguous-K reference exactly (same -inf map + PCC >= 0.999)."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 2048
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k_slab = _to_slab(k_nat, ring_size, ring_size * sq)  # slab_chunk_size passed to the op = ring_size*Sq
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    out = run_dsa(q, k_slab, w, chunk_start, device, program_config=cfg, proxy_ring_size=ring_size)
+    ref = indexer_score_dsa_ref(q, k_nat, w, chunk_start)
+    assert_indexer_match(out, ref, sq, t, check_neg=True)
+
+
+@pytest.mark.parametrize("ring_size", SLAB_RINGS, ids=SLAB_IDS)
+@pytest.mark.parametrize("block_size", [0, BLOCK_POOL_BS], ids=["unpooled", "pooled"])
+def test_indexer_score_msa_slab(device, block_size, ring_size):
+    """MSA per-group scoring over a slab K cache, SINGLE CHIP. block_size=0 -> [1,G,Sq,T] planes; >0 ->
+    block-max-pool (the M3 crux: a pooled block is block_size CONTIGUOUS tokens, scattered across the physical
+    buffer, so only reading in natural order pools the right token range). Both match the contiguous-K ref."""
+    heads, dim, sq, t, chunk_start = 4, GLX_DIM, 128, 2048, 512
+    scale = dim**-0.5
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k_slab = _to_slab(k_nat, ring_size, ring_size * sq)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    out = run_msa(
+        q,
+        k_slab,
+        chunk_start,
+        device,
+        scale=scale,
+        num_groups=heads,
+        block_size=block_size,
+        program_config=cfg,
+        proxy_ring_size=ring_size,
+    )
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start, heads, block_size=block_size)
+    if block_size:
+        assert_pooled_match(out, ref, heads, sq, t // block_size, pcc_floor=0.995)
+    else:
+        assert_grouped_match(out, ref, heads, sq, t)
+
+
+def test_indexer_score_slab_remap_matters(device):
+    """The remap is load-bearing: with the proxy the permuted cache reads correctly; WITHOUT it the deduction
+    is the identity (one chip -> ring_size=1), so the permuted cache is read as-is and the scores are wrong (a
+    token permutation). Confirms the slab handling is not a no-op."""
+    ring_size = 8
+    heads, dim, sq, t, chunk_start = 64, GLX_DIM, 64, 2048, 1024
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k_slab = _to_slab(k_nat, ring_size, ring_size * sq)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    ref = indexer_score_dsa_ref(q, k_nat, w, chunk_start)
+    masked = ref == float("-inf")
+    b = ref[~masked].flatten().float()
+
+    good = run_dsa(q, k_slab, w, chunk_start, device, program_config=cfg, proxy_ring_size=ring_size)
+    pcc_good = torch.corrcoef(torch.stack([good[~masked].flatten().float(), b]))[0, 1].item()
+    assert pcc_good >= 0.999, f"slab proxy PCC {pcc_good} < 0.999"
+
+    # No proxy on one chip -> ring_size=1 identity -> permuted cache read as-is. -inf map is positional
+    # (same), but the visible scores are permuted -> far below the floor.
+    bad = run_dsa(q, k_slab, w, chunk_start, device, program_config=cfg)
+    pcc_bad = torch.corrcoef(torch.stack([bad[~masked].flatten().float(), b]))[0, 1].item()
+    assert pcc_bad < 0.99, f"identity read of a permuted cache unexpectedly matched (PCC {pcc_bad})"
+
+
+def test_indexer_score_slab_rejects_bad_chunk(device, expect_error):
+    """A derived chunk (= ring_size*Sq) that does not divide T is rejected loudly so a bad layout can't
+    silently mis-address K. Here ring_size=5, Sq=64 -> chunk=320, which does not divide T=2048."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 2048
+    q, k, w = make_inputs(heads, dim, sq, t)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=256, head_group_size=0)
+    with expect_error(RuntimeError, "must divide T"):
+        run_dsa(q, k, w, 0, device, program_config=cfg, proxy_ring_size=5)

@@ -27,8 +27,9 @@ enum CbArg : uint32_t {
     num_cb_args
 };
 
-// Two mask tiles in cb_mask: index 0 = diagonal strict-upper -inf, index 1 = full -inf.
-constexpr uint32_t num_mask_tiles = 2;
+// Three mask tiles in cb_mask: index 0 = diagonal strict-upper -inf, index 1 = full -inf, index 2 = sub-tile
+// kv_len partial-column -inf (cols [kv_len%32, 32) -> -inf; filled only when kv_len is not tile-aligned).
+constexpr uint32_t num_mask_tiles = 3;
 
 // Per-direction multicast role, written by the factory into the reader's runtime args. Single-sourced
 // here so host and device can't drift on the encoding.
