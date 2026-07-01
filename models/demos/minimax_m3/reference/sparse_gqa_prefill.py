@@ -53,7 +53,7 @@ each chip holds ALL heads and an S-shard — H is full 64, a multiple of 32 ✓)
   indices [1,  4, S, TOPK]   uint32 (ONE LIST PER GQA GROUP; 0xFFFFFFFF = masked)
   ->  out [1, 64, S, 128]    bf16
   TOPK = sparse_topk_blocks(16) * sparse_block_size(128) = 2048 ; scale = 128**-0.5
-  (block-0 sink + local block are folded into each group's index list by the producer.)
+  (the local block is folded into each group's index list by the producer; no sink block.)
 
   NOTE on the index head-axis: this golden accepts indices with head-dim
   ``{1, Hkv, Hq}`` and broadcasts to per-q-head: 1 = one shared list (the OLD MLA-style

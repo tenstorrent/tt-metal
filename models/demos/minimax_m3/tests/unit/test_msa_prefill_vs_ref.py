@@ -16,7 +16,7 @@ across turns, but ~5k is the realistic per-step unit). 5120/128 = 40 blocks, top
 Pipeline (merged ops):
   indexer_score_msa(iq[1,1,S,128], ik[1,1,T,128], num_groups=1, block_size=128)
     -> block-max-pooled scores [1,1,S,T/128]  (op already force-locals the current block)
-  host: sink(block 0) + top-16 blocks -> block-ids [1,1,S,16] int32
+  host: top-16 blocks -> block-ids [1,1,S,16] int32
   sparse_sdpa_msa(q[1,16,S,128] RM, k/v[1,1,T,128] TILE, block-ids uint32 RM, block_size=128) -> [1,16,S,128]
   vs sparse_attention_ref_msa (the op's own block-level golden), same block-ids.
 """
@@ -36,7 +36,7 @@ from sparse_sdpa_msa_test_utils import sparse_attention_ref_msa  # noqa: E402
 
 # Per-device TP=4 slice of M3: 64 q / 4 kv -> 16 q / 1 kv; 1 index-q head + 1 shared index-k; num_groups=1.
 H_DEV, NKV_DEV, NIDX_DEV, NGROUPS = 16, 1, 1, 1
-HEAD_DIM, BLOCK, TOPK_BLK, SINK_BLOCK = 128, 128, 16, 0
+HEAD_DIM, BLOCK, TOPK_BLK = 128, 128, 16
 
 
 @pytest.mark.parametrize("S,T", [(640, 5120)], ids=["chunk640_ctx5120"])  # 5120 chunk/SP=8; 40 blocks
@@ -56,20 +56,27 @@ def test_msa_prefill(device, S, T):
     def dev_rm(t, dt):
         return ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # --- indexer block scores (device); op already force-locals, we inject only the sink ---
+    # --- indexer block scores (device); op already force-locals the current block (no sink, per upstream) ---
     block_scores = ttnn.experimental.indexer_score_msa(
-        dev_tile(iq), dev_tile(ik), chunk_start_idx=chunk_start, scale=HEAD_DIM**-0.5, num_groups=NGROUPS,
+        dev_tile(iq),
+        dev_tile(ik),
+        chunk_start_idx=chunk_start,
+        scale=HEAD_DIM**-0.5,
+        num_groups=NGROUPS,
         block_size=BLOCK,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
     )
     bs = ttnn.to_torch(block_scores).float()  # [1, NGROUPS, S, nblk]
-    bs[:, :, :, SINK_BLOCK] = float("inf")
     block_ids = bs.topk(TOPK_BLK, dim=-1).indices.to(torch.int32)  # [1, NGROUPS, S, 16]
 
     # --- device op (mirror run_op_msa_native) + the op's golden, SAME block-ids ---
     out = ttnn.transformer.sparse_sdpa_msa(
-        dev_rm(q.to(torch.float32), ttnn.bfloat16), dev_tile(k), dev_tile(v),
-        dev_rm(block_ids, ttnn.uint32), scale=HEAD_DIM**-0.5, block_size=BLOCK,
+        dev_rm(q.to(torch.float32), ttnn.bfloat16),
+        dev_tile(k),
+        dev_tile(v),
+        dev_rm(block_ids, ttnn.uint32),
+        scale=HEAD_DIM**-0.5,
+        block_size=BLOCK,
     )
     out_t = ttnn.to_torch(out)[:, :H_DEV].float()
     ref = sparse_attention_ref_msa(q.float(), k.float(), v.float(), block_ids, HEAD_DIM**-0.5)

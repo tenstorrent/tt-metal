@@ -11,7 +11,7 @@ cache-read. So the cache + cross-device gather live in THIS wrapper:
   We AllGather those across the SP axis so every device materialises the full context, then:
 
     indexer_score_msa(index_q, index_k_full, chunk_start_idx=cached_len)  -> block scores
-    inject sink (block 0) + topk_large_indices(topk_blocks)              -> block-ids   (the op
+    topk_large_indices(topk_blocks)                                      -> block-ids   (the op
                                               already force-locals the current block, +inf)
     sparse_sdpa_msa(q, k_full, v_full, block-ids)                        -> attention out
 
@@ -60,7 +60,6 @@ def _dbg_msa_save(t, device, layer_idx, name):
 # M3 sparse_attention_config (configs/MiniMax-M3/config.json).
 BLOCK_SIZE = 128
 TOPK_BLOCKS = 16
-SINK_BLOCK = 0  # sparse_init_block — the attention sink, always selected
 NUM_INDEX_HEADS = 4  # sparse_num_index_heads (1 per GQA group; 1 per device at TP=4)
 INDEX_DIM = 128  # sparse_index_dim
 
@@ -99,18 +98,6 @@ def index_branch_forward(hidden_states, weights, rope_mats, transformation_mat, 
     ik = apply_qk_norm_per_head(ik, weights.index_k_norm, rms_norm_eps)
     ik = apply_rope(ik, rope_mats, transformation_mat, is_decode_mode=False)
     return iq, ik
-
-
-def _sink_mask(num_groups, nblk, device):
-    """A [1, num_groups, 1, nblk] additive mask with +inf at the sink block (broadcast over queries)."""
-    m = torch.zeros(1, num_groups, 1, nblk, dtype=torch.float32)
-    m[:, :, :, SINK_BLOCK] = float("inf")
-    kwargs = {}
-    if isinstance(device, ttnn.MeshDevice):
-        kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
-    return ttnn.from_torch(
-        m.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, **kwargs
-    )
 
 
 def msa_indexer_sparse(
@@ -163,10 +150,8 @@ def msa_indexer_sparse(
         cluster_axis=cluster_axis,
     )
 
-    # Force the attention sink (block 0) to always be selected: +inf at block 0 before top-k. The op
-    # already force-locals the current block (+inf), so we only add the sink here.
-    nblk = block_scores.shape[-1]
-    block_scores = ttnn.add(block_scores, _sink_mask(num_groups, nblk, device))
+    # The op already force-locals the current block (+inf); the real MiniMax-M3 indexer forces ONLY the
+    # local block (upstream minimax_m3_vl: index_local_blocks, no init/sink block), so nothing else is added.
     _dbg_msa_save(block_scores, device, layer_idx, f"{dbg_tag}_scores" if dbg_tag else None)
 
     # Top-k block ids (uint32 row-major) — the block selection that encodes causality.

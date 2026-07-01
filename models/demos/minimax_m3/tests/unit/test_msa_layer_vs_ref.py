@@ -5,20 +5,19 @@
 
 Exercises the REAL model code end-to-end for a sparse layer (3-59): QKV proj -> head split ->
 per-head gemma QK-norm -> partial RoPE (main Q/K/V), the index branch (index_q/k proj -> per-head
-norm -> RoPE, msa.index_branch_forward), then the indexer -> sink + top-16 -> sparse_sdpa_msa
+norm -> RoPE, msa.index_branch_forward), then the indexer -> top-16 -> sparse_sdpa_msa
 (msa.msa_indexer_sparse). MSA only diverges from full attention above topk*block = 2048 tokens, so
 S>2048 is where this actually tests sparsity (here S=2560 -> 20 blocks, top-16).
 
 Torch reference mirrors the op chain: scaled index dot -> causal -inf -> block max-pool -> force-local
-current block (op does this) + sink block 0 (we add) -> top-16 -> block-sparse attention. TT and torch
+current block (op does this; no sink block, per upstream) -> top-16 -> block-sparse attention. TT and torch
 each compute their OWN block selection, so a wrong index branch (proj/norm/rope) -> different blocks ->
 PCC drops. Single card (TP=1); SP=8×TP=4 sharding of this same path is validated by test_msa_sp_vs_ref.
 """
 
-from types import SimpleNamespace
-
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -66,7 +65,7 @@ def _gemma_per_head_norm(x, weight):
 
 
 def _torch_block_ids(iq, ik, scale, S):
-    """Torch indexer block selection mirroring indexer_score_msa + our sink. iq [1,G,S,D] ik [1,1,S,D]."""
+    """Torch indexer block selection mirroring indexer_score_msa (force-local only, no sink). iq [1,G,S,D] ik [1,1,S,D]."""
     G, T = iq.shape[1], ik.shape[2]
     nblk = T // BLOCK
     scores = scale * (iq @ ik.transpose(-1, -2))  # [1,G,S,T] (ik 1 head broadcasts over G)
@@ -75,7 +74,6 @@ def _torch_block_ids(iq, ik, scale, S):
     bs = scores.view(1, G, S, nblk, BLOCK).max(-1).values  # block max-pool [1,G,S,nblk]
     local = (qpos // BLOCK).clamp(max=nblk - 1)
     bs[0, :, torch.arange(S), local] = float("inf")  # force-local current block (op does this)
-    bs[:, :, :, 0] = float("inf")  # sink block 0
     return bs.topk(TOPK, dim=-1).indices.to(torch.int32)  # [1,G,S,TOPK]
 
 
@@ -98,8 +96,18 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     base = os.environ.get("M3_CKPT", "/data/philei/MiniMax-M3")
     wmap = _json.load(open(f"{base}/model.safetensors.index.json"))["weight_map"]
     pre = "language_model.model.layers.3.self_attn."
-    names = {"q": "q_proj", "k": "k_proj", "v": "v_proj", "o": "o_proj", "q_norm": "q_norm", "k_norm": "k_norm",
-             "iq": "index_q_proj", "ik": "index_k_proj", "iq_norm": "index_q_norm", "ik_norm": "index_k_norm"}
+    names = {
+        "q": "q_proj",
+        "k": "k_proj",
+        "v": "v_proj",
+        "o": "o_proj",
+        "q_norm": "q_norm",
+        "k_norm": "k_norm",
+        "iq": "index_q_proj",
+        "ik": "index_k_proj",
+        "iq_norm": "index_q_norm",
+        "ik_norm": "index_k_norm",
+    }
     _handles, w = {}, {}
     for short, nm in names.items():
         key = pre + nm + ".weight"
@@ -116,43 +124,78 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
 
     # --- torch reference: main Q/K/V + index branch + indexer block-ids + block-sparse attention ---
     xf = x.float()
-    q = _partial_rope(_gemma_per_head_norm((xf @ w["q"].t()).view(1, S, NQ, HEAD_DIM).transpose(1, 2), w["q_norm"]), cos_ref, sin_ref)
-    k = _partial_rope(_gemma_per_head_norm((xf @ w["k"].t()).view(1, S, NKV, HEAD_DIM).transpose(1, 2), w["k_norm"]), cos_ref, sin_ref)
+    q = _partial_rope(
+        _gemma_per_head_norm((xf @ w["q"].t()).view(1, S, NQ, HEAD_DIM).transpose(1, 2), w["q_norm"]), cos_ref, sin_ref
+    )
+    k = _partial_rope(
+        _gemma_per_head_norm((xf @ w["k"].t()).view(1, S, NKV, HEAD_DIM).transpose(1, 2), w["k_norm"]), cos_ref, sin_ref
+    )
     v = (xf @ w["v"].t()).view(1, S, NKV, HEAD_DIM).transpose(1, 2)
-    iq = _partial_rope(_gemma_per_head_norm((xf @ w["iq"].t()).view(1, S, NIDX, IDX_DIM).transpose(1, 2), w["iq_norm"]), cos_ref, sin_ref)
-    ik = _partial_rope(_gemma_per_head_norm((xf @ w["ik"].t()).view(1, S, 1, IDX_DIM).transpose(1, 2), w["ik_norm"]), cos_ref, sin_ref)
+    iq = _partial_rope(
+        _gemma_per_head_norm((xf @ w["iq"].t()).view(1, S, NIDX, IDX_DIM).transpose(1, 2), w["iq_norm"]),
+        cos_ref,
+        sin_ref,
+    )
+    ik = _partial_rope(
+        _gemma_per_head_norm((xf @ w["ik"].t()).view(1, S, 1, IDX_DIM).transpose(1, 2), w["ik_norm"]), cos_ref, sin_ref
+    )
     block_ids_ref = _torch_block_ids(iq, ik, scale, S)  # [1, NKV(=NIDX groups), S, TOPK]
     sample = list(range(0, S, S // 64))  # ~64 sampled query rows (full gather is too large at S>2048)
     ref_sampled = sparse_attention_ref_msa_sampled_tokens(q, k, v, block_ids_ref, scale, sample)  # [1,NQ,len,HD]
 
     # --- TT path: compose the real model functions from the SAME (Meta-swizzled) weights ---
     hf_state = {
-        "q_proj.weight": w["q"], "k_proj.weight": w["k"], "v_proj.weight": w["v"], "o_proj.weight": w["o"],
-        "q_norm.weight": w["q_norm"], "k_norm.weight": w["k_norm"],
-        "index_q_proj.weight": w["iq"], "index_k_proj.weight": w["ik"],
-        "index_q_norm.weight": w["iq_norm"], "index_k_norm.weight": w["ik_norm"],
+        "q_proj.weight": w["q"],
+        "k_proj.weight": w["k"],
+        "v_proj.weight": w["v"],
+        "o_proj.weight": w["o"],
+        "q_norm.weight": w["q_norm"],
+        "k_norm.weight": w["k_norm"],
+        "index_q_proj.weight": w["iq"],
+        "index_k_proj.weight": w["ik"],
+        "index_q_norm.weight": w["iq_norm"],
+        "index_k_norm.weight": w["ik_norm"],
     }
     state = convert_hf_qkv_to_meta_format_partial(hf_state, HEAD_DIM, ROTARY_DIM)
 
     hf_config = SimpleNamespace(
-        hidden_size=HIDDEN, num_attention_heads=NQ, num_key_value_heads=NKV, head_dim=HEAD_DIM,
-        rotary_dim=ROTARY_DIM, rope_theta=THETA, rope_scaling=None, rms_norm_eps=EPS,
-        max_position_embeddings=max(S, 128), use_qk_norm=True, use_gemma_norm=True,
+        hidden_size=HIDDEN,
+        num_attention_heads=NQ,
+        num_key_value_heads=NKV,
+        head_dim=HEAD_DIM,
+        rotary_dim=ROTARY_DIM,
+        rope_theta=THETA,
+        rope_scaling=None,
+        rms_norm_eps=EPS,
+        max_position_embeddings=max(S, 128),
+        use_qk_norm=True,
+        use_gemma_norm=True,
     )
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     rope_setup = create_rope_setup(mesh_device=mesh_device, hf_config=hf_config, datatype=ttnn.bfloat16)
     trans_mats = rope_setup.get_both_trans_mats()
     attn_config = AttentionConfig(
-        hidden_size=HIDDEN, num_heads=NQ, num_kv_heads=NKV, head_dim=HEAD_DIM, rotary_dim=ROTARY_DIM,
-        rms_norm_eps=EPS, use_qk_norm=True, use_gemma_norm=True, max_seq_len=max(S, 128), max_local_batch_size=1,
+        hidden_size=HIDDEN,
+        num_heads=NQ,
+        num_kv_heads=NKV,
+        head_dim=HEAD_DIM,
+        rotary_dim=ROTARY_DIM,
+        rms_norm_eps=EPS,
+        use_qk_norm=True,
+        use_gemma_norm=True,
+        max_seq_len=max(S, 128),
+        max_local_batch_size=1,
     )
     weights = load_attention_weights(mesh_device, attn_config, state, mesh_config, weight_dtype=ttnn.bfloat16)
 
     rope_mats = [rope_setup.cos_matrix_prefill[:, :, :S, :], rope_setup.sin_matrix_prefill[:, :, :S, :]]
     trans_mat = trans_mats["prefill"] if isinstance(trans_mats, dict) else trans_mats
     x_tt = ttnn.from_torch(
-        x.reshape(1, 1, S, HIDDEN), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+        x.reshape(1, 1, S, HIDDEN),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
@@ -162,7 +205,15 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     tt_k = apply_rope(apply_qk_norm_per_head(tt_k, weights.k_norm, EPS), rope_mats, trans_mat, False)
     tt_iq, tt_ik = index_branch_forward(x_tt, weights, rope_mats, trans_mat, rms_norm_eps=EPS)
     tt_out, tt_block_ids = msa_indexer_sparse(
-        tt_iq, tt_ik, tt_q, tt_k, tt_v, chunk_start_idx=0, scale=scale, num_groups=NIDX, device=mesh_device,
+        tt_iq,
+        tt_ik,
+        tt_q,
+        tt_k,
+        tt_v,
+        chunk_start_idx=0,
+        scale=scale,
+        num_groups=NIDX,
+        device=mesh_device,
         return_block_ids=True,
     )
 
@@ -189,7 +240,12 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     import statistics
 
     bs_dev = ttnn.experimental.indexer_score_msa(
-        tt_iq, tt_ik, chunk_start_idx=0, scale=scale, num_groups=NIDX, block_size=BLOCK,
+        tt_iq,
+        tt_ik,
+        chunk_start_idx=0,
+        scale=scale,
+        num_groups=NIDX,
+        block_size=BLOCK,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
     )
     bs_d = ttnn.to_torch(ttnn.get_device_tensors(bs_dev)[0]).float()[:, :NIDX]  # [1,NIDX,S,nblk]

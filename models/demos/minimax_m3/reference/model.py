@@ -23,8 +23,8 @@ ATTENTION (dense + MSA, the real schedule)
 Layers with ``sparse_attention_freq[i] == 0`` (layers 0-2) use full causal attention. Layers with
 ``sparse_attention_freq[i] == 1`` (layers 3-59) use MSA sparse attention: a lightweight index
 branch (``index_q/k_proj`` -> per-head norm -> partial RoPE) scores key blocks, the top
-``sparse_topk_blocks`` (16) blocks of ``sparse_block_size`` (128) — plus the sink block 0 and the
-force-local current block — are selected per GQA group, and attention runs causally over only the
+``sparse_topk_blocks`` (16) blocks of ``sparse_block_size`` (128) — plus the force-local current
+block (no sink/init block, matching upstream) — are selected per GQA group, and attention runs causally over only the
 selected blocks. This mirrors the device chain (``msa.py`` + ``indexer_score_msa`` /
 ``sparse_sdpa_msa``) and the validated torch reference in ``tests/unit/test_msa_layer_vs_ref.py``.
 
@@ -84,8 +84,7 @@ class MiniMaxM3Config:
     sparse_num_index_heads: int = 4
     sparse_block_size: int = 128
     sparse_topk_blocks: int = 16
-    sparse_init_block: int = 0  # the attention-sink block, always selected
-    sparse_local_block: int = 1  # current block is always selected (force-local)
+    sparse_local_block: int = 1  # current block is always selected (force-local); no sink/init block (upstream)
 
     @classmethod
     def from_hf_config(cls, hf_config: dict) -> "MiniMaxM3Config":
@@ -117,7 +116,6 @@ class MiniMaxM3Config:
             sparse_num_index_heads=sac.get("sparse_num_index_heads", 4),
             sparse_block_size=sac.get("sparse_block_size", 128),
             sparse_topk_blocks=sac.get("sparse_topk_blocks", 16),
-            sparse_init_block=sac.get("sparse_init_block", 0),
             sparse_local_block=sac.get("sparse_local_block", 1),
         )
 
@@ -220,15 +218,16 @@ def ffn(x: torch.Tensor, w_gate, w_up, w_down, alpha: float, limit: float) -> to
     return swiglu_oai(x @ w_gate.t(), x @ w_up.t(), alpha, limit) @ w_down.t()
 
 
-def msa_block_selection(index_q, index_k, scale, block_size, topk_blocks, sink_block):
-    """MSA indexer block selection, mirroring ``indexer_score_msa`` + sink injection.
+def msa_block_selection(index_q, index_k, scale, block_size, topk_blocks):
+    """MSA indexer block selection, mirroring ``indexer_score_msa`` + top-k.
 
     ``index_q`` ``[1, G, S, d]`` (per GQA group), ``index_k`` ``[1, 1, S, d]`` (one shared head,
     broadcast over G). Single-shot prefill so query row ``s`` attends to keys ``[0, s]``
     (chunk_start=0). Returns a per-group boolean ``[G, S, nblk]`` of selected key blocks.
 
     Pipeline: scaled index dot -> causal ``-inf`` for future tokens -> block max-pool (score_type
-    "max") -> force-local the current block (+inf) -> sink block (+inf) -> top-k blocks.
+    "max") -> force-local the current block (+inf) -> top-k blocks. Matches upstream
+    ``minimax_m3_vl`` MiniMaxM3VLIndexer: ONLY the local block is forced, there is no sink/init block.
     """
     G, S, T = index_q.shape[1], index_q.shape[2], index_k.shape[2]
     nblk = (T + block_size - 1) // block_size
@@ -244,7 +243,6 @@ def msa_block_selection(index_q, index_k, scale, block_size, topk_blocks, sink_b
     bs = scores.view(1, G, S, nblk, block_size).max(-1).values  # block max-pool [1,G,S,nblk]
     local = (qpos // block_size).clamp(max=nblk - 1)
     bs[0, :, torch.arange(S, device=scores.device), local] = float("inf")  # force-local current block
-    bs[:, :, :, sink_block] = float("inf")  # attention sink, always selected
 
     k = min(topk_blocks, nblk)
     sel = bs.topk(k, dim=-1).indices  # [1,G,S,k]
@@ -325,7 +323,7 @@ class MiniMaxM3TextModel:
         # `sparse_sdpa_msa` masks sentinel blocks. We additionally apply the standard token-level
         # causal mask BEFORE the block mask, which (a) makes the within-current-block tokens strictly
         # causal and (b) renders the future-block sentinel handling moot here. The net selected set is
-        # therefore "the top-k past blocks + sink + current block, token-causal" — exactly the intended
+        # therefore "the top-k past blocks + current block, token-causal" — exactly the intended
         # semantics, and identical to full causal attention whenever every block fits in the top-k
         # (S <= sparse_topk_blocks*sparse_block_size). It only diverges from dense above that bound,
         # where un-selected past blocks are dropped.
@@ -334,7 +332,7 @@ class MiniMaxM3TextModel:
             iq, ik = self._index_branch(x, p, cos, sin)
             index_k = ik  # cache the post-norm/post-RoPE shared index key
             sel = msa_block_selection(  # [G, S, nblk], G == nkv
-                iq, ik, scale, cfg.sparse_block_size, cfg.sparse_topk_blocks, cfg.sparse_init_block
+                iq, ik, scale, cfg.sparse_block_size, cfg.sparse_topk_blocks
             )
             # expand selected blocks -> per-token [G, S, S], aligned to the (block-padded) key axis
             selected = sel.repeat_interleave(cfg.sparse_block_size, dim=-1)[:, :, :S]  # [G, S, S]

@@ -218,7 +218,6 @@ def _sparse_layer_model(block_size, topk_blocks, *, hidden=64, nq=8, nkv=2, hd=8
         sparse_num_index_heads=nkv,
         sparse_block_size=block_size,
         sparse_topk_blocks=topk_blocks,
-        sparse_init_block=0,
         sparse_local_block=1,
     )
     p = "model.layers.0."
@@ -264,7 +263,7 @@ def test_msa_is_sparse_above_bound():
     """Above the bound MSA drops blocks, so it must differ from dense_only (and stay finite/causal)."""
     torch.manual_seed(0)
     model, cfg = _sparse_layer_model(block_size=8, topk_blocks=2)  # bound = 16
-    S = 64  # > 16 => genuine sparsity (only sink + top-2 + local blocks attended)
+    S = 64  # > 16 => genuine sparsity (only top-2 + local blocks attended)
     assert S > cfg.sparse_topk_blocks * cfg.sparse_block_size
     x = torch.randn(1, S, cfg.hidden_size)
     h_msa = model.forward_hidden(x, compute_logits=True)[1]
