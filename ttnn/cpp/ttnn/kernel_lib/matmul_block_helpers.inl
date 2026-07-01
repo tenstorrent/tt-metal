@@ -105,12 +105,19 @@ ALWI void matmul_block_finalize_copy(
     Buf& interm_buf,
     Buf& out_buf,
     uint32_t out_block_num_tiles,
-    uint32_t out_num_tiles) {
+    uint32_t out_num_tiles,
+    uint32_t prev_srca_cb_id) {
     const uint32_t interm_cb_id = buf_id(interm_buf);
     const uint32_t out_cb_id = buf_id(out_buf);
 
     // Bring srcA onto interm and the packer onto out's format (dtype convert lands here).
-    copy_tile_to_dst_init_short_with_dt(interm_cb_id, interm_cb_id);
+    // The K-loop left the unpacker's srcA data-format programmed for the matmul's srcA operand
+    // (in1 — see the matmul convention). copy_tile_to_dst_init_short_with_dt only reprograms the
+    // srcA format when old_cbid != new_cbid, so old_cbid MUST be that prior srcA operand
+    // (prev_srca_cb_id = in1), not interm — otherwise the reconfig is a no-op and the datacopy
+    // reads interm's tiles through the stale (in1) source format, producing bit garbage / inf
+    // whenever interm's format differs from in1's (e.g. fp32 interm + bfp-packed in1).
+    copy_tile_to_dst_init_short_with_dt(prev_srca_cb_id, interm_cb_id);
     PACK((pack_reconfig_data_format(out_cb_id)));
     // The accumulation packed with l1_acc enabled; the copy must NOT re-accumulate.
     if constexpr (packer_l1_acc) {
@@ -690,7 +697,7 @@ ALWI void matmul_block(
             const bool needs_finalize = (out_cb_id != interm_cb_id);
             if (needs_finalize) {
                 matmul_block_finalize_copy<packer_l1_acc, finalize_relu, Activation>(
-                    interm_buf, out_buf, out_block_num_tiles, out_num_tiles);
+                    interm_buf, out_buf, out_block_num_tiles, out_num_tiles, /*prev_srca_cb_id=*/in1_cb_id);
                 // The finalize copy left the unpacker in datacopy mode and the packer on out's
                 // format. If another batch's K-loop follows, restore matmul unpack/math state and
                 // point the packer back at interm so the next accumulation is correct. (Single-batch
