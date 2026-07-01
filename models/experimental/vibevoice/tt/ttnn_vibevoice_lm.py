@@ -371,6 +371,22 @@ class TTVibeVoiceLM:
         # Causal-mask cache for the fp32 prefill path, keyed by (S, S_total).
         self._mask_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
 
+        # ── Trace-safe decode state (Phase C) ──────────────────────────────
+        # Host RoPE rows: the traced decode writes a per-position [1,1,1,hd] cos/sin
+        # row into a persistent device buffer each step (instead of slicing the device
+        # table with a Python-int position, which would bake into the trace).
+        self._cos_np, self._sin_np = _build_rope_cache(max_len, self.cfg.head_dim, self.cfg.rope_theta)  # [max_len, hd]
+        # Height-sharded L1 memcfg for the paged_update_cache input [1,1,n_kv,hd]
+        # (heads tile-padded to 32, one batch row => one core).  paged_update_cache
+        # takes a device-tensor write index so the KV write position varies per replay.
+        _grid = device.compute_with_storage_grid_size()
+        _shard_grid = ttnn.num_cores_to_corerangeset(1, _grid, True)
+        self._kv_update_shard_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_shard_grid, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
     def alloc_kv_cache(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16) -> KVCache:
         """Preallocate a fixed-size KV cache sized to ``max_seq`` (rounded up).
 
@@ -733,6 +749,140 @@ class TTVibeVoiceLM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        return logits, last_hidden
+
+    # ── Trace-safe decode (Phase C) ────────────────────────────────────────
+    # Mirrors the eager S==1 decode but is fully driven by device tensors so the
+    # 28-layer step can be captured once and replayed: KV write position and the
+    # SDPA read bound come from ``cur_pos`` (a device int32 tensor) via
+    # paged_update_cache / sdpa cur_pos_tensor, and RoPE comes from a host-written
+    # per-position [1,1,1,hd] row.  Numerically equivalent to the eager fused path.
+    def _attention_decode_traced(
+        self,
+        x: ttnn.Tensor,
+        layer_w: LayerWeights,
+        cos_row: ttnn.Tensor,
+        sin_row: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        kv_cache: KVCache,
+        layer_idx: int,
+    ) -> ttnn.Tensor:
+        cfg = self.cfg
+        B, S = 1, 1
+        head_dim = cfg.head_dim
+        n_heads = cfg.num_attention_heads
+        n_kv = cfg.num_key_value_heads
+
+        q = ttnn.linear(
+            x,
+            layer_w.wq,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG,
+            memory_config=_QO_DECODE_OUT_MEMCFG,
+        )
+        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.q_bias is not None:
+            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.k_bias is not None:
+            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.v_bias is not None:
+            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        q = ttnn.permute(_reshape_tt(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [1, n_heads, 1, hd]
+        k = ttnn.permute(_reshape_tt(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [1, n_kv, 1, hd]
+        v = ttnn.permute(_reshape_tt(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))
+
+        # RoPE via the per-position row (broadcasts over the head dim; same numerics
+        # as the eager sliced-table path).
+        q = _apply_rope_ttnn(q, cos_row, sin_row)
+        k = _apply_rope_ttnn(k, cos_row, sin_row)
+
+        # KV write at cur_pos: paged_update_cache needs input [1,B,n_kv,hd] height-sharded L1.
+        k_1bkd = ttnn.to_memory_config(ttnn.permute(k, (0, 2, 1, 3)), self._kv_update_shard_mc)
+        v_1bkd = ttnn.to_memory_config(ttnn.permute(v, (0, 2, 1, 3)), self._kv_update_shard_mc)
+        ttnn.experimental.paged_update_cache(
+            kv_cache.keys[layer_idx], k_1bkd, update_idxs_tensor=cur_pos, page_table=None
+        )
+        ttnn.experimental.paged_update_cache(
+            kv_cache.values[layer_idx], v_1bkd, update_idxs_tensor=cur_pos, page_table=None
+        )
+
+        q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, n_heads, hd]
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_dec,
+            kv_cache.keys[layer_idx],
+            kv_cache.values[layer_idx],
+            cur_pos_tensor=cur_pos,
+            scale=self.scale,
+            program_config=_SDPA_DECODE_CFG,
+            compute_kernel_config=_HIFI4,
+        )  # [1, B, n_heads, hd]
+        out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
+        out = ttnn.linear(
+            out,
+            layer_w.wo,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG,
+            memory_config=_QO_DECODE_OUT_MEMCFG,
+        )
+        return out
+
+    def _transformer_layer_traced(
+        self,
+        x: ttnn.Tensor,
+        layer_idx: int,
+        cos_row: ttnn.Tensor,
+        sin_row: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        kv_cache: KVCache,
+    ) -> ttnn.Tensor:
+        lw = self.w.layers[layer_idx]
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.attn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_out = self._attention_decode_traced(x_norm, lw, cos_row, sin_row, cur_pos, kv_cache, layer_idx)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.ffn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ffn_out = self._ffn_layer(x_norm, lw)
+        x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
+    def forward_decode_traced_embeds(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        cos_row: ttnn.Tensor,
+        sin_row: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        kv_cache: KVCache,
+        return_last_hidden: bool = False,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """Capturable single-token decode over an already-embedded input [1,1,1,hidden]."""
+        cfg = self.cfg
+        x = inputs_embeds
+        if x.dtype == ttnn.float32:
+            x = ttnn.typecast(x, ttnn.bfloat16)
+        for layer_idx in range(cfg.num_hidden_layers):
+            x = self._transformer_layer_traced(x, layer_idx, cos_row, sin_row, cur_pos, kv_cache)
+        x = ttnn.rms_norm(
+            x,
+            weight=self.w.norm_w,
+            epsilon=cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
+        logits = ttnn.linear(x, self.w.lm_head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits, last_hidden
 
     def prefill(
