@@ -319,16 +319,3 @@ class TtPrefillRuntime:
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
         )
-
-    def kv_cache_pcc_check(
-        self, kv_cache: ttnn.Tensor, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
-    ) -> float:
-        """Optional bring-up hook (not part of the core runtime contract; never called in production
-        serving). PCC the populated engine-owned `kv_cache` for `slot_id` against the golden trace;
-        returns the min per-layer PCC and asserts on failure (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1).
-        Thin forwarder into the model's validation module so the PCC logic lives in one place."""
-        from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
-
-        return kv_cache_pcc_check(
-            self, kv_cache, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=first_layer_idx
-        )

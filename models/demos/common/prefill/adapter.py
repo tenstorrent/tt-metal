@@ -128,7 +128,7 @@ class PrefillModelAdapter(ABC):
         """Allocate (and zero) this model's KV cache on device and return it. This is
         the single place a model's KV layout is defined. The engine OWNS the returned
         cache's lifetime: it allocates it once, passes it into every runtime call that
-        touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check),
+        touches it (compile / prefill_chunk / build_kv_chunk_table),
         and frees it with the mesh at shutdown. ``params`` carries the per-rank knobs
         (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
 
@@ -138,7 +138,7 @@ class PrefillModelAdapter(ABC):
         is stateless w.r.t. the KV cache — it receives the engine-owned cache as an
         argument on each call. The engine then calls ``.compile(kv_cache)`` and drives
         it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
-        kv_cache_pcc_check / set_layer_ack_channel). ``params`` carries the per-rank knobs."""
+        set_layer_ack_channel). ``params`` carries the per-rank knobs."""
 
     # =====================================================================
     # Test-only metadata (HF download coordinates + reference modeling).
