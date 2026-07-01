@@ -421,7 +421,11 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
             False,  # long_context_mode
             True,  # stop_at_eos
-            True,  # run_in_ci
+            # run_in_ci=False: the GPT-OSS e2e pipeline runs this demo file without a -k filter, so a
+            # CI-enabled seqlen-sweep case would be collected by the regular e2e job and fail. GPT-OSS is
+            # descoped from the sweep pipeline pending #48533; keep this case out of CI until re-scoped
+            # (the sweep pipeline will select it explicitly via -k "seqlen-sweep").
+            False,  # run_in_ci
         ),
     ],
     ids=[
