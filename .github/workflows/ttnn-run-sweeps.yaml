@@ -816,15 +816,12 @@ jobs:
       # Reconstruct reads the ttnn-ops dataset from Snowflake (SELF_SERVE.TTNN_OPS_V6)
       # via the SVC_TTOPS_SWEEPS service account (RSA keypair). Only the private key
       # is a secret (repo secret SWEEPS_SNOWFLAKE_KEY); the rest is non-sensitive config.
-      TTNN_OPS_READ_BACKEND: snowflake
       SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
       SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
       SNOWFLAKE_ROLE: SELF_SERVE
       SNOWFLAKE_WAREHOUSE: PUBLIC
       SNOWFLAKE_DATABASE: SELF_SERVE
       SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
-      # Unused on the Snowflake read path, but the module requires a DB URL at import:
-      NEON_CONNECTION_STRING: unused
     if: >-
       needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' ||
       needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
@@ -837,7 +834,7 @@ jobs:
         with:
           python-version: "3.10"
       - name: Install dependencies
-        run: pip install psycopg2-binary pyyaml tqdm snowflake-connector-python cryptography
+        run: pip install pyyaml tqdm snowflake-connector-python cryptography
       - name: Generate JSON for lead_models run
         if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
         run: |
