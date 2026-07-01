@@ -183,16 +183,6 @@ Tensor group_norm(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
-    const bool rm_interleaved_input = !input_tensor.is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR;
-    const bool rm_interleaved_output =
-        !input_tensor.is_sharded() && output_layout.value_or(input_tensor.layout()) == Layout::ROW_MAJOR;
-    if (rm_interleaved_input || rm_interleaved_output) {
-        TT_FATAL(
-            !use_welford,
-            "group_norm: ROW_MAJOR interleaved (non-sharded) input and/or output is not supported with "
-            "use_welford=true yet. Use use_welford=false, provide TILE layout, or use a sharded input.");
-    }
-
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());

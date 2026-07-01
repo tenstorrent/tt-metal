@@ -1546,9 +1546,13 @@ def test_group_norm_optional_weight_bias(
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("with_affine", [False, True], ids=["no_weight_bias", "weight_bias"])
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-def test_group_norm_row_major_interleaved_input(device, grid_size, output_layout, with_affine, mem_config):
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+def test_group_norm_row_major_interleaved_input(device, grid_size, output_layout, with_affine, mem_config, use_welford):
     """ROW_MAJOR interleaved input must complete and match torch (issue #26594)."""
     torch.manual_seed(0)
+
+    if use_welford and grid_size.y > 1:
+        pytest.skip("welford ROW_MAJOR interleaved is not supported on the multicast path")
 
     N, C, H, W, num_groups = 1, 480, 1, 64, 8
     epsilon = 1e-5
@@ -1595,6 +1599,7 @@ def test_group_norm_row_major_interleaved_input(device, grid_size, output_layout
         core_grid=grid_size,
         inplace=False,
         output_layout=output_layout,
+        use_welford=use_welford,
     )
 
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
