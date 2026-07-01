@@ -219,15 +219,10 @@ class GroupNorm:
         self.num_groups = self.num_groups // num_splits
         self.channels = self.channels // num_splits
 
-        # Positive mask is synthesized in the writer kernel (see #48640); no DRAM tensor needed.
-        # Negative mask, if requested, is still built on host (synthesis needs a fuse_negative_mask opt-in).
-        if negative_mask:
-            input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(
-                self.channels, self.num_groups, grid_y, ttnn.bfloat16
-            )
-            input_nmask_tensor = ttnn.to_device(input_nmask_tensor, device)
-        else:
-            input_nmask_tensor = None
+        # Both positive and negative masks are synthesized in the writer kernel
+        # (see #48640). Negative-mask synthesis is opt-in via the
+        # synthesize_negative_mask kwarg on ttnn.group_norm.
+        synthesize_neg_mask = bool(negative_mask)
         # Generate gamma/beta tensors
         gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, self.channels, grid_y)
         beta = ttnn.create_group_norm_weight_bias_rm(self.bias, self.channels, grid_y)
@@ -272,7 +267,7 @@ class GroupNorm:
         tt_output_tensor = ttnn.group_norm(
             input_tensor,
             num_groups=self.num_groups,
-            negative_mask=input_nmask_tensor,
+            synthesize_negative_mask=synthesize_neg_mask,
             weight=gamma_t,
             bias=beta_t,
             memory_config=sharded_mem_config,
