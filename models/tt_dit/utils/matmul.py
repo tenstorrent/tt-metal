@@ -102,6 +102,27 @@ grid_12_10_configs = {
     (9472, 5120, 3456): (16, 8, 4, (1, 2)),
     (9472, 5120, 3840): (16, 8, 4, (1, 2)),
     (9472, 3456, 5120): (8, 4, 8, (1, 2)),
+    # --- Ideogram 4.0 single-stream block, SP4xTP2 on the (4,2) loudbox (p150b, 12x10) ---
+    # Per-device shapes of the 4 big HiFi4 matmuls (qkv/o/ff1/ff2) at 512/1024/2048px.
+    # Tuned via a standalone HiFi4 minimal_matmul micro-sweep at these exact (M,K,N);
+    # additive only (these keys were absent -> previously hit the 8x8x8 fallback).
+    # NB: per-device M is the SDPA-k-chunk-padded seq / sp (_sp_padded_len, div=256*sp),
+    #     NOT ceil(seq/sp): 512px->512, 1024px->1280, 2048px->4352.
+    # 512px  (M=512):
+    (512, 4608, 6912): (2, 4, 6, (2, 2)),  # QKV col
+    (512, 2304, 4608): (2, 4, 6, (2, 2)),  # O   row
+    (512, 4608, 12288): (2, 4, 12, (1, 4)),  # FF1 col (swiglu)
+    (512, 6144, 4608): (2, 4, 6, (2, 2)),  # FF2 row
+    # 1024px (M=1280):
+    (1280, 4608, 6912): (2, 4, 6, (2, 2)),  # QKV col
+    (1280, 2304, 4608): (2, 8, 6, (2, 2)),  # O   row
+    (1280, 4608, 12288): (2, 4, 8, (1, 4)),  # FF1 col (swiglu)
+    (1280, 6144, 4608): (4, 4, 8, (1, 4)),  # FF2 row
+    # 2048px (M=4352):
+    (4352, 4608, 6912): (2, 8, 6, (2, 2)),  # QKV col
+    (4352, 2304, 4608): (2, 4, 6, (2, 2)),  # O   row
+    (4352, 4608, 12288): (2, 8, 8, (1, 4)),  # FF1 col (swiglu)
+    (4352, 6144, 4608): (2, 4, 6, (2, 2)),  # FF2 row
 }
 
 grid_11_10_configs = {
