@@ -123,7 +123,7 @@
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp4
+  sp_config: sp4-blitz
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
@@ -149,7 +149,7 @@
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp4
+  sp_config: sp4-blitz
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
@@ -176,4 +176,4 @@
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp4
+  sp_config: sp4-blitz
