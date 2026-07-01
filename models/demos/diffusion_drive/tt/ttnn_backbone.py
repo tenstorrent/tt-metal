@@ -40,6 +40,7 @@ import torch.nn as nn
 import ttnn
 from models.demos.diffusion_drive.tt.common import fold_bn
 from models.demos.diffusion_drive.tt.ttnn_resnet34 import (
+    _RELU_ACT,
     TtnnBasicBlock,
     _ttnn_conv2d,
     prep_conv_weights,
@@ -115,11 +116,10 @@ class TtnnStem:
         xt = _to_ttnn_tile(x, B, H, W, C, self._device)
         # Cache the device-prepared stem weights (trace-safe; no per-forward H2D upload).
         out, Ho, Wo, self._w, self._b = _ttnn_conv2d(
-            self._device, xt, self._w, self._b, B, H, W, C, self._cout, self._k, self._s, self._p
+            self._device, xt, self._w, self._b, B, H, W, C, self._cout, self._k, self._s, self._p, activation=_RELU_ACT
         )
         if out.is_sharded():
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.relu(out)
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         out = ttnn.max_pool2d(
             out,
