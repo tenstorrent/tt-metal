@@ -78,9 +78,11 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, dummy_weig
     )
 
     tt_out = tt_model(attention_input, mask=tt_mask)
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
+        0, :, :, :
+    ].squeeze()
 
-    reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)[0]
+    reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)[0].squeeze()
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
