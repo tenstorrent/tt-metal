@@ -176,8 +176,7 @@
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
     # Only test that builds the full 64-layer model. On a cold tt_cache every layer is
     # dequant+tilized (~14s/layer -> ~13min) before inference even starts, so the first
-    # (cold) run needs a generous timeout; once the tt_cache is persisted (run with the
-    # MLPerf mount read-write to regenerate it), warm runs load in seconds.
+    # (cold) run needs a generous timeout
     pytest --timeout 1200 models/demos/blackhole/qwen36/tests/test_generate_tp.py
   model: qwen3.6-27b
   skus:

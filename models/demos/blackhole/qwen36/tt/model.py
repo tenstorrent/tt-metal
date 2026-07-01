@@ -1047,26 +1047,18 @@ class Qwen36Model:
         return ttnn.reshape(logits, (1, 1, logits.shape[-1]))
 
     def warmup_prefill_masked_buckets(self, page_table, buckets=None):
-        """Compile every masked-bucket prefill program up front (warmup).
+        """Compile every masked-bucket prefill program up front so short prompts never compile
+        at request time (which clobbers parked decode/chunk traces -> second-request hang, #48536).
 
-        For each bucket runs dummy prefills covering both the no-mask program (actual_len ==
-        bucket) and the masked program (actual_len < bucket — the GDN valid-len mask multiply,
-        conv-state capture, and logit one-hot select), plus one length per distinct
-        paged_fill_cache FILL WIDTH ceil(actual_len/block_size) reachable within the bucket.
-        After this, a real short prompt of ANY length rounds up to an already-compiled bucket and
-        never compiles at request time — the root cause of the trace-clobber hang. MUST run while
-        the GDN is in its serving state mode and BEFORE any trace is parked;
+        Per bucket, run dummy prefills covering the no-mask program (actual_len == bucket) and the
+        masked program (actual_len < bucket), plus one length per distinct paged_fill_cache fill
+        width. MUST run while the GDN is in serving state mode and BEFORE any trace is parked;
         capture_prefill_trace_chunked calls this just before begin_trace_capture. page_table must
         cover the largest bucket.
 
-        Drive the sweep from the BUCKET set, not from block_size. This hybrid GDN model's
-        attention KV page size is unified with the large recurrent-state page, so
-        get_block_size() is big (e.g. ~800 tokens/block, NOT 64). The old
-        `max_width = max(buckets) // block_size` collapsed to 1-2 iterations at
-        vlen = w * block_size (~800, ~1600), which only warmed buckets 1024/2048 and NEVER the
-        small 128/256/512 buckets that short prompts use. Those short prompts then compiled ~the
-        whole forward at request time, clobbering the parked decode/chunk traces -> second-request
-        device hang (issue #48536)."""
+        Sweep from the BUCKET set, not block_size: this hybrid GDN unifies the attention KV page
+        with the large recurrent-state page, so get_block_size() is big (~800, not 64) and the old
+        max(buckets)//block_size only warmed the large buckets, never the small 128/256/512 ones."""
         if buckets is None:
             buckets = self._PREFILL_MASK_BUCKETS
         block_size = get_block_size(self._paged_kv_caches)
@@ -1122,13 +1114,11 @@ class Qwen36Model:
         # shared by short prompts and the long-prompt tail; prefill_dispatch routes every traced
         # prefill here so the short/long seam is defined once.
         if num_full == 0:
-            # Match the full-attention SDPA page-table width to the warmed/captured width so the
-            # short-prompt forward REPLAYS the pre-warmed program set instead of recompiling at
-            # request time (a request-time compile clobbers the parked decode/chunk traces -> the
-            # second-request hang). vLLM pads the request page table to its own
-            # max_num_blocks_per_req, which differs from the width warmup used; pad/clip to the
-            # captured buffer width. Trailing entries index blocks past the prompt and are never
-            # read by causal SDPA up to actual_len (same rationale as the long-prompt branch
+            # Pad/clip the SDPA page table to the warmed/captured width so the short-prompt forward
+            # REPLAYS the pre-warmed programs instead of recompiling at request time (which clobbers
+            # parked decode/chunk traces -> second-request hang). vLLM pads to its own
+            # max_num_blocks_per_req, which differs from the warmed width. Trailing entries index
+            # blocks past the prompt and are never read by causal SDPA (as in the long-prompt branch
             # below). No-op when no chunk buffer was captured or the widths already match.
             buf = getattr(self, "_chunk_full_page_table_buf", None)
             if buf is not None:
