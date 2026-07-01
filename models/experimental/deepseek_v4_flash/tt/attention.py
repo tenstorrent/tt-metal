@@ -502,7 +502,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.eps = config.rms_norm_eps
         self.scaling = self.head_dim**-0.5
         cache = _as_cache(cache)
+        print(f"weight_dtype: {weight_dtype}")
 
+        # self.q_a_proj = LinearDecode(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype, partial_width_sharded=True, k_blocks=2, n_blocks=32, N=1024)
         self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
         self.q_a_norm = DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"))
         self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
@@ -641,10 +643,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         b, s, _, _ = hidden.shape  # B == 1, S == 1 (decode)
         h, dh = self.num_heads, self.head_dim
         _profile(self.device)
-
-        q = self.q_b_proj(self.q_a_norm(self.q_a_proj(hidden)))  # [B, S, H*Dh]
+        # hidden_input_memory_config = self.q_a_proj.get_input_memory_config(1, hidden.shape[3])
+        # hidden = ttnn.to_memory_config(hidden, hidden_input_memory_config)
+        print(f"hidden: {hidden.shape}")
+        q_a = self.q_a_norm(self.q_a_proj(hidden))
+        q = self.q_b_proj(q_a)  # [B, S, H*Dh]
+        print(f"q_a: {q_a.shape}")
+        print(f"q: {q.shape}")
         kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
-
+        print(f"kv: {kv.shape}")
         # Fuse [Q | K | V] (K==V) -> [1, 1, B, (H+2)*Dh] and split into the decode
         # head layout. The op emits height-sharded heads; convert back to
         # interleaved L1 so the custom RoPE / cache / SDPA path stays unchanged.
