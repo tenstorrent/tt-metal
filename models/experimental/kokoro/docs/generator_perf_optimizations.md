@@ -148,11 +148,26 @@ bf16 conv weights barely help (−11 µs) because the convs are ConvTranspose-ov
 precision-bound. **Relaxing the PCC bar does *not* unlock a meaningful device-kernel win.** #1 + #2 is
 the practical ceiling for generator device time.
 
-The real remaining opportunity is **wall-clock, not device-kernel** (PCC-safe, 0 device change):
-- **#10 trace / program cache** — all 1,570 ops are `PROGRAM CACHE HIT=False`, no trace; the op-to-op
-  gap was ~13.8 ms vs 4.7 ms of device kernel. This is the biggest real demo speedup.
-- **#9 device-side SineGen** — drop the CPU phase-fallback device↔host round-trip (memory says the
-  cumsum path landed; re-validate the `sine_merge > 0.98` gate).
+The real remaining opportunity is **wall-clock, not device-kernel**. Measured (no profiler, T_x=5):
+
+| config | cold fwd | warm fwd | device kernel |
+|---|---:|---:|---:|
+| phase-fallback ON (demo) | 904 ms | 181 ms | ~4.45 ms |
+| phase-fallback OFF (device SineGen) | (cache-shared) | 185 ms | ~4.45 ms |
+
+The 4.45 ms of device kernel is only **~2.5 % of the 181 ms warm wall-clock** — the generator is
+**host-dispatch-bound** (~176 ms = 1378 ops × ~128 µs Python/host dispatch). Corrections to earlier
+guesses: the "13.8 ms op-gap" was 13.8 **s** under tracy (profiler-inflated, ignore); and the **CPU
+phase fallback is NOT a warm bottleneck** (ON vs OFF warm are identical), so **#9 device SineGen buys
+~nothing for wall-clock**. The levers:
+
+- **#10 Metal trace** — replays the captured command queue with ~zero host overhead → warm 181 ms
+  collapses toward device-bound (~5–10 ms), a **~20–35× warm speedup**. Constraints: needs a *static*
+  device graph, so the CPU phase fallback must be **off** (device SineGen, harmonic PCC ~0.982 —
+  passes the 0.98 gate but below fallback parity) + fixed input-buffer plumbing; best applied at the
+  **pipeline/decoder** level, not the generator alone. This is a real implementation project.
+- **Persistent program cache** (`enable_model_cache`, currently off) — skips the ~708 ms cold compile
+  on repeat process runs. PCC-neutral, cheap; helps only across runs, not a single cold invocation.
 
 ### 9. Drop `use_torch_phase_fallback` (device-side SineGen) — wall-clock, not device-kernel
 The CPU phase fallback forces device→host→device round-trips (the ~13.8 ms op-to-op gap in this
