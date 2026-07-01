@@ -89,7 +89,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
 
     // Step 5: Exponent bit manipulation on the FUSED result
     sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::NoDebias);  // Extract exponent of x*poly
-    sfpi::vInt new_exp = xpoly_exp + k_int;               // Shift by 2^k
+    sfpi::vInt new_exp = xpoly_exp + k_int;                                    // Shift by 2^k
 
     // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
     sfpi::vFloat result = sfpi::vConst0;
@@ -303,9 +303,12 @@ inline void calculate_gelu() {
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: GELU(x) = x * 0.5 * (1 + erf(x/√2))
         // using the n16/d16 piecewise rational erf (MaxULP=1 vs FP64).
-        // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
         constexpr float INV_SQRT2 = 0.7071067811865475f;
         constexpr float GELU_SAT = -5.54259443f;  // 0xc0b15cef: first x where libm erff=-1.0
+        // NOTE: kept `#pragma GCC unroll 0`. Measured (perf_eltwise_unary_sfpu, fp32-dest,
+        // approx=No, Wormhole B0): unroll 8 regressed this path +2.6% MATH_ISOLATE and
+        // ~doubled text (+3.9 KB) — the piecewise-rational erf + reciprocal body is too
+        // large to benefit (same pattern as binary POW). Do not enable unroll here.
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
@@ -497,7 +500,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         } else {
             // 1 NR step suffices for BF16 (7 mantissa bits); FP32 needs 2 steps (23 bits).
             sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<is_fp32_dest_acc_en ? 2 : 1>(x2);  // 1/x²
-            sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
+            sfpi::vFloat inv_x4 = inv_x2 * inv_x2;                                        // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             result = x_exp * INV_SQRT_2PI * correction;
         }

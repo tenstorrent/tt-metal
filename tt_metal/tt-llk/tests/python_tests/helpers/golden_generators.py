@@ -2132,7 +2132,19 @@ class UnarySFPUGolden:
             MathOperation.Atanh: self._atanh,
             MathOperation.Asinh: self._asinh,
             MathOperation.Acosh: self._acosh,
+            MathOperation.Atan: self._atan,
             MathOperation.Cos: self._cos,
+            MathOperation.Cosh: self._cosh,
+            MathOperation.Sinh: self._sinh,
+            MathOperation.Tan: self._tan,
+            MathOperation.Erf: self._erf,
+            MathOperation.Erfc: self._erfc,
+            MathOperation.Expm1: self._expm1,
+            MathOperation.TanhDerivative: self._tanh_derivative,
+            MathOperation.Floor: self._floor,
+            MathOperation.Ceil: self._ceil,
+            MathOperation.Trunc: self._trunc,
+            MathOperation.Frac: self._frac,
             MathOperation.Log: self._log,
             MathOperation.Log1p: self._log1p,
             MathOperation.Reciprocal: self._reciprocal,
@@ -2391,6 +2403,46 @@ class UnarySFPUGolden:
 
     def _cos(self, x):
         return math.cos(x)
+
+    def _atan(self, x):
+        return self._torch_unary(x, torch.atan)
+
+    def _cosh(self, x):
+        return self._torch_unary(x, torch.cosh)
+
+    def _sinh(self, x):
+        return self._torch_unary(x, torch.sinh)
+
+    def _tan(self, x):
+        return self._torch_unary(x, torch.tan)
+
+    def _erf(self, x):
+        return self._torch_unary(x, torch.erf)
+
+    def _erfc(self, x):
+        return self._torch_unary(x, torch.erfc)
+
+    def _expm1(self, x):
+        return self._torch_unary(x, torch.expm1)
+
+    def _tanh_derivative(self, x):
+        # d/dx tanh(x) = 1 - tanh(x)^2 (matches the legacy LUT-based
+        # calculate_tanh_derivative dispatched by the unary SFPU test path).
+        t = math.tanh(x)
+        return 1.0 - t * t
+
+    def _floor(self, x):
+        return self._torch_unary(x, torch.floor)
+
+    def _ceil(self, x):
+        return self._torch_unary(x, torch.ceil)
+
+    def _trunc(self, x):
+        return self._torch_unary(x, torch.trunc)
+
+    def _frac(self, x):
+        # frac(x) = x - trunc(x); matches the SFPU _calculate_frac_ body.
+        return self._torch_unary(x, torch.frac)
 
     def _log(self, x):
         return self._torch_unary(x, torch.log)
@@ -2862,6 +2914,18 @@ class EltwiseBinaryGolden(FidelityMasking):
         wide = self._wide_dtype(t1)
         return (t1.to(wide) * t2.to(wide)).to(t1.dtype)
 
+    def _rsub(self, t1, t2):
+        # RSUB computes in1 - in0 (second operand minus first); the golden
+        # __call__ passes (src1=in0, src2=in1), so reverse-subtract here.
+        wide = self._wide_dtype(t1)
+        return (t2.to(wide) - t1.to(wide)).to(t1.dtype)
+
+    def _pow(self, t1, t2):
+        # POW computes base**exponent (in0**in1) via exp(exp*log(base)) in fp32.
+        # Stimuli use strictly positive bases, matching the well-defined branch
+        # of calculate_sfpu_binary_power.
+        return torch.pow(t1.to(torch.float32), t2.to(torch.float32)).to(t1.dtype)
+
     def _div(self, t1, t2):
         # Compute in float32 to match the SFPU divide path (reciprocal +
         # Newton-Raphson refinement in fp32; the bf16 dest case rounds back
@@ -2894,6 +2958,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwsub: self._sub,
                 MathOperation.SfpuElwmul: self._mul,
                 MathOperation.SfpuElwdiv: self._div,
+                MathOperation.SfpuElwrsub: self._rsub,
+                MathOperation.SfpuElwpow: self._pow,
                 MathOperation.SfpuElwmulInt: self._mul,
                 MathOperation.SfpuGtInt: self._gt_int,
                 MathOperation.SfpuLtInt: self._lt_int,

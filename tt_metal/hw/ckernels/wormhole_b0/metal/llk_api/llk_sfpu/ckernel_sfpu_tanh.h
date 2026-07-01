@@ -5,6 +5,7 @@
 #pragma once
 
 #include <limits>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -154,22 +155,29 @@ inline void calculate_tanh() {
         l_reg[sfpi::LRegs::LReg1] = l1;
         l_reg[sfpi::LRegs::LReg2] = l2;
     } else {  // APPROXIMATION_MODE is false
-
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-
-            sfpi::vFloat result;
-
-            if constexpr (is_fp32_dest_acc_en) {
+        // The two non-approx paths have very different body sizes, so they get
+        // different unroll treatment (measured on perf_eltwise_unary_sfpu):
+        //   * BF16 polynomial path: short straight-line body → `unroll 8` hides
+        //     the 2-cycle SFPU tail latency for ~7-9% MATH_ISOLATE gain.
+        //   * FP32-accurate (sigmoid-based) path: large body (exp + 2x NR recip
+        //     + nested NaN/Inf v_if); unrolling it 8x spills/pressures and
+        //     *regressed* ~6%, so it is left rolled.
+        if constexpr (is_fp32_dest_acc_en) {
+            for (int d = 0; d < ITERATIONS; d++) {
+                sfpi::vFloat val = sfpi::dst_reg[0];
                 // Use accurate sigmoid-based tanh for fp32
-                result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
-            } else {
-                result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+                sfpi::dst_reg[0] = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
+                sfpi::dst_reg++;
             }
-
-            sfpi::dst_reg[0] = result;
-            sfpi::dst_reg++;
+        } else {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                sfpi::vFloat val = sfpi::dst_reg[0];
+                sfpi::vFloat result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+                sfpi::dst_reg[0] = result;
+                sfpi::dst_reg++;
+            }
         }
     }
 }
@@ -177,9 +185,9 @@ inline void calculate_tanh() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     if constexpr (APPROXIMATION_MODE) {
-        uint imm0 = 0x1DFF;  // 0.90625*x
-        uint imm1 = 0x481A;  // 0.09375*x + 0.8125
-        uint imm2 = 0xFF00;  // 1
+        std::uint32_t imm0 = 0x1DFF;  // 0.90625*x
+        std::uint32_t imm1 = 0x481A;  // 0.09375*x + 0.8125
+        std::uint32_t imm2 = 0xFF00;  // 1
         _sfpu_load_imm16_(0, imm0);
         _sfpu_load_imm16_(1, imm1);
         _sfpu_load_imm16_(2, imm2);

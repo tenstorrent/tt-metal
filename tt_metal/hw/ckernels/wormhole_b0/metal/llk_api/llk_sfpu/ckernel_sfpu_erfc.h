@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -24,43 +25,47 @@ namespace ckernel::sfpu {
 // 18 FMAs          (was 24)
 // ======================================================================
 
-constexpr uint32_t ERFC_NUM_DEGREE = 4;
-constexpr uint32_t ERFC_DEN_DEGREE = 5;
-constexpr uint32_t ERFC_NUM_SEGMENTS = 2;
-constexpr uint32_t ERFC_LUT_SIZE = 25;
+constexpr std::uint32_t ERFC_NUM_DEGREE = 4;
+constexpr std::uint32_t ERFC_DEN_DEGREE = 5;
+constexpr std::uint32_t ERFC_NUM_SEGMENTS = 2;
+constexpr std::uint32_t ERFC_LUT_SIZE = 25;
 constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
-                                             0.0000000000e+00f,
-                                             2.5000000000e+00f,
-                                             5.0000000000e+00f,
-                                             // Segment 0 [0, 2.5]: numerator (degree 4)
-                                             1.0000233650e+00f,
-                                             -1.3375675678e+00f,
-                                             6.8185544014e-01f,
-                                             -1.5691982210e-01f,
-                                             1.3746744953e-02f,
-                                             // Segment 0 [0, 2.5]: denominator (degree 5)
-                                             1.0000000000e+00f,
-                                             -2.0801517367e-01f,
-                                             4.3667086959e-01f,
-                                             -3.4568668343e-03f,
-                                             2.5104774162e-02f,
-                                             2.8375532478e-02f,
-                                             // Segment 1 [2.5, 5.0]: numerator (degree 4)
-                                             -2.5655237550e-05f,
-                                             2.1275576728e-05f,
-                                             -6.6162156145e-06f,
-                                             9.1439767402e-07f,
-                                             -4.7387182178e-08f,
-                                             // Segment 1 [2.5, 5.0]: denominator (degree 5)
-                                             1.0000000000e+00f,
-                                             -1.6457208991e-01f,
-                                             -2.0572184026e-01f,
-                                             -1.3888636231e-01f,
-                                             1.2677097321e-01f,
-                                             -2.1375391632e-02f}};
+                                                        0.0000000000e+00f,
+                                                        2.5000000000e+00f,
+                                                        5.0000000000e+00f,
+                                                        // Segment 0 [0, 2.5]: numerator (degree 4)
+                                                        1.0000233650e+00f,
+                                                        -1.3375675678e+00f,
+                                                        6.8185544014e-01f,
+                                                        -1.5691982210e-01f,
+                                                        1.3746744953e-02f,
+                                                        // Segment 0 [0, 2.5]: denominator (degree 5)
+                                                        1.0000000000e+00f,
+                                                        -2.0801517367e-01f,
+                                                        4.3667086959e-01f,
+                                                        -3.4568668343e-03f,
+                                                        2.5104774162e-02f,
+                                                        2.8375532478e-02f,
+                                                        // Segment 1 [2.5, 5.0]: numerator (degree 4)
+                                                        -2.5655237550e-05f,
+                                                        2.1275576728e-05f,
+                                                        -6.6162156145e-06f,
+                                                        9.1439767402e-07f,
+                                                        -4.7387182178e-08f,
+                                                        // Segment 1 [2.5, 5.0]: denominator (degree 5)
+                                                        1.0000000000e+00f,
+                                                        -1.6457208991e-01f,
+                                                        -2.0572184026e-01f,
+                                                        -1.3888636231e-01f,
+                                                        1.2677097321e-01f,
+                                                        -2.1375391632e-02f}};
 
 template <int ITERATIONS = 8>
 inline void calculate_erfc() {
+    // NOTE: no `#pragma GCC unroll 8` here. Pass-2 measurement showed unrolling
+    // this loop *regressed* MATH_ISOLATE by +2.0% (uniform across formats): the
+    // erfc body (piecewise rational + reciprocal) is large enough that 8× unroll
+    // grows register pressure / I-cache more than it hides the 2-cycle tail.
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 5.0 before evaluation (avoids extrapolation, saves one branch)

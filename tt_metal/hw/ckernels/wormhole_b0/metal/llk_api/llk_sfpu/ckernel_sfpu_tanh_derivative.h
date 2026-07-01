@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -25,6 +26,7 @@ inline void calculate_tanh_derivative() {
     vUInt l2 = l_reg[LRegs::LReg2];
 
     // tanh'(x) = 1 - (tanh(x))^2
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
 
@@ -45,9 +47,9 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    uint imm0;
-    uint imm1;
-    uint imm2;
+    std::uint32_t imm0;
+    std::uint32_t imm1;
+    std::uint32_t imm2;
     imm0 = 0x1DFF;  // 0.90625*x
     imm1 = 0x481A;  // 0.09375*x + 0.8125
     imm2 = 0xFF00;  // 1

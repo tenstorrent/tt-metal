@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
@@ -118,6 +119,7 @@ inline void calculate_tangent() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vInt i;
@@ -181,6 +183,7 @@ inline void calculate_sine() {
         C0 = -0x1.5554a4p-3f;
     }
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
@@ -256,6 +259,7 @@ inline void calculate_cosine() {
     const float ROUNDING_BIAS = 12582912.0f;
     const float NEG_ROUNDING_BIAS = -12582912.0f;
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
@@ -371,6 +375,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
@@ -477,7 +482,7 @@ inline void calculate_acos() {
 // fp32 path: exhaustively validated maxulperr < 0.94 for normal fp32 2^-126 <= x <= 2^103.
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
-    constexpr uint MAGIC_SEED = 0xfef392e0;
+    constexpr std::uint32_t MAGIC_SEED = 0xfef392e0;
 
     // initial estimate y = -reciprocal(x)
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(MAGIC_SEED - sfpi::as<sfpi::vInt>(x));
@@ -545,6 +550,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::setsgn(x, 0);
@@ -582,7 +588,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
         r = 8.361816406e-03f;
         r = r * f + 4.177856445e-02f;
-        s = f * f; // hide SFPMAD latency
+        s = f * f;  // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         c0 = 0.5f;
         r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
@@ -595,7 +601,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
         r = r * f + 1.393107930e-3f;
         r = r * f + 8.333439939e-3f;
         r = r * f + 4.166680202e-2f;
-        s = f * f; // hide SFPMAD latency
+        s = f * f;  // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         r = r * f + 4.999999702e-1f;
     }
@@ -642,6 +648,7 @@ sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sinh() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat y = _sfpu_sinh_<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
 
@@ -685,8 +692,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm1 = -0.693145752f;    // -ln(2)_hi
-        sfpi::vConstFloatPrgm2 = 4.99999851e-1f;   // c2
+        sfpi::vConstFloatPrgm1 = -0.693145752f;   // -ln(2)_hi
+        sfpi::vConstFloatPrgm2 = 4.99999851e-1f;  // c2
     } else {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
         sfpi::vConstFloatPrgm2 = 0.500122011f;          // c2
@@ -819,6 +826,10 @@ inline void _calculate_cosine_(const int iterations) {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_acosh() {
     // SFPU microcode
+    // NOTE: no `#pragma GCC unroll 8` here. Measured (perf_eltwise_unary_sfpu)
+    // unroll gives <1% on acosh/atanh because each iteration is dominated
+    // by the sqrt + log (+ reciprocal) subroutines, so the 2-cycle SFPU tail
+    // latency is already hidden — the unroll only grows code size.
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
         v_if(inp < sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
@@ -839,6 +850,10 @@ inline void calculate_acosh() {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_asinh() {
     // SFPU microcode
+    // Pass 2: re-added `#pragma GCC unroll 8` — measured −2.2% (real, <5%) and
+    // kept under the cumulative "speed up every time" goal. acosh/atanh stay
+    // un-unrolled (measured +0.0% / −0.1%: pure neutral, code-growth only).
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
         sfpi::vFloat tmp = inp * inp + sfpi::vConst1;
@@ -856,6 +871,7 @@ inline void calculate_asinh() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atanh() {
     // SFPU microcode
+    // NOTE: no `#pragma GCC unroll 8` (see calculate_acosh): measured <1% gain.
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
         sfpi::vFloat abs_inp = sfpi::abs(inp);
