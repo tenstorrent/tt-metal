@@ -139,13 +139,15 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+
+        tile_shape = compute_unit.src_a.tile_shape
+        tensor_shape_instantiation: str = (
+            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
         )
 
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {enforce_fp32_accumulation}>();\n"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}>({tensor_shape_instantiation});\n"
         )
 
     def calculate(
@@ -159,9 +161,7 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
-        )
+
         _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
         is_int_fpu_en = (
             "true"
@@ -185,7 +185,7 @@ class ReduceFpu(Fpu):
         )
 
         return (
-            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}, {enforce_fp32_accumulation}>(\n"
+            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>(\n"
             f"    {block.tile_id_block}, {tensor_shape_instantiation}\n"
             f");\n"
         )
@@ -197,7 +197,4 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
-        )
-        return f"_llk_math_reduce_uninit_<{enforce_fp32_accumulation}>();\n"
+        return "_llk_math_reduce_uninit_();\n"

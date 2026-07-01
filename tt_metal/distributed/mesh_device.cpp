@@ -1190,7 +1190,7 @@ std::vector<CoreCoord> MeshDeviceImpl::get_ethernet_sockets(ChipId /*connected_c
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 
-uint32_t MeshDeviceImpl::num_virtual_eth_cores(SubDeviceId sub_device_id) {
+uint32_t MeshDeviceImpl::num_virtual_eth_cores(SubDeviceId sub_device_id) const {
     // Issue #19729: Return the maximum number of active ethernet cores across physical devices in the Mesh.
     TT_FATAL(*sub_device_id == 0, "Cannot query virtual ethernet cores per sub-device when using MeshDevice");
     return num_virtual_eth_cores_;
@@ -1744,9 +1744,6 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(ChipId connected_chip_id
 bool MeshDevice::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return pimpl_->is_inactive_ethernet_core(logical_core);
 }
-uint32_t MeshDevice::num_virtual_eth_cores(SubDeviceId sub_device_id) {
-    return pimpl_->num_virtual_eth_cores(sub_device_id);
-}
 CoreCoord MeshDevice::compute_with_storage_grid_size() const { return pimpl_->compute_with_storage_grid_size(); }
 CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     return pimpl_->worker_cores(core_type, sub_device_id);
@@ -1822,15 +1819,6 @@ HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual
 }
 HalMemType MeshDevice::get_mem_type_of_core(CoreCoord virtual_core) const {
     return pimpl_->get_mem_type_of_core(virtual_core);
-}
-bool MeshDevice::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return pimpl_->has_noc_mcast_txns(sub_device_id);
-}
-uint8_t MeshDevice::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    return pimpl_->num_noc_unicast_txns(sub_device_id);
-}
-uint8_t MeshDevice::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
-    return pimpl_->noc_data_start_index(sub_device_id, unicast_data);
 }
 SubDeviceManagerId MeshDevice::get_active_sub_device_manager_id() const {
     return pimpl_->get_active_sub_device_manager_id();

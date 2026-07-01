@@ -408,6 +408,18 @@ INSTANTIATE_TEST_SUITE_P(
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = Shape2D{32, 32},
         },
+        // CONTIGUOUS_1D has no legacy equivalent: the same params convert to BLOCK_SHARDED under GRID_2D (above), so
+        // without an explicit guard this would silently fabricate a garbled legacy spec. It must instead stay
+        // ND_SHARDED with no 2D shard spec.
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .grid_size = CoreCoord{3, 4},
+            .shard_distribution_strategy = ShardDistributionStrategy::CONTIGUOUS_1D,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
+            .shard_shape_2d = std::nullopt,
+        },
         NdToLegacyShardingParams{
             .shape = Shape({2, 2, 4}),
             .shard_shape_nd = Shape({1, 1, 2}),

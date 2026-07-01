@@ -207,12 +207,6 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"pack_num_pages_last_row_col", pack_num_pages_last_row_col}},
         .hw_config = compute_cfg,
     };
-    // Compute self-loops are permitted as INTRA (per-thread). cb_tilize (tilize->transpose staging) is
-    // always self-looped; cb_out0 (borrowed output shard) is self-looped only on the ht<=8 in-place path.
-    compute_spec.advanced_options.dfb_self_loop_connectivities.insert({CB_TILIZE, DFBSelfLoopConnectivity::INTRA});
-    if (!ht_gt_8) {
-        compute_spec.advanced_options.dfb_self_loop_connectivities.insert({CB_OUT0, DFBSelfLoopConnectivity::INTRA});
-    }
 
     std::vector<KernelSpec> kernels;
     std::vector<KernelSpecName> wu_kernels;
