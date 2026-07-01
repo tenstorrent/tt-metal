@@ -715,6 +715,10 @@ def counter_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
+    temp_report.assert_single_schema(
+        context=f"{test_module} counters (worker {worker_id})"
+    )
+
     counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
 
     if counters_path.exists():
@@ -740,6 +744,11 @@ def perf_report(request, worker_id):
 
     if PerfConfig.TEST_COUNTER == 0:
         return
+
+    # Fail loud before writing: a single CSV must hold exactly one column schema.
+    # More than one means two unrelated tests/ops share this module (split them
+    # into separate files) or one test emits inconsistent columns across its sweep.
+    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
 
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"

@@ -283,6 +283,13 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     const auto& nd_shard_spec = mem_config.nd_shard_spec().value();
     const auto& nd_shard_shape = nd_shard_spec.shard_shape;
 
+    // CONTIGUOUS_1D has no legacy equivalent: its shard->bank placement (adjacent shards packed onto the same bank)
+    // is not expressible as any legacy WIDTH/HEIGHT/BLOCK_SHARDED layout. Don't fabricate a (garbled) legacy spec --
+    // leave the tensor ND-sharding-only.
+    if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D) {
+        return std::nullopt;
+    }
+
     // Trying to flatten ND shard shape into 2D
     std::array<uint32_t, 2> shard_shape = {1, nd_shard_shape[-1]};
     size_t cur_tensor_volume = padded_shape()[-1];

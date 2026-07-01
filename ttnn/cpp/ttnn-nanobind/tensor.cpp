@@ -105,7 +105,12 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         .value(
             "GRID_2D",
             ShardDistributionStrategy::GRID_2D,
-            "Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.");
+            "Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.")
+        .value(
+            "CONTIGUOUS_1D",
+            ShardDistributionStrategy::CONTIGUOUS_1D,
+            "Distribute shards contiguously over a linearized list of cores: adjacent shards go to the same "
+            "core (shard s -> core s/shards_per_core, slot s%shards_per_core). Requires uniform shards-per-core.");
 
     tt_serializable_class<tt::tt_metal::CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate

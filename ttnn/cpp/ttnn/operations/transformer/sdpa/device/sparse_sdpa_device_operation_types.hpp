@@ -10,6 +10,21 @@
 
 namespace ttnn::prim {
 
+// Block-cyclic KV layout. When set, the gathered `indices` are NATURAL token positions, but the kv cache is
+// stored block-cyclic across `sp` SP shards with per-shard chunk `chunk_local` (the DeepSeek chunked-prefill
+// KVPE cache, written by update_padded_kv_cache). The gather kernels remap each natural index -> physical page
+// id on the fly (invP, the inverse of the cache writer's blockcyclic_positions), so the host does NOT have to
+// reorder the kv buffer back to natural order before the op.
+//
+// Both fields are resolved+validated at the ttnn entry (ttnn::transformer::sparse_sdpa): `sp` is read from the
+// mesh axis the cache was striped over (so the caller cannot pass an sp that disagrees with the device), and
+// `chunk_local` is cross-checked against q's per-chip seq length. `sp` is folded into the program hash here
+// (BC_SP is a compile-time define), so it must be the resolved value, not a mesh axis index.
+struct BlockCyclicLayout {
+    uint32_t sp;           // SP shard count the cache was written across (resolved from the mesh)
+    uint32_t chunk_local;  // per-shard chunk length (chunk_size_global / sp == per-chip seq_len_local)
+};
+
 // Sparse MLA prefill (DeepSeek DSA).
 struct SparseSDPAParams {
     float scale = 1.0f;  // compile-time (folded into the program hash)
@@ -21,6 +36,12 @@ struct SparseSDPAParams {
     // (excluded from the program hash, re-applied every dispatch), so changing it does NOT recompile.
     std::optional<uint32_t> cache_batch_idx = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Block-cyclic index remap (see BlockCyclicLayout). Fully compile-time: the enable bit, sp, chunk_local,
+    // and the T-derived BC_SHARD_STRIDE_GAP (= T/sp - chunk_local) are all program defines, and the cache length T is
+    // folded into the hash for this path — so a different cache size is a distinct program (no runtime remap
+    // arg). Assumes a consistent-size preallocated cache (per-size recompile, once, is acceptable).
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
+    bool has_block_cyclic() const { return block_cyclic.has_value(); }
 };
 
 struct SparseSDPAInputs {
