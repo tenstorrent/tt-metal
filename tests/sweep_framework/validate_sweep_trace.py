@@ -58,6 +58,11 @@ KWARG_ALIASES = {
     "ttnn.linear": {"input_tensor_b": 1},
     "ttnn.experimental.paged_fill_cache": {"page_table": 2},
     "ttnn.experimental.paged_update_cache": {"input_tensor": 0, "input_tensor_b": 1},
+    # Model traces sometimes record the gather input as the kwarg ``input_tensor``
+    # and the gather dim as the kwarg ``dim``; the sweep calls all_gather_async
+    # positionally so the tracer captures them as ``arg0``/``arg1``. Canonicalize
+    # both to the positional form before comparing.
+    "ttnn.experimental.all_gather_async": {"input_tensor": 0, "dim": 1},
 }
 
 
@@ -485,14 +490,41 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             norm = json.dumps(normalize(canonicalize_op_args(m_op, m_args)), sort_keys=True)
             matched_norm_args.setdefault(m_op, set()).add(norm)
 
+    # Also collect normalized args from ALL sweep traces (including incidental).
+    # When a model makes N calls to the same op with identical args, the master
+    # has N configs (each with a unique config_hash from the trace context) but
+    # the sweep produces only 1 unique trace.  If the sweep trace's
+    # sweep_source_hash doesn't match any master config_hash, the hash-level
+    # match above won't fire and the dedup above only catches masters whose
+    # normalized args match an already-hash-matched master.  By also comparing
+    # against sweep trace args directly, we recover these "exercised but
+    # hash-mismatched" configs.
+    sweep_norm_args: dict[str, set[str]] = {}  # op_name -> set of normalized arg JSON
+    for op_name, op_info in sweep_data.get("operations", {}).items():
+        for cfg in op_info.get("configurations", []):
+            sweep_args = cfg.get("arguments", {})
+            norm = json.dumps(normalize(canonicalize_op_args(op_name, sweep_args)), sort_keys=True)
+            sweep_norm_args.setdefault(op_name, set()).add(norm)
+
     # Report master configs with no sweep execution
     for ch, (op_name, cid, _args) in master_index.items():
         if ch not in matched_hashes:
-            # Check if an identical config (same normalized args) was already matched.
-            # This happens when the same op call is traced on different hardware
-            # (e.g., p100a and p150b), producing different config_hash but identical args.
             norm_args = json.dumps(normalize(canonicalize_op_args(op_name, _args)), sort_keys=True)
+            # Check if an identical config (same normalized args) was already matched
+            # via hash, or was exercised by any sweep trace with matching args.
             if norm_args in matched_norm_args.get(op_name, set()):
+                matched_hashes.add(ch)
+                report.results.append(
+                    ConfigResult(
+                        config_hash=ch,
+                        op_name=op_name,
+                        master_config_id=cid,
+                        sweep_config_id=None,
+                        status="match",
+                    )
+                )
+                continue
+            if norm_args in sweep_norm_args.get(op_name, set()):
                 matched_hashes.add(ch)
                 report.results.append(
                     ConfigResult(

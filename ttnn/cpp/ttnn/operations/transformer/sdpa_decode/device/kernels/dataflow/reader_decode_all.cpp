@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     // #44366: cur_pos is consumed by both the writer (c_8) and compute (c_15).
     // Using one shared CB races — whichever consumer pops first drains the
-    // count and the other hangs in cb_wait_front. Each consumer gets its own CB.
+    // count and the other hangs waiting for tiles. Each consumer gets its own CB.
     constexpr uint32_t cb_writer_cur_pos = tt::CBIndex::c_8;
     constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;

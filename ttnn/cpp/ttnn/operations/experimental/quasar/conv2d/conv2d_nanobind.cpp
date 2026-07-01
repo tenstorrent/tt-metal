@@ -151,7 +151,7 @@ void bind_conv2d(nb::module_& mod) {
                   - TILE
         )doc";
 
-    ttnn::bind_function<"conv2d">(
+    ttnn::bind_function<"conv2d", "ttnn.experimental.quasar.">(
         mod,
         doc,
         &ttnn::operations::experimental::quasar::conv2d,

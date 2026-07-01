@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_tanh.h"
 
 namespace ckernel::sfpu {
@@ -58,7 +59,7 @@ inline void calculate_tanhshrink() {
                 sfpi::vFloat clamp = 9.0f;
                 sfpi::vec_min_max(axc, clamp);  // axc = min(|x|, 9)
                 sfpi::vFloat e = _sfpu_exp_fp32_accurate_unsafe_(-2.f * axc);
-                sfpi::vFloat sig = _sfpu_reciprocal_<2>(sfpi::vConst1 + e);  // sigmoid(2|x|)
+                sfpi::vFloat sig = sfpu_reciprocal_iter<2>(sfpi::vConst1 + e);  // sigmoid(2|x|)
                 sfpi::vFloat tanh_ax = 2.f * sig - sfpi::vConst1;            // tanh(|x|)
                 result = sfpi::copysgn(ax - tanh_ax, x);
             } else {
@@ -76,7 +77,7 @@ inline void calculate_tanhshrink() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = result;
@@ -90,7 +91,7 @@ inline void tanhshrink_init() {
     if constexpr (is_fp32_dest_acc_en) {
         // The fp32 large-|x| path only needs the reciprocal Newton constants; the accurate
         // exp it uses is pure arithmetic (no LUT / programmable constants).
-        _init_sfpu_reciprocal_<false>();
+        sfpu_reciprocal_init<false>();
     }
 }
 

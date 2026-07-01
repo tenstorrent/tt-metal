@@ -64,7 +64,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
     with:
-      arch: wormhole_b0
+      runs-on-sku: cpu_medium
       docker-image: ${{ inputs.docker-image }}
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -74,7 +74,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      test-category: smoke
+      test-category: merge_gate
       docker-image: ${{ inputs.docker-image }}
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

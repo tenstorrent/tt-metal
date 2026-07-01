@@ -36,7 +36,7 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
     )doc";
 
-    ttnn::bind_function<"untilize_with_unpadding">(
+    ttnn::bind_function<"untilize_with_unpadding", "ttnn.experimental.quasar.">(
         mod,
         doc,
         &ttnn::operations::experimental::quasar::untilize_with_unpadding,

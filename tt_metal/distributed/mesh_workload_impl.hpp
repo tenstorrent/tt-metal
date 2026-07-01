@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -66,6 +68,13 @@ private:
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
+
+    // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed once and reused so
+    // re-enqueues skip the O(programs*coords*cores) no-mixing scan. nullopt = not yet classified.
+    // Classify-once holds because the classification depends only on core placement (fixed at build) and
+    // the claimed-core set (worker cores never become service cores, and service workloads are only
+    // re-enqueued onto still-claimed cores - which the dispatch path re-checks).
+    std::optional<bool> is_service_workload_;
 
     friend uint32_t program_dispatch::program_base_addr_on_core(
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);

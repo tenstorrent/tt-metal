@@ -307,7 +307,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
-    if (MetalEnvAccessor(*env_).impl().get_rtoptions().get_watcher_enabled()) {
+    if (MetalEnvAccessor(*env_).impl().get_rtoptions().get_watcher_enabled() && context_->watcher_server()) {
         watcher_lock = context_->watcher_server()->get_lock();
     }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
@@ -330,7 +330,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-        for (const auto& dram_core : cluster.get_soc_desc(id_).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = cluster.get_soc_desc(id_);
+        for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
         }
     }
@@ -378,8 +379,13 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     }
 
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
-    for (auto& hw_cq : this->command_queues_) {
-        hw_cq->set_go_signal_noc_data_and_dispatch_sems(num_sub_devices(), noc_mcast_unicast_data);
+    const CoreCoord compute_grid_size = compute_with_storage_grid_size();
+    const uint32_t default_sub_device_worker_count =
+        compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
+    std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
+    for (auto& command_queue : command_queues_) {
+        command_queue->set_go_signal_noc_data_and_dispatch_sems(
+            num_sub_devices(), noc_mcast_unicast_data, workers_per_sub_device);
     }
 }
 

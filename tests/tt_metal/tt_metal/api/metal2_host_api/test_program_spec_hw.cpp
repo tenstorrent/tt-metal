@@ -38,6 +38,7 @@ using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeShardedTensorParameter;
 
 // ============================================================================
 // Test Fixture
@@ -436,6 +437,187 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 }
 
 // ============================================================================
+// TT_KERNEL ("1st world arguments") Loopback — Data Movement
+// ============================================================================
+//
+// Same DRAM → DFB → DRAM loopback as NamedArgsLoopback, but the producer and consumer kernels
+// are authored in the TT_KERNEL function/template-parameter syntax (CTAs as template params,
+// RTA/CRTA as function params, no hand-written kernel_main() and no get_arg() calls — genfiles
+// generates the kernel_main() shim). Proves the generated shim binds the named args correctly
+// end-to-end on real hardware for the data-movement compile path. No varargs (the TT_KERNEL
+// syntax doesn't express them), so verification is by plain data round-trip: a wrong binding for
+// src_addr / dst_addr / entry_size / bank_id / num_entries corrupts input == output.
+
+TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries_in_dfb = 4;
+    constexpr uint32_t num_transfers = 8;
+    constexpr uint32_t total_bytes = entry_size * num_transfers;
+
+    const NodeCoord node{0, 0};
+
+    InterleavedBufferConfig dram_config{
+        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+    auto input_buffer = CreateBuffer(dram_config);
+    auto output_buffer = CreateBuffer(dram_config);
+
+    ProgramSpec spec;
+    spec.name = "tt_kernel_named_args_loopback";
+
+    // Producer (BRISC) reads DRAM → DFB. TT_KERNEL form: bank_id/entry_size are template params
+    // (CTAs); src_addr (RTA) and num_entries (CRTA) are function params.
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tt_kernel_named_args_producer.cpp";
+    producer.runtime_arg_schema.runtime_arg_names = {"src_addr"};
+    producer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
+    producer.compile_time_args = {{"bank_id", 0}, {"entry_size", entry_size}};
+
+    // Consumer (NCRISC) reads DFB → DRAM. Same TT_KERNEL form with dst_addr.
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tt_kernel_named_args_consumer.cpp";
+    consumer.runtime_arg_schema.runtime_arg_names = {"dst_addr"};
+    consumer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
+    consumer.compile_time_args = {{"bank_id", 0}, {"entry_size", entry_size}};
+
+    auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries_in_dfb);
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"loopback_dfb"}, "loopback_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"loopback_dfb"}, "loopback_dfb"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"producer"},
+            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+            .common_runtime_arg_values = {{"num_entries", num_transfers}},
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"consumer"},
+            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+            .common_runtime_arg_values = {{"num_entries", num_transfers}},
+        },
+    };
+    SetProgramRunArgs(program, params);
+
+    std::vector<uint32_t> input_data(total_bytes / sizeof(uint32_t));
+    for (size_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = static_cast<uint32_t>(i);
+    }
+    detail::WriteToBuffer(input_buffer, input_data);
+
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(output_buffer, output_data);
+
+    ASSERT_EQ(output_data.size(), input_data.size());
+    EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// TT_KERNEL ("1st world arguments") Loopback — Compute Producer
+// ============================================================================
+//
+// The TT_KERNEL counterpart to NamedArgsLoopbackCompute, and the test that proves the generated
+// kernel_main() shim is emitted on the COMPUTE (TRISC) compile path — the gap fixed by routing
+// both genfiles paths through the shared shim helper. The compute kernel is authored in TT_KERNEL
+// form (magic/entry_size as template CTAs; input_offset (RTA) and num_tiles (CRTA) as function
+// params); the DM consumer reuses the existing positional-vararg DFB consumer verbatim.
+//
+// Verification: the kernel writes magic ^ entry_size ^ input_offset ^ num_tiles into word 0 of
+// every entry; the host solves input_offset so the XOR equals a known target. A wrong binding on
+// the compute path → wrong sum → wrong DRAM word → test fails.
+
+TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries_in_dfb = 4;
+    constexpr uint32_t num_transfers = 8;
+    constexpr uint32_t total_bytes = entry_size * num_transfers;
+
+    const NodeCoord node{0, 0};
+
+    InterleavedBufferConfig dram_config{
+        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+    auto output_buffer = CreateBuffer(dram_config);
+
+    ProgramSpec spec;
+    spec.name = "tt_kernel_named_args_loopback_compute";
+
+    // Compute kernel authored in TT_KERNEL form. magic/entry_size are template params (CTAs);
+    // input_offset (RTA) and num_tiles (CRTA) are function params. No varargs.
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/tt_kernel_named_args_compute.cpp";
+    compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
+    compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
+    compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
+
+    // Consumer: NCRISC reads out_dfb → DRAM. Reuses the existing positional-vararg consumer.
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
+    consumer.advanced_options.num_runtime_varargs = 3;
+
+    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
+    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "a_dfb_named_bob"));
+
+    spec.kernels = {compute, consumer};
+    spec.dataflow_buffers = {out_dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute", "consumer"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    // sum = magic ^ entry_size ^ input_offset ^ num_tiles. Solve input_offset for a known target.
+    constexpr uint32_t kTargetXorSum = 0xDEADBEEFu;
+    constexpr uint32_t kMagic = 0xCAFE0001u;
+    constexpr uint32_t kInputOffset = kTargetXorSum ^ kMagic ^ entry_size ^ num_transfers;
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"compute"},
+            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
+            .common_runtime_arg_values = {{"num_tiles", num_transfers}},
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"consumer"},
+            .advanced_options =
+                AdvancedKernelRunArgs{
+                    .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
+                },
+        },
+    };
+    SetProgramRunArgs(program, params);
+
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(output_buffer, output_data);
+
+    constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    std::vector<uint32_t> expected(total_bytes / sizeof(uint32_t), 0u);
+    for (uint32_t e = 0; e < num_transfers; ++e) {
+        expected[e * words_per_entry] = kTargetXorSum;
+    }
+
+    ASSERT_EQ(output_data.size(), expected.size());
+    EXPECT_EQ(output_data, expected);
+}
+
+// ============================================================================
 // Semaphore Accessor Name Loopback Test
 // ============================================================================
 //
@@ -536,8 +718,9 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 //   Consumer DM kernel (NCRISC): DFB → output MeshTensor, via TensorAccessor(tensor::output_tensor)
 //   Host reads output MeshTensor and verifies match
 //
-// DM-only on purpose. The TensorAccessor library is currently DM-only (TRISC builds don't
-// compile its NoC-using includes); compute-kernel TA bindings are out of scope for this PR.
+// DM-only on purpose: TensorAccessor is the NOC-capable accessor and only compiles on DM builds.
+// The compute (TRISC) path uses LocalTensorAccessor instead — proven by
+// LocalTensorAccessorBindingCompileComputeKernel below.
 
 TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     auto mesh_device = devices_.at(0);
@@ -649,6 +832,107 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// LocalTensorAccessor Binding — Compute (TRISC) Compile + Token-Wiring Proof
+// ============================================================================
+//
+// Proves the compute-kernel path for tensor bindings, which previously could not compile:
+//   1. A compute (TRISC) kernel binds a tensor and constructs LocalTensorAccessor<uint32_t> from the
+//      binding token. The generated header emits only the NOC-free token header on the TRISC build, so
+//      this compiles (tensor_accessor.h would not — it needs NOC_INDEX, absent on compute builds).
+//   2. ValidateProgramSpec accepts the compute-kernel tensor binding (the old guard is gone).
+//   3. The binding's base-address CRTA is broadcast to the compute kernel and resolves to the local
+//      L1 shard address — verified by comparing the reported address to the bound tensor's address.
+//
+// Pipeline (compute-only producer, no DM producer needed):
+//   Compute kernel (TRISC) — constructs LocalTensorAccessor (token ctor) and a second via the legacy
+//       base-address ctor, deposits {base_address, get_unsafe_ptr, &operator[], legacy-ctor base} into
+//       each out_dfb entry (raw L1 writes from PACK); all four should equal the bound tensor's address.
+//   DM consumer (NCRISC)   — out_dfb → DRAM output.
+//
+// The tensor is a single-shard L1 tensor on core (0,0) (the compute kernel's core), so its shard base
+// address equals MeshTensor::address(). No dereference of the shard occurs (address-of only), so the
+// proof does not depend on the shard's contents.
+
+TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries_in_dfb = 4;
+    constexpr uint32_t num_tiles = 2;  // entries the compute kernel pushes
+    constexpr uint32_t total_bytes = entry_size * num_tiles;
+
+    const NodeCoord node{0, 0};
+
+    InterleavedBufferConfig dram_config{
+        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+    auto output_buffer = CreateBuffer(dram_config);
+
+    // Single-shard L1 tensor on core (0,0): one 32x32 BFLOAT16 tile.
+    auto tensor_param = MakeShardedTensorParameter("local_t", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
+    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec, TensorTopology{});
+
+    ProgramSpec spec;
+    spec.name = "local_tensor_accessor_compute";
+
+    // Compute kernel (the kernel under test) — binds the tensor, produces into out_dfb.
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/local_tensor_accessor_compute.cpp";
+    compute.compile_time_args = {{"entry_size", entry_size}, {"num_tiles", num_tiles}};
+    BindTensorParameterToKernel(compute, "local_t", "local_t");
+
+    // Consumer (NCRISC): drains out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp verbatim.
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
+    consumer.advanced_options.num_runtime_varargs = 3;
+
+    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
+    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "a_dfb_named_bob"));
+
+    spec.kernels = {compute, consumer};
+    spec.dataflow_buffers = {out_dfb};
+    spec.tensor_parameters = {tensor_param};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute", "consumer"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"compute"}},
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"consumer"},
+            .advanced_options =
+                AdvancedKernelRunArgs{
+                    .runtime_varargs = {{node, {output_buffer->address(), 0u, num_tiles}}},
+                },
+        },
+    };
+    params.tensor_args = {
+        {TensorParamName{"local_t"}, TensorArgument{local_tensor}},
+    };
+    SetProgramRunArgs(program, params);
+
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(output_buffer, output_data);
+
+    const uint32_t expected_address = static_cast<uint32_t>(local_tensor.address());
+    constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    ASSERT_EQ(output_data.size(), total_bytes / sizeof(uint32_t));
+    for (uint32_t e = 0; e < num_tiles; ++e) {
+        const uint32_t* entry = output_data.data() + e * words_per_entry;
+        EXPECT_EQ(entry[0], expected_address) << "entry " << e << ": get_bank_base_address mismatch";
+        EXPECT_EQ(entry[1], expected_address) << "entry " << e << ": get_unsafe_ptr mismatch";
+        EXPECT_EQ(entry[2], expected_address) << "entry " << e << ": &operator[] mismatch";
+        EXPECT_EQ(entry[3], expected_address) << "entry " << e << ": legacy base-address ctor mismatch";
+    }
 }
 
 // ============================================================================
