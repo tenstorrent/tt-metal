@@ -3,8 +3,8 @@ from typing import Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _HIFI4, _HIFI4_SDPA, _MASK_NEG, _profile
-from .layers import DeepSeekV4RMSNorm, Linear, _rms_norm_unweighted
+from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
+from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
@@ -50,6 +50,7 @@ class _SlidingKVCache:
 
     def append(self, kv_new: ttnn.Tensor) -> ttnn.Tensor:
         """Append ``kv_new`` ``[B, 1, n, Dh]`` and return the (capped) cache."""
+        kv_new = ttnn.to_memory_config(kv_new, ttnn.DRAM_MEMORY_CONFIG)
         self.kv = kv_new if self.kv is None else ttnn.concat([self.kv, kv_new], dim=2)
         b, _, length, dh = self.kv.shape
         if length > self.window:
@@ -65,6 +66,8 @@ class _CompressorCache:
         self.gate: Optional[ttnn.Tensor] = None
 
     def append(self, kv_new: ttnn.Tensor, gate_new: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        kv_new = ttnn.to_memory_config(kv_new, ttnn.DRAM_MEMORY_CONFIG)
+        gate_new = ttnn.to_memory_config(gate_new, ttnn.DRAM_MEMORY_CONFIG)
         self.kv = kv_new if self.kv is None else ttnn.concat([self.kv, kv_new], dim=1)
         self.gate = gate_new if self.gate is None else ttnn.concat([self.gate, gate_new], dim=1)
         return self.kv, self.gate
@@ -136,27 +139,62 @@ def make_rope_table(cos_half: torch.Tensor, sin_half: torch.Tensor) -> tuple[tor
     return cos, sin
 
 
+# ``rot`` (the ``[Rd, Rd]`` interleaved rotate matrix) is block-diagonal in 32-wide
+# blocks, so the single top-left ``[32, 32]`` tile is the per-tile ``rotate_half`` the
+# fused device op applies to every rope tile. Derive + cache it once per ``rot`` object.
+_TRANS_MAT_CACHE: dict[int, ttnn.Tensor] = {}
+
+
+def _trans_mat_for(rot: ttnn.Tensor) -> ttnn.Tensor:
+    tm = _TRANS_MAT_CACHE.get(id(rot))
+    if tm is None:
+        tm = ttnn.reshape(
+            ttnn.slice(rot, [0, 0], [ttnn.TILE_SIZE, ttnn.TILE_SIZE]), [1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE]
+        )
+        # The fused op reads trans_mat from a DRAM-interleaved source.
+        tm = ttnn.to_memory_config(tm, ttnn.DRAM_MEMORY_CONFIG)
+        _TRANS_MAT_CACHE[id(rot)] = tm
+    return tm
+
+
+def _rope_height_sharded_config(width: int, num_cores: int, device) -> ttnn.MemoryConfig:
+    """Height-sharded L1 config: one tile-row (32 rows) per core over ``num_cores`` cores."""
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+    shard_spec = ttnn.ShardSpec(grid, [ttnn.TILE_SIZE, width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Tensor, rope_dim: int) -> ttnn.Tensor:
     """Interleaved RoPE on the trailing ``rope_dim`` channels of ``x`` ([.., D]).
 
     ``cos`` / ``sin`` are ``[1,1,L,rope_dim]`` tables (broadcast over batch/heads);
     ``rot`` is the ``[rope_dim, rope_dim]`` ``rotate_half`` matrix. Leading "nope"
     channels pass through untouched.
+
+    Delegates the whole calc to the fused ``ttnn.experimental.fused_partial_rope`` device
+    op: ``x`` is height-sharded one tile-row per core while ``cos`` / ``sin`` / ``trans_mat``
+    are DRAM-interleaved (the reader streams each core's rope tile-row), then the sharded
+    output is converted back to ``x``'s original memory config.
     """
-    shape = list(x.shape)
-    d = shape[-1]
-    if d == rope_dim:
-        nope = None
-        rope = x
-    else:
-        nope = ttnn.slice(x, [0, 0, 0, 0], [shape[0], shape[1], shape[2], d - rope_dim])
-        rope = ttnn.slice(x, [0, 0, 0, d - rope_dim], shape)
-    rotated = ttnn.add(
-        ttnn.multiply(rope, cos), ttnn.multiply(ttnn.matmul(rope, rot, compute_kernel_config=_HIFI4), sin)
-    )
-    if nope is None:
-        return rotated
-    return ttnn.concat([nope, rotated], dim=-1)
+    device = x.device()
+    orig_mem = x.memory_config()
+    d = x.shape[-1]
+    rows = x.shape[-2]
+
+    # The op reads one cos/sin tile-row per core, or a single tile-row broadcast across all
+    # rows on device (e.g. a shared decode position over heads). So cos/sin must cover either
+    # every input row or exactly one row.
+    assert cos.shape[-2] in (rows, 1), f"{cos.shape} not broadcastable to rows={rows}"
+
+    # cos/sin must already be DRAM-interleaved (the fused op's reader streams them from DRAM).
+    assert cos.memory_config().buffer_type == ttnn.BufferType.DRAM, "cos must be DRAM-interleaved"
+    assert sin.memory_config().buffer_type == ttnn.BufferType.DRAM, "sin must be DRAM-interleaved"
+
+    num_cores = (rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    x_sh = ttnn.to_memory_config(x, _rope_height_sharded_config(d, num_cores, device))
+
+    out_sh = ttnn.experimental.fused_partial_rope(x_sh, cos, sin, _trans_mat_for(rot), rope_dim)
+    return ttnn.to_memory_config(out_sh, orig_mem)
 
 
 # ---------------------------------------------------------------------------- #
@@ -186,7 +224,7 @@ def _update_cache_at(cache: ttnn.Tensor, row: ttnn.Tensor, pos_tensor: ttnn.Tens
     """In-place write ``row`` ``[1, 1, 1, F]`` into ``cache`` ``[1, 1, L, F]`` at the
     sequence index held (on device) by ``pos_tensor`` ``[1]`` (INT32). Trace-safe."""
     width = row.shape[-1]
-    row_sharded = ttnn.interleaved_to_sharded(row, _height_sharded_l1_config(width))
+    row_sharded = ttnn.to_memory_config(row, _height_sharded_l1_config(width))
     ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor)
     ttnn.deallocate(row_sharded)
 
@@ -235,7 +273,7 @@ class DeepSeekV4HCACompressor:
             weights["compressor.gate_proj.weight"], device, cache.file("compressor.gate_proj"), dtype=weight_dtype
         )
         self.kv_norm = DeepSeekV4RMSNorm(
-            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm")
+            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
         )
         # position_bias: [compress_rate, head_dim] -> broadcast over [B, n_win].
         pb = _materialize(weights["compressor.position_bias"], cache.file("compressor.position_bias"), ttnn.bfloat16)
@@ -272,8 +310,8 @@ class DeepSeekV4HCACompressor:
         gate = ttnn.reshape(gate, [b, n_win, cr, self.head_dim])
         gate = ttnn.add(gate, self.position_bias)
         compressed = _softmax_weighted_sum(kv, gate, window_axis=2)  # [B, n_win, Dh]
-        compressed = self.kv_norm(compressed)
         compressed = ttnn.reshape(compressed, [b, 1, n_win, self.head_dim])
+        compressed = self.kv_norm(compressed)
         return _apply_rope(compressed, cos_win, sin_win, self.rot, self.rope_dim)
 
     def decode(
@@ -360,7 +398,7 @@ class DeepSeekV4CSACompressor:
             weights["compressor.gate_proj.weight"], device, cache.file("compressor.gate_proj"), dtype=weight_dtype
         )
         self.kv_norm = DeepSeekV4RMSNorm(
-            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm")
+            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
         )
         pb = _materialize(weights["compressor.position_bias"], cache.file("compressor.position_bias"), ttnn.bfloat16)
         self.position_bias = _load_weight(
@@ -425,8 +463,8 @@ class DeepSeekV4CSACompressor:
         new_kv = ttnn.concat([ca_prev, cb], dim=2)  # [B, n_win, 2*cr, Dh]
         new_gate = ttnn.concat([cag_prev, cb_g], dim=2)
         compressed = _softmax_weighted_sum(new_kv, new_gate, window_axis=2)  # [B, n_win, Dh]
-        compressed = self.kv_norm(compressed)
         compressed = ttnn.reshape(compressed, [b, 1, n_win, dh])
+        compressed = self.kv_norm(compressed)
         return _apply_rope(compressed, cos_win, sin_win, self.rot, self.rope_dim)
 
     def decode(
@@ -504,23 +542,60 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         cache = _as_cache(cache)
         print(f"weight_dtype: {weight_dtype}")
 
-        # self.q_a_proj = LinearDecode(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype, partial_width_sharded=True, k_blocks=2, n_blocks=32, N=1024)
-        self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
-        self.q_a_norm = DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"))
-        self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
-        self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
-        self.kv_norm = DeepSeekV4RMSNorm(weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"))
-        self.o_b_proj = Linear(weights["o_b_proj.weight"], device, cache.file("o_b_proj"), dtype=weight_dtype)
+        self.o_b_proj = LinearDecode(
+            weights["o_b_proj.weight"], device, cache.file("o_b_proj"), dtype=weight_dtype, K=8192, N=4096
+        )
+        self.kv_proj = LinearDecode(
+            weights["kv_proj.weight"],
+            device,
+            cache.file("kv_proj"),
+            dtype=weight_dtype,
+            partial_width_sharded=True,
+            k_blocks=4,
+            n_blocks=16,
+            N=512,
+            K=4096,
+        )
+        self.q_b_proj = LinearDecode(
+            weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype, n_blocks=64, K=1024, N=32768
+        )
+        self.q_a_proj = LinearDecode(
+            weights["q_a_proj.weight"],
+            device,
+            cache.file("q_a_proj"),
+            dtype=weight_dtype,
+            partial_width_sharded=True,
+            k_blocks=2,
+            n_blocks=32,
+            K=4096,
+            N=1024,
+        )
+        # self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
+        # self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
+        # self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
+        self.q_a_norm = DeepSeekV4RMSNorm(
+            weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
+        )
+        self.kv_norm = DeepSeekV4RMSNorm(
+            weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"), sharded=True
+        )
 
-        # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal
-        # over o_groups. Store the per-group weight as [g, in_per_group, out_per_group]
-        # so a single batched matmul (batch axis = group) does all groups at once.
-        # oa: [g*o_lora_rank, (H*Dh)//g] -> per-group [g, in_per_group, o_lora_rank].
-        oa = _materialize(weights["o_a_proj.weight"], cache.file("o_a_proj"), weight_dtype)
-        in_per_group = (self.num_heads * self.head_dim) // self.o_groups
-        if oa is not None:
-            oa = oa.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous()
-        self.o_a_weight = _load_weight(oa, device, cache_file_name=cache.file("o_a_proj"), dtype=weight_dtype)
+        # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal over o_groups,
+        # run as a single batched ``matmul_decode`` (batch axis = group). ``BatchedLinearDecode``
+        # folds the weight along BOTH batch (group) and N into the width-sharded layout the op
+        # expects. The raw torch weight is [g*o_lora_rank, (H*Dh)//g]; ``preprocess`` normalizes it
+        # to the per-group [g, K, N] the class folds from (applied only on a cache miss).
+        in_per_group = (self.num_heads * self.head_dim) // self.o_groups  # K
+        self.o_a_proj = BatchedLinearDecode(
+            weights["o_a_proj.weight"],
+            device,
+            cache.file("o_a_proj"),
+            dtype=weight_dtype,
+            batch=self.o_groups,
+            K=in_per_group,
+            N=self.o_lora_rank,
+            preprocess=lambda w: w.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous(),
+        )
 
         # sinks live on host (folded into the softmax denominator), so there is
         # no tile cache for them -- always materialise.
@@ -557,8 +632,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         # The rotate-half matrix must stay precise (a bf4 rotation would corrupt RoPE).
         self.rot = _load_weight(_interleaved_rotate_matrix(self.rope_dim), device, cache_file_name=cache.file("rot"))
-
         compressor_cls = _COMPRESSORS.get(self.layer_type)
+        print(f"Attn with {compressor_cls} compressor at layer {self.layer_idx}. {self.layer_type}")
         self.compressor = (
             compressor_cls(config, weights, device, self.rot, self.rope_dim, cache=cache, weight_dtype=weight_dtype)
             if compressor_cls is not None
@@ -581,6 +656,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         head-independent ``mask`` is broadcast across the ``H`` head axis first.
         """
         mask_h = ttnn.repeat(mask, ttnn.Shape([1, 1, self.num_heads, 1]))  # [1, 1, H, Skv]
+        # sdpa_decode requires its K/V operands in DRAM.
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             kv,
@@ -597,17 +675,22 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     def _grouped_output(self, attn: ttnn.Tensor) -> ttnn.Tensor:
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
 
-        ``attn`` is ``[B, S, H, Dh]``. Reshape to per-group feature blocks, run a
-        batched matmul over the group axis, then mix groups back to hidden.
+        ``attn`` is ``[B, S, H, Dh]``. Reshape to per-group feature blocks, run the
+        batched ``matmul_decode`` over the group axis (batch = o_groups, weights
+        folded along group + N), then mix groups back to hidden via ``o_b_proj``.
         """
         b, s, h, dh = attn.shape
         in_per_group = (h * dh) // self.o_groups
-        x = ttnn.reshape(attn, [b * s, self.o_groups, in_per_group])
-        x = ttnn.permute(x, [1, 0, 2])  # [g, B*S, in_per_group]
-        y = ttnn.matmul(x, self.o_a_weight, compute_kernel_config=_HIFI4)  # [g, B*S, o_lora_rank]
-        y = ttnn.permute(y, [1, 0, 2])  # [B*S, g, o_lora_rank]
+        m = b * s
+        # Rank-4 activation [1, g, M, K] (batch = g = o_groups) for the batched matmul_decode; the
+        # op folds the group axis to match the folded (b_blocks x n_blocks) weight layout.
+        x = ttnn.reshape(attn, [m, self.o_groups, in_per_group])
+        x = ttnn.permute(x, [1, 0, 2])  # [g, M, K]
+        x = ttnn.reshape(x, [1, self.o_groups, m, in_per_group])  # [1, g, M, K]
+        y = self.o_a_proj(x)  # DRAM-interleaved [1, g, M, N]
+        y = ttnn.permute(y, [0, 2, 1, 3])  # [1, M, g, N]
         y = ttnn.reshape(y, [b, s, 1, self.o_groups * self.o_lora_rank])
-        return self.o_b_proj(y)
+        return ttnn.to_memory_config(self.o_b_proj(y), ttnn.DRAM_MEMORY_CONFIG)
 
     def _attend(
         self, q: ttnn.Tensor, kv: ttnn.Tensor, mask: ttnn.Tensor, cos: ttnn.Tensor, neg_sin: ttnn.Tensor
@@ -640,41 +723,21 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         directly in this layout also removes the head/seq transposes that previously
         wrapped the SDPA-decode call.
         """
-        b, s, _, _ = hidden.shape  # B == 1, S == 1 (decode)
+        b, s, _, hidden_width = hidden.shape  # B == 1, S == 1 (decode)
         h, dh = self.num_heads, self.head_dim
+        # width_sharded_l1_config = _width_sharded_l1_config(b * s, hidden_width, self.device)
+        # hidden = ttnn.to_memory_config(hidden, width_sharded_l1_config)
         _profile(self.device)
         # hidden_input_memory_config = self.q_a_proj.get_input_memory_config(1, hidden.shape[3])
         # hidden = ttnn.to_memory_config(hidden, hidden_input_memory_config)
-        print(f"hidden: {hidden.shape}")
         q_a = self.q_a_norm(self.q_a_proj(hidden))
         q = self.q_b_proj(q_a)  # [B, S, H*Dh]
-        print(f"q_a: {q_a.shape}")
-        print(f"q: {q.shape}")
-        kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
-        print(f"kv: {kv.shape}")
-        # Fuse [Q | K | V] (K==V) -> [1, 1, B, (H+2)*Dh] and split into the decode
-        # head layout. The op emits height-sharded heads; convert back to
-        # interleaved L1 so the custom RoPE / cache / SDPA path stays unchanged.
-        fused = ttnn.concat(
-            [
-                ttnn.reshape(q, [1, 1, b * s, h * dh]),
-                ttnn.reshape(kv, [1, 1, b * s, dh]),
-                ttnn.reshape(kv, [1, 1, b * s, dh]),
-            ],
-            dim=-1,
-        )
-        q_h, kv_h, v_h = ttnn.experimental.nlp_create_qkv_heads_decode(
-            fused, num_heads=h, num_kv_heads=1, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        )
-        ttnn.deallocate(v_h)  # K == V, so the duplicated V head is unused
-        ttnn.deallocate(fused)
-        q = ttnn.sharded_to_interleaved(q_h, ttnn.L1_MEMORY_CONFIG)  # [B, 1, H, Dh]
-        kv = ttnn.sharded_to_interleaved(kv_h, ttnn.L1_MEMORY_CONFIG)  # [B, 1, 1, Dh]
-        ttnn.deallocate(q_h)
-        ttnn.deallocate(kv_h)
+        q = ttnn.reshape(q, [1, 1, h, dh], memory_config=width_sharded_l1_config(b * s * h, dh, self.device))
 
         q = _rms_norm_unweighted(q, self.eps)
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [B, 1, H, Dh]
+
+        kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
 
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)  # [B, 1, S, Dh]
         return q, kv
@@ -709,6 +772,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         if self.compressor is not None:
             compressed = self.compressor.decode(hidden, cos_win, sin_win, kv_cache.compressor)
             if compressed is not None:
+                kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
+                compressed = ttnn.to_memory_config(compressed, ttnn.DRAM_MEMORY_CONFIG)
                 kv = ttnn.concat([kv, compressed], dim=2)  # [B, 1, L_sld + n_win, Dh]
         _profile(self.device)
 
@@ -746,6 +811,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             compressed = self.compressor.decode_static(
                 hidden, cos_win, sin_win, scache.compressor_kv, scache.compressor_gate, compress_pos
             )
+            kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
+            compressed = ttnn.to_memory_config(compressed, ttnn.DRAM_MEMORY_CONFIG)
             kv = ttnn.concat([kv, compressed], dim=2)  # [1, 1, window + n_win, Dh]
 
         return self._attend(q, kv, mask, cos, neg_sin)
