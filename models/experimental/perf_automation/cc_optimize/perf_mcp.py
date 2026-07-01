@@ -308,9 +308,10 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             False,
             "tp-fracture",
             "single-chip levers + both kernels exhausted and this dense matmul is still memory-bound on "
-            "a mesh that cannot fit the model on one chip -> fracture the weight across the TP axis and "
-            "insert the matching CCL (GUIDELINES/08 §7); verify_tp_fracture(M,K,N,tp) to PROVE it is "
-            "PCC-correct, then record_kernel_attempt(...,'tp-fracture',...)",
+            "a mesh -> tp_pick_degree(M,K,N) to MEASURE the fastest TP degree (best_tp=1 means keep it "
+            "single-chip). If best_tp>1, fracture the weight across the TP axis + insert the matching CCL "
+            "(GUIDELINES/08 §7), verify_tp_fracture(M,K,N,best_tp) to PROVE PCC, then commit; ALWAYS "
+            "record_kernel_attempt(...,'tp-fracture',...) even on a no-gain result",
         )
     # BOX (4) STRUCTURAL (ALWAYS ON, GENERAL — no model/architecture knowledge) — the per-op ladder
     # above (grid+dtype+tt-lang+C++) is exhausted but a MATERIAL GAP REMAINS (this op is in the
@@ -879,6 +880,33 @@ def termination_check() -> dict:
             "termination_check after each rung."
         ),
     }
+
+
+@mcp.tool()
+def tp_pick_degree(m: int, k: int, n: int) -> dict:
+    """Decide the tensor-parallel degree for a dense matmul (M x K x N) by MEASUREMENT: sweep each
+    feasible degree (>= the model's TP floor) on the mesh and return the fastest. Returns
+    {best_tp, timings_ms, floor}. best_tp=1 means TP did not help this matmul (keep it single-chip).
+    Call this on the tp-fracture rung to pick the level, then apply it and verify_tp_fracture."""
+    try:
+        import ttnn
+
+        from cc_optimize.tp_fracture import sweep_degrees
+
+        floor = int(os.environ.get("TT_PERF_TP_FLOOR", "1") or "1")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
+        try:
+            num = mesh.shape[0] * mesh.shape[1]
+            candidates = [d for d in (floor, num) if d >= floor]
+            r = sweep_degrees(mesh, m=m, k=k, n=n, candidates=candidates)
+        finally:
+            ttnn.close_mesh_device(mesh)
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        r["floor"] = floor
+        return r
+    except Exception as exc:  # noqa: BLE001
+        return {"best_tp": 1, "error": str(exc)[-400:]}
 
 
 @mcp.tool()

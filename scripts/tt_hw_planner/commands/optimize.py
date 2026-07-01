@@ -317,7 +317,6 @@ def cmd_optimize(args) -> int:
             sync_catalog=getattr(args, "sync_catalog", False),
             catalog_remote=getattr(args, "catalog_remote", "origin"),
             catalog_branch=getattr(args, "catalog_branch", "perf-catalog"),
-            allow_tp_latency=getattr(args, "tp_latency", False),
             model_id_hint=(None if model_dir else args.target),
         )
         if result is None:

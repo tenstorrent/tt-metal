@@ -8,6 +8,7 @@ import pytest
 
 @pytest.mark.parametrize("m,k,n", [(128, 512, 1024), (256, 1024, 2048), (64, 2048, 4096)])
 def test_column_fracture_matches_dense(m, k, n):
+    pytest.importorskip("torch")
     ttnn = pytest.importorskip("ttnn")
     from cc_optimize.tp_fracture import verify_fracture
 
@@ -27,6 +28,7 @@ def test_column_fracture_matches_dense(m, k, n):
 
 
 def test_sweep_degrees_returns_a_legal_fastest():
+    pytest.importorskip("torch")
     ttnn = pytest.importorskip("ttnn")
     from cc_optimize.tp_fracture import sweep_degrees
 
