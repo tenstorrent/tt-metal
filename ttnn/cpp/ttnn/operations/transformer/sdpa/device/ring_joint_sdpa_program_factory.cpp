@@ -1379,16 +1379,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
-    // Per-CB precision lift for accuracy: cb_sum_A/B get their own dtype so the running
-    // softmax denominator survives K-iter rounding without forcing cb_max (LLK haloized
-    // transpose path) or cb_exp_max_diff to fp32. Validated by CPU ablation (mean_diff
-    // 0.011 → 0.003 when paired with fp32 cb_qk_im) and by tt-train SDPA fwd, which uses
-    // fp32 partial-sum CBs with L1-accumulate in production.
+    // Use fp32 precision for cb_sum_A/B when fp32 accumulation is enabled so
+    // the running softmax denominator doesn't lose precision with K-iter rounding.
     tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    // Stage 2 accuracy lift: cb_qk_im stores S after QK matmul and P after softmax. Per
-    // CPU ablation, keeping S in fp32 (so exp(S-m) is computed from full-precision S)
-    // is the biggest single precision lever — drops mean_diff ~0.011 → ~0.003 vs
-    // baseline when paired with fp32 cb_sum. cb_out_im stays bf16 (marginal impact).
+    // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
     tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);

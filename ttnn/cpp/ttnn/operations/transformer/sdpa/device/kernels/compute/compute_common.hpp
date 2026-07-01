@@ -155,10 +155,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
              * Note that this special invocation of copy_tile is necessary to produce
              * tiles in DST with transposed faces, as `reduce_block_max_row` expects.
              */
-            // prev_cb and in0_cb can have different formats (e.g. bf16 cb_max vs fp32
-            // cb_qk_im). The copy below reads prev_cb via srcA; the reduce reads in0_cb
-            // via srcA. The init calls don't reconfigure formats, so set srcA explicitly
-            // for each read — otherwise prev_max is read with in0_cb's stride → garbage.
             reconfig_data_format_srca(prev_cb);
             sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
             for (uint32_t i = 0; i < dst_tiles; i++) {
@@ -180,9 +176,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
         tile_regs_commit();
         tile_regs_wait();
-        // out_cb (e.g. bf16 cb_max) may differ from the packer state left by upstream ops
-        // that wrote fp32 cb_qk_im. Without this, fp32-formatted data is packed into bf16
-        // tile slots → corrupt max → exp overflow → NaN.
         pack_reconfig_data_format(out_cb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
@@ -225,11 +218,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     cb_in0.wait_front(num_tiles);
     cb_out.reserve_back(rows);
 
-    // Same fix-pattern as the other helpers: when in0_cb is fp32 (e.g. fp32 cb_qk_im
-    // in Stage 2) but out_cb is bf16 (cb_max), the caller's packer state is fp32 from
-    // the QK matmul's pack_reconfig. pack_tile below would write fp32-formatted bits
-    // into bf16 slots → adjacent-element corruption → astronomical max values that
-    // collapse the rescaling. reduce_init only ASSERTS — it doesn't reconfigure.
     pack_reconfig_data_format(out_cb);
 
     binary_max_tile_init();
@@ -237,12 +225,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        // Restore srcA to in0_cb's format at the start of every iter. After the first
-        // iter, copy_tile_to_dst_init_short(prev_cb) below has reset srcA to prev_cb's
-        // format (bf16 cb_max). Without this, the next iter's reduce_tile reads fp32
-        // in0_cb (cb_qk_im) through bf16 strides → wrong row max → cascading rescale
-        // corruption (peaky-attention heads worst, naturally-flat heads unaffected).
-        // reduce_init only asserts unpack config; it doesn't reconfigure.
         reconfig_data_format_srca(in0_cb);
         tile_regs_acquire();
         reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
@@ -251,11 +233,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         }
         reduce_uninit();
         if (do_eltwise_max) {
-            // srcA is currently in0_cb's format (fp32 cb_qk_im) from the reduce above.
-            // copy_tile_to_dst_init_short does NOT reconfigure the data format, so srcA
-            // must be switched to prev_cb's format (bf16 cb_max) explicitly — otherwise
-            // prev_max is read with an fp32 stride → corrupt running max → wrong
-            // cross-chunk rescale. The top-of-loop reconfig restores fp32 next iter.
             reconfig_data_format_srca(prev_cb);
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
@@ -324,17 +301,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    // in0_cb (e.g. fp32 cb_qk_im) is read as srcA and in1_cb (bf16 cb_max) as srcB. The
-    // init only asserts unpack config; it doesn't reconfigure formats. Set them explicitly
-    // so the fp32 scores aren't read with a bf16 stride inherited from an upstream op.
     reconfig_data_format(in0_cb, in1_cb);
 
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
     exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
-    // constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
-    // exp_tile_init<false>();
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     cb_in0.wait_front(rows * cols);
@@ -359,7 +331,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
-                // exp_tile<false /* approx */, true /* scale_en */>(j, VectorMode::RC, scale_bf16);
             }
             tile_regs_commit();
 
@@ -371,10 +342,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
-                // in0_cb and reduce_cb may have different formats (e.g. bf16 cb_qk_im vs
-                // fp32 cb_sum). Both are packed in this single tile-regs region, so the
-                // packer format must be switched before each group — otherwise one CB is
-                // written with the other's format (bf16 bits into fp32 slots → NaN).
                 pack_reconfig_data_format(in0_cb);
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
@@ -384,8 +351,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             }
 
             if constexpr (do_reduce) {
-                // Switch packer to reduce_cb's format (see note above) before packing the
-                // partial row-sum into reduce_cb.
                 pack_reconfig_data_format(reduce_cb);
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
@@ -438,12 +403,6 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = rows * cols;
 
-    // BUG fix per code review: when this is called as the per-K-chunk output rescale
-    // (compute_common.hpp:2150, 2210) right after add_block_inplace, the upstream ops
-    // left srcA/srcB/packer = fp32 cb_sum. Without an explicit reconfig, this op reads
-    // bf16 alias_mm2_prev_out and bf16 cb_exp_max_diff through fp32 strides → garbage.
-    // mul_bcast_cols_init_short only ASSERTS unpack config; it doesn't reconfigure.
-    // Self-sufficient reconfig pattern mirrors the other fp32-cb_sum-touching helpers.
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(out_cb);
     mul_bcast_cols_init_short(in0_cb, in1_cb);
@@ -530,12 +489,6 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
 #endif
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
-    // Reconfigure BOTH unpacker (srcA, srcB) and packer for (in0_cb, in1_cb). The init
-    // above only ASSERTS unpackers are configured — it doesn't reconfigure them. When
-    // the previous op (recip_block_inplace) set srcA to fp32 cb_sum, the unpack would
-    // read in0_cb (bf16 cb_out_im) with fp32 strides → garbage reads → garbage product.
-    // pack_reconfig switches packer to in0_cb's format so the writeback isn't corrupted.
-    // Mirrors the matmul_reduce dual-reconfig pattern.
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
@@ -558,10 +511,6 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
         }
     }
     cb_in1.pop_front(rows);
-    // Restore unpacker srcB to in0_cb so subsequent ops (sigmoid_sub, copy_block, etc.)
-    // don't inherit the fp32 srcB state we set for in1_cb=cb_sum above. They don't
-    // reconfigure the unpacker themselves; without this, they read bf16 CBs with fp32
-    // strides → garbage cb_out.
     reconfig_data_format_srcb(in0_cb);
 }
 
@@ -616,12 +565,6 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
-    // BUG fix per code review: when called with fp32 cb_sum (in0=in1=fp32 cb_sum),
-    // the preceding mul_tiles_bcast_cols_inplace left srcB = bf16 cb_exp_max_diff
-    // and didn't restore — so without this explicit reconfig, add_tiles reads fp32
-    // alias_prev_sum through bf16 strides → corrupt cur_sum. add_tiles_init only
-    // ASSERTS unpack config; it doesn't reconfigure. Same fix-pattern as
-    // recip_block_inplace's explicit reconfig_data_format_srca.
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
     add_tiles_init(in0_cb, in1_cb);
@@ -656,9 +599,6 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in1_cb has num_tiles produced
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
-    // Pack writes back to in0_cb. When in0_cb is fp32 cb_sum and the packer was left
-    // in bf16 mode by an upstream op, pack_tile writes bf16 bits into only the upper
-    // half of fp32 tile slots — lower bytes stay uninit → garbage values when read.
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
@@ -878,10 +818,6 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-    // BUG fix per code review: when in_cb is fp32 cb_sum (RING LSE path),
-    // matmul_reduce left srcA = bf16 cb_col_identity. copy_tile_to_dst_init_short
-    // doesn't reconfigure data format → srcA stays bf16 while reading fp32 →
-    // corrupt LSE poisoning sigmoid_sub/sub_block downstream.
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
     CircularBuffer cb_in(in_cb);
@@ -1156,10 +1092,6 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
     reconfig_data_format(in1_cb, out_cb);
-    // Without this, when out_cb is fp32 cb_sum and the caller had the packer in bf16
-    // state (e.g. from the K-loop's bf16 cb_out_im writes), pack_tile below writes
-    // bf16-formatted bits into fp32 slots → denormal garbage (~2.3e-41).
-    // Diagnosed via DPRINT showing valid fp32 input but corrupted output.
     pack_reconfig_data_format(out_cb);
     cb_in1.wait_front(N);
     cb_out.wait_front(M);
@@ -1219,9 +1151,6 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t num_rows) {
     uint32_t start = num_cols - num_padded;
 
-    // mask source (neginf_cb) is bf16; out_cb (cb_qk_im) may be fp32. The stamp reads
-    // neginf_cb via srcA and L1-accumulates into out_cb via the packer. Set both formats
-    // explicitly — copy_tile_to_dst_init_short only asserts unpack config.
     reconfig_data_format_srca(neginf_cb);
     pack_reconfig_data_format(out_cb);
     copy_tile_to_dst_init_short(neginf_cb);
@@ -1252,7 +1181,6 @@ void apply_partial_mask_lightweight(
     uint32_t boundary_col,
     uint32_t num_cols,
     uint32_t num_rows) {
-    // mask_cb is bf16; out_cb (cb_qk_im) may be fp32 — set srcA/packer explicitly.
     reconfig_data_format_srca(mask_cb);
     pack_reconfig_data_format(out_cb);
     copy_tile_to_dst_init_short(mask_cb);
@@ -1291,7 +1219,6 @@ void apply_causal_mask_lightweight(
     uint32_t num_cols,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
-    // mask_cb is bf16; out_cb (cb_qk_im) may be fp32 — set srcA/packer explicitly.
     reconfig_data_format_srca(mask_cb);
     pack_reconfig_data_format(out_cb);
     copy_tile_to_dst_init_short(mask_cb);
@@ -1897,14 +1824,9 @@ void sdpa_inner_loop(
              * else:
              *  cur_max = max(qk, dim=-1)
              *
-             * Use the SLOW reduce_c overload (cols as runtime arg, lines 182-226) which
-             * uses standard reduce_tile + binary_max_tile. The fast overload (cols as
-             * template arg) uses the SDPA-specific reduce_block_max_row + haloized
-             * transpose copy, which is bf16-only for both the input tile read AND the
-             * prev_max copy — broken when cb_qk_im is fp32 (Stage 2). The slow path
-             * is the tt-train SDPA forward pattern (sdpa_compute_utils.hpp:148-170)
-             * and supports fp32 inputs natively. Slower per call but the reduce is not
-             * the kernel hotspot.
+             * Use the reduce_c overload with cols as a runtime arg which uses standard
+             * reduce_tile + binary_max_tile. The overload with cols as a template arg
+             * is bf16-only but cb_qk_im could be fp32.
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
@@ -2044,7 +1966,6 @@ void sdpa_inner_loop(
 
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
-
             /* cb_out_accumulate_im *= cb_cur_sum */
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum);
 
