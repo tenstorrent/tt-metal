@@ -271,6 +271,20 @@ def decode_forward(
         exp_approx_mode=False,
     )
 
+    # SDPA compute-kernel config: HiFi4 + FP32 dest accumulation. The online-softmax
+    # running sum/max are reductions whose precision, since #47311 reworked the reduce
+    # kernel, is controlled by fp32_dest_acc_en (the old reduce forced FP32 accumulation
+    # unconditionally, which masked the missing config here). Without this the softmax
+    # sum loses low-mantissa bits and Gemma's tight attention PCC bar (0.99) fails.
+    # Matches the standard tt_transformers SDPA compute config.
+    sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -283,6 +297,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
             block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
@@ -300,6 +315,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
 
