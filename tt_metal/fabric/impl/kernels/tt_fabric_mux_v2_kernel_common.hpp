@@ -68,10 +68,6 @@ inline volatile tt_l1_ptr uint32_t* get_status_ptr() {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct_args::mux_status_address);
 }
 
-inline volatile tt_l1_ptr tt::tt_fabric::TerminationSignal* get_termination_signal_ptr() {
-    return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::TerminationSignal*>(ct_args::termination_signal_address);
-}
-
 inline volatile tt_l1_ptr uint32_t* get_forwarder_ready_sem_ptr() {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         get_semaphore<ProgrammableCoreType::TENSIX>(ct_args::forwarder_ready_sem_id));

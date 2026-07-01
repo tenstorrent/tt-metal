@@ -364,7 +364,6 @@ private:
     uint32_t trid_ring_capacity_ = 0;
 
     MemoryRegion status_region_{};
-    MemoryRegion termination_signal_region_{};
     MemoryRegion connection_info_region_{};
     MemoryRegion connection_handshake_region_{};
     MemoryRegion shared_ring_region_{};

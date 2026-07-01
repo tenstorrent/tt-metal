@@ -15,7 +15,6 @@ namespace tt::tt_fabric::mux_v2::ct_args {
 constexpr uint32_t num_buffers_per_channel = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_num_buffers_per_channel");
 constexpr uint32_t num_channels = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_num_channels");
 constexpr uint32_t mux_status_address = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_mux_status_address");
-constexpr uint32_t termination_signal_address = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_termination_signal_address");
 constexpr uint32_t channel_region_base_address =
     FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_channel_region_base_address");
 constexpr uint32_t connection_info_region_base_address =

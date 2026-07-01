@@ -159,10 +159,6 @@ FabricMuxV2Config::FabricMuxV2Config(
     current_address = status_region_.get_end_address();
 
     current_address = align_up(current_address, noc_aligned_address_size_bytes_);
-    termination_signal_region_ = MemoryRegion(current_address, noc_aligned_address_size_bytes_, 1);
-    current_address = termination_signal_region_.get_end_address();
-
-    current_address = align_up(current_address, noc_aligned_address_size_bytes_);
     connection_info_region_ =
         MemoryRegion(current_address, sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo), num_channels_);
     current_address = connection_info_region_.get_end_address();
@@ -232,8 +228,6 @@ std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_n
         {"fabric_mux_v2_num_buffers_per_channel", static_cast<uint32_t>(num_buffers_per_channel_)},
         {"fabric_mux_v2_num_channels", static_cast<uint32_t>(num_channels_)},
         {"fabric_mux_v2_mux_status_address", to_uint32_checked(status_region_.get_address(), "mux_status_address")},
-        {"fabric_mux_v2_termination_signal_address",
-         to_uint32_checked(termination_signal_region_.get_address(), "termination_signal_address")},
         {"fabric_mux_v2_channel_region_base_address",
          to_uint32_checked(channel_region_.get_address(), "channel_region_base_address")},
         {"fabric_mux_v2_connection_info_region_base_address",
