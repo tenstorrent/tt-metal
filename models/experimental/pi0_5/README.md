@@ -248,7 +248,7 @@ Results (trace + 2CQ, N=5 — per-chunk ms):
 
 | | 2 cameras | 3 cameras |
 |---|---|---|
-| **8 BH chips (1×8)** | 29.03 ms | 31.38 ms |
+| **8 BH chips (1×8)** | 28.83 ms | 31.38 ms |
 
 ---
 
