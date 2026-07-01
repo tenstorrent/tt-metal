@@ -98,7 +98,6 @@ void kernel_main() {
                 break;
             }
 
-            const uint32_t dst = data_cbuf.get_write_ptr();
             const uint32_t base_page = chunk * pages_per_chunk;
             for (uint32_t i = 0; i < pages_per_chunk; ++i) {
                 noc.async_read<NocOptions::DEFAULT, input_tensor_page_size>(
