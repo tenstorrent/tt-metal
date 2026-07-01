@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Internal experimental modules to be dynamically added to ttnn.experimental."""
+"""Internal experimental modules to be dynamically added to ``ttnn.experimental``."""
 
-from . import tensor_prefetcher_matmul
+from . import auto_config
 from . import moe_compute_utils
+from . import tensor_prefetcher_matmul
 
 __all__ = [
-    "tensor_prefetcher_matmul",
+    "auto_config",
     "moe_compute_utils",
+    "tensor_prefetcher_matmul",
 ]
