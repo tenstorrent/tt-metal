@@ -186,6 +186,40 @@ def eth_bw_util_pct(fabric_bytes, duration_ns, per_link_gbps, num_links):
     return achieved_gbps / (per_link_gbps * num_links) * 100.0
 
 
+def all_gather_bytes_per_link(output_bytes, num_devices, num_links, is_ring):
+    """Per-link ethernet bytes an all-gather pushes across the fabric (canonical tt-metal formula).
+
+    An all-gather leaves the full output replicated on every device, so each device must *receive*
+    the (N-1)/N of the output it does not already own; that traffic is spread across ``num_links``
+    (and both directions of a ring, hence the /2 for ring topologies). This matches the algorithm-BW
+    definition used by tests/ttnn/multidevice_perf_tests/test_all_gather_hyperparameter_sweep_perf_*.
+
+    The count is exact from shape + topology alone -- which is the whole point: a full-grid gather
+    emits ~11.6k markers/core and overflows the noc-trace DRAM buffer, so its fabric bytes can NOT be
+    read back from a noc-trace. Returns 0.0 for a degenerate 1-device gather or missing link count.
+    """
+    if not num_devices or num_devices <= 1 or not num_links or num_links <= 0:
+        return 0.0
+    ring_div = 2 if is_ring else 1
+    return output_bytes * ((num_devices - 1) / num_devices) / num_links / ring_div
+
+
+def all_gather_fabric_bw(output_bytes, num_devices, num_links, is_ring, duration_ns, per_link_peak_gbps):
+    """(achieved per-link GB/s, % of trained peak) for an all-gather -- analytical, no noc-traces.
+
+    Bytes come from all_gather_bytes_per_link (shape+topology), duration from the op's measured
+    device-FW time, and the peak from the fabric's *trained* per-link speed (fabric_link_bw sidecar)
+    so the % is honest on any machine (200/400/800G). (None, None) when bytes/duration are missing;
+    the % is None (blank, never fabricated) when the trained peak could not be sourced.
+    """
+    moved = all_gather_bytes_per_link(output_bytes, num_devices, num_links, is_ring)
+    if not moved or not duration_ns or duration_ns <= 0:
+        return None, None
+    achieved_gbps = moved / (duration_ns * 1e-9) / 1e9
+    pct = (achieved_gbps / per_link_peak_gbps * 100.0) if per_link_peak_gbps else None
+    return achieved_gbps, pct
+
+
 def _load_trace_events(log_folder):
     import glob
     import json

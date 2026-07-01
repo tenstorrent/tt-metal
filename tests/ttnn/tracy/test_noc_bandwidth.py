@@ -19,6 +19,8 @@ from tracy.noc_bandwidth import (
     aggregate_fabric_bytes_per_op,
     aggregate_noc_bytes_per_op,
     aggregate_noc_links_per_op,
+    all_gather_bytes_per_link,
+    all_gather_fabric_bw,
     eth_bw_util_pct,
     noc_bw_util_pct,
     noc_bytes_from_trace_dir,
@@ -181,3 +183,35 @@ def test_eth_bw_util_reproduces_allgather_measurement():
     assert util == pytest.approx(43.0, abs=1.0)
     # A real peak that doubled (800G link) halves the util for the same traffic.
     assert eth_bw_util_pct(int(39.71e6), 924_000, per_link_gbps=100.0, num_links=2) == pytest.approx(21.5, abs=0.5)
+
+
+def test_all_gather_bytes_per_link_canonical_formula():
+    """Per-link fabric bytes match the algorithm-BW definition used by the perf sweeps:
+    output_bytes x (N-1)/N / links / (2 if ring). Stage-2 gather: (1,1,9696,4096) bf16 over 2
+    devices, 2 links, Linear -> 19.86 MB/link (half the 39.71 MB total across the two links)."""
+    output_bytes = 9696 * 4096 * 2  # (1,1,9696,4096) bf16 = 79.43 MB gathered output
+    per_link = all_gather_bytes_per_link(output_bytes, num_devices=2, num_links=2, is_ring=False)
+    assert per_link == pytest.approx(19_857_408)
+    # A ring moves the same payload in both directions -> half the per-link bytes.
+    assert all_gather_bytes_per_link(output_bytes, 2, 2, is_ring=True) == pytest.approx(per_link / 2)
+    # Degenerate / missing inputs never fabricate traffic.
+    assert all_gather_bytes_per_link(output_bytes, num_devices=1, num_links=2, is_ring=False) == 0.0
+    assert all_gather_bytes_per_link(output_bytes, num_devices=2, num_links=0, is_ring=False) == 0.0
+
+
+def test_all_gather_fabric_bw_reproduces_43pct_and_scales_with_real_peak():
+    """The analytical all-gather BW (no noc-traces) reproduces the hand-validated 43% at the real
+    50 GB/s peak, and %util tracks the *trained* peak so the number stays honest across machines."""
+    output_bytes = 9696 * 4096 * 2
+    gbps, pct = all_gather_fabric_bw(output_bytes, 2, 2, False, duration_ns=924_000, per_link_peak_gbps=50.0)
+    assert gbps == pytest.approx(21.49, abs=0.1)  # achieved per-link
+    assert pct == pytest.approx(43.0, abs=1.0)
+    # 800G link (100 GB/s) -> same traffic is half the util.
+    _, pct_800 = all_gather_fabric_bw(output_bytes, 2, 2, False, 924_000, 100.0)
+    assert pct_800 == pytest.approx(21.5, abs=0.5)
+    # No trained peak on disk -> GB/s still reported, %util blank (never fabricated).
+    gbps_np, pct_np = all_gather_fabric_bw(output_bytes, 2, 2, False, 924_000, None)
+    assert gbps_np == pytest.approx(21.49, abs=0.1)
+    assert pct_np is None
+    # Missing duration -> nothing at all.
+    assert all_gather_fabric_bw(output_bytes, 2, 2, False, 0, 50.0) == (None, None)

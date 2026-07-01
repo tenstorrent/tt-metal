@@ -9,6 +9,7 @@
 
 import ast
 import os
+import re
 import csv
 from pathlib import Path
 import json
@@ -39,6 +40,7 @@ from tracy.common import (
 from tracy import device_post_proc_config
 from tracy.perf_counter_scope import sample_cores_per_op
 from tracy.noc_bandwidth import (
+    all_gather_fabric_bw,
     eth_bw_util_pct,
     fabric_bytes_from_trace_dir,
     noc_bw_util_pct,
@@ -144,6 +146,11 @@ OPS_CSV_HEADER = [
     # NaN (blank) when the peak can't be sourced -- never a fabricated number.
     "NOC BW UTIL FROM COUNTERS (%)",
     "ETH BW UTIL FROM COUNTERS (%)",
+    # Analytical fabric BW for collective (CCL) ops: a gather's bytes are exact from shape+topology,
+    # so this is computed WITHOUT --collect-noc-traces (a full-grid gather overflows the marker
+    # buffer) and against the fabric's real trained per-link speed. Blank for non-CCL ops.
+    "CCL FABRIC BW [GB/s]",
+    "CCL FABRIC BW UTIL (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -1077,6 +1084,80 @@ def _op_measured_fw_timing(op) -> Tuple[Optional[float], Optional[float]]:
     return duration_ns, 1000.0 / ns_per_cycle  # ns/cycle -> MHz
 
 
+# Bytes/element as data actually moves on the wire, per ttnn DataType. Block-float pack a shared
+# 8-bit exponent per 16-datum face on top of the mantissa (bf8: 1 + 1/16; bf4: 0.5 + 1/16).
+_DTYPE_BYTES = {
+    "FLOAT32": 4.0,
+    "UINT32": 4.0,
+    "INT32": 4.0,
+    "BFLOAT16": 2.0,
+    "UINT16": 2.0,
+    "UINT8": 1.0,
+    "BFLOAT8_B": 1.0625,
+    "BFLOAT4_B": 0.5625,
+}
+
+
+def _lead_int(v):
+    """Leading integer of a shape cell that may be an int or a 'padded[logical]' string."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    m = re.match(r"\s*(\d+)", str(v))
+    return int(m.group(1)) if m else None
+
+
+def _int_attr(attrs, key):
+    """Integer value of an op attribute that is stored as a string (e.g. ring_size='2')."""
+    try:
+        return int(str(attrs.get(key)).strip())
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _analytical_ccl_bw(active_op_record, duration_ns, per_link_gbps):
+    """(achieved per-link GB/s, %util) for an all-gather op; (None, None) for anything else.
+
+    Fabric bytes for a gather are exact from output shape + ring_size + topology, so the BW is
+    computed here WITHOUT --collect-noc-traces (a full-grid gather overflows the profiler marker
+    buffer, corrupting any trace-derived byte count). Only all-gather is modeled; other collectives
+    return (None, None) rather than a fabricated number. duration_ns is the op's measured device-FW
+    time; per_link_gbps is the fabric's real trained per-link speed, so %util is honest across machines.
+    """
+    op_code = str(active_op_record.get("op_code", ""))
+    if "AllGather" not in op_code and "all_gather" not in op_code:
+        return None, None
+    outs = active_op_record.get("output_tensors") or []
+    attrs = active_op_record.get("attributes") or {}
+    if not outs or not isinstance(attrs, dict):
+        return None, None
+    shape = outs[0].get("shape") or {}
+    dims = [_lead_int(shape.get(k)) for k in ("W", "Z", "Y", "X")]
+    if any(d is None for d in dims):
+        return None, None
+    dtype = str(outs[0].get("dtype", "")).upper().split("::")[-1]
+    bytes_per_elem = _DTYPE_BYTES.get(dtype)
+    if not bytes_per_elem:
+        return None, None
+    output_bytes = 1
+    for d in dims:
+        output_bytes *= d
+    output_bytes *= bytes_per_elem
+    try:
+        duration_ns = float(duration_ns) if duration_ns is not None else None
+    except (TypeError, ValueError):
+        duration_ns = None
+    return all_gather_fabric_bw(
+        output_bytes,
+        num_devices=_int_attr(attrs, "ring_size"),
+        num_links=_int_attr(attrs, "num_links"),
+        is_ring="Ring" in str(attrs.get("topology", "")),
+        duration_ns=duration_ns,
+        per_link_peak_gbps=per_link_gbps,
+    )
+
+
 def _attach_counter_derived_bw(ops_iter, logFolder: Path) -> int:
     """Attach counter-derived NoC/ETH bytes + BW-util % from the profiler's own noc-trace JSON.
 
@@ -1504,6 +1585,10 @@ def generate_reports(
     with open(allOpsCSVPath, "w") as allOpsCSV:
         csv_rows = []
 
+        # Real trained per-link fabric speed (fabric_link_bw sidecar), for analytical CCL BW%. None
+        # off-fabric or on a host without the sidecar -> the GB/s column still fills, %util stays blank.
+        ccl_link_gbps = read_trained_link_bw_gbps(logFolder)
+
         prev_device_kernel_end_cycle = {}
         prev_device_dm_start_cycle = {}
         prev_device_fw_end_cycle: Dict[int, int] = {}
@@ -1871,6 +1956,17 @@ def generate_reports(
                             csv_row["PM FPU UTIL (%)"] = round(fpu_util, 3)
                         except ZeroDivisionError:
                             csv_row["PM FPU UTIL (%)"] = 0.0
+
+                # Analytical CCL fabric BW (all-gather): exact from output shape + topology, so it
+                # needs no --collect-noc-traces (a full-grid gather overflows the marker buffer).
+                # Blank for non-CCL ops; %util blank when the trained link speed can't be sourced.
+                ccl_bw_gbps, ccl_bw_pct = _analytical_ccl_bw(
+                    active_op_record, csv_row.get("DEVICE FW DURATION [ns]"), ccl_link_gbps
+                )
+                if ccl_bw_gbps is not None:
+                    csv_row["CCL FABRIC BW [GB/s]"] = round(ccl_bw_gbps, 2)
+                    if ccl_bw_pct is not None:
+                        csv_row["CCL FABRIC BW UTIL (%)"] = round(ccl_bw_pct, 1)
 
             csv_rows.append(csv_row)
 
