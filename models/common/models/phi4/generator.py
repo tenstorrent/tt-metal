@@ -19,7 +19,7 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.models.executor import make_contiguous_page_table
 from models.common.models.phi4.executor import EagerPhi4Executor, TracedPhi4Executor
-from models.common.models.phi4.model import Phi4Transformer
+from models.common.models.phi4.model import DEFAULT_HF_REVISION, Phi4Transformer
 
 
 @dataclass
@@ -27,7 +27,9 @@ class Phi4GeneratorConfig:
     """Port-local serving / executor knobs (HF-free beyond ``hf_model_id``)."""
 
     hf_model_id: str = "microsoft/phi-4"
-    hf_revision: str | None = None
+    # Pin the full-weights snapshot by default; microsoft/phi-4's refs/main is config-only (no
+    # weights/tokenizer). Callers may override (or pass None to force the unpinned main ref).
+    hf_revision: str | None = DEFAULT_HF_REVISION
     max_batch_size: int = 32
     max_seq_len: int = 4096
     num_layers: int | None = None

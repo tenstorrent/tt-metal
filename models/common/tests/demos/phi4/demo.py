@@ -10,8 +10,7 @@ Uses ``EagerPhi4Executor`` / ``TracedPhi4Executor`` directly (no vLLM adapter).
 mesh device count. N300 (2 devices) is the only supported and gated SKU. N150 (1 device) hits
 a hard L1 OOM at program-build time (distributed-layernorm reader CBs ~1.51 MB > ~1.50 MB L1),
 so it is unsupported as configured. T3K (8) is incompatible (10 KV heads not divisible by 8).
-Perf gates are TTTv1-measured (or faster TTTv2) per SKU + batch; PERF.md is stale and is not
-used as a source (see EXPECTED_METRICS).
+Perf gates are TTTv1-measured (or faster TTTv2) per SKU + batch (see EXPECTED_METRICS).
 
 Usage::
 
@@ -51,10 +50,9 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # Expected metrics
 # =============================================================================
 
-# Perf gates are keyed by [profile][SKU][batch]. PERF.md is stale and is intentionally NOT used
-# as a source. Each threshold is the TTTv1 measured metric, or the TTTv2 measured metric where
-# TTTv2 is faster (never below TTTv1). Baselines from the phi-4 PR_REBASE_UPDATE (N300, 2026-06-30,
-# SKU-matched on-host argmax decode):
+# Perf gates are keyed by [profile][SKU][batch]. Each threshold is the TTTv1 measured metric, or
+# the TTTv2 measured metric where TTTv2 is faster (never below TTTv1). Baselines from the phi-4
+# PR_REBASE_UPDATE (N300, 2026-06-30, SKU-matched on-host argmax decode):
 #   perf  b1:  TTTv1 16.33 t/s/u / 175.16 ms  → TTTv2 25.1 / 124.1 faster → gate on TTTv2
 #   perf  b32: TTTv1 15.54 t/s/u              → TTTv2 23.6 faster        → gate on TTTv2
 #   acc   b1:  TTTv1 OOMs on N300             → TTTv2 21.2 / 145.0       → gate on TTTv2 only
