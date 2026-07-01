@@ -241,7 +241,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                       "single_block_size_col_arg",
                       "sub_block_width_size",
                       "single_sub_block_size_row_arg"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .gen1_config =
+                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
         });
 
         // Writer: consumes c_16 (out); writes output tensor.
@@ -257,7 +260,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                  {"total_tiles_per_row", total_tiles_per_row}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .gen1_config =
+                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).

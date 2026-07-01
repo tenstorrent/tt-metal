@@ -169,7 +169,9 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "num_local_unpadded_Y",
                   "full_unpadded_X_nbytes",
                   "num_local_W"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ------------------------------------------------------------------------
@@ -195,7 +197,9 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "full_padded_X_nbytes",
                   "dst_stick_offset",
                   "num_local_W"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // ------------------------------------------------------------------------

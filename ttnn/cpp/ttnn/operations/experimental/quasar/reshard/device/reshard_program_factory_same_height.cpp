@@ -109,7 +109,9 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
-            .hw_config = DataMovementHardwareConfig{.role = role},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(role)},
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam}, .accessor_name = kSHRemoteTensorParam});

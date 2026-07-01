@@ -90,7 +90,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}};
     reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"}};
-    reader.hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER};
+    reader.hw_config = DataMovementHardwareConfig{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)};
 
     KernelSpec writer;
     writer.unique_id = WRITER;
@@ -98,7 +99,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     writer.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER}};
     writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}};
-    writer.hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER};
+    writer.hw_config = DataMovementHardwareConfig{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)};
 
     const auto& slice_start = args.slice_start;
     const auto& slice_end = args.slice_end;

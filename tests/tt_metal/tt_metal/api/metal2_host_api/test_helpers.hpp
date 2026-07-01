@@ -106,9 +106,8 @@ inline KernelSpec MakeMinimalGen1DMKernel(
     };
 }
 
-// Helper to create a minimal valid KernelSpec for data movement that relies on a
-// Gen1 role hint (READER/WRITER) to fill in the hardware config, rather than
-// supplying an explicit Gen1Config (Gen1/WH/BH).
+// Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
+// from a READER/WRITER role via Gen1Config::create_from_role (Gen1/WH/BH).
 inline KernelSpec MakeMinimalRoleDMKernel(const std::string& name, DataMovementRoleHint role) {
     return KernelSpec{
         .unique_id = KernelSpecName{name},
@@ -116,7 +115,7 @@ inline KernelSpec MakeMinimalRoleDMKernel(const std::string& name, DataMovementR
         .num_threads = 1,
         .hw_config =
             DataMovementHardwareConfig{
-                .role = role,
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(role),
             },
     };
 }
