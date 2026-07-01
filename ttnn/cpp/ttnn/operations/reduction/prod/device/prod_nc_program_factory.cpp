@@ -155,12 +155,21 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
 
+    // Accumulate the running product in full fp32 precision when the tensor is fp32; otherwise the
+    // dst register would round each partial product to bf16 and defeat the purpose of fp32 input.
+    const bool fp32_dest_acc_en = input.dtype() == DataType::FLOAT32;
+    // On Wormhole, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
+    // (see tenstorrent/tt-metal#38306); use HiFi3 in that case.
+    const auto math_fidelity = fp32_dest_acc_en ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+
     KernelDescriptor compute_desc_1;
     compute_desc_1.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
     compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc_1.core_ranges = core_group_1;
     compute_desc_1.compile_time_args = compute_args_group_1;
     compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false,
     };
 
@@ -173,6 +182,8 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
         cd2.core_ranges = core_group_2;
         cd2.compile_time_args = compute_args_group_2;
         cd2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = false,
         };
         compute_desc_2 = std::move(cd2);

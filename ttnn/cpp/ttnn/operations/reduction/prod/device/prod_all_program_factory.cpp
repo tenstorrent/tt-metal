@@ -87,7 +87,10 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
         1           // per_core_block_size
     };
 
-    bool fp32_dest_acc_en = false;
+    bool fp32_dest_acc_en = input.dtype() == DataType::FLOAT32;
+    // On Wormhole, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
+    // (see tenstorrent/tt-metal#38306); use HiFi3 in that case.
+    const auto math_fidelity = fp32_dest_acc_en ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     bool math_approx_mode = true;
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp";
@@ -95,7 +98,7 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
     compute_desc.core_ranges = core_ranges;
     compute_desc.compile_time_args = std::move(compute_kernel_args);
     compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false,
         .math_approx_mode = math_approx_mode,
