@@ -2,26 +2,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Minimal MPISocket transfer repro: 100 replicated tensors, 4 devices -> 4 devices.
-
-Deliberately the simplest possible socket-transfer example. Unlike
-mesh_socket_debug/repro_socket_transfer.py this has *nothing* to do with the fabric data
-path, submeshes, or the 1-socket-vs-N-sockets topology machinery:
+"""MPISocket transfer repro: 100 replicated tensors, 4 devices -> 4 devices.
 
   * One MPISocket (SocketType.MPI), opened once and reused for every tensor.
-  * Every tensor is REPLICATED across all 4 devices on both the send and receive sides.
-  * Transport is host-staged MPI, addressed by rank -- no ttnn.experimental.send_async /
-    recv_async, no per-device SocketConnection routing.
+  * Both ranks open a [1, 4] mesh; each tensor is REPLICATED across all 4 devices on both
+    sides. Transport is host-staged MPI, addressed by rank.
+  * Genuine 4 -> 4 transfer: a single sock.send(tensor) on a [1, 4]-replicated tensor emits
+    one MPI message per device shard (4 total), and sock.recv(template) fills all 4 device
+    shards of the receiver template. No 1->1 + broadcast, no per-device SocketConnection
+    routing (MPISocket.send/recv move the whole tensor's shards by rank).
+  * The receiver issues ALL receives first and only calls to_torch AFTER the last receive --
+    no host read is interleaved between recv calls.
 
-A single ``sock.send(tensor)`` on a [1, 4]-replicated tensor already moves all four device
-copies: MPISocket.send does ``tensor.cpu()`` -> one host shard per device -> one MPI message
-per shard (ttnn/core/distributed/mpi_socket.cpp). ``sock.recv(template)`` fills a matching
-[1, 4]-replicated template the same way.
-
-MPISocket still builds a MeshSocket internally, and MeshSocket construction requires a
-non-empty socket_connection_config (tt_metal/distributed/mesh_socket.cpp asserts this). So we
-hand it one trivial (0, 0) -> (0, 0) connection purely as construction boilerplate -- it is
-NOT used to route the MPI data (MPI addresses the peer by rank).
+MPISocket still builds a MeshSocket internally, which requires a non-empty connection config,
+so we hand it one trivial (0, 0) -> (0, 0) connection as construction boilerplate (unused for
+MPI data routing).
 
 Requires the ttnn build that exposes ttnn._ttnn.multi_device.create_socket / SocketType (the
 binding in ttnn/core/distributed/distributed_nanobind.cpp). Rebuild _ttnn if the import fails.
@@ -31,11 +26,12 @@ Knobs:
   REPRO_TENSOR_SHAPE  per-device shape (env CSV, default "1,1,32,32").
   REPRO_BRANCH        git branch label for logging (env, normally set by runner.sh).
 
-Run: bash mpi_socket_debug/runner.sh   (from tt-train/sources/examples/grpo)
+Run: bash debug_mpi_socket/runner.sh   (from tt-train/sources/examples/grpo)
 """
 
 import os
 import subprocess
+import time
 
 import torch
 from ttnn._ttnn.multi_device import SocketType, create_socket
@@ -46,7 +42,7 @@ import ttnn
 
 SENDER_RANK = 0
 RECEIVER_RANK = 1
-NUM_DEVICES = 4
+NUM_DEVICES = 4  # both ranks open a [1, 4] mesh; every tensor is replicated across all 4
 NUM_TENSORS = int(os.environ.get("REPRO_NUM_TENSORS", "100"))
 TENSOR_SHAPE = [int(d) for d in os.environ.get("REPRO_TENSOR_SHAPE", "1,1,32,32").split(",")]
 SOCKET_FIFO_BYTES = 80 * 1024 * 1024
@@ -180,15 +176,28 @@ def receiver():
     sock = create_socket(SocketType.MPI, mesh, SENDER_RANK, one_connection_config())
     log("socket open")
 
+    # Pre-allocate all receive templates and drain their zero-fills, so the timer below measures
+    # only the receives (not template allocation).
+    templates = [make_replicated_tensor(mesh, 0.0) for _ in range(NUM_TENSORS)]
+    ttnn.synchronize_device(mesh)
+
+    # Phase 1: receive every tensor (each recv fills all 4 device shards); no to_torch here.
+    t0 = time.perf_counter()
+    for j in range(NUM_TENSORS):
+        sock.recv(templates[j])  # blocking; fills all 4 replicated device copies
+        log_progress("recv", j)
+    ttnn.synchronize_device(mesh)  # after all recv
+    recv_secs = time.perf_counter() - t0
+    log(f"all {NUM_TENSORS} receives + sync: {recv_secs:.4f}s ({recv_secs / NUM_TENSORS * 1e3:.3f} ms/tensor)")
+    recvd = templates
+
+    # Phase 2: only after ALL receives, read the tensors back with to_torch and verify.
+    log("verifying ...")
     all_correct = True
     for j in range(NUM_TENSORS):
-        template = make_replicated_tensor(mesh, 0.0)
-        recvd = sock.recv(template)  # blocking; fills all 4 replicated device copies
-        log_progress("recv", j)
-
         expected = torch.full(TENSOR_SHAPE, tensor_value(j), dtype=torch.bfloat16)
         for i in range(NUM_DEVICES):
-            got = ttnn.to_torch(ttnn.get_device_tensors(recvd)[i])
+            got = ttnn.to_torch(ttnn.get_device_tensors(recvd[j])[i])
             mn, mx, me = tensor_stats(got)
             correct, total = count_correct(got, expected)
             status = "OK" if correct == total else "CORRUPT"

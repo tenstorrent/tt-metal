@@ -2,37 +2,33 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Minimal MeshSocket (fabric) transfer repro: 1 device -> 1 device, then replicate on recv.
+"""MeshSocket (fabric) 2->6 repro: 1 device -> 1 device then replicate -- FATALs on routing.
 
-Deliberately the simplest possible fabric-socket example. Unlike earlier versions of this
-file there are NO topology modes -- no submeshes, no 1-socket-vs-N-sockets, no per-device
-connection fan-out. Just:
+Same 1->1-transfer-then-broadcast logic as debug_mesh_socket_and_broadcast, but with an
+ASYMMETRIC split: the sender opens a [1, 2] mesh (1 N300 board) and the receiver a [1, 6] mesh
+(3 boards). A single MeshSocket connection sender(0, 0) -> receiver(0, 0) carries device 0's
+shard; the receiver then broadcasts it across its [1, 6] mesh.
 
-  * One ttnn.MeshSocket with a SINGLE connection: sender (0, 0) -> receiver (0, 0).
-  * Each tensor is transferred device-to-device over fabric via
-    ttnn.experimental.send_async / recv_async (only device (0, 0) crosses the wire).
-  * After receiving on the single device, the RECEIVER replicates the tensor across its
-    whole [1, 6] mesh with ttnn.broadcast (an on-device fan-out from the receive device to the
-    rest of the mesh) -- so the end state on the receive side is a replicated tensor.
-  * The receiver issues ALL recv_async (and broadcasts) first, then reads every result back
-    with to_torch only after the last recv -- no host read is interleaved between recvs.
-
-The sender opens a [1, 2] mesh and the receiver opens a [1, 6] mesh (asymmetric). Only
-coordinate (0, 0) on each side participates in the socket; the replicate step fans the single
-received shard out across the receiver's 6 devices locally. The rank/device split lives in
-configurations/local8/{rank_bindings.yaml,mgd.textproto}: rank 0 -> mesh_id 0 ([1, 2]),
-rank 1 -> mesh_id 1 ([1, 6]).
+!!! THIS IS EXPECTED TO FATAL AT open_mesh_device -- IT DOES NOT COMPLETE A TRANSFER !!!
+A single-board sender mesh is an asymmetric inter-mesh endpoint. On a T3000 (4x N300, 2x4
+mesh) that board's local chip has ethernet cables to two other boards, so fabric inter-mesh
+bring-up trips:
+    control_plane.cpp: "Inter-mesh: one src to multiple dst chips ... not supported yet"
+That check runs during open_mesh_device, BEFORE any socket -- so the run dies before the
+socket/transfer code is reached. This folder exists to document/reproduce that routing
+failure; the working symmetric version is debug_mesh_socket_and_broadcast (4/4).
 
 Knobs:
   REPRO_NUM_TENSORS   tensors streamed (env, default 100).
   REPRO_TENSOR_SHAPE  per-device shape (env CSV, default "1,1,32,32").
   REPRO_BRANCH        git branch label for logging (env, normally set by runner.sh).
 
-Run: bash mesh_socket_debug/runner.sh   (from tt-train/sources/examples/grpo)
+Run: bash debug_mesh_socket_2_6/runner.sh   (from tt-train/sources/examples/grpo)
 """
 
 import os
 import subprocess
+import time
 
 import torch
 from ttnn._ttnn.multi_device import recv_bytes as _recv
@@ -42,8 +38,8 @@ import ttnn
 
 SENDER_RANK = 0
 RECEIVER_RANK = 1
-SENDER_DEVICES = 2  # sender opens a [1, 2] mesh; only coordinate (0, 0) is transferred
-RECEIVER_DEVICES = 6  # receiver opens a [1, 6] mesh and replicates the received shard across all 6
+SENDER_DEVICES = 2  # sender opens a [1, 2] mesh (1 board); only coordinate (0, 0) is transferred
+RECEIVER_DEVICES = 6  # receiver opens a [1, 6] mesh (3 boards) and replicates the shard across all 6
 NUM_TENSORS = int(os.environ.get("REPRO_NUM_TENSORS", "100"))
 TENSOR_SHAPE = [int(d) for d in os.environ.get("REPRO_TENSOR_SHAPE", "1,1,32,32").split(",")]
 SOCKET_FIFO_BYTES = 80 * 1024 * 1024
@@ -184,27 +180,28 @@ def receiver():
     socket = ttnn.MeshSocket(mesh, single_connection_config())
     log("socket open (1 connection: (0,0) -> (0,0))")
 
-    # Phase 1: issue every recv_async (and its on-device broadcast) back-to-back, with NO
-    # to_torch in between -- reading a tensor back to host would drain the mesh command queue
-    # between recvs, and we want them all in flight first. Keep every tensor alive until the
-    # read-back phase (the template is consumed asynchronously by its broadcast on the queue).
-    templates = [None] * NUM_TENSORS
-    recvd = [None] * NUM_TENSORS
+    # Pre-allocate all receive templates and drain their zero-fills, so the timer below measures
+    # only the receives. Each recv_async writes the single shard onto coordinate (0, 0) of its
+    # template; the broadcast (later) fans it out across the [1, RECEIVER_DEVICES] mesh.
+    templates = [make_replicated_tensor(mesh, 0.0) for _ in range(NUM_TENSORS)]
+    ttnn.synchronize_device(mesh)
+
+    # Phase 1: issue every recv_async back-to-back (no to_torch, no broadcast in between), then a
+    # single synchronize_device to complete them all. Time the whole receive phase.
+    t0 = time.perf_counter()
     for j in range(NUM_TENSORS):
-        # Receive the single shard onto coordinate (0, 0); only device (0, 0) holds real data,
-        # the other devices hold the template's zeros.
-        template = make_replicated_tensor(mesh, 0.0)
-        ttnn.experimental.recv_async(template, socket)
-        templates[j] = template
-
-        # Replicate on the receiving side, on-device: broadcast coordinate (0, 0)'s shard out to
-        # every device of the [1, RECEIVER_DEVICES] mesh (ordered after recv_async on the queue).
-        recvd[j] = ttnn.broadcast(template, ttnn.MeshCoordinate(0, 0))
+        ttnn.experimental.recv_async(templates[j], socket)
         log_progress("recv issued", j)
+    ttnn.synchronize_device(mesh)  # after all recv: force every recv_async to complete
+    recv_secs = time.perf_counter() - t0
+    log(f"all {NUM_TENSORS} receives + sync: {recv_secs:.4f}s ({recv_secs / NUM_TENSORS * 1e3:.3f} ms/tensor)")
 
-    # Phase 2: only after ALL tensors have been received do we read them back with to_torch and
-    # verify. The first to_torch drains the queue, so every recv_async + broadcast completes here.
-    log("all recv_async issued; verifying ...")
+    # Replicate on the receiving side (after all recvs complete): broadcast coordinate (0, 0)'s
+    # shard out to every device of the [1, RECEIVER_DEVICES] mesh.
+    recvd = [ttnn.broadcast(templates[j], ttnn.MeshCoordinate(0, 0)) for j in range(NUM_TENSORS)]
+
+    # Phase 2: read the tensors back with to_torch and verify.
+    log("verifying ...")
     all_correct = True
     for j in range(NUM_TENSORS):
         expected = torch.full(TENSOR_SHAPE, tensor_value(j), dtype=torch.bfloat16)

@@ -1,18 +1,16 @@
-# Mesh Graph Descriptor for the minimal socket-transfer reproducer (asymmetric 2 -> 6).
+# Mesh Graph Descriptor for the MeshSocket 2->6 reproducer (asymmetric, EXPECTED TO FATAL).
 #
-# Two meshes (one per rank), connected by a FABRIC graph so
-# ttnn.experimental.send_async/recv_async can route across them:
-#
+# Two meshes (one per rank), connected by a FABRIC graph:
 #   Rank 0 (sender)   -> mesh_id 0, a [1, 2] line (ONE eth-linked N300 board = 2 chips).
 #   Rank 1 (receiver) -> mesh_id 1, a [1, 6] line (THREE eth-linked N300 boards = 6 chips).
 #
-# !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# This declares a [1, 2] line for the sender and a [1, 6] line for the receiver. The exact
-# device_topology, channel counts, and inter-mesh connection MUST match your physical wiring
-# (the 2 sender chips must be an eth-linked line, the 6 receiver chips must be an eth-linked
-# line, and sender chip (0,0) must be eth-reachable from receiver chip (0,0)). Adjust for your
-# machine. Pairs with configurations/local8/rank_bindings.yaml (TT_VISIBLE_DEVICES "0" for the
-# sender board, "1,2,3" for the three receiver boards).
+# !!! EXPECTED TO FATAL AT open_mesh_device !!!
+# On a T3000 (4x N300, 2x4 mesh) the single sender board's local chip cables to two other
+# boards, so fabric inter-mesh bring-up hits control_plane.cpp "one src to multiple dst chips
+# ... not supported yet". This fires before any socket. The working symmetric config is in
+# debug_mesh_socket_and_broadcast (two [1, 4] meshes, boards {0,1}|{2,3}).
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!! Adjust device_topology / connection to your wiring.
 
 mesh_descriptors {
   name: "M_SEND"

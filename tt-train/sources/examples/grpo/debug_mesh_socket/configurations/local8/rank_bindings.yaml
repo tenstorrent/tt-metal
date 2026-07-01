@@ -1,6 +1,6 @@
 # Maps MPI ranks to the mesh ids in mgd.textproto and pins each rank to a
 # disjoint set of four chips via TT_VISIBLE_DEVICES (UMD enumerates PCIe
-# boards 0..3; each board has 2 chips reachable over the on-board eth link).
+# boards 0..3; each N300 board has 2 chips reachable over the on-board eth link).
 #
 # Rank 0 = sender   (owns boards 0+1 -> mesh_id 0, a [1, 4] line).
 # Rank 1 = receiver (owns boards 2+3 -> mesh_id 1, a [1, 4] line).
@@ -12,8 +12,6 @@
 # chips for rank 1, each a routable [1, 4] line. (Do NOT use chip ids 4..7
 # here -- only 0..3 are valid PCIe device ids on this machine.) Adjust to your
 # machine.
-#
-# Copied from tests/weight_transfer/configurations/local8.
 
 rank_bindings:
   - rank: 0

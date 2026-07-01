@@ -5,13 +5,11 @@
 # Rank 0 = sender   (owns board 0      -> mesh_id 0, a [1, 2] line = 2 chips).
 # Rank 1 = receiver (owns boards 1,2,3 -> mesh_id 1, a [1, 6] line = 6 chips).
 #
-# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# !!! EXPECTED TO FATAL AT open_mesh_device (asymmetric inter-mesh routing) !!!
 # TT_VISIBLE_DEVICES indexes PCIe devices, not UMD chip ids. This host is four
 # N300 boards = four PCIe devices (valid ids 0..3), each exposing two chips. So
 # "0" = board 0 = two chips for rank 0 (a [1, 2] line) and "1,2,3" = boards
-# 1+2+3 = six chips for rank 1 (a [1, 6] line). (Do NOT use chip ids 4..7 here
-# -- only 0..3 are valid PCIe device ids on this machine.) The [1, 6] receiver
-# line requires boards 1,2,3 to be eth-linked in a line; adjust to your machine.
+# 1+2+3 = six chips for rank 1 (a [1, 6] line).
 
 rank_bindings:
   - rank: 0

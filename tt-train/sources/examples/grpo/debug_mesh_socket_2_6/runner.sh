@@ -2,11 +2,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Launches the 2-rank MeshSocket (fabric) transfer reproducer via tt-run. Both ranks open a
-# [1, 4] mesh; rank 0 streams REPRO_NUM_TENSORS tensors to rank 1 over a SINGLE fabric
-# MeshSocket with one connection (0,0) -> (0,0) (ttnn.experimental.send_async/recv_async).
-# The receiver then replicates each received shard across its whole [1, 4] mesh. No submeshes,
-# no 1-socket-vs-N-sockets modes. See repro_socket_transfer.py.
+# Launches the 2-rank MeshSocket (fabric) 2->6 reproducer via tt-run. Sender opens a [1, 2]
+# mesh (1 board), receiver a [1, 6] mesh (3 boards); a single connection (0,0) -> (0,0) carries
+# device 0's shard, then the receiver broadcasts it across its [1, 6].
+#
+# !!! EXPECTED TO FATAL AT open_mesh_device !!! The asymmetric single-board inter-mesh split
+# trips the T3000 fabric routing limit ("one src to multiple dst chips ... not supported yet")
+# during control-plane bring-up, before any socket. The working symmetric version is
+# debug_mesh_socket_and_broadcast (4/4). See repro_socket_transfer.py.
 #
 # Plain python script (not pytest) so there is no timeout and the per-step prints stream
 # straight to the terminal -- the last printed line shows exactly where it stalls if it hangs.
@@ -15,7 +18,7 @@
 # first. The current branch is auto-detected and tagged onto every log line.
 #
 # Configurable:
-#   REPRO_NUM_TENSORS=100 REPRO_TENSOR_SHAPE=1,1,32,32 bash mesh_socket_debug/runner.sh
+#   REPRO_NUM_TENSORS=100 REPRO_TENSOR_SHAPE=1,1,32,32 bash debug_mesh_socket_2_6/runner.sh
 
 set -euo pipefail
 
@@ -24,7 +27,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-DEBUG_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/mesh_socket_debug"
+DEBUG_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/debug_mesh_socket_2_6"
 HOST_FILE="${DEBUG_DIR}/configurations/local8/hosts.txt"
 RANK_BINDINGS_FILE="${DEBUG_DIR}/configurations/local8/rank_bindings.yaml"
 SCRIPT="${DEBUG_DIR}/repro_socket_transfer.py"
@@ -51,7 +54,7 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-echo "[runner] branch=${REPRO_BRANCH} transport=MeshSocket(fabric) shape=${REPRO_TENSOR_SHAPE} num_tensors=${REPRO_NUM_TENSORS}"
+echo "[runner] branch=${REPRO_BRANCH} transport=MeshSocket(fabric) split=2->6 shape=${REPRO_TENSOR_SHAPE} num_tensors=${REPRO_NUM_TENSORS}"
 
 # tt-run resolves the relative `mesh_graph_desc_path` in rank_bindings.yaml against the launch
 # directory, so cd into this dir to make "configurations/local8/mgd.textproto" resolve here.
