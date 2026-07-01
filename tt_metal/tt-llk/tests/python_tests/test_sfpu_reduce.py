@@ -66,20 +66,10 @@ def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]
     return [(-1000, 1000), (0, 1000), (-1000, 0)]
 
 
-def get_supported_reduce_axioms(
-    reduce_pool: ReducePool, formats: InputOutputFormat
-) -> list[MathOperation]:
-    # Row reduce (REDUCE_ROW) supports SUM/MAX/MIN for every format and AVG for float formats only
-    # (the row AVG divisor is the runtime column count, which only the float reciprocal-multiply
-    # divides exactly; integer AVG stays column-only). See ckernel_sfpu_reduce.h::calculate_reduce.
-    if reduce_pool in (ReducePool.Sum, ReducePool.Max, ReducePool.Min):
-        return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
-    # Only Float32/Float16_b: the kernel's `is_float_format` AVG row gate treats just these two as
-    # float, so a Float16 row AVG would hit the calculate_reduce static_assert at compile time.
-    if reduce_pool == ReducePool.Average and formats.input_format in (
-        DataFormat.Float32,
-        DataFormat.Float16_b,
-    ):
+def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
+    # Row reduce (REDUCE_ROW) is only implemented in the kernel for SUM and MAX
+    # (see ckernel_sfpu_reduce.h::calculate_reduce static_assert); MIN/AVG are column-only.
+    if reduce_pool in (ReducePool.Sum, ReducePool.Max):
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
     return [MathOperation.ReduceColumn]
 
@@ -91,13 +81,15 @@ def use_int32_twos_complement(
 
     This matches how ttnn feeds the device: Int32 reduce operands sit in DEST as two's-complement.
 
-    Both the column and the row MAX/MIN paths load with ``INT32_2S_COMP``. On Blackhole that mode is
-    a no-op, so the paths cast two's-complement -> sign-magnitude explicitly around the
-    sign-magnitude ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``); on Wormhole the
-    mode-12 load does the same conversion in hardware. Either way they expect two's-complement
-    operands. Row MAX must agree with the column path because a multi-axis reduce chains
-    column-then-row over the same DEST (the column path leaves two's-complement there), so the row
-    path consumes and produces two's-complement just like the column path.
+    Column MAX/MIN load with ``INT32_2S_COMP``. On Blackhole that mode is a no-op, so the column
+    path casts two's-complement -> sign-magnitude explicitly around the sign-magnitude
+    ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``); on Wormhole the mode-12 load does
+    the same conversion in hardware. Either way the column path expects two's-complement operands.
+
+    Row MAX is different: it loads with plain ``INT32`` (sign-magnitude) and runs the comparator
+    directly on sign-magnitude data with no conversion (see ``perform_reduce_row_max_int32_tile``).
+    Feeding it two's-complement stimuli would miscompare negatives (e.g. ``-5`` reads as a large
+    positive), so row MAX must stay sign-magnitude. Hence the gate on ``ReduceColumn`` below.
 
     SUM loads with plain ``INT32`` so the word reaches ``SFPIADD`` (a two's-complement adder)
     unchanged. Sign-magnitude stimuli would hide the SUM bug where ``INT32_2S_COMP`` corrupts
@@ -111,9 +103,8 @@ def use_int32_twos_complement(
     if reduce_pool == ReducePool.Sum:
         return True
     if reduce_pool in (ReducePool.Max, ReducePool.Min):
-        # Both column and row MAX/MIN take two's-complement (row MAX now matches the column path so
-        # the chained multi-axis reduce is consistent).
-        return True
+        # Only the column MAX/MIN path takes two's-complement; row MAX stays sign-magnitude.
+        return mathop == MathOperation.ReduceColumn
     return False
 
 
@@ -311,14 +302,14 @@ def test_sfpu_reduce(
 
     if (
         mathop == MathOperation.ReduceRow
-        and reduce_pool in (ReducePool.Max, ReducePool.Min)
+        and reduce_pool == ReducePool.Max
         and formats.input_format == DataFormat.UInt16
     ):
         pytest.skip(
-            reason="UInt16 row MAX/MIN is unsupported by the kernel: without a 32-bit dest it loads "
-            "with LO16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
-            "through the INT32 sign-magnitude row path, which does not mask UInt16's high bits and "
-            "returns garbage. Column UInt16 MAX/MIN (the ttnn-exercised path) is still covered."
+            reason="UInt16 row MAX is unsupported by the kernel: without a 32-bit dest it loads with "
+            "LO16 (rejected by the row-MAX static_assert), and with a 32-bit dest it routes through "
+            "the INT32 sign-magnitude row path, which does not mask UInt16's high bits and returns "
+            "garbage. Column UInt16 MAX (the ttnn-exercised path) is still covered."
         )
 
     if (
