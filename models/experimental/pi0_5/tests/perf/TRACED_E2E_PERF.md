@@ -1,7 +1,7 @@
 # pi0.5 tt_bh_glx — fully-traced e2e perf (BH Galaxy, per-stage layout)
 
 Measured on Blackhole Galaxy, 5 denoise steps, N_CAMS=3 (prefix_len=1024),
-production perf flags baked in (`models/experimental/pi0_5/pi05_production.env`). Correctness:
+production perf flags baked in (`models/experimental/pi0_5/common/pi05_production.env`). Correctness:
 traced e2e matches torch `Pi0_5Model.sample_actions` at **PCC 0.9988**.
 
 Reproduce:

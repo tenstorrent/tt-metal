@@ -3,12 +3,12 @@
 
 """Shared loader for the pi0.5 production perf flags.
 
-`pi05_production.env` lives in the pi0_5 package root (models/experimental/pi0_5/).
+`pi05_production.env` lives next to this loader in models/experimental/pi0_5/common/.
 Perf tests call `apply_production_env_defaults()` at module load (before any ttnn /
 pi0_5 import) so the full validated production flag set is in place without a manual
 `source`. setdefault semantics: an explicitly-set env var always wins.
 
-Resolved RELATIVE TO THIS PACKAGE (not a pardir count from the test file), so it works
+Resolved RELATIVE TO THIS FILE (not a pardir count from the test file), so it works
 regardless of cwd / TT_METAL_HOME and from any tests subdirectory.
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from __future__ import annotations
 import os
 import re
 
-# models/experimental/pi0_5/pi05_production.env  (this file is .../pi0_5/common/prod_env.py)
-PROD_ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pi05_production.env")
+# models/experimental/pi0_5/common/pi05_production.env  (same dir as this loader)
+PROD_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pi05_production.env")
 
 
 def apply_production_env_defaults(verbose: bool = True, skip: set | None = None) -> list:

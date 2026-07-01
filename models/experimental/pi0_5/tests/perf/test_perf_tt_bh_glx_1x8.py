@@ -77,7 +77,7 @@ PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
 # mean — set WARMUP_ITERS=1 if you prefer to drop that from the timing.
 WARMUP_ITERS = int(os.environ.get("WARMUP_ITERS", "0"))
 
-# Production env flags worth asserting present (set by models/experimental/pi0_5/pi05_production.env).
+# Production env flags worth asserting present (set by models/experimental/pi0_5/common/pi05_production.env).
 # Logged at test start so the run-log shows which optimizations were active.
 _PROD_ENV_KEYS = (
     "PI0_EXPERT_MM_LOFI",

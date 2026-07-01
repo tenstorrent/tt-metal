@@ -301,7 +301,7 @@ capture + replay ≈ ×3). E.g. SDPA = 990 ≈ 3 × 18 × 18.
   10–26 ms of mostly-idle "duration"; the true transfer is ~0.8–1.6 ms.
 - **Tooling:** full-e2e Tracy capture is ~27 GB (profiles all one-time block-building
   setup) and fills the disk — profile **per-stage** (~3 GB). The prefill repro doesn't
-  bake the prod flags → run with `source models/experimental/pi0_5/pi05_production.env` (else L1
+  bake the prod flags → run with `source models/experimental/pi0_5/common/pi05_production.env` (else L1
   circular-buffer clash at prefix=1024).
 
 ---

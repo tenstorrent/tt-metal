@@ -67,7 +67,7 @@ SEED = 42
 N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])
 LANG_LEN = 256
 
-# Production env flags worth asserting present (set by models/experimental/pi0_5/pi05_production.env).
+# Production env flags worth asserting present (set by models/experimental/pi0_5/common/pi05_production.env).
 # Logged at test start so the run-log shows which optimizations were active.
 _PROD_ENV_KEYS = (
     "PI0_EXPERT_MM_LOFI",
