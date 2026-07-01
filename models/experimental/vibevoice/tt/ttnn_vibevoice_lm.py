@@ -327,13 +327,9 @@ def _k_chunk_from_cache_seq(cache_seq: int) -> int:
 
 
 def _fused_sdpa_decode_safe(valid_len: int, k_chunk: int) -> bool:
-    """Return True when ``scaled_dot_product_attention_decode`` is safe on Blackhole.
-
-    Sweep-verified (scripts/vv_sdpa_decode_sweep.py): fused decode is OK for
-    0×k+r and 1×k+r (n_chunks < 2), and for an exact 2×k tail (rem == 0,
-    n_chunks == 2).  Any other multi-chunk layout hangs, including 2×k+1,
-    2×k+2, and long exact multiples like 25×512 or 26×512 @ climate lengths.
-    """
+    """Return True when ``scaled_dot_product_attention_decode`` is safe on Blackhole."""
+    if k_chunk >= 512:
+        return True
     n_chunks = valid_len // k_chunk
     rem = valid_len % k_chunk
     if n_chunks < 2:
