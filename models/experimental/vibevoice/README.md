@@ -94,6 +94,9 @@ pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py::test_lm_p
 
 # ISL sweep: 32, 64, 128, 256, 512, 1024
 pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py::test_lm_prefill_hidden_state_pcc_isl_sweep -v -s
+
+# Extended ISL sweep: 32 … 65536 with HF/TT wall-time per length (may take hours)
+pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py::test_lm_prefill_hidden_state_pcc_isl_sweep_extended_with_timing -v -s
 ```
 
 | Test | Type | Asserts PCC? | Status (Blackhole, seed=0) |
