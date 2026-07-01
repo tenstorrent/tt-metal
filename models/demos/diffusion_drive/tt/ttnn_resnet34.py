@@ -18,9 +18,11 @@ Helper functions:
 Notes:
     - BN is folded into Conv at preprocessor time (fp32 fold, cast to bfloat16).
     - Weights are passed as raw bfloat16 torch tensors; ttnn.conv2d handles layout.
-    - Stage 1: no sharding; INTERLEAVED DRAM memory config throughout.
-    - AdaptiveAvgPool2d, GPT fusion, and F.interpolate remain in PyTorch
-      (TorchModuleFallback) until Stage 2.
+    - conv2d uses the auto shard layout; a following ReLU is fused into the conv
+      (see ``_RELU_ACT``) rather than run as a separate ttnn.relu op.
+    - This helper module backs every conv in the model (backbone BasicBlocks,
+      stems, FPN, perception 1x1, grid-sample value_proj); each of those runs on
+      TTNN — nothing here remains a PyTorch fallback.
 """
 
 from __future__ import annotations
@@ -32,6 +34,12 @@ import torch.nn as nn
 
 import ttnn
 from models.demos.diffusion_drive.tt.common import fold_bn
+
+# Fused conv activation for the Stage 2 "relu with conv" optimisation: a single
+# shared, read-only descriptor passed into Conv2dConfig so a conv writes its
+# ReLU'd output directly, removing a standalone ttnn.relu op per conv+relu pair.
+# Mirrors the in-tree ufld_v2 ResNet-34 (models/demos/vision/segmentation/ufld_v2).
+_RELU_ACT = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
 # ---------------------------------------------------------------------------
 # Weight preparation
@@ -96,8 +104,12 @@ def prepare_resnet34_stage_params(layer: nn.Sequential) -> list:
 # ---------------------------------------------------------------------------
 
 
-def _make_conv_config() -> ttnn.Conv2dConfig:
-    """Conv2d config for Stage 1: INTERLEAVED DRAM, bfloat16, no sharding.
+def _make_conv_config(activation=None) -> ttnn.Conv2dConfig:
+    """Conv2d config: bfloat16 weights, auto shard layout.
+
+    ``activation`` is a ``ttnn.UnaryWithParam`` (e.g. ``_RELU_ACT``) or ``None``.
+    When set, the conv fuses that activation into its output writeback, removing a
+    standalone elementwise op for every conv that feeds a ReLU.
 
     Note: older binaries do not accept a 'dtype' kwarg in Conv2dConfig; the
     output dtype is controlled via the 'dtype' kwarg of ttnn.conv2d itself.
@@ -107,7 +119,8 @@ def _make_conv_config() -> ttnn.Conv2dConfig:
         deallocate_activation=False,
         reallocate_halo_output=True,
         reshard_if_not_optimal=False,
-        shard_layout=None,  # INTERLEAVED — Stage 1 only
+        shard_layout=None,  # auto-selected (interleaved output at these sizes)
+        activation=activation,
     )
 
 
@@ -136,6 +149,7 @@ def _ttnn_conv2d(
     kernel_size: int,
     stride: int,
     padding: int,
+    activation=None,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
     """Run ttnn.conv2d and return (output, out_H, out_W, prepared_w, prepared_b).
 
@@ -144,8 +158,12 @@ def _ttnn_conv2d(
     weights lets the caller cache them and skip the per-forward host upload — which
     is both a small perf win and **required for trace capture** (host->device writes
     are illegal between begin/end_trace_capture).
+
+    ``activation`` (a ``ttnn.UnaryWithParam`` such as ``_RELU_ACT``, or ``None``)
+    is fused into the conv, so a caller that passes it must not run a separate
+    ttnn.relu on the result.
     """
-    conv_config = _make_conv_config()
+    conv_config = _make_conv_config(activation)
     [out, [out_H, out_W], [prep_w, prep_b]] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=w_ttnn,
@@ -215,11 +233,22 @@ class TtnnBasicBlock:
         # Reassign self._w1/_b1 to the device-prepared weights conv2d returns, so the
         # next forward reuses them instead of re-uploading host weights (trace-safe).
         out, H1, W1, self._w1, self._b1 = _ttnn_conv2d(
-            self._device, x, self._w1, self._b1, B, H, W, C_in, C_mid, kernel_size=3, stride=self._stride, padding=1
+            self._device,
+            x,
+            self._w1,
+            self._b1,
+            B,
+            H,
+            W,
+            C_in,
+            C_mid,
+            kernel_size=3,
+            stride=self._stride,
+            padding=1,
+            activation=_RELU_ACT,  # ReLU fused into conv1
         )
-        # Move to interleaved DRAM + TILE for reliable add/relu
+        # Move to interleaved DRAM + TILE for reliable add (ReLU already applied by the conv).
         out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG) if out.is_sharded() else out
-        out = ttnn.relu(out)
 
         # Conv2: 3×3, stride=1, BN-folded (no activation)
         C_out = self._C_out
