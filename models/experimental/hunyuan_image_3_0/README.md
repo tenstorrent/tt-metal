@@ -17,7 +17,7 @@ Host-side tokenizer code and assets live under `ref/tokenizer/`:
 Download `tokenizer.json` (and refresh `tokenizer_config.json`) from Hugging Face:
 
 ```bash
-cd ~/tt-ign/tt-metal
+cd ~/ign-tt/tt-metal
 mkdir -p models/experimental/hunyuan_image_3_0/ref/tokenizer/assets
 
 hf download tencent/HunyuanImage-3.0 \
@@ -74,14 +74,20 @@ hidden 4096). They differ only at the edges:
 
 ## Running demos
 
-Run from the `tt-metal` repo root (`cd ~/tt-ign/tt-metal`). All three use the 2×2 mesh
+Run from the `tt-metal` repo root (`cd ~/ign-tt/tt-metal`). All three use the 2×2 mesh
 and default to 32 backbone layers (`HY_NUM_LAYERS=32`).
 
 | Variant | Demo | Steps | CFG | Checkpoint env / default path |
 |---|---|---:|---|---|
-| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | hardcoded in `demo.py` → `/home/iguser/Christy/HunyuanImage-3` |
-| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` → `…/HunyuanImage-3-Instruct` |
+<<<<<<< Updated upstream
+| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | hardcoded in `demo.py` → `/home/iguser/ign-tt/base` |
+| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` → `/home/iguser/ign-tt/hunyan_instruct` |
+| **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` → `/home/iguser/ign-tt/hunyan_instruct` |
+=======
+| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | `HUNYUAN_MODEL_DIR` (default `/home/iguser/ign-tt/base`) |
+| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` (default `/home/iguser/ign-tt/hunyan_instruct`) |
 | **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` → `…/HunyuanImage-3-Instruct-Distil` |
+>>>>>>> Stashed changes
 
 ### Base text-to-image
 
@@ -263,5 +269,11 @@ HY_NUM_LAYERS=32 python_env/bin/python -m pytest \
   models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline_step.py -v -s
 ```
 
-Checkpoint weights expected at `/home/iguser/Christy/HunyuanImage-3` (sharded safetensors
+<<<<<<< Updated upstream
+Checkpoint weights expected at `/home/iguser/ign-tt/base` (sharded safetensors
 + `*.index.json` + `config.json`).
+=======
+Checkpoint weights: base at `/home/iguser/ign-tt/base`, Instruct at
+`/home/iguser/ign-tt/hunyan_instruct` (override with `HUNYUAN_MODEL_DIR` /
+`HUNYUAN_INSTRUCT_MODEL_DIR`; sharded safetensors + `*.index.json` + `config.json`).
+>>>>>>> Stashed changes

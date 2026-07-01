@@ -6,7 +6,7 @@
 #   prompt --[ optional AR recaption: text-sampling loop on the resident backbone +
 #              LM head -> <recaption>...</recaption> cot_text ]
 #          --HunyuanTokenizer (cot_text injected as the assistant turn)--> input_ids
-#          --wte--> text embeddings (cond / uncond rows for CFG)
+#          --HunyuanTtWte--> text embeddings (cond / uncond rows for CFG)
 #   noise latent --[ patch_embed -> RESIDENT bf8 sharded backbone -> final_layer ]
 #                  x N scheduler steps with CFG (denoise_loop on the 2x2 sp0tp1 mesh)
 #          --> denoised latent
@@ -33,17 +33,20 @@
 #   HY_RECAPTION=0 HY_STEPS=8 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/demo/demo.py "a photo of a cat"
 
-import os, sys, json, glob, time
+import os, sys, json, time
 from pathlib import Path
 import torch
 from safetensors import safe_open
 
 ROOT = str(Path(__file__).resolve().parents[4])  # tt-metal repo root (robust to checkout location)
-HUNYUAN = os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/christy/HunyuanImage-3.0")
-WEIGHTS = os.environ.get("HUNYUAN_MODEL_DIR", "/home/iguser/christy/HunyuanImage-3")
+HUNYUAN = os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/tt-ign/HunyuanImage-3.0")
 for p in (ROOT, HUNYUAN):
     if p not in sys.path:
         sys.path.insert(0, p)
+
+from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
+
+WEIGHTS = MODEL_DIR
 
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
@@ -67,6 +70,7 @@ from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
 from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
 
 PROMPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HY_PROMPT", "a photo of a cat, studio lighting")
 STEPS = int(os.environ.get("HY_STEPS", "8"))
@@ -79,7 +83,7 @@ SEED = int(os.environ.get("HY_SEED", "0"))
 # When set, overrides the recaption-resolved size. The VAE is rebuilt for the grid.
 IMAGE_SIZE = int(os.environ["HY_IMAGE_SIZE"]) if os.environ.get("HY_IMAGE_SIZE") else None
 SCALING = 0.562679178327931
-OUT_PNG = os.environ.get("HY_OUT", "/home/iguser/Christy/tt-metal/hy_t2i.png")
+OUT_PNG = os.environ.get("HY_OUT", "/home/iguser/ign-tt/tt-metal/hy_t2i.png")
 
 # AR recaption (text-sampling loop) — ON by default; rewrites the prompt before gen.
 RECAPTION = os.environ.get("HY_RECAPTION", "1") != "0"
@@ -94,7 +98,15 @@ TOP_K = int(os.environ.get("HY_TOP_K", str(_SAMPLE_DEFAULTS.top_k)))
 TOP_P = float(os.environ.get("HY_TOP_P", str(_SAMPLE_DEFAULTS.top_p)))
 REP_PENALTY = float(os.environ.get("HY_REP_PENALTY", str(_SAMPLE_DEFAULTS.repetition_penalty)))
 
-_WMAP = json.load(open(glob.glob(f"{WEIGHTS}/*.index.json")[0]))["weight_map"]
+_INDEX = WEIGHTS / "model.safetensors.index.json"
+if not _INDEX.is_file():
+    raise SystemExit(
+        f"Base HunyuanImage-3 weights not found at {_INDEX}\n"
+        f"Download tencent/HunyuanImage-3.0 and set HUNYUAN_MODEL_DIR, e.g.:\n"
+        f"  hf download tencent/HunyuanImage-3.0 --local-dir /home/iguser/ign-tt/base\n"
+        f"  HUNYUAN_MODEL_DIR=/home/iguser/ign-tt/base python_env/bin/python ..."
+    )
+_WMAP = json.load(open(_INDEX))["weight_map"]
 _OPEN = {}
 
 # --- lightweight per-stage timing -------------------------------------------
@@ -124,7 +136,7 @@ def _print_timing_summary(total):
 
 def _load(key):
     shard = _WMAP[key]
-    f = _OPEN.get(shard) or _OPEN.setdefault(shard, safe_open(f"{WEIGHTS}/{shard}", framework="pt"))
+    f = _OPEN.get(shard) or _OPEN.setdefault(shard, safe_open(WEIGHTS / shard, framework="pt"))
     return f.get_tensor(key)
 
 
@@ -133,7 +145,7 @@ def _load_prefix(prefix):
 
 
 def _cfg():
-    c = json.load(open(f"{WEIGHTS}/config.json"))
+    c = json.load(open(WEIGHTS / "config.json"))
     first = lambda v: v if isinstance(v, int) else v[0]
     return dict(
         H=c["hidden_size"],
@@ -288,7 +300,7 @@ def main():
 
     tok = HunyuanTokenizer.from_pretrained()
     wte = _load("model.wte.weight").float()
-    proc = HunyuanImage3ImageProcessor(json.load(open(f"{WEIGHTS}/config.json")))
+    proc = HunyuanImage3ImageProcessor(json.load(open(WEIGHTS / "config.json")))
     generator = torch.Generator().manual_seed(SEED)
     t = _mark("1_setup_weights_tokenizer", t)
 
@@ -313,10 +325,6 @@ def main():
     print(f"[demo] seq_len={S} image_span={span} grid={grid}  (max_position_embeddings={c['MAX_SEQ']})")
     assert S <= c["MAX_SEQ"], f"seq_len {S} (image_size {image_size}) exceeds max_position_embeddings {c['MAX_SEQ']}"
 
-    # 2) text embeddings (host wte lookup — exact) for cond/uncond rows.
-    emb = torch.nn.functional.embedding(ids, wte)  # [2, S, H]
-    t = _mark("3_tokenize_embed", t)
-
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     # 2x2 mesh (full QB2): SP=axis0 / TP=axis1 layout. Phase 1 wires 4-way expert
     # parallelism across BOTH axes (16 experts/device, ~19GB bf8) so the 80GB model
@@ -335,6 +343,14 @@ def main():
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
+
+        # 2) text embeddings (on-device HunyuanTtWte) for cond/uncond rows.
+        wte_tt = HunyuanTtWte(
+            mesh_device,
+            wte,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        emb = wte_tt.embedding_torch(ids)  # [2, S, H]
 
         patch_embed = HunyuanTtUNetDown(
             mesh_device,
