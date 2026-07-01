@@ -57,14 +57,50 @@ The `profile_forward.py` core-grid probe reports the memory layout each auto-sha
 | layer4 3×3 512ch 8×32 | interleaved (not sharded) |
 
 Every conv writes its output to **interleaved DRAM**, so each conv in a BasicBlock reads from and writes
-to DRAM rather than handing an L1-resident, sharded activation to the next conv. This per-conv round-trip
-is the dominant remaining overhead in the backbone and is *not* addressed by ReLU fusion. Closing it —
-keeping activations height/block-sharded in L1 across a block, matching the residual-add's shard spec —
-is the highest-value remaining optimization (tracked as the L1-sharding rewrite; it is the risky one and
-is gated on this profile + maintainer input). Per-op *compute* core-utilisation numbers require a
-profiler-enabled build (`TT_METAL_DEVICE_PROFILER`); this report uses host wall-clock + the layout probe.
+to DRAM rather than handing an L1-resident, sharded activation to the next conv. This looked like the
+highest-value remaining lever, so it was tested directly — see §4. Per-op *compute* core-utilisation
+numbers require a profiler-enabled build (`TT_METAL_DEVICE_PROFILER`); this report uses host wall-clock +
+the layout probe.
 
-## 4. Context — end-to-end throughput is host-bound
+## 4. Optimization experiments — measured, not adopted
+
+Two conv-config levers aimed at the §3 round-trip were tested and **not adopted** because the measured
+gain was not significant or not robust for this model's (small) conv shapes. Documented here so the
+decision is reproducible (Stage 3 "document advanced tuning / known issues").
+
+**(a) Explicit L1 sharding** (`shard_layout=HEIGHT_SHARDED` / `BLOCK_SHARDED`), isolated 2-conv
+BasicBlock chain vs. the interleaved baseline, per stage:
+
+| Stage | HEIGHT_SHARDED | BLOCK_SHARDED | Output stayed in L1? |
+|---|---|---|---|
+| layer1 64ch 64×256 | 1.02× | 0.86× | no — still interleaved |
+| layer2 128ch 32×128 | 0.91× | 0.84× | no — still interleaved |
+| layer3 256ch 16×64 | 1.18× | 1.06× | no — still interleaved |
+| layer4 512ch 8×32 | **crash** (`TT_FATAL` sliding_window) | 1.00× | — |
+
+Two problems: (1) even with an explicit shard layout, `ttnn.conv2d` returns an **interleaved** output at
+these shapes, so the "keep it L1-resident across convs" premise never actually holds; (2) the latency
+effect is stage-specific and offsetting (layer3 gains, layer1/2 regress) and HEIGHT_SHARDED **crashes** on
+layer4 — so there is no viable single global config. PCC held (≥0.997) where it ran.
+
+**(b) Activation/weights double-buffering** (`enable_act_double_buffer` + `enable_weights_double_buffer`),
+applied to the whole model, end-to-end traced forward:
+
+| | median | avg | min |
+|---|---|---|---|
+| baseline | 50.0 ms | 50.7 ms | 48.7 ms |
+| + double-buffer | 49.2 ms | **53.2 ms** | 47.1 ms |
+
+Median improves ~1.5% but the **average regresses** (higher variance) — within noise, not a robust win.
+PCC unchanged. Reverted.
+
+**Conclusion:** the backbone conv activations are small (≤512 ch, ≤64×256), so sharding/double-buffer
+overhead cancels the parallelism benefit — the same "tensors too small for a sharding win" outcome seen on
+sibling small models. The auto (`shard_layout=None`) interleaved path is the right default here. The real
+lever would be a genuine L1-resident chain, which this build's `ttnn.conv2d` does not expose at these
+shapes (it re-interleaves the output regardless).
+
+## 5. Context — end-to-end throughput is host-bound
 
 The headline NavSim PDM eval wall (~26 min for 12146 scenes with the thread-pool funnel) is gated by
 host-side NavSim CPU (scene loading, metric scoring), **not** by the model forward. So forward-latency
@@ -75,7 +111,7 @@ for any deployment that is not host-bound. See README §9.
 like-for-like comparison with Wormhole N300s. The traced path here is 20.0 FPS at batch=1, full
 production resolution, real weights — the same hardware caveat applies to any absolute-FPS comparison.
 
-## 5. Accuracy (unchanged by the perf work)
+## 6. Accuracy (unchanged by the perf work)
 
 | Metric | Value |
 |---|---|
