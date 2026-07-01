@@ -62,7 +62,10 @@ def main():
             except Exception as e:
                 row[f"{mode}_error"] = str(e)
         if "dram_avg_ns" in row and "synth_avg_ns" in row:
-            delta = row["dram_avg_ns"] - row["synth_avg_ns"]
+            # Delta reported as (synth - dram) with DRAM as baseline:
+            #   +N ns / +N% = synth is SLOWER by N (partial-read wins)
+            #   -N ns / -N% = synth is FASTER by N (synthesis wins)
+            delta = row["synth_avg_ns"] - row["dram_avg_ns"]
             pct = 100.0 * delta / row["dram_avg_ns"] if row["dram_avg_ns"] else 0.0
             row["delta_ns"] = delta
             row["pct"] = pct
