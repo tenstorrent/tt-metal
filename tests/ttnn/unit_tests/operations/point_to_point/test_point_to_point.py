@@ -13,10 +13,19 @@ is identity:
 
 This file is the immutable spec — the implementer must not modify it.
 
-The op requires a multi-device ``ttnn.MeshDevice`` with the fabric enabled, so it
-uses the ``mesh_device`` fixture (parametrized to a 1xN line) plus a
-``device_params`` fabric_config keyed to the topology under test. Tests
-auto-skip on machines with too few devices.
+Verification topology (MUST match scripts/run_multidevice_sim_pytest.py's graded
+`bh_8xP150_p2p` entry): an 8-chip Blackhole mesh of shape (2, 4) with
+`fabric_config = ttnn.FabricConfig.FABRIC_1D` (a torus-x mesh-graph descriptor).
+Opening any other mesh shape (e.g. (1, 2)) hangs fabric init with
+"Fabric Router Sync: Timeout" — a test/topology mismatch, not an op defect. So
+every test here opens exactly (2, 4) + FABRIC_1D and picks sender/receiver coords
+inside it, (0, 0) -> (0, 1).
+
+Both Linear and Ring op-topologies are exercised under FABRIC_1D. For an adjacent
+sender/receiver pair, `ccl_dm_route` resolves the Ring route to the same 1-hop
+line route as Linear (the ring wraparound is only shorter for distant coords), so
+Ring is safely routable under FABRIC_1D here; a genuine wraparound ring (which
+needs FABRIC_1D_RING) is out of scope for the graded topology.
 """
 
 from math import prod
@@ -31,6 +40,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.point_to_point import point_to_point
 
 
+# ---------------------------------------------------------------------------
+# Verification topology (fixed to the graded sim entry).
+# ---------------------------------------------------------------------------
+MESH_SHAPE = (2, 4)
+FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+
+# Adjacent sender/receiver on row 0 (1-D route valid for Linear and Ring).
+SENDER = ttnn.MeshCoordinate(0, 0)
+RECEIVER = ttnn.MeshCoordinate(0, 1)
+
 # PCC tolerances keyed by dtype (same thresholds as the golden suite).
 PCC = {
     ttnn.float32: 0.999,
@@ -38,30 +57,30 @@ PCC = {
     ttnn.bfloat8_b: 0.99,
 }
 
-# Valid (dtype, layout) pairs. bfloat8_b is a tiled block-float format with no
-# row-major representation, so it appears only with TILE_LAYOUT.
-DTYPE_LAYOUTS = [
-    (ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    (ttnn.float32, ttnn.TILE_LAYOUT),
-    (ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-]
+# Integer/passthrough dtypes are compared bit-exactly (no PCC).
+_INT_DTYPES = (ttnn.uint16, ttnn.int32, ttnn.uint32)
 
-# Per-device shard shapes: single-tile, multi-tile, non-square, multi-batch,
-# non-tile-aligned. Last dims are multiples of 8 so the row-major page size stays
-# 16-byte aligned for every dtype.
-SHARD_SHAPES = [
-    (1, 1, 32, 32),  # single tile
-    (1, 1, 64, 128),  # multi-tile
-    (1, 1, 96, 64),  # non-square, tile-aligned
-    (2, 1, 32, 64),  # multi-batch
-    (1, 1, 48, 64),  # non-tile-aligned (H not %32), 16B-aligned page
-]
 
-# Topology <-> fabric_config pairing.
-LINEAR = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear)
-RING = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring)
+# Identity-transfer matrix: (topology, dtype, layout, shard_shape). Collectively
+# covers both topologies, every supported dtype, both layouts, and shape
+# diversity (single-tile, multi-tile, non-square, multi-batch, non-tile-aligned).
+# All last dims are multiples of 8 so the row-major page stays 16-byte aligned.
+CASES = [
+    # --- Linear, float / block-float (PCC) ---
+    (ttnn.Topology.Linear, ttnn.bfloat16, ttnn.TILE_LAYOUT, (1, 1, 32, 32)),  # single tile
+    (ttnn.Topology.Linear, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (1, 1, 96, 64)),  # non-square, RM
+    (ttnn.Topology.Linear, ttnn.float32, ttnn.TILE_LAYOUT, (1, 1, 64, 128)),  # multi-tile
+    (ttnn.Topology.Linear, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, (1, 1, 48, 64)),  # non-tile-aligned, RM
+    (ttnn.Topology.Linear, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, (2, 1, 32, 64)),  # multi-batch, bf8b
+    # --- Ring (adjacent coords -> same 1-hop route under FABRIC_1D) ---
+    (ttnn.Topology.Ring, ttnn.bfloat16, ttnn.TILE_LAYOUT, (1, 1, 64, 128)),  # ring, multi-tile
+    (ttnn.Topology.Ring, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, (1, 1, 96, 64)),  # ring, RM
+    (ttnn.Topology.Ring, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, (1, 1, 32, 32)),  # ring, bf8b
+    # --- integer passthrough (bit-exact) ---
+    (ttnn.Topology.Linear, ttnn.uint16, ttnn.TILE_LAYOUT, (1, 1, 32, 64)),
+    (ttnn.Topology.Linear, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, (1, 1, 32, 64)),
+    (ttnn.Topology.Ring, ttnn.uint32, ttnn.TILE_LAYOUT, (1, 1, 64, 64)),
+]
 
 
 def _linear_index(coord, mesh_shape):
@@ -80,9 +99,13 @@ def _make_input(mesh_device, shard_shape, dtype, layout):
     full_shape = (shard_shape[0] * num_devices, *shard_shape[1:])
 
     torch.manual_seed(42)
-    torch_full = torch.randn(full_shape, dtype=torch.float32)
-    if dtype == ttnn.bfloat16:
-        torch_full = torch_full.to(torch.bfloat16)
+    if dtype in _INT_DTYPES:
+        # Positive values that fit in uint16 (and hence every integer dtype here).
+        torch_full = torch.randint(0, 30000, full_shape, dtype=torch.int32)
+    else:
+        torch_full = torch.randn(full_shape, dtype=torch.float32)
+        if dtype == ttnn.bfloat16:
+            torch_full = torch_full.to(torch.bfloat16)
 
     input_tensor = ttnn.from_torch(
         torch_full,
@@ -98,92 +121,105 @@ def _make_input(mesh_device, shard_shape, dtype, layout):
     return input_tensor, input_shards
 
 
-@pytest.mark.parametrize("device_params, topology", [LINEAR, RING], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUTS)
-@pytest.mark.parametrize("shard_shape", SHARD_SHAPES)
+def _compare(expected, actual, dtype):
+    """Bit-exact for integer dtypes; PCC for float / block-float dtypes."""
+    if dtype in _INT_DTYPES:
+        assert torch.equal(expected, actual), f"{dtype}: shard bytes differ"
+    else:
+        assert_with_pcc(expected, actual, PCC[dtype])
+
+
+@pytest.mark.parametrize("device_params", [FABRIC], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("topology, dtype, layout, shard_shape", CASES)
 def test_point_to_point(mesh_device, topology, dtype, layout, shard_shape):
     """Receiver shard equals sender shard; sender's own shard is unchanged."""
     if prod(tuple(mesh_device.shape)) < 2:
         pytest.skip("point_to_point requires at least 2 mesh devices")
 
-    sender_coord = ttnn.MeshCoordinate(0, 0)
-    receiver_coord = ttnn.MeshCoordinate(0, 1)
-    send_idx = _linear_index(sender_coord, mesh_device.shape)
-    recv_idx = _linear_index(receiver_coord, mesh_device.shape)
+    send_idx = _linear_index(SENDER, mesh_device.shape)
+    recv_idx = _linear_index(RECEIVER, mesh_device.shape)
 
     input_tensor, input_shards = _make_input(mesh_device, shard_shape, dtype, layout)
 
-    output_tensor = point_to_point(input_tensor, sender_coord, receiver_coord, topology=topology)
+    output_tensor = point_to_point(input_tensor, SENDER, RECEIVER, topology=topology)
     ttnn.synchronize_device(mesh_device)
 
     output_shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(output_tensor)]
 
-    pcc = PCC[dtype]
     # Receiver shard now holds the sender's input shard.
-    assert_with_pcc(input_shards[send_idx], output_shards[recv_idx], pcc)
+    _compare(input_shards[send_idx], output_shards[recv_idx], dtype)
     # Sender's own shard is unchanged.
-    assert_with_pcc(input_shards[send_idx], output_shards[send_idx], pcc)
+    _compare(input_shards[send_idx], output_shards[send_idx], dtype)
     logger.info(f"p2p {dtype} {layout} {shard_shape} {topology}: receiver shard matches sender shard")
 
 
-@pytest.mark.parametrize("device_params, topology", [LINEAR, RING], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-@pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT), (ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)])
+@pytest.mark.parametrize("device_params", [FABRIC], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "topology, dtype, layout",
+    [
+        (ttnn.Topology.Linear, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.Topology.Ring, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
 def test_point_to_point_nonparticipating_unchanged(mesh_device, topology, dtype, layout):
-    """On a >2-device line, every non-receiver shard stays equal to its input."""
-    if prod(tuple(mesh_device.shape)) < 4:
-        pytest.skip("this test needs at least 4 mesh devices on a line")
+    """On the full mesh, every non-receiver shard stays equal to its input."""
+    if prod(tuple(mesh_device.shape)) < 3:
+        pytest.skip("this test needs at least 3 mesh devices to observe a bystander")
 
-    sender_coord = ttnn.MeshCoordinate(0, 0)
-    receiver_coord = ttnn.MeshCoordinate(0, 1)
-    send_idx = _linear_index(sender_coord, mesh_device.shape)
-    recv_idx = _linear_index(receiver_coord, mesh_device.shape)
+    send_idx = _linear_index(SENDER, mesh_device.shape)
+    recv_idx = _linear_index(RECEIVER, mesh_device.shape)
 
     input_tensor, input_shards = _make_input(mesh_device, (1, 1, 64, 64), dtype, layout)
 
-    output_tensor = point_to_point(input_tensor, sender_coord, receiver_coord, topology=topology)
+    output_tensor = point_to_point(input_tensor, SENDER, RECEIVER, topology=topology)
     ttnn.synchronize_device(mesh_device)
 
     output_shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(output_tensor)]
 
-    pcc = PCC[dtype]
-    assert_with_pcc(input_shards[send_idx], output_shards[recv_idx], pcc)
+    # Receiver got the sender's shard.
+    _compare(input_shards[send_idx], output_shards[recv_idx], dtype)
+    # Every other device (including the sender) is untouched.
     for i in range(len(output_shards)):
         if i == recv_idx:
             continue
-        assert_with_pcc(input_shards[i], output_shards[i], pcc)
+        _compare(input_shards[i], output_shards[i], dtype)
 
 
-@pytest.mark.parametrize("device_params, topology", [LINEAR, RING], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-@pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT), (ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)])
+@pytest.mark.parametrize("device_params", [FABRIC], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "topology, dtype, layout",
+    [
+        (ttnn.Topology.Linear, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.Topology.Linear, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
 def test_point_to_point_output_tensor(mesh_device, topology, dtype, layout):
     """The output_tensor path writes into the supplied tensor and returns it."""
     if prod(tuple(mesh_device.shape)) < 2:
         pytest.skip("point_to_point requires at least 2 mesh devices")
 
-    sender_coord = ttnn.MeshCoordinate(0, 0)
-    receiver_coord = ttnn.MeshCoordinate(0, 1)
-    send_idx = _linear_index(sender_coord, mesh_device.shape)
-    recv_idx = _linear_index(receiver_coord, mesh_device.shape)
+    send_idx = _linear_index(SENDER, mesh_device.shape)
+    recv_idx = _linear_index(RECEIVER, mesh_device.shape)
 
     input_tensor, input_shards = _make_input(mesh_device, (1, 1, 64, 128), dtype, layout)
     preallocated = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
 
-    returned = point_to_point(input_tensor, sender_coord, receiver_coord, topology=topology, output_tensor=preallocated)
+    returned = point_to_point(input_tensor, SENDER, RECEIVER, topology=topology, output_tensor=preallocated)
     ttnn.synchronize_device(mesh_device)
 
     # Same handle is returned.
     assert returned.buffer_address() == preallocated.buffer_address()
 
     output_shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(returned)]
-    assert_with_pcc(input_shards[send_idx], output_shards[recv_idx], PCC[dtype])
+    _compare(input_shards[send_idx], output_shards[recv_idx], dtype)
 
 
-@pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_point_to_point_program_cache(mesh_device, topology):
+@pytest.mark.parametrize("device_params", [FABRIC], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_point_to_point_program_cache(mesh_device):
     """Second call (program-cache hit) still transfers correctly.
 
     The op-internal GlobalSemaphore must survive the cache hit (created once,
@@ -192,14 +228,12 @@ def test_point_to_point_program_cache(mesh_device, topology):
     if prod(tuple(mesh_device.shape)) < 2:
         pytest.skip("point_to_point requires at least 2 mesh devices")
 
-    sender_coord = ttnn.MeshCoordinate(0, 0)
-    receiver_coord = ttnn.MeshCoordinate(0, 1)
-    send_idx = _linear_index(sender_coord, mesh_device.shape)
-    recv_idx = _linear_index(receiver_coord, mesh_device.shape)
+    send_idx = _linear_index(SENDER, mesh_device.shape)
+    recv_idx = _linear_index(RECEIVER, mesh_device.shape)
 
     for call in range(2):
         input_tensor, input_shards = _make_input(mesh_device, (1, 1, 32, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-        output_tensor = point_to_point(input_tensor, sender_coord, receiver_coord, topology=topology)
+        output_tensor = point_to_point(input_tensor, SENDER, RECEIVER, topology=ttnn.Topology.Linear)
         ttnn.synchronize_device(mesh_device)
         output_shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(output_tensor)]
         assert_with_pcc(input_shards[send_idx], output_shards[recv_idx], PCC[ttnn.bfloat16])

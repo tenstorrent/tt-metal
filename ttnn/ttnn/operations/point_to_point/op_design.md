@@ -252,6 +252,23 @@ After phase 7, every device's `sem` copy is back to 0 (clean for the next cache 
 
 `dim`-style index canonicalization is not applicable (no index axis). `topology` is taken verbatim (`Linear`/`Ring`).
 
+## Verification Topology
+
+The op is verified on a simulated multi-chip mesh via `scripts/run_multidevice_sim_pytest.py`. The graded (`grade_primary`, `required`) entry is `bh_8xP150_p2p` in `scripts/multidevice_sim_topologies.yaml`:
+
+| Field | Value |
+|-------|-------|
+| arch | Blackhole (8× P150, all-MMIO) |
+| mesh shape | **(2, 4)** — 8 chips |
+| mesh-graph descriptor | `blackhole_8xP150_torus_x_mesh_graph_descriptor.textproto` (torus wraparound in x/columns) |
+| fabric_config | **`ttnn.FabricConfig.FABRIC_1D`** (set by the test, not the descriptor) |
+
+**The acceptance test's `mesh_device` fixture MUST open exactly `(2, 4)` with `FABRIC_1D`.** The mesh-graph descriptor fixes the mesh shape; opening any other shape (e.g. `(1, 2)`) hangs fabric init with `Fabric Router Sync: Timeout` — a test/topology mismatch, not a sim or op defect. Sender/receiver coords are picked inside the mesh: `(0, 0) → (0, 1)` (adjacent, row 0, a valid 1-D route).
+
+Both Linear and Ring op-topologies are exercised under the SAME `FABRIC_1D` fabric config. For an adjacent coord pair, `ccl_dm_route(..., Ring)` computes `line_hops = 1` and `ring_hops = 1 + mesh_shape[dim] = 5`; since `|5| > |1|` it falls through to the 1-hop line route (`ccl_helpers_dataflow_host.hpp:156-165`). So Ring degenerates to the Linear route for adjacent coords and is safely routable under `FABRIC_1D`. A genuine ring wraparound (short-way over the torus, e.g. `(0,0) → (0,3)` = 1 backward hop) requires `FABRIC_1D_RING` and is covered by throwaway sim confirmation tests, not the graded acceptance suite.
+
+Per-device shards are produced with `ttnn.ShardTensorToMesh(mesh_device, dim=0)` and read back per-device with `ttnn.get_device_tensors(...)` → `ttnn.to_torch(...)`; the linear (row-major) index of a `MeshCoordinate` is `coord[0] * mesh_shape[1] + coord[1]`. The oracle is identity: `to_torch(out_shard[receiver]) == to_torch(in_shard[sender])` (bit-exact for integer dtypes, PCC for float / block-float), and every non-receiver shard equals its own input.
+
 ## Key Risks and Gotchas
 
 - **Semaphore reset order is load-bearing.** Sender resets BEFORE its outgoing "done" inc; receiver resets AFTER its "done" wait (`ccl_helpers_dataflow.hpp:67-69`). Missing or mis-ordered resets pass run 1 and hang/corrupt run 2 (program-cache reuse).
