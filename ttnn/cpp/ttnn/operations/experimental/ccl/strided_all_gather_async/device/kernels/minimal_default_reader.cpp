@@ -71,8 +71,10 @@ void kernel_main() {
     const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 
     OpSignaler op_signaler;
+    bool writer_signals_mm = false;
     if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
+        writer_signals_mm = get_arg_val<uint32_t>(arg_idx++) == 1;
     }
 
     uint32_t slices_expected = 0;
@@ -181,9 +183,11 @@ void kernel_main() {
                         last_input_chunk_start_tile = input_chunk_start_tile;
                     }
                     if constexpr (fuse_op) {
-                        DeviceZoneScopedN("AG-MM-SIGNAL");
-                        // Signal matmul to go
-                        op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+                        if (!writer_signals_mm) {
+                            DeviceZoneScopedN("AG-MM-SIGNAL");
+                            // Signal matmul to go
+                            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+                        }
                     }
                 }
                 slices_received++;

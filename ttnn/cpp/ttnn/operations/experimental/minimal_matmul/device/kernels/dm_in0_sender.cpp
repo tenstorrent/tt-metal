@@ -132,11 +132,14 @@ void kernel_main() {
     uint32_t fused_op_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
     uint32_t num_devices = get_arg_val<uint32_t>(fused_op_rt_args_idx);
     uint32_t num_k_blocks = get_arg_val<uint32_t>(fused_op_rt_args_idx + 1);
+    uint32_t num_ag_workers = get_arg_val<uint32_t>(fused_op_rt_args_idx + 9);  // after the 9 scalar args
     uint8_t k_block_device_expected[num_k_blocks]{};
     uint8_t k_block_device_received[num_k_blocks]{};
     uint32_t device_k_block_counts[num_devices]{};
     uint32_t device_k_block_start_ids[num_devices]{};
     uint32_t forward_k_block_schedule[num_k_blocks]{};
+    uint32_t backward_sem_addrs[num_ag_workers]{};
+    uint32_t forward_sem_addrs[num_ag_workers]{};
     if constexpr (is_injector_core) {
         fused_op_receiver = MinimalMatmulOpReceiver(
             true,
@@ -145,7 +148,9 @@ void kernel_main() {
             k_block_device_received,
             device_k_block_counts,
             device_k_block_start_ids,
-            forward_k_block_schedule);
+            forward_k_block_schedule,
+            backward_sem_addrs,
+            forward_sem_addrs);
     }
 
 #ifdef READ_FROM_LOCAL_INPUT
@@ -165,7 +170,8 @@ void kernel_main() {
     // OpSignaler runtime args start after output addresses and optional FUSE_AG args
     uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
 #ifdef FUSE_AG
-    srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
+    // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args: 9 scalars + num_ag_workers + (2N+1) sems
+    srs_fuse_signaler_rt_args_idx += (11 + 2 * get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9));
 #endif
     OpSignaler srs_fuse_signaler;
     if constexpr (is_output_writer) {
