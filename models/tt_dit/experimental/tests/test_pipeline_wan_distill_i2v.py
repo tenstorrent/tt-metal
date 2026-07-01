@@ -25,7 +25,9 @@ from models.tt_dit.utils.test import ring_params
     "mesh_device, mesh_shape, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         # BH Galaxy 4x8 Ring — sole supported config in the first Distill PR.
-        [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
+        # trace_region_size bumped to 200MB so the traced run's trace buffers fit
+        # (mirrors WAN22_DISTILL_BH_TRACE_REGION_BYTES in the tt-media-server runner).
+        [(4, 8), (4, 8), 2, False, {"trace_region_size": 200000000, **ring_params}, ttnn.Topology.Ring, False],
     ],
     ids=["bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
@@ -93,6 +95,7 @@ def test_pipeline_inference(
                 guidance_scale=guidance_scale,
                 guidance_scale_2=guidance_scale_2,
                 output_type="uint8",
+                traced=True,
             )
 
         if hasattr(result, "frames"):

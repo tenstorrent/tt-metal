@@ -16,7 +16,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConf
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params, ring_params, ring_params_8k
 
 
 @pytest.mark.parametrize(
@@ -34,6 +34,10 @@ from ....utils.test import line_params, ring_params
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH (ring) on 4x8 — copied from test_performance_wan.py (blessed config).
+        # trace_region_size 200MB so the traced run's trace buffers fit (matches
+        # WAN22_GALAXY_BH_TRACE_REGION_BYTES in the tt-media-server runner).
+        [(4, 8), (4, 8), 1, 0, 2, False, {"trace_region_size": 200000000, **ring_params_8k}, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -41,6 +45,7 @@ from ....utils.test import line_params, ring_params
         "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "ring_bh_4x8_sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -121,6 +126,7 @@ def test_pipeline_inference(
                 guidance_scale=guidance_scale,
                 guidance_scale_2=guidance_scale_2,
                 output_type="uint8",
+                traced=True,
             )
 
         logger.info(f"Inference completed successfully")

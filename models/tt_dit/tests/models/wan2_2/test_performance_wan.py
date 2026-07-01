@@ -136,8 +136,19 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False, None],
         # WH on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True, None],
-        # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False, None],
+        # BH (ring) on 4x8 — trace region added so 4x8 can run traced (base I2V needs ~128MB)
+        [
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            2,
+            False,
+            {"trace_region_size": 200000000, **ring_params_8k},
+            ttnn.Topology.Ring,
+            False,
+            None,
+        ],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, None],
         [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False, None],
@@ -195,7 +206,7 @@ def test_pipeline_performance(
     """Performance test for Wan pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
-    traced = mesh_shape == (4, 32)  # trace only for quadx32
+    traced = mesh_shape in ((4, 32), (4, 8))  # trace on quadx32 and BH Galaxy 4x8
 
     # Skip 4U.
     if galaxy_type == "4U":
