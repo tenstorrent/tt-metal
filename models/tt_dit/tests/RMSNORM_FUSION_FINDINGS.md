@@ -241,6 +241,41 @@ A split-sender ring AG (each worker one full-wrap mcast instead of two arc mcast
 tried and **reverted** — essentially neutral (only the largest no-RoPE shape gained ~3%)
 and more fragile under traced replay. Dual-direction arc AG is the only path.
 
+### Worker-cap re-sweep — WH galaxy, post-rebase + LayerNorm (2026-07-01)
+
+Re-swept `WAN_RMSNORM_WORKER_CAP` (the knob was re-added to `derive_worker_cap`; it overrides
+the grid cap, still validity-clamped, and bypasses the BH knee) over the galaxy RMS configs
+(wan/ltx/flux) **and** the FLUX LayerNorm bench, fused-only. Caps {32, 48, 64}. Fused µs, best
+in **[ ]**:
+
+| shape | c32 | c48 | c64 |
+|---|---:|---:|---:|
+| RMS self_sp4_N18944   | 847 | 686 | **632** |
+| RMS cross_q_sp4_N18944| 585 | 539 | **520** |
+| RMS flux_tp8_N16384_phn0 | 589 | 447 | **408** |
+| RMS flux_tp4_N8192_phn0  | 441 | 402 | **357** |
+| LN flux_tp8_N16384    | 874 | 637 | **528** |
+| LN flux_tp8_N4096     | 246 | 205 | **171** |
+| LN flux_tp4_N8192     | 610 | 495 | **402** |
+| RMS self_sp32_N2368 (mid) | 154 | **129** | 130 |
+| RMS v_selfattn_qk_s2 (mid, compute-bound) | 223 | **223** | 230 |
+
+**Conclusion: heuristic UNCHANGED — grid-derived cap 64 is validated for BOTH RMSNorm and
+LayerNorm on WH.** Large / all-gather-bound shapes improve monotonically 32<48<64 (64 is the
+grid/validity ceiling; the curve is still rising to it), and **LayerNorm behaves exactly like
+RMSNorm** — no norm-specific divergence, so no separate LN cap is needed. Small shapes
+(rows < cap) are cap-independent (`num_workers = tile_rows`). A couple of mid compute-bound RMS
+shapes prefer cap 48 by ~1–3%, but a global cap-48 would cost 5–15% on the large shapes that
+dominate runtime — not worth it. (The BH re-sweep is separate — BH keeps its own knee=48.)
+
+> **cap 56 reproducibly HANGS** `wan_tp4_galaxy` (2/2 runs on a freshly-reset galaxy timed out
+> at 300 s; 54 CPU-min, no output). 48 (12 workers/fwd) and 64 (16/fwd) both run fine; 56
+> (14/fwd) deadlocks the fabric-forwarder AG despite being grid-row-aligned and validity-legal.
+> Root cause not chased (off the production path — the heuristic never emits 56). **Takeaway:
+> only feed `derive_worker_cap`-produced values; arbitrary caps can deadlock the AG — relevant
+> when sweeping caps on BH.** Only `WAN_RMSNORM_WORKER_CAP` was re-added; `FORCE_WORKERS` /
+> `FORCE_CHUNK` remain stripped.
+
 ---
 
 ## Feature support — nothing missing at the API level
