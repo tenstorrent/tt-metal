@@ -109,14 +109,16 @@ def get_default_dispatch_core_axis(fabric_tensix_config=None):
 
 class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
     def __init__(self, type: DispatchCoreType = None, axis: DispatchCoreAxis = None, fabric_tensix_config=None):
-        # Validate user provided args
-        if type:
+        # Validate user provided args.
+        # NOTE: Use `is not None` (not truthiness) because DispatchCoreType.WORKER == 0
+        # and DispatchCoreAxis.ROW == 0, both of which are falsy in Python.
+        if type is not None:
             if not isinstance(type, DispatchCoreType):
                 valid_values = [e for e in DispatchCoreType.__members__.values()]
                 raise ValueError(f"Invalid dispatch core type: {type}. Valid values are: {valid_values}")
             if type == DispatchCoreType.ETH and axis == DispatchCoreAxis.COL:
                 raise ValueError("COL axis is not supported for ETH dispatch core type")
-        if axis:
+        if axis is not None:
             if not isinstance(axis, DispatchCoreAxis):
                 valid_values = [e for e in DispatchCoreAxis.__members__.values()]
                 raise ValueError(f"Invalid dispatch core axis: {axis}. Valid values are: {valid_values}")
@@ -124,16 +126,16 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
                 raise ValueError(
                     "ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled"
                 )
-        if type and axis:
+        if type is not None and axis is not None:
             # User provided both valid type and axis, check if they are compatible
             self.type = type
             self.axis = axis
-        elif type:
+        elif type is not None:
             # User provided only valid type
             self.type = type
             self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
             logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
-        elif axis:
+        elif axis is not None:
             self.axis = axis
             # User provided only valid axis
             if self.axis == DispatchCoreAxis.COL:
