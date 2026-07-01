@@ -259,14 +259,21 @@ class LTXDistilledPipeline(LTXPipeline):
                 device=self.mesh_device,
             )
             # I2V pin buffers (mask + clean frame-0 latent): reserve here so replays can't clobber
-            # them. Allocated for every stage even when unused by t2v — small and harmless.
-            for buf in (state._tt_i2v_mask, state._tt_i2v_clean):
-                buf.update(
-                    torch.zeros(1, 1, video_N, self.in_channels),
-                    False,
-                    mesh_axes=[None, None, sp_axis, None],
-                    device=self.mesh_device,
-                )
+            # them. Allocated for every stage even when unused by t2v — small and harmless. The mask
+            # is per-token width-1 (broadcasts against the 128-ch latent in the pin); clean carries the
+            # real per-channel cond latent, so it stays full width.
+            state._tt_i2v_mask.update(
+                torch.zeros(1, 1, video_N, 1),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
+            state._tt_i2v_clean.update(
+                torch.zeros(1, 1, video_N, self.in_channels),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
 
     def _denoise_no_guidance(
         self,
@@ -402,8 +409,10 @@ class LTXDistilledPipeline(LTXPipeline):
 
         tt_i2v_mask = tt_i2v_clean = None
         if image_cond:
-            mask_host = torch.ones(1, 1, video_N, self.in_channels)
-            mask_host[:, :, :video_N_real, :] = denoise_mask[0, :, 0].unsqueeze(-1).expand(-1, self.in_channels)
+            # Mask stays width-1; ttnn broadcasts it against the (…,128) latent in the pin. Padded
+            # tokens keep 1.0 (unpinned).
+            mask_host = torch.ones(1, 1, video_N, 1)
+            mask_host[:, :, :video_N_real, :] = denoise_mask[0, :, 0].unsqueeze(-1)
             clean_host = torch.zeros(1, 1, video_N, self.in_channels)
             clean_host[:, :, :video_N_real, :] = clean_latent
             # Copy into the pre-allocated trace-baked buffers so pin inputs keep stable addresses
