@@ -107,7 +107,6 @@ public:
     // This value is queried from the actual hardware via the cluster API
     // and reflects the device's current operating frequency.
     int get_clock_rate_mhz() const override;
-    uint32_t get_arc_timer_heartbeat() const override;
 
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
