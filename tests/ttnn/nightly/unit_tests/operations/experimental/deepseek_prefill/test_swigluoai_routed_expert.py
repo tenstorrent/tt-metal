@@ -148,7 +148,7 @@ def test_swigluoai_routed_expert(mesh_device, device_params, num_tokens):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
-@pytest.mark.parametrize("num_tokens", [128, 1024], ids=["t128", "t1k"])
+@pytest.mark.parametrize("num_tokens", [128, 1024, 4096], ids=["t128", "t1k", "t4k"])
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
@@ -160,6 +160,11 @@ def test_swigluoai_routed_expert_m3_shapes(mesh_device, device_params, num_token
     factory now shrinks in0_block_w_gu / per_core_M to fit; this asserts the op builds
     (no L1 overflow) AND stays numerically correct at M3 shapes. Dims from
     models/demos/minimax_m3/configs/MiniMax-M3/config.json (hidden_size / intermediate_size).
+
+    Token counts cover both program-factory M paths: t128/t1k (<= 1024 tokens =
+    <= 32 M-tiles) take the short-seq path; t4k (4096 tokens = 128 M-tiles) takes
+    the general 2D path — the exact prefill dispatch-buffer shape that overflowed
+    L1 before the adaptive guard.
     """
     run_swigluoai_routed_expert(
         mesh_device,

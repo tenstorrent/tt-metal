@@ -418,6 +418,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
 }
 
 #ifdef SWIGLU_OAI
+// Dst-accumulator mode (fp32 dest accum on/off) from the host ComputeConfig,
+// passed via -DFP32_DEST_ACC_EN. Defaults to bf16 dst (0) if not passed.
+#ifndef FP32_DEST_ACC_EN
+#define FP32_DEST_ACC_EN 0
+#endif
 // SwiGLU-OAI activation pass (replaces gate-silu + multiply_phase for M3/gpt-oss).
 // Reads the raw bf16 gate & up matmul accumulators (both still resident in their
 // partials CBs) and writes the activated result into activated_cb:
@@ -434,12 +439,16 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // chunks of <=4 output tiles (<=8 dst). The activated CB is drained count-based by
 // the reader (cb_wait_front(cb_activated, d_in0_block_num_tiles)), so the push
 // granularity here is free and need not match out_subblock_num_tiles.
-template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
+template <uint32_t out_block_num_tiles>
 FORCE_INLINE void swiglu_oai_activation_phase(
     uint32_t prev_srcA_cb_id, uint32_t gate_partials_cb_id, uint32_t up_partials_cb_id, uint32_t activated_cb_id) {
-    // MATH-thread dst capacity (bf16 dst / fp32_dest_acc_en=false). Each output
-    // tile needs gate+up resident simultaneously -> 2 dst slots -> 4 per acquire.
-    constexpr uint32_t kDstCapacity = 8;
+    // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
+    // it and the SFPU op's fp32-dest template below stay in sync with the
+    // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
+    // 16-tile dst reg file halves under fp32 dest accum. Each output tile pins
+    // gate+up simultaneously -> 2 dst slots -> kActChunk output tiles / acquire.
+    constexpr bool kFp32DestAccEn = (FP32_DEST_ACC_EN != 0);
+    constexpr uint32_t kDstCapacity = kFp32DestAccEn ? 4u : 8u;
     constexpr uint32_t kActChunk = kDstCapacity / 2;
 
     cb_wait_front(gate_partials_cb_id, out_block_num_tiles);
@@ -465,7 +474,7 @@ FORCE_INLINE void swiglu_oai_activation_phase(
         // Fused clamp + alpha-sigmoid + (up+1) multiply; result written in place to
         // dst[j] (out == gate slot, mirroring moe_gpt's swiglu(0,1,0)).
         for (uint32_t j = 0; j < c; ++j) {
-            MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<false>(j, c + j, j)));
+            MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<kFp32DestAccEn>(j, c + j, j)));
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -670,8 +679,7 @@ void kernel_main() {
         // gate-silu pass (skipped above) and the plain multiply_phase. cb_in1_up is
         // the unpacker's last SrcA operand (up matmul in1), passed so the partials
         // reconfig (weights df -> Float16_b) actually fires.
-        swiglu_oai_activation_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
-            cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated);
+        swiglu_oai_activation_phase<gu_out_block_num_tiles>(cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated);
         (void)cb_gate_intermed;
         (void)cb_up_intermed;
 #else
