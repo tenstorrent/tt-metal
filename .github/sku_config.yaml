@@ -235,7 +235,7 @@ skus:
     allocation:
       type: MGD
       match_labels:
-        exabox.tenstorrent.com/purpose: ci-mce-error
+        exabox.tenstorrent.com/purpose: ci-metal
       topologyKeys:
         - exabox.tenstorrent.com/superpod
       mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
