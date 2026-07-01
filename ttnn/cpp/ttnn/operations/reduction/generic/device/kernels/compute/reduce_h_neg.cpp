@@ -188,6 +188,10 @@ void kernel_main() {
                     }
                 }
                 pack_reconfig_data_format(cb_acc);
+                constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+                if constexpr (swap_operands) {
+                    reconfig_data_format(cb_scaler, cb_ineg);
+                }
                 reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, i, 0, i);

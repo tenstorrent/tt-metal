@@ -59,7 +59,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::NoDebias);  // Extract exponent ( = 2**(integer part of val/ln2))
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
@@ -126,7 +126,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        exexp(z, sfpi::ExponentMode::NoDebias);   // Extract exponent ( = 2**(integer part of val/ln2))
+        exexp(z, sfpi::ExponentMode::Biased);     // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vMag fractional_part = sfpi::exman(z);  // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
@@ -225,7 +225,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 
     if constexpr (unsafe) {
         // y = 2**i * r
-        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i;
+        e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
         y = sfpi::setexp(r, e);
     } else {
         // IMPORTANT: this bit-level hack only works on Wormhole, which
@@ -240,7 +240,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
         // This is our underflow result, which handles -NaN correctly too.
         y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(y) + -1);
         y *= 0.0f;
-        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i;
+        e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
         v_if(e >= 1) {
             // Overflow: y = infinity or NaN
             // We add infinity to our underflow result to get the overflow result.

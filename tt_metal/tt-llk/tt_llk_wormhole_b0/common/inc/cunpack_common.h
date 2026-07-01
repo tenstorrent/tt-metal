@@ -749,12 +749,8 @@ inline void configure_unpack_AB(
     // Get pointer to registers for current state ID
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
-    std::uint32_t unpA_ch1_x_stride = (unpA_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpA_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                      : 1;
-    std::uint32_t unpB_ch1_x_stride = (unpB_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpB_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                      : 1;
+    std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpA_dst_format);
+    std::uint32_t unpB_ch1_x_stride = datum_size_in_bytes(unpB_dst_format);
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     std::uint32_t unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
     std::uint32_t exp_width         = (unpA_dst_format >> 2) & 0x1; // 0=5-bit, 1=8-bit
@@ -951,9 +947,7 @@ inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint3
     std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId));  // Apply fixed offset of 4*16 to dest address
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                          // Disable address bit swizzle
     TTI_RDCFG(p_gpr_unpack::UNPACK_STRIDE, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Save current stride
-    std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                        : 1;
+    std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride
