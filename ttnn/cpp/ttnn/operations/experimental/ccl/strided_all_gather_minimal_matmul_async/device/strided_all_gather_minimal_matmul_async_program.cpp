@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include <algorithm>
+#include <cstdlib>
 
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -108,6 +109,11 @@ strided_all_gather_minimal_matmul_async_program(
         topology,
         read_local_slice_from_input,
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
+
+    // Option W (writer-signals-matmul): the matmul cores keep the legacy 3 semaphores (backward,
+    // forward, self) and wait +1 per k-block. When the flag is on, a dedicated per-direction
+    // aggregation core (see the AG program factory) collects the N per-worker landing signals and
+    // provides that single +1 - so the matmul semaphore count is unchanged here (num_ag_workers = 1).
 
     // Matmul - wrap single output tensor in vector for unified interface
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
