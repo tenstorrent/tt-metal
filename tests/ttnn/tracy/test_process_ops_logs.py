@@ -251,6 +251,79 @@ def test_attach_counter_derived_bw_uses_real_peaks(tmp_path):
     assert ops[1]["ETH BW UTIL FROM COUNTERS (%)"] == pytest.approx(50.0, abs=1.0)
 
 
+def test_analytical_ccl_bw_from_op_record():
+    """The all-gather BW is derived from the op record alone (output shape + ring_size + topology +
+    measured duration) -- no noc-traces. Reproduces the hand-validated stage-2 gather at 43%."""
+    op = {
+        "op_code": "AllGatherAsyncDeviceOperation",
+        "attributes": {"ring_size": "2", "num_links": "2", "topology": "Topology::Linear", "dim": "3"},
+        "output_tensors": [
+            {"shape": {"W": "1[1]", "Z": "1[1]", "Y": "9696[9696]", "X": "4096[4096]"}, "dtype": "BFLOAT16"}
+        ],
+    }
+    gbps, pct = process_ops_logs._analytical_ccl_bw(op, duration_ns=924_000, per_link_gbps=50.0)
+    assert gbps == pytest.approx(21.49, abs=0.2)
+    assert pct == pytest.approx(43.0, abs=1.0)
+    # No trained peak -> GB/s still known, %util blank (never fabricated).
+    _, pct_np = process_ops_logs._analytical_ccl_bw(op, 924_000, None)
+    assert pct_np is None
+    # A non-CCL op is left entirely alone.
+    matmul = {"op_code": "Matmul", "attributes": {}, "output_tensors": op["output_tensors"]}
+    assert process_ops_logs._analytical_ccl_bw(matmul, 924_000, 50.0) == (None, None)
+
+
+def test_generate_reports_writes_ccl_fabric_bw_column(tmp_path):
+    """End-to-end: an all-gather op + a fabric_link_bw sidecar must surface the analytical CCL
+    fabric-BW columns in the CSV, computed against the real trained link speed and no noc-traces."""
+    import json
+
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+    (log_folder / "fabric_link_bw_0.json").write_text(json.dumps({"device_id": 0, "per_link_gb_s": 50.0}))
+
+    ops = {
+        1: {
+            "global_call_count": 1,
+            "device_id": 0,
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": None,
+            "op_code": "AllGatherAsyncDeviceOperation",
+            "attributes": {"ring_size": "2", "num_links": "2", "topology": "Topology::Linear"},
+            "input_tensors": [],
+            "output_tensors": [
+                {
+                    "shape": {"W": "1[1]", "Z": "1[1]", "Y": "9696[9696]", "X": "4096[4096]"},
+                    "layout": "TILE",
+                    "dtype": "BFLOAT16",
+                    "storage_type": "DEV_0_DRAM_INTERLEAVED",
+                }
+            ],
+            "DEVICE FW DURATION [ns]": 924_000,
+        }
+    }
+
+    process_ops_logs.generate_reports(
+        ops=ops,
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    report_csv = Path(report_folder) / "ops_perf_results.csv"
+    with report_csv.open("r", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        row = next(reader)
+        assert "CCL FABRIC BW [GB/s]" in reader.fieldnames
+        assert "CCL FABRIC BW UTIL (%)" in reader.fieldnames
+        assert float(row["CCL FABRIC BW [GB/s]"]) == pytest.approx(21.49, abs=0.3)
+        assert float(row["CCL FABRIC BW UTIL (%)"]) == pytest.approx(43.0, abs=1.0)
+
+
 def test_generate_reports_writes_noc_counter_bytes_column(tmp_path):
     log_folder = tmp_path / "logs"
     report_folder = tmp_path / "reports"
