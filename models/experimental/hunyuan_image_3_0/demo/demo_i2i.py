@@ -93,6 +93,29 @@ RECAPTION_ON_DEVICE = os.environ.get("HY_RECAPTION_DEVICE", "1") != "0"
 USE_DISTIL = os.environ.get("HY_DISTIL", "0") == "1"
 SCALING = 0.562679178327931
 
+# --- lightweight per-stage timing (mirrors demo.py) -------------------------
+_TIMINGS = []
+
+
+def _mark(name, since):
+    dt = time.time() - since
+    _TIMINGS.append((name, dt))
+    print(f"[timing] {name}: {dt:.1f}s", flush=True)
+    return time.time()
+
+
+def _print_timing_summary(total):
+    print("\n==================== I2I TIMING SUMMARY ====================", flush=True)
+    acc = 0.0
+    for name, dt in _TIMINGS:
+        acc += dt
+        print(f"[timing] {name:34s} {dt:8.1f}s  ({100 * dt / total:5.1f}%)", flush=True)
+    other = total - acc
+    if abs(other) > 0.5:
+        print(f"[timing] {'(unaccounted)':34s} {other:8.1f}s  ({100 * other / total:5.1f}%)", flush=True)
+    print(f"[timing] {'TOTAL':34s} {total:8.1f}s", flush=True)
+    print("============================================================", flush=True)
+
 
 def _resolve_model_dir(distil: bool) -> Path:
     if distil:
@@ -255,6 +278,8 @@ def _run_recaption_host(model_dir, weights, prompt, bot_task, system_prompt, pil
 
 
 def main():
+    t_start = time.time()
+    t = t_start
     parser = argparse.ArgumentParser(description="HunyuanImage-3.0 Instruct I2I on Tenstorrent")
     parser.add_argument("--prompt", default=os.environ.get("HY_PROMPT", "make the sky more dramatic"))
     parser.add_argument(
@@ -325,6 +350,7 @@ def main():
     timestep_emb_ref = load_timestep_embedder("timestep_emb", model_dir)
     vision_ref = load_siglip2_vision(model_dir, num_layers=VIT_LAYERS)
     aligner_ref = load_aligner(model_dir)
+    t = _mark("1_setup_weights_encoders_cond", t)
 
     if args.bot_task != "image":
         sp_key, sp_sub = system_prompt_for_bot_task(args.bot_task)
@@ -417,6 +443,7 @@ def main():
             )
 
         print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
+        t = _mark("2_recaption_ar", t)
 
     denoise_system = get_system_prompt("en_unified", "image")
     print("[demo_i2i] building I2I denoise bundle ...")
@@ -446,6 +473,7 @@ def main():
     timestep_emb = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H)
     guidance_emb = load_timestep_embedder("guidance_emb", model_dir, hidden_size=H) if cfg_distilled else None
     timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
+    t = _mark("3_build_i2i_bundle", t)
 
     print("[demo_i2i] opening denoise mesh (2x2) ...", flush=True)
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -520,6 +548,7 @@ def main():
         init_latent = torch.randn(1, LATENT, grid[0], grid[1])
         sched = HunyuanTtScheduler(mesh_device)
         sched.set_timesteps(steps)
+        t = _mark("4_build_denoise_mesh_backbone", t)
         mode = "distil" if cfg_distilled else "CFG"
         print(
             f"[demo_i2i] denoising {steps} steps ({mode}, guidance={GUIDANCE}, seq_len={seq_len}) ...",
@@ -542,6 +571,7 @@ def main():
             mesh_device=mesh_device,
         )
         print(f"[demo_i2i] denoised latent {tuple(latent.shape)}")
+        t = _mark("5_denoise_loop", t)
     finally:
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -563,10 +593,13 @@ def main():
     finally:
         ttnn.close_mesh_device(vae_mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    t = _mark("6_vae_decode", t)
 
     arr = (img[0].permute(1, 2, 0).cpu().numpy() * 255).round().astype("uint8")
     Image.fromarray(arr).save(args.out)
     print(f"[demo_i2i] saved -> {args.out}")
+    t = _mark("7_save_png", t)
+    _print_timing_summary(time.time() - t_start)
 
 
 if __name__ == "__main__":
