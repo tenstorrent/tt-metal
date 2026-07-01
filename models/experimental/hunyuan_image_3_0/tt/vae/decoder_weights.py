@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import torch
+import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
     load_conv_in,
@@ -20,6 +21,33 @@ def _load_state(module, state_dict) -> None:
     module.load_torch_state_dict(state_dict)
 
 
+def _load_gn(module, state_dict) -> None:
+    """Load a GroupNorm3D and stash its raw per-channel affine ([1,1,1,C] fp32,
+    replicated across the mesh) so the distributed (spatially-sharded) group_norm can
+    apply the affine without the packed ttnn.group_norm weights. See spatial.py."""
+    module.load_torch_state_dict(state_dict)
+    C = module.num_channels
+    dev = module.mesh_device
+    w = state_dict.get("weight")
+    b = state_dict.get("bias")
+    gamma = w.reshape(1, 1, 1, C).float() if w is not None else torch.ones(1, 1, 1, C)
+    beta = b.reshape(1, 1, 1, C).float() if b is not None else torch.zeros(1, 1, 1, C)
+    module._raw_gamma = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=dev,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+    )
+    module._raw_beta = ttnn.from_torch(
+        beta,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=dev,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+    )
+
+
 def init_conv_in(module) -> None:
     ref = load_conv_in(dtype=_REF_DTYPE)
     _load_state(module.conv, ref.conv.state_dict())
@@ -27,8 +55,8 @@ def init_conv_in(module) -> None:
 
 
 def load_resnet_block(module, ref_block) -> None:
-    _load_state(module.norm1, ref_block.norm1.state_dict())
-    _load_state(module.norm2, ref_block.norm2.state_dict())
+    _load_gn(module.norm1, ref_block.norm1.state_dict())
+    _load_gn(module.norm2, ref_block.norm2.state_dict())
     _load_state(module.conv1, ref_block.conv1.state_dict())
     _load_state(module.conv2, ref_block.conv2.state_dict())
     if module.nin_shortcut is not None:
@@ -63,7 +91,7 @@ def load_up_block(module, ref_block) -> None:
 
 
 def load_norm_out(module, ref_norm_out) -> None:
-    _load_state(module.norm, ref_norm_out.norm.state_dict())
+    _load_gn(module.norm, ref_norm_out.norm.state_dict())
 
 
 def load_conv_out(module, ref_conv_out) -> None:
