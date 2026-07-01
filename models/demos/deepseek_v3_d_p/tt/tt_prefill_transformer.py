@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
 
@@ -115,7 +115,7 @@ class TtPrefillTransformer(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -149,6 +149,11 @@ class TtPrefillTransformer(LightweightModule):
         # instance builds the whole model unchanged.
         self.is_first_rank = is_first_rank
         self.is_last_rank = is_last_rank
+
+        # The blocks take the full per-axis topology (they split SP/TP internally for the MoE).
+        # The final norm and LM head are pure TP-axis (cluster_axis=tp_axis) collectives, so they
+        # take the scalar TP element.
+        tp_topology = topology[1] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -227,7 +232,7 @@ class TtPrefillTransformer(LightweightModule):
                 epsilon=config.rms_norm_eps,
                 cluster_axis=tp_axis,
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix="norm",
             )
@@ -258,7 +263,7 @@ class TtPrefillTransformer(LightweightModule):
                 vocab_size=config.vocab_size,
                 torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,
                 is_balanced=is_balanced,
                 weight_cache_path=weight_cache_path,
                 is_column_parallel=lm_head_is_column_parallel,
