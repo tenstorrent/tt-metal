@@ -34,6 +34,20 @@ _LOCAL_CKPT = "data/diffusiondrive_navsim.pth"
 _LOCAL_ANCHORS = "data/kmeans_navsim_traj_20.npy"
 
 
+def _safe_subpath(root: Path, rel: str) -> Path:
+    """Resolve ``root / rel`` and confirm the result stays within ``root``.
+
+    ``root`` is operator-supplied (the ``--root`` argument), so validate the join
+    rather than trusting it: a stray absolute path or ``..`` in the (otherwise
+    constant) relative name would otherwise let a write escape the asset root.
+    """
+    root = root.resolve()
+    dest = (root / rel).resolve()
+    if dest != root and root not in dest.parents:
+        raise ValueError(f"refusing to write outside asset root: {dest} is not under {root}")
+    return dest
+
+
 def _download_hf(repo_id: str, filename: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
@@ -107,8 +121,8 @@ def _extract_anchors(ckpt_path: Path, anchors_path: Path) -> None:
 def prepare(root: Path) -> None:
     print(f"Asset root: {root.resolve()}")
 
-    ckpt_path = root / _LOCAL_CKPT
-    anchors_path = root / _LOCAL_ANCHORS
+    ckpt_path = _safe_subpath(root, _LOCAL_CKPT)
+    anchors_path = _safe_subpath(root, _LOCAL_ANCHORS)
 
     print("\n[checkpoint]")
     _download_hf(_HF_REPO, _HF_FILENAME, ckpt_path)
