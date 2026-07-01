@@ -5,7 +5,6 @@
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
 #include "groupnorm_grid_utils.hpp"
-#include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -75,79 +74,6 @@ void validate_dram_grid(
 }
 
 }  // namespace
-
-namespace ttnn::operations::normalization {
-
-int64_t get_group_norm_cores_across_channel(
-    tt::tt_metal::TensorMemoryLayout memory_layout,
-    const ttnn::CoreGrid& core_grid,
-    const std::optional<tt::tt_metal::ShardOrientation>& shard_orientation) {
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::TensorMemoryLayout;
-    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        if (shard_orientation == ShardOrientation::ROW_MAJOR) {
-            return static_cast<int64_t>(core_grid.x);
-        }
-        return static_cast<int64_t>(core_grid.y);
-    }
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        return 1;
-    }
-    return static_cast<int64_t>(core_grid.x * core_grid.y);
-}
-
-ttnn::Tensor get_mask_tensor(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& input_mask,
-    const std::optional<ttnn::Tensor>& negative_mask,
-    const CoreGrid& core_grid,
-    const int num_groups,
-    bool /*use_welford*/) {
-    ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
-    if (!input_mask.has_value() and !negative_mask.has_value()) {
-        // Synthesis path: the writer kernel writes the per-group {0.0, 1.0}
-        // mask directly in L1 from a small recurrence (see
-        // groupnorm_mask_synthesize.hpp). Skip the host-side build — every
-        // (sharded/DRAM × welford/legacy) writer + compute combination
-        // supports synthesis after the welford mask-multiply reorder.
-        return ttnn::Tensor();
-        // create input mask
-        int64_t num_channel = input_tensor.padded_shape()[-1];
-        int64_t num_cores_across_channel;
-        if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
-            const auto mem_layout = input_tensor.memory_config().memory_layout();
-            const auto shard_spec = input_tensor.memory_config().shard_spec();
-            std::optional<ShardOrientation> shard_orientation = std::nullopt;
-            if (shard_spec.has_value()) {
-                shard_orientation = shard_spec->orientation;
-            }
-            num_cores_across_channel = get_group_norm_cores_across_channel(mem_layout, core_grid, shard_orientation);
-        } else {
-            uint32_t num_virtual_cols =
-                compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
-            TT_FATAL(
-                num_virtual_cols > 0,
-                "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
-                "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
-                "and num_groups % nvc == 0.",
-                core_grid.x,
-                num_groups,
-                num_channel);
-            num_cores_across_channel = static_cast<int64_t>(num_virtual_cols);
-        }
-        mask = create_group_norm_input_mask(
-            num_channel,
-            num_groups,
-            num_cores_across_channel,
-            tt::tt_metal::DataType::BFLOAT16,
-            input_tensor.tensor_spec().tile().get_height(),
-            input_tensor.tensor_spec().tile().get_width());
-        mask = mask.to_device(input_tensor.device());
-    }
-    return mask;
-}
-
-}  // namespace ttnn::operations::normalization
 
 namespace ttnn {
 
@@ -368,20 +294,11 @@ Tensor group_norm(
         validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }
 
-    // auto generate mask tensor if both input_mask and negative_mask are not provided
-    // (skipped entirely when the writer kernel will synthesize the mask in-L1).
-    //
-    // Synthesis is supported on every (sharded/DRAM × welford/legacy)
-    // writer + compute combination, so we always skip the host-side build
-    // when no mask was passed and no negative mask was requested.
-    const bool will_synthesize = !input_mask.has_value() && !negative_mask.has_value();
-    std::optional<ttnn::Tensor> mask_for_op = input_mask;
-    if (!will_synthesize) {
-        ttnn::Tensor mask = operations::normalization::get_mask_tensor(
-            input_tensor, input_mask, negative_mask, core_grid.value(), num_groups, use_welford);
-        mask_for_op = mask;
-    }
-
+    // When no input_mask is passed, the writer kernel synthesizes the per-group
+    // {0.0, 1.0} selector directly in L1 from a small recurrence (see
+    // groupnorm_mask_synthesize.hpp) — no host-side build, no DRAM tensor.
+    // Every (sharded/DRAM × welford/legacy) writer + compute combination
+    // supports synthesis after the welford mask-multiply reorder.
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
@@ -399,7 +316,7 @@ Tensor group_norm(
             use_welford,
             gamma,
             beta,
-            mask_for_op,
+            input_mask,
             negative_mask,
             reciprocals);
     }
@@ -423,7 +340,7 @@ Tensor group_norm(
         use_welford,
         gamma,
         beta,
-        mask_for_op,
+        input_mask,
         negative_mask,
         reciprocals);
 }
