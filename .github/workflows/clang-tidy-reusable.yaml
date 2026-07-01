@@ -47,6 +47,7 @@ jobs:
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
       CCACHE_S3_READONLY: "false"
+      CCACHE_S3_DEBUG: "true"
     container:
       image: ${{ inputs.ci-build-docker-image }}
       env:
