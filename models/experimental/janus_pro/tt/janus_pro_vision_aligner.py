@@ -70,6 +70,8 @@ class TtJanusProVisionAligner(LightweightModule):
             self.hidden_layers.append((w, b))
 
     def _linear_with_reduce(self, x, weight, bias):
+        batch = x.shape[0] * x.shape[1]
+        seq_len = x.shape[-2]
         out = ttnn.linear(
             x,
             weight,
@@ -77,6 +79,10 @@ class TtJanusProVisionAligner(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # The row-parallel matmul leaves a per-device partial sum. Fold batch into
+        # dim 0 and keep dim 1 as the size-1 device-partial axis so fast_reduce_nc
+        # sums only those partials; reducing the batch axis would corrupt batch > 1.
+        out = ttnn.reshape(out, [batch, 1, seq_len, -1])
         if self.args.num_devices > 1:
             out = ttnn.experimental.all_gather_async(
                 out,

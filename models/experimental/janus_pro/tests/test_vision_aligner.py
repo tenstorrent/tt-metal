@@ -80,10 +80,6 @@ def test_aligner_inference(batch, num_chunks, mesh_device, reset_seeds):
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
-    non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
-    tt_output_torch = tt_output_torch[non_zero_indices]
-    reference_output = reference_output[non_zero_indices]
-
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
 
