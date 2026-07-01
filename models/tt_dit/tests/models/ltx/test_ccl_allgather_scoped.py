@@ -15,6 +15,8 @@ into ring SDPA and never appears as a standalone AllGatherAsync. This reproduces
 gather at the stage-2 video sequence length.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -23,6 +25,11 @@ import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.tensor import bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params
+
+# Scale the gathered sequence length to probe the fabric-BW ceiling: a small transfer is
+# latency/overhead-bound and understates the link rate, so LTX_CCL_SEQ_SCALE=N grows the
+# per-device shard N-fold to push the link toward saturation (used to settle 200 vs 400 Gbps).
+_SEQ_SCALE = int(os.environ.get("LTX_CCL_SEQ_SCALE", "1"))
 
 # LTX-2.3-22B distilled video config (mirrors test_transformer_ltx.py).
 DIM = 4096
@@ -60,7 +67,7 @@ def test_ccl_allgather_scoped(
     tp_factor = tuple(mesh_device.shape)[tp_axis]
     assert tp_factor > 1, "AllGather only fires for tp_factor > 1"
 
-    video_N = _sp_pad_len(STAGE2_F * STAGE2_H * STAGE2_W, sp_factor)
+    video_N = _sp_pad_len(STAGE2_F * STAGE2_H * STAGE2_W * _SEQ_SCALE, sp_factor)
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
 
