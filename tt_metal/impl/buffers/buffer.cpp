@@ -64,11 +64,14 @@ bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 o
 // LiveDramRanges symbols are always linked but never touched. Uses the device's own
 // context (matching the Tracy lookups below) so it is correct under multiple contexts.
 //
-// extract_context_id() calls MeshDevice::get_mesh_device() -> shared_from_this(), which
-// throws std::bad_weak_ptr when the MeshDevice is mid-destruction (e.g. buffers freed from
-// ~ProgramImpl during device teardown). This runs inside ~Buffer (noexcept), so an escaping
-// throw would std::terminate. Treat that case as non-emule: the range registry is being torn
-// down anyway, so skipping the removal is harmless (and hardware already returns false here).
+// Only called from the Buffer constructor, where device_ is guaranteed valid; the result is
+// cached in Buffer::is_emule_device_ and read from the alloc/dealloc paths, so device_ is never
+// dereferenced for this check during teardown (when it may be dangling — see buffer.hpp).
+//
+// The try/catch is defense-in-depth: extract_context_id() -> MeshDevice::get_mesh_device() ->
+// shared_from_this() throws std::bad_weak_ptr if the MeshDevice is ever mid-destruction. Treat
+// that as non-emule; the range registry is being torn down anyway, so skipping is harmless (and
+// hardware already returns false here).
 inline bool is_emule_device(const IDevice* device) {
     try {
         return MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
@@ -315,6 +318,7 @@ Buffer::Buffer(
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
+    is_emule_device_(is_emule_device(device)),
     page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
@@ -392,7 +396,7 @@ std::shared_ptr<Buffer> Buffer::create(
 
     // Explicit-address (non-owning) L1 buffers skip allocate_impl(), so register their
     // per-core extent here (removed in deallocate()). Rationale: SANITIZER_CHECKS.md §4.
-    if (is_emule_device(device) && buffer->size_ != 0 &&
+    if (buffer->is_emule_device_ && buffer->size_ != 0 &&
         (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL)) {
         tt::tt_metal::emule::LiveL1Ranges::add(
             device->id(),
@@ -464,7 +468,7 @@ void Buffer::allocate_impl() {
         // Requires updating all use cases of buffer address to accept a u64 to remove
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
-        if (is_emule_device(device_)) {
+        if (is_emule_device_) {
             if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
                 // Per-core footprint, not the aggregate size_ (spans all banks). See SANITIZER_CHECKS.md §4.
                 tt::tt_metal::emule::LiveL1Ranges::add(
@@ -495,7 +499,7 @@ void Buffer::allocate_impl() {
 
 void Buffer::deallocate() {
     if (!owns_data_) {
-        if (is_emule_device(device_)) {
+        if (is_emule_device_) {
             // Mirror the Buffer::create registration; non-owning buffers skip deallocate_impl().
             // Guard on status: the explicit-call + destructor double-deallocate must remove once.
             if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0 &&
@@ -529,7 +533,7 @@ void Buffer::deallocate_impl() {
             }
 #endif
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
-            if (is_emule_device(device_)) {
+            if (is_emule_device_) {
                 if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
                     tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
                     tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), static_cast<uint32_t>(address_));
