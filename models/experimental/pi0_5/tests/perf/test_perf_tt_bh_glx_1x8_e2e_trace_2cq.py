@@ -67,12 +67,10 @@ SEED = 42
 N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])
 LANG_LEN = 256
 PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
-# Explicit replay-warmup default = 0: capture_trace already runs an internal
-# eager warmup that JIT-compiles every kernel before
-# trace recording. The first traced replay does have a small first-call cost
-# (~1 ms above steady-state), which the 2CQ test reports via the "excl iter 0"
-# mean — set WARMUP_ITERS=1 if you prefer to drop that from the timing.
-WARMUP_ITERS = int(os.environ.get("WARMUP_ITERS", "0"))
+# One warm-up replay by default (not timed): absorbs the small first-call cost
+# (~1 ms above steady-state — first CQ1 wait / cache warm-up) so the reported
+# mean over PERF_ITERS is steady-state. Override with WARMUP_ITERS.
+WARMUP_ITERS = int(os.environ.get("WARMUP_ITERS", "1"))
 
 # Production env flags worth asserting present (set by models/experimental/pi0_5/common/pi05_production.env).
 # Logged at test start so the run-log shows which optimizations were active.
@@ -182,7 +180,7 @@ def test_perf_1x8_traced_2cq():
         ah = cfg.action_horizon
         ad = cfg.action_dim
 
-        # Warmup: do a few normal replays first (kernel caches, address stability).
+        # Warm-up replay(s) — not timed (kernel caches, address stability, first CQ1 wait).
         for _ in range(WARMUP_ITERS):
             _ = pipe.sample_actions_traced(images, lang_tokens)
 
@@ -191,18 +189,8 @@ def test_perf_1x8_traced_2cq():
         assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
 
         mean = _mean(times)
-        mn = min(times)
-        mx = max(times)
-        # Drop the first iter (warmup-effect of the first CQ1 wait), report excluded.
-        if len(times) > 1:
-            mean_excl0 = _mean(times[1:])
-        else:
-            mean_excl0 = mean
         print("\n" + "=" * 72)
-        print(f"1×8 pi0.5 TRACED 2CQ replay  (PERF_ITERS={PERF_ITERS}, N_CAMS={N_CAMS})")
+        print(f"1×8 pi0.5 TRACED 2CQ replay  (N_CAMS={N_CAMS})")
         print("=" * 72)
-        print(f"  mean (incl iter 0)     : {mean:.2f} ms")
-        print(f"  mean (excl iter 0)     : {mean_excl0:.2f} ms")
-        print(f"  min                    : {mn:.2f} ms")
-        print(f"  max                    : {mx:.2f} ms")
+        print(f"  mean ({len(times)} iters, {WARMUP_ITERS} warm-up excluded) : {mean:.2f} ms")
         print("=" * 72)
