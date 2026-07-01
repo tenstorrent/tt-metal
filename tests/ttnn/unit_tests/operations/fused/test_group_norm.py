@@ -1178,9 +1178,14 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", NO_INPUT_MASK_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
-def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid):
     """
     Test that a group norm without an input mask produces the same result as torch.
+
+    Exercises the writer-kernel mask-synthesis path on the sharded factory. Parametrized
+    over use_welford so we cover the Welford + sharded + synthesis combination, which
+    depends on the mask-multiply reorder in welford_groupnorm_sharded_v2.cpp.
     """
     torch.manual_seed(0)
     input_shape = (N, C, H, W)
@@ -1217,6 +1222,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
             memory_config=sharded_mem_config,
             core_grid=grid_size if specify_grid else None,
             compute_kernel_config=compute_config,
+            use_welford=use_welford,
         )
         tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
         tt_output_tensor_host = ttnn.to_torch(tt_output_tensor_host)
