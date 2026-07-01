@@ -343,13 +343,14 @@ class Ideogram4TransformerBlock(Module):
         attn_out = self._attention(
             attn_in, cos=cos, sin=sin, attn_mask=attn_mask, spatial_sequence_length=spatial_sequence_length
         )
-        x = x + gate_msa * self.attention_norm2(attn_out)
+        # x = x + gate_msa * norm2(attn_out); norm2 needs replicated hidden (see _attention).
+        x = ttnn.addcmul(x, gate_msa, self.attention_norm2(attn_out), value=1.0)
 
         # ----------------- feed-forward sub-block -----------------
         ff_in = self.ffn_norm1(x) * scale_mlp
         ff_out = self.feed_forward(ff_in, compute_kernel_config=self.matmul_compute_kernel_config)
         ff_out = self._all_gather_hidden(ff_out)  # fractured -> replicated hidden
-        x = x + gate_mlp * self.ffn_norm2(ff_out)
+        x = ttnn.addcmul(x, gate_mlp, self.ffn_norm2(ff_out), value=1.0)
 
         return x
 
