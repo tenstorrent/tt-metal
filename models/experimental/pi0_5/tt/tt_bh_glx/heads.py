@@ -5,8 +5,8 @@
 
 `_PrefillHead` (lang-token embedding + prefix concat) and `_DenoiseHead` (final
 adaRMS-norm weights) are used by the 1×8 single-mesh pipeline (`pipeline_1x8.py`).
-Kept here — free of any stage/transport/migration imports — so the 1×8 pipeline
-does not depend on the legacy 28-chip `pipeline.py`.
+Kept as small standalone modules (no stage/pipeline imports) so `pipeline_1x8`
+stays self-contained.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import ttnn
 
 
 class _PrefillHead:
-    """Lang token embedding + prefix concat — lives on prefill_per_chip[0]."""
+    """Lang token embedding + prefix concat (replicated on the mesh)."""
 
     def __init__(self, vlm_language_weights: Dict[str, torch.Tensor], submesh, vlm_hidden: int):
         embed_w = vlm_language_weights.get("model.embed_tokens.weight") or vlm_language_weights.get("lm_head.weight")

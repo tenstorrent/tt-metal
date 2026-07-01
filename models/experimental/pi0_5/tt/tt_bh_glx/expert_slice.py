@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-chip expert chunk: 3 AdaRMS Gemma-300M blocks on one 1x1 submesh.
+"""AdaRMS Gemma-300M expert blocks on a mesh submesh.
 
-The 18-layer expert is striped 3 layers per chip across the 6-chip denoise
-submesh. Each chunk owns its layers' weights + their fused adaRMS
-modulation Dense + its own RoPE tables. The block forward path mirrors the
+A chunk owns a contiguous range of expert layers + their weights, fused adaRMS
+modulation Dense, and RoPE tables. In the 1×8 pipeline a single chunk covers all
+18 layers, replicated across the mesh. The block forward path mirrors the
 single-chip Pi0_5PaliGemmaBackboneTTNN.forward_expert iteration body.
 """
 
@@ -150,8 +150,8 @@ class ExpertChunkSlice:
         precomputed_mods (optional): list of (sa1, ta, ga, sf1, tf, gf) tuples,
         one per local layer. When provided, each block bypasses its per-step
         mod-Dense matmul + split — see AdaRMSGemmaBlockTTNN.forward's fast path.
-        Used by the 1×8 pipeline's TIER A precompute (pipeline_1x8.py); 28-chip
-        callers pass None and fall through to the on-device mod-Dense.
+        Used by the 1×8 pipeline's TIER A precompute (pipeline_1x8.py); callers
+        that don't precompute pass None and fall through to the on-device mod-Dense.
         """
         if len(prefix_kv_for_chunk) != len(self.blocks):
             raise RuntimeError(f"expected {len(self.blocks)} prefix KV tuples, got {len(prefix_kv_for_chunk)}")

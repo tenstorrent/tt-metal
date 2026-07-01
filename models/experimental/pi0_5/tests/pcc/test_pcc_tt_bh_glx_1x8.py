@@ -198,8 +198,8 @@ def test_pcc_1x8_all_stages():
         # ref_model construction+call) gives the best PCC because Pi0_5Model
         # construction happens to consume the exact RNG offset that aligns torch's
         # denoising.sample_noise with TT's _refresh_noise_buffer randn. The
-        # alternative "seed-before-call" pattern from the 28-chip test gives WORSE
-        # PCC (~0.93 vs ~0.99) on this 1×8 pipeline — empirically verified.
+        # alternative "seed-before-call" pattern gives WORSE PCC (~0.93 vs ~0.99)
+        # on this 1×8 pipeline — empirically verified.
         # Done first so vision/prefill PCC sections don't pollute the RNG state.
         torch.manual_seed(SEED)
         tt_actions = pipe.sample_actions(images, lang_tokens=lang_tokens)

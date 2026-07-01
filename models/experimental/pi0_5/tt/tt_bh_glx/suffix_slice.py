@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replicated suffix MLP on the 6-chip denoise submesh.
+"""Replicated suffix MLP on the mesh.
 
-Each chip gets its own copy of the suffix weights (~8 MB total per chip),
-which avoids a per-step host-bounce of adarms_cond. A single chip's worth
-of work is exposed via SuffixSlice; the stage driver constructs one per
-denoise chip.
+The suffix weights (~8 MB) are replicated on every chip, which avoids a
+per-step host-bounce of adarms_cond. SuffixSlice wraps the replicated
+Pi0_5SuffixEmbeddingTTNN; the 1×8 pipeline constructs one on its mesh.
 """
 
 from __future__ import annotations

@@ -182,7 +182,7 @@ def _load_block_weights_tp8(
     mesh_device,
     config: Optional[GemmaConfig] = None,
 ) -> Dict[str, ttnn.Tensor]:
-    """Load one VLM block's weights onto a TP=4 mesh.
+    """Load one VLM block's weights onto the TP=8 mesh.
 
     Attention / norms  → ReplicateTensorToMesh (same on every chip).
     gate_proj, up_proj → ShardTensorToMesh(dim=-1): column-parallel on mlp_dim.
@@ -304,11 +304,11 @@ def _load_block_weights_tp8(
     return block_w
 
 
-# ─────────────────────────── TP=4 MLP ─────────────────────────────────────────
+# ─────────────────────────── TP=8 MLP ─────────────────────────────────────────
 
 
 class GemmaMLPTP8:
-    """GeGLU MLP with TP=4 column+row parallelism and AllReduce.
+    """GeGLU MLP with TP=8 column+row parallelism and AllReduce.
 
     Each chip holds mlp_dim/_TP columns of gate/up and mlp_dim/_TP rows of down.
     down_proj matmul is fused with reduce_scatter (matmul_reduce_scatter_async);
@@ -339,7 +339,7 @@ class GemmaMLPTP8:
         if _user and _user.isdigit():
             self.chunk_size = int(_user)
         elif num_cores >= 100:
-            # 1024 = single chunk for the production seq=1024 prefix. The TP=4 MLP
+            # 1024 = single chunk for the production seq=1024 prefix. The TP=8 MLP
             # intermediate is 1/_TP-width (4096, not 16384), so it fits L1 in one
             # chunk — denser matmuls + one all_reduce/layer (vs the 768 default
             # inherited from the full-width single-device MLP). ~17.9→15.1 ms/chip.
@@ -625,7 +625,7 @@ class GemmaMLPTP8:
         return out
 
 
-# ──────────────────── TP=4 Gemma block ────────────────────────────────────────
+# ──────────────────── TP=8 Gemma block ────────────────────────────────────────
 
 
 class _GemmaAttentionTP8(GemmaAttentionTTNN):
@@ -645,7 +645,7 @@ class _GemmaAttentionTP8(GemmaAttentionTTNN):
 
 
 class _GemmaBlockTP8:
-    """Gemma-2B transformer block with TP=4 MLP on a 4-chip mesh.
+    """Gemma-2B transformer block with TP=8 MLP on an 8-chip mesh.
 
     MLP: GemmaMLPTP8 (column/row parallel + AllReduce).
     Attention: replicated by default; head-parallel + AllReduce when PI0_TP8_ATTN_HEADPAR=1.
@@ -766,7 +766,7 @@ class _GemmaBlockTP8:
 
 
 class StagePrefillTP8:
-    """TP=4 VLM prefill: 18 Gemma-2B blocks on a 4-chip mesh.
+    """TP=8 VLM prefill: 18 Gemma-2B blocks on an 8-chip mesh.
 
     Usage:
         with open_prefill_tp8_mesh(tp=8, l1_small_size=24576) as prefill_mesh:
@@ -823,10 +823,10 @@ class StagePrefillTP8:
         per_chip_cos: Optional[List[ttnn.Tensor]] = None,
         per_chip_sin: Optional[List[ttnn.Tensor]] = None,
     ) -> Tuple[ttnn.Tensor, List[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
-        """prefix_embs must be a ttnn.Tensor replicated on the 4-chip mesh.
+        """prefix_embs must be a ttnn.Tensor replicated on the 8-chip mesh.
 
         Returns (final_hidden_on_mesh, [(K_i, V_i)]_i=0..17).
-        All output tensors are replicated across the 4 chips.
+        All output tensors are replicated across the 8 chips.
         """
         hidden = prefix_embs
         per_layer_kv: List[Tuple[ttnn.Tensor, ttnn.Tensor]] = []

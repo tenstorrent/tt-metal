@@ -1,20 +1,14 @@
 # SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-chip SigLIP slices for the BH-Galaxy host-bounce pipeline.
+"""SigLIP slices for the 1×8 mesh pipeline.
 
-Three slice classes wrap the existing TTNN SigLIP building blocks (no code
+Slice classes wrap the existing TTNN SigLIP building blocks (no code
 duplication — they import PatchEmbeddingTTNN / SigLIPBlockTTNN /
-MultiModalProjectorTTNN). The block-sharded fast path (`forward_bs`) is
-intentionally NOT used: BS requires entering once and exiting once around
-the layer loop, which doesn't survive a host bounce. v1 uses the interleaved
-`forward()` path for correctness; perf comes later.
-
-Chip ownership (vision_per_chip[i]):
-    chip 0: SigLIPEmbedSlice  (patch_embed + pos_emb, no transformer layers)
-    chip 1: SigLIPLayerSlice  (layers 0..8)
-    chip 2: SigLIPLayerSlice  (layers 9..17)
-    chip 3: SigLIPTailSlice   (layers 18..26 + post_layernorm + mm_projector)
+MultiModalProjectorTTNN). `SigLIPCameraSlice` composes embed + all layers +
+tail into the full encoder on one submesh and runs it camera-parallel: each
+chip runs the whole encoder for its own camera(s) at small batch, in parallel
+across the mesh (see SigLIPCameraSlice for the block-sharded encoder path).
 """
 
 from __future__ import annotations

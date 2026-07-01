@@ -294,8 +294,12 @@ Task success is in the [400-episode/suite sweep](#libero-success-rate-upstream-p
 |---|---|
 | Pre-bf8 baseline | 394/400 (98.5%) |
 | `8ef91d7fe60` + `c0876acc212` (all weights + outputs bf8) | 387/400 (96.75%) |
-| `df531eeb9d6` (current — weights+biases bf8, session outputs reverted) | 387/400 (96.75%) |
+| `df531eeb9d6` (weights+biases bf8, session outputs reverted) | 387/400 (96.75%) |
+| current (re-validated on the 1×8 mesh, trace+2CQ) | 386/400 (96.5%) |
 
+Current per-suite (N=5, replan=5): spatial 99/100 · object 98/100 · goal 95/100 ·
+libero_10 94/100. `libero_10` is the recurring loss (long-horizon tasks 8–9 hit the
+520-step cap).
 
 ---
 

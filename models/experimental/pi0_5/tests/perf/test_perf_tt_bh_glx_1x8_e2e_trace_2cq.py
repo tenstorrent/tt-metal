@@ -214,8 +214,7 @@ def test_perf_1x8_traced():
             - trace_exec_ms   : ttnn.execute_trace (pure on-device compute)
             - output_readback_ms : ttnn.to_torch (single concat → host)
        These three are the only host-observable knobs once the trace is
-       captured; their sum is the wall-clock per-call cost. The 28-chip
-       baseline reported ≈43 ms total.
+       captured; their sum is the wall-clock per-call cost.
     """
     from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
@@ -292,7 +291,6 @@ def test_perf_1x8_traced():
         print(f"   eager compute sum : {sum_compute_eager:7.2f} ms  (vision+prefix+prefill+denoise)")
         print(f"   traced compute    : {tr_mean['trace_exec_ms']:7.2f} ms")
         print(f"   dispatch savings  : {trace_dispatch_savings:7.2f} ms  (eager compute − traced compute)")
-        print(f"   28-chip baseline  : ≈43 ms (single-mesh 1×8 expected substantially faster, no socket hops)")
         print("=" * 72)
 
 
