@@ -2144,17 +2144,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .set_tile_dims(src2_cb_index, in0_tile);
     tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
-    // Streaming pipelines one block ahead (lookahead 1), so up to this many blocks are in flight
-    // at once: cb_sync must hold this many compute-done credits, the GCB must hold this many
-    // blocks/receiver (checked below), and the reader's cumulative remote_cb_wait_front peaks at
-    // this count. One symbol ties the three together; bumping it would also require generalizing
-    // the reader's one-behind ack loop.
+    // Streaming pipelines one block ahead (lookahead 1), so up to this many blocks are in flight at
+    // once: the GCB must hold this many blocks/receiver (checked below) and the reader's cumulative
+    // remote_cb_wait_front peaks at this count. Bumping it would also require generalizing the
+    // reader's one-behind ack loop. (The reader recycles GCB slots off the in1 CB's engine-accurate
+    // consumer ack, so streaming needs no separate compute-done credit CB.)
     constexpr uint32_t kStreamingInFlightBlocks = 2;
 
     uint32_t sync_cb_index = base_cb_index + 3;
-    // One 16 B page per credit. Batched signals once per layer and needs only 1 credit.
+    // Compute->reader release signal: one 16 B page (one credit). Only the batched global-CB path
+    // uses it (signals once per layer); streaming recycles GCB slots off the in1 CB's own consumer
+    // ack and needs no credit here.
     constexpr uint32_t sync_cb_page_bytes = 16;
-    uint32_t sync_cb_size_bytes = (stream_in1 ? kStreamingInFlightBlocks : 1u) * sync_cb_page_bytes;
+    uint32_t sync_cb_size_bytes = sync_cb_page_bytes;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_page_bytes);
