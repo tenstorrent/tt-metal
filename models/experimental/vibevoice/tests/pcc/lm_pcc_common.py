@@ -672,6 +672,18 @@ class _TTVibeVoiceLMLayerProbe(TTVibeVoiceLM):
         final = _tt_tensor_to_hidden_torch(x)
         return layer_hiddens, final
 
+    def forward_decoder_layer_hidden(
+        self,
+        hidden: torch.Tensor,
+        start_pos: int,
+        kv_cache,
+        layer_idx: int = 0,
+    ) -> torch.Tensor:
+        """Run one decoder layer on ``hidden`` [B, 1, H]; returns [B, 1, H] float32 (Devstral-style)."""
+        x = hidden_torch_to_tt(hidden, self.device)
+        x = self._transformer_layer(x, layer_idx, (self._cos_tt, self._sin_tt), kv_cache, start_pos)
+        return _tt_tensor_to_hidden_torch(x)
+
     def l0_decode_attention(
         self,
         input_ids: torch.Tensor,
@@ -1120,6 +1132,20 @@ def as_layer_probe(lm_tt: TTVibeVoiceLM) -> _TTVibeVoiceLMLayerProbe:
     probe = _TTVibeVoiceLMLayerProbe.__new__(_TTVibeVoiceLMLayerProbe)
     probe.__dict__.update(lm_tt.__dict__)
     return probe
+
+
+def hidden_torch_to_tt(hidden: torch.Tensor, device) -> ttnn.Tensor:
+    """``hidden`` [B, 1, H] bf16 → TT ``[B, 1, 1, H]`` TILE."""
+    if hidden.dim() != 3 or hidden.shape[1] != 1:
+        raise ValueError(f"expected hidden [B, 1, H], got {tuple(hidden.shape)}")
+    B, _, H = hidden.shape
+    return ttnn.from_torch(
+        hidden.reshape(B, 1, 1, H).to(torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def advance_tt_decode(lm_tt: TTVibeVoiceLM, decode_tokens: torch.Tensor, prefill_len: int, kv_cache, num_steps: int):
