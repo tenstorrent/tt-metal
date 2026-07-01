@@ -1,0 +1,53 @@
+{
+  "model_id": "Qwen/Qwen3-4B",
+  "autoport_dir": "models/autoports/qwen_qwen3_4b",
+  "hf_advertised_context": 40960,
+  "current_supported_context": 64,
+  "decode_status": "pending_emitted_decode_version",
+  "stage": "forge-functional-decoder",
+  "limiting_reason": "device_dram",
+  "actual_limiting_reason": "Functional decoder stage translated a static-shape prefill-only forge emit and validated prefill through seq_len 64 in this pass; downstream stages must extend and revalidate longer context.",
+  "capacity_evidence": {
+    "status": "not_measured_for_this_stage",
+    "checker_compatibility_note": "No device-DRAM capacity limit is claimed for this functional-decoder pass. The context reduction is a stage validation limit; this field is present because .agents/scripts/check_context_contract.py currently requires capacity_evidence whenever supported context is below the HF target."
+  },
+  "evidence": [
+    {
+      "command": "pytest -q models/autoports/qwen_qwen3_4b/tests/test_functional_decoder.py -k 'synthetic_weight_prefill or runtime_has_no_host_fallback or decode_forward'",
+      "largest_validated_prefill_seq": 64,
+      "status": "passed",
+      "pcc": {
+        "seq_16": 0.9996239896537468,
+        "seq_64": 0.9996795472223063
+      }
+    },
+    {
+      "command": "pytest -q models/autoports/qwen_qwen3_4b/tests/test_functional_decoder.py -k real_weight_single_layer_prefill_matches_hf",
+      "largest_validated_prefill_seq": 16,
+      "status": "passed",
+      "pcc": {
+        "seq_16": 0.9999931920726277
+      }
+    },
+    {
+      "command": "pytest -q models/autoports/qwen_qwen3_4b/tests/test_functional_decoder.py",
+      "largest_validated_prefill_seq": 64,
+      "status": "passed",
+      "pcc": {
+        "synthetic_seq_16": 0.9996239896537468,
+        "synthetic_seq_64": 0.9996795472223063,
+        "real_weight_seq_16": 0.9999917295183249
+      }
+    },
+    {
+      "command": ".agents/scripts/check_context_contract.py --model-dir models/autoports/qwen_qwen3_4b",
+      "status": "passed",
+      "output": "Context contract OK for models/autoports/qwen_qwen3_4b: target=40960, supported=64 (DRAM-limited)."
+    }
+  ],
+  "notes": [
+    "This context reduction is a functional starting-point validation limit, not a claimed hard DRAM or model limit.",
+    "The delivered runtime is prefill-only; there is no decode or paged-KV path until a forge emitted-decode graph is provided.",
+    "RoPE tables and causal masks are rebuilt during decoder setup for the requested max_seq_len instead of copying the forge seq_len=16 constants."
+  ]
+}
