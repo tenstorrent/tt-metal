@@ -153,9 +153,7 @@ struct D2HMetadataArgs {
     uint32_t metadata_l1_addr = 0;
 };
 
-// The writer half owns the D2H socket and runs on RISCV_1's default NOC. build_persistent_d2h_program
-// (kernel placement) and set_worker_mcast_corners (coord ordering) must agree on this single source of
-// truth, so a future NOC reassignment stays correct without introducing the multicast-direction bug.
+// The writer half owns the D2H socket and runs on RISCV_1's default NOC.
 // Named distinctly from H2D's kWriterNoc to avoid ODR clash in unity builds.
 constexpr NOC kD2HWriterNoc = NOC::RISCV_1_default;
 
