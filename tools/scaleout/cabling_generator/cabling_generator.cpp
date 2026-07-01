@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <regex>
 #include <unordered_set>
 #include <fmt/base.h>
 #include <google/protobuf/text_format.h>
@@ -46,6 +47,15 @@ Descriptor load_descriptor_from_textproto(const std::string& file_path) {
 
     std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     file.close();
+
+    // Protobuf parses integer literals with C-style radix rules, so a leading-zero value is
+    // read as octal ("08" fails to parse, "010" silently becomes 8). These descriptors are
+    // hand-authored and never use octal, so strip leading zeros from the integer fields before
+    // parsing. Anchoring to the field names at line start keeps string values (which could
+    // themselves contain "<text>:0..") untouched. Add new uint32 fields here if the schema grows.
+    static const std::regex leading_zero_int(
+        R"((^|\n)([ \t]*(?:rack|shelf_u|rack_capacity)[ \t]*:[ \t]*)0+(\d))");
+    file_content = std::regex_replace(file_content, leading_zero_int, "$1$2$3");
 
     Descriptor descriptor;
     if (!google::protobuf::TextFormat::ParseFromString(file_content, &descriptor)) {
