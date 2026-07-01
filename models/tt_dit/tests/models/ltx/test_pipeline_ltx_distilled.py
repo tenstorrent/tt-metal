@@ -55,7 +55,7 @@ line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8. Requires increased worker_l1_size to avoid code-size error in RingAttention.
         [(4, 8), (4, 8), 1, 0, 4, True, {"worker_l1_size": 1344544, **ring_params}, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -107,6 +107,10 @@ def test_pipeline_distilled(
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    # LTX_ITER_FAST=1 (opt-in, dev iteration): skip the traced steady-state replay pass (gen #1).
+    # gen #0 is the capture pass and already writes the correct deterministic output, so the loop
+    # only needs one full generate. Default OFF => default behavior is unchanged.
+    iter_fast = os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
 
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -245,7 +249,9 @@ def test_pipeline_distilled(
         run(prompt=prompt, number=0, seed=seed)
         # Traced: gen #0 captures (lazily, on first step of each stage); gen #1 is pure
         # replay — its Stage 1/2 denoise times are the steady-state measurement.
-        if traced:
+        # LTX_ITER_FAST skips gen #1 (dev iteration only): gen #0 already wrote the output,
+        # so the checks run on number=0 instead.
+        if traced and not iter_fast:
             logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
             run(prompt=prompt, number=1, seed=seed)
             check_output_with_clip(prompt, 1)

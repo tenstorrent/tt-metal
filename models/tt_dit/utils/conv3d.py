@@ -579,6 +579,11 @@ def register_conv3d_configs(configs: dict) -> None:
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
+# Channel-keys already logged once for the fallback path; a missing exact-blocking entry is a
+# tuning notice, not an error, so log it once per key at debug instead of per-call at warning.
+_warned_conv3d_fallback_keys: set = set()
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -621,10 +626,12 @@ def get_conv3d_config(
         fallback = _DEFAULT_BLOCKINGS.get(channel_key)
         if fallback is not None:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fallback
-            logger.warning(
-                f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
-                f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
-            )
+            if channel_key not in _warned_conv3d_fallback_keys:
+                logger.debug(
+                    f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
+                    f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
+                )
+                _warned_conv3d_fallback_keys.add(channel_key)
         else:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
             logger.warning(

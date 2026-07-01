@@ -145,22 +145,30 @@ class LTXDistilledPipeline(LTXPipeline):
             if self._traced:
                 self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
-            self._prepare_transformer(0)
+        # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
+        # DiT), so they never disturb the denoise/decode kernels compiled above.
+        # The VAE image encoder is warmed here (not before the denoise warmups) because running it
+        # evicts the transformer weights, which the denoise steps above still need resident.
+        # Warming whenever the checkpoint has an encoder (not only when an I2V image is staged) keeps
+        # a post-capture I2V request from loading the encoder for the first time, which would evict
+        # the DiT and clobber the already-captured traces' activation regions — corrupting every
+        # subsequent gen to static.
+        # LTX_WARMUP_ENCODERS=0 skips both encoder warmups for the steady-state t2v iteration loop:
+        # the image encoder is never exercised without an I2V request, and a t2v prompt whose device
+        # embeddings are disk-cached never runs the Gemma encoder in generate(). Neither encoder is
+        # loaded after capture in that loop, so skipping their warmup compiles is safe there; leave it
+        # at the default (warm) for I2V or uncached-prompt runs that load an encoder post-capture.
+        if os.environ.get("LTX_WARMUP_ENCODERS", "1") in ("1", "true", "True"):
+            if self.vae_encoder is not None:
+                logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
+                self._warmup_encode(height // 2, width // 2)
+                self._warmup_encode(height, width)
 
-        # Warm the encoders last: they coresident-evict the DiT/VAE, so gen #0 then re-loads the DiT.
-        # The VAE image encoder is warmed here (not before the denoise warmups) for the same reason:
-        # running it evicts the transformer weights, which the denoise steps above still need resident.
-        # Warm whenever the checkpoint has an encoder, not only when an I2V image is staged: the first
-        # I2V request can arrive after capture, and loading the encoder then evicts the DiT and clobbers
-        # the already-captured traces' activation regions — corrupting every subsequent gen to static.
-        if self.vae_encoder is not None:
-            logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
-            self._warmup_encode(height // 2, width // 2)
-            self._warmup_encode(height, width)
-
-        # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
-        self.gemma_encoder_pair.ensure_loaded()
-        self.encode_prompts(["warmup"], use_cache=False)
+            # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
+            self.gemma_encoder_pair.ensure_loaded()
+            self.encode_prompts(["warmup"], use_cache=False)
+        else:
+            logger.info("LTX_WARMUP_ENCODERS=0: skipping image + gemma encoder warmup")
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 

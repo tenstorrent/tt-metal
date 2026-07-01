@@ -567,6 +567,14 @@ class LTXPipeline:
         tp_axis = tp_axis if tp_axis is not None else defaults["tp_axis"]
         num_links = num_links if num_links is not None else defaults["num_links"]
         dynamic_load = dynamic_load if dynamic_load is not None else defaults["dynamic_load"]
+        # LTX_ITER_DIT_RESIDENT=1 (opt-in, dev iteration): force models resident (disable dynamic
+        # eviction) so the DiT is loaded once and reused across passes instead of being evicted by
+        # the VAE/audio loads and reloaded (~12s each). Trades device memory for reloads; may OOM on
+        # small meshes (the 2x4 BH default is dynamic_load=True precisely because memory is tight),
+        # so default OFF => default behavior unchanged. Validated by md5 before being kept.
+        if os.environ.get("LTX_ITER_DIT_RESIDENT", "0") in ("1", "true", "True"):
+            logger.info("LTX_ITER_DIT_RESIDENT=1: forcing dynamic_load=False (models stay resident)")
+            dynamic_load = False
         topology = topology if topology is not None else defaults["topology"]
         is_fsdp = is_fsdp if is_fsdp is not None else defaults["is_fsdp"]
 
