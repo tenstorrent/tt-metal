@@ -37,8 +37,9 @@ import ttnn
 #                              Marginal win on both axes vs True (+0.0003 PCC,
 #                              −0.10 ms). Comment in ViT-BH-hiRes line 307:
 #                              "False is more correct".
-#   PI0_SDPA_FP32_DEST=1     → fp32_dest_acc_en=True.
 #   PI0_SDPA_PACKER_L1=1     → packer_l1_acc=True.
+# (fp32_dest_acc_en is always on — no longer env-gated; the fp32 accumulator is
+#  the sole expert/SigLIP SDPA precision path.)
 # ---------------------------------------------------------------------------
 
 
@@ -99,7 +100,7 @@ def get_sdpa_compute_kernel_config(seq_len_kv: Optional[int] = None) -> "ttnn.Wo
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=get_sdpa_math_fidelity(),
         math_approx_mode=False,
-        fp32_dest_acc_en=_env_bool("PI0_SDPA_FP32_DEST", True),
+        fp32_dest_acc_en=True,
         packer_l1_acc=_env_bool("PI0_SDPA_PACKER_L1", True),
     )
 
