@@ -10,9 +10,9 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
-from helpers.chip_architecture import ChipArchitecture
 from helpers.llk_params import GoldenType
 
+from .arch_common import fpu_common, pack_common, unpack_common
 from .block_data import BlockData
 from .fpu_node import FpuNode
 from .fused_fpu import Fpu
@@ -191,15 +191,7 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> str:
-        if config.architecture == ChipArchitecture.QUASAR:
-            return ""
-        if operation.stage_id > 1:
-            return (
-                "t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);\n"
-                "t6_semaphore_get<>(semaphore::PACK_DONE);\n"
-            )
-
-        return ""
+        return unpack_common.sync_with_packer(operation.stage_id)
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         unpack_ops = [
@@ -211,8 +203,7 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
         init_code = ""
-        if config.architecture == ChipArchitecture.QUASAR:
-            init_code += "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+        init_code += unpack_common.dvalid_init()
         init_code += config.sentinel.hw_configure_unpack(config, operation)
         if hoist_reconfig and unpack_ops:
             init_code += unpack_ops[0].unpack_reconfig(operation, config)
@@ -262,31 +253,25 @@ class ComputePipeline:
     ) -> str:
         if config.skip_sync:
             return ""
-        if config.architecture == ChipArchitecture.QUASAR:
-            return ""
-        dest_sync = operation.dest_sync.cpp_enum_value
-        return f"_llk_math_wait_for_dest_available_<{dest_sync}>();\n"
+        return fpu_common.math_wait_for_dest(operation.dest_sync.cpp_enum_value)
 
     def _math_dest_section_done(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         if config.skip_sync:
             return ""
-        if config.architecture == ChipArchitecture.QUASAR:
-            dest_sync = operation.dest_sync.cpp_enum_value
-            return f"_llk_math_set_dvalid_<p_cleardvalid::FPU, {dest_sync}>();\n"
-        dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+        return fpu_common.math_dest_section_done(
+            operation.dest_sync.cpp_enum_value,
+            config.dest_acc.cpp_enum_value,
+        )
 
     def _math_pack_sync_init(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        if config.architecture == ChipArchitecture.QUASAR:
-            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-        dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_pack_sync_init_<{dest_sync}, {dest_acc}>();\n"
+        return fpu_common.math_pack_sync_init(
+            operation.dest_sync.cpp_enum_value,
+            config.dest_acc.cpp_enum_value,
+        )
 
     def _math_constants(
         self, operation: "FusedOperation", config: "GlobalConfig"
@@ -347,31 +332,25 @@ class ComputePipeline:
     def _packer_wait_for_math(self, config: "GlobalConfig") -> str:
         if config.skip_sync:
             return ""
-        if config.architecture == ChipArchitecture.QUASAR:
-            return ""
-        return "_llk_packer_wait_for_math_done_();\n"
+        return pack_common.packer_wait_for_math()
 
     def _packer_dest_section_done(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         if config.skip_sync:
             return ""
-        if config.architecture == ChipArchitecture.QUASAR:
-            dest_sync = operation.dest_sync.cpp_enum_value
-            en_32bit_dest = "true" if config.dest_acc.value else "false"
-            return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {en_32bit_dest}>();\n"
-        dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_pack_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+        return pack_common.packer_dest_section_done(
+            operation.dest_sync.cpp_enum_value,
+            config.dest_acc.cpp_enum_value,
+        )
 
     def _pack_dest_init(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        if config.architecture == ChipArchitecture.QUASAR:
-            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-        dest_sync = operation.dest_sync.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
+        return pack_common.pack_dest_init(
+            operation.dest_sync.cpp_enum_value,
+            config.dest_acc.cpp_enum_value,
+        )
 
     def _pack_constants(
         self, operation: "FusedOperation", config: "GlobalConfig"
@@ -395,16 +374,9 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> str:
-        if config.architecture == ChipArchitecture.QUASAR:
-            return ""
-        stage = operation.stage_id
-        num_stages = operation.num_stages
-        code = ""
-
-        if stage < num_stages:
-            code += "t6_semaphore_post<>(semaphore::PACK_DONE);\n\n"
-
-        return code
+        return pack_common.packer_sync_with_unpacker(
+            operation.stage_id, operation.num_stages
+        )
 
     def _all_same_pack_formats(self) -> bool:
         pack_only = self._get_pack_nodes()

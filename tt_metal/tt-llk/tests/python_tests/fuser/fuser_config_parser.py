@@ -31,18 +31,12 @@ FUSER_CONFIG_DIR = (
     Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
 )
 
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import get_chip_architecture
+
+from .arch_common import _get_parser
 
 arch = get_chip_architecture()
-
-if arch == ChipArchitecture.WORMHOLE:
-    from .wormhole.parser import OperationSchema
-elif arch == ChipArchitecture.BLACKHOLE:
-    from .blackhole.parser import OperationSchema
-elif arch == ChipArchitecture.QUASAR:
-    from .quasar.parser import OperationSchema
-else:
-    pytest.skip("Architecture is not supported", allow_module_level=True)
+OperationSchema = _get_parser().OperationSchema
 
 
 def format_validation_error(error: ValidationError) -> str:

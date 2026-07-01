@@ -16,10 +16,11 @@ from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
     from .fpu_node import FpuNode
-    from .fused_operand import Operand
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .pack_node import PackNode
+
+from .arch_common import fpu_common, pack_common, unpack_common
 
 
 @dataclass
@@ -261,77 +262,6 @@ class FuserSentinel:
     def pack_dst_format(self) -> str:
         return self._fmt(self._pack_dst)
 
-    def _emit_quasar_buf_desc(
-        self,
-        var_prefix: str,
-        operand: "Operand",
-        src_fmt: DataFormat,
-        dst_fmt: DataFormat,
-    ) -> str:
-        """Emit buffer_descriptor_u + tdma_descriptor_t setup for a Quasar operand."""
-        face_r = operand.tile_shape.face_r_dim
-        face_c = operand.tile_shape.face_c_dim
-        num_faces = operand.tile_shape.total_num_faces()
-
-        code = ""
-        code += f"buffer_descriptor_u bd_{var_prefix} {{}};\n"
-        code += f"bd_{var_prefix}.f.l1_addr_16B = {operand.cpp_name}[0] / 16;\n"
-        code += f"bd_{var_prefix}.f.format = static_cast<std::uint8_t>({self._fmt(src_fmt)});\n"
-        code += f"bd_{var_prefix}.f.x_dim = {face_c};\n"
-        code += f"bd_{var_prefix}.f.y_dim = {face_r};\n"
-        code += f"bd_{var_prefix}.f.z_dim = {num_faces};\n"
-        code += f"tdma_descriptor_t td_{var_prefix};\n"
-        code += f"td_{var_prefix}.buf_desc = bd_{var_prefix};\n"
-        code += f"td_{var_prefix}.buf_desc_id = {operand.buf_desc_id};\n"
-        code += f"td_{var_prefix}.reg_data_format = static_cast<std::uint8_t>({self._fmt(dst_fmt)});\n"
-        code += f"_configure_buf_desc_table_(td_{var_prefix}.buf_desc_id, td_{var_prefix}.buf_desc);\n"
-        return code
-
-    @staticmethod
-    def _is_datacopy_node(compute_node: "FpuNode") -> bool:
-        from .quasar.fpu.datacopy import DatacopyFpu
-
-        return isinstance(compute_node.fpu, DatacopyFpu)
-
-    def _hw_configure_unpack_quasar(
-        self,
-        config: "GlobalConfig",
-        compute_node: "FpuNode",
-        unpack_A_src: DataFormat,
-        unpack_A_dst: DataFormat,
-        unpack_B_src: DataFormat,
-        unpack_B_dst: DataFormat,
-    ) -> str:
-        """Emit Quasar-specific buffer descriptor setup and configure call."""
-        from .quasar.unpacker.tilize_a import UnpackerTilizeA as QsrUnpackerTilizeA
-        from .quasar.unpacker.unpack_a import UnpackerA as QsrUnpackerA
-
-        src_a = compute_node.src_a
-        is_unary = isinstance(compute_node.unpacker, (QsrUnpackerA, QsrUnpackerTilizeA))
-        is_datacopy_dest_acc = (
-            self._is_datacopy_node(compute_node) and config.dest_acc.value
-        )
-
-        if src_a.buf_desc_id is None:
-            src_a.buf_desc_id = self._alloc_unpack_buf_desc_id()
-
-        code = self._emit_quasar_buf_desc("val_A", src_a, unpack_A_src, unpack_A_dst)
-
-        if is_unary and is_datacopy_dest_acc:
-            code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_A);\n"
-        elif is_unary:
-            code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>(td_val_A);\n"
-        else:
-            src_b = compute_node.src_b
-            if src_b.buf_desc_id is None:
-                src_b.buf_desc_id = self._alloc_unpack_buf_desc_id()
-            code += self._emit_quasar_buf_desc(
-                "val_B", src_b, unpack_B_src, unpack_B_dst
-            )
-            code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);\n"
-
-        return code
-
     def hw_configure_unpack(
         self,
         config: "GlobalConfig",
@@ -360,42 +290,25 @@ class FuserSentinel:
         self._unpack_B_src = unpack_B_src
         self._unpack_B_dst = unpack_B_dst
 
-        face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
-        num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
-        tile_size_a = compute_node.src_a.tile_size
+        self._unpack_face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
+        self._unpack_num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
 
         if compute_node.src_b is not None:
-            face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
-            num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
-            tile_size_b = compute_node.src_b.tile_size
+            self._unpack_face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
+            self._unpack_num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
         else:
-            face_r_dim_b = face_r_dim_a
-            num_faces_b = num_faces_a
-            tile_size_b = tile_size_a
+            self._unpack_face_r_dim_b = self._unpack_face_r_dim_a
+            self._unpack_num_faces_b = self._unpack_num_faces_a
 
-        self._unpack_face_r_dim_a = face_r_dim_a
-        self._unpack_num_faces_a = num_faces_a
-        self._unpack_face_r_dim_b = face_r_dim_b
-        self._unpack_num_faces_b = num_faces_b
+        self.ensure_unpack_buf_desc_ids(compute_node)
 
-        if config.architecture == ChipArchitecture.QUASAR:
-            return self._hw_configure_unpack_quasar(
-                config,
-                compute_node,
-                unpack_A_src,
-                unpack_A_dst,
-                unpack_B_src,
-                unpack_B_dst,
-            )
-
-        dest_acc = config.dest_acc.cpp_enum_value
-        return (
-            f"_llk_unpack_hw_configure_<{dest_acc}>(\n"
-            f"    {self._fmt(unpack_A_src)}, {self._fmt(unpack_B_src)},\n"
-            f"    {self._fmt(unpack_A_dst)}, {self._fmt(unpack_B_dst)},\n"
-            f"    {face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b},\n"
-            f"    {tile_size_a}, {tile_size_b}\n"
-            f");\n"
+        return unpack_common.hw_configure_unpack(
+            compute_node,
+            config.dest_acc.cpp_enum_value,
+            unpack_A_src,
+            unpack_A_dst,
+            unpack_B_src,
+            unpack_B_dst,
         )
 
     def configure_unpack(
@@ -445,13 +358,7 @@ class FuserSentinel:
         srcb_changed = srcb_fmt_changed or srcb_tile_changed
 
         if config.architecture == ChipArchitecture.QUASAR:
-            from .quasar.unpacker.tilize_a import UnpackerTilizeA as QsrUnpackerTilizeA
-            from .quasar.unpacker.unpack_a import UnpackerA as QsrUnpackerA
-
-            is_unary = isinstance(
-                compute_node.unpacker, (QsrUnpackerA, QsrUnpackerTilizeA)
-            )
-
+            is_unary = unpack_common.is_unary_unpacker(compute_node)
             needs_buf_desc = compute_node.src_a.buf_desc_id is None
             if not is_unary:
                 needs_buf_desc = needs_buf_desc or (
@@ -460,82 +367,24 @@ class FuserSentinel:
                 )
             if not (srca_changed or srcb_changed or needs_buf_desc):
                 return ""
-            if compute_node.src_a.buf_desc_id is None:
-                compute_node.src_a.buf_desc_id = self._alloc_unpack_buf_desc_id()
-            code = "{\n"
-            code += self._emit_quasar_buf_desc(
-                "val_A", compute_node.src_a, new_A_src, new_A_dst
-            )
-            if (
-                is_unary
-                and self._is_datacopy_node(compute_node)
-                and config.dest_acc.value
-            ):
-                code += "_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_A);\n"
-            elif is_unary:
-                code += "_llk_unpack_configure_unary_<p_unpacr::UNP_A>(td_val_A);\n"
-            else:
-                if (
-                    compute_node.src_b is not None
-                    and compute_node.src_b.buf_desc_id is None
-                ):
-                    compute_node.src_b.buf_desc_id = self._alloc_unpack_buf_desc_id()
-                code += self._emit_quasar_buf_desc(
-                    "val_B", compute_node.src_b, new_B_src, new_B_dst
-                )
-                code += "_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);\n"
-            code += "}\n"
+            self.ensure_unpack_buf_desc_ids(compute_node)
         elif not (srca_changed or srcb_changed):
             return ""
-        else:
-            dest_acc = config.dest_acc.cpp_enum_value
 
-            if srca_changed:
-                to_from_int8 = (
-                    "true"
-                    if self._unpack_A_src.needs_int8_math_config()
-                    or new_A_src.needs_int8_math_config()
-                    else "false"
-                )
-                dim_stride = (
-                    "p_dim_stride_target::FACE_ROW_MAJOR"
-                    if srca_tile_changed
-                    else "p_dim_stride_target::IGNORE"
-                )
-                code += (
-                    f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
-                    f"    {self._fmt(new_A_src)}, {self._fmt(new_A_dst)}, {compute_node.src_a.tile_size}"
-                )
-                if srca_tile_changed:
-                    code += f", {new_face_r_dim_a}, {new_num_faces_a}"
-                code += "\n);\n"
-
-            if srcb_changed:
-                srcb_tile_size = (
-                    compute_node.src_a.tile_size
-                    if compute_node.reuse_dest
-                    is EltwiseBinaryReuseDestType.DEST_TO_SRCA
-                    else (compute_node.src_b.tile_size if compute_node.src_b else None)
-                )
-                if srcb_tile_size is not None:
-                    to_from_int8 = (
-                        "true"
-                        if self._unpack_B_src.needs_int8_math_config()
-                        or new_B_src.needs_int8_math_config()
-                        else "false"
-                    )
-                    dim_stride = (
-                        "p_dim_stride_target::FACE_ROW_MAJOR"
-                        if srcb_tile_changed
-                        else "p_dim_stride_target::IGNORE"
-                    )
-                    code += (
-                        f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
-                        f"    {self._fmt(new_B_src)}, {self._fmt(new_B_dst)}, {srcb_tile_size}"
-                    )
-                    if srcb_tile_changed:
-                        code += f", {new_face_r_dim_b}, {new_num_faces_b}"
-                    code += "\n);\n"
+        code = unpack_common.configure_unpack(
+            compute_node,
+            config.dest_acc.cpp_enum_value,
+            self._unpack_A_src,
+            new_A_src,
+            new_A_dst,
+            self._unpack_B_src,
+            new_B_src,
+            new_B_dst,
+            srca_changed,
+            srcb_changed,
+            srca_tile_changed,
+            srcb_tile_changed,
+        )
 
         self._unpack_A_src = new_A_src
         self._unpack_A_dst = new_A_dst
@@ -571,20 +420,7 @@ class FuserSentinel:
 
         self._math_format = math_fmt
 
-        if config.architecture == ChipArchitecture.QUASAR:
-            is_fp32 = "true" if config.dest_acc.value else "false"
-            return (
-                f"_llk_math_srcAB_hw_configure_<true, {is_fp32}, false>(\n"
-                f"    {self._dfmt(math_fmt)}, {self._dfmt(math_fmt)}\n"
-                f");\n"
-            )
-
-        dest_acc = config.dest_acc.cpp_enum_value
-        return (
-            f"_llk_math_hw_configure_<{dest_acc}>(\n"
-            f"    {self._fmt(math_fmt)}, {self._fmt(math_fmt)}\n"
-            f");\n"
-        )
+        return fpu_common.hw_configure_math(config.dest_acc.cpp_enum_value, math_fmt)
 
     def configure_math(
         self,
@@ -607,26 +443,10 @@ class FuserSentinel:
         if self._math_format == new_math:
             return ""
 
-        if config.architecture == ChipArchitecture.QUASAR:
-            is_fp32 = "true" if config.dest_acc.value else "false"
-            code = (
-                f"_llk_math_srcAB_hw_configure_<false, {is_fp32}, false>(\n"
-                f"    {self._dfmt(new_math)}, {self._dfmt(new_math)}\n"
-                f");\n"
-            )
-        else:
-            to_from_int8 = (
-                "true"
-                if self._math_format.needs_int8_math_config()
-                or new_math.needs_int8_math_config()
-                else "false"
-            )
-            dest_acc = config.dest_acc.cpp_enum_value
-            code = (
-                f"_llk_math_reconfig_data_format_<{dest_acc}, {to_from_int8}>(\n"
-                f"    {self._fmt(new_math)}, {self._fmt(new_math)}\n"
-                f");\n"
-            )
+        code = fpu_common.configure_math(
+            config.dest_acc.cpp_enum_value, self._math_format, new_math
+        )
+
         self._math_format = new_math
         return code
 
@@ -649,51 +469,15 @@ class FuserSentinel:
         first = pack_nodes[0]
         pack_src, pack_dst = self._resolve_pack_formats(config, operation, first)
 
-        if config.architecture == ChipArchitecture.QUASAR:
-            output = first.output
-            if output.buf_desc_id is None:
-                output.buf_desc_id = self._alloc_pack_buf_desc_id()
+        self.ensure_pack_buf_desc_id(first)
 
-            face_r_dim = output.tile_shape.face_r_dim
-            face_c_dim = output.tile_shape.face_c_dim
-            num_faces_r = output.tile_shape.total_row_dim() // face_r_dim
-            num_faces_c = output.tile_shape.total_col_dim() // face_c_dim
-
-            code = ""
-            code += f"buffer_descriptor_u bd_pack {{}};\n"
-            code += f"bd_pack.f.l1_addr_16B = {output.cpp_name}[0] / 16;\n"
-            code += f"bd_pack.f.format = static_cast<std::uint8_t>({self._fmt(pack_dst)});\n"
-            code += f"bd_pack.f.x_dim = {face_c_dim};\n"
-            code += f"bd_pack.f.y_dim = {face_r_dim};\n"
-            code += f"bd_pack.f.z_dim = {num_faces_r * num_faces_c};\n"
-            code += f"tdma_descriptor_t td_pack;\n"
-            code += f"td_pack.buf_desc = bd_pack;\n"
-            code += f"td_pack.buf_desc_id = {output.buf_desc_id};\n"
-            code += f"td_pack.reg_data_format = static_cast<std::uint8_t>({self._fmt(pack_src)});\n"
-            code += (
-                f"_configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);\n"
-            )
-            code += f"_llk_pack_hw_configure_<p_pacr::PACK0>(td_pack);\n"
-        else:
-            dest_acc = config.dest_acc.cpp_enum_value
-            pack_size = first.output.tile_size
-            face_r_dim = first.output.tile_shape.face_r_dim
-            tile_c_dim = first.output.tile_shape.total_col_dim()
-            num_faces = first.output.tile_shape.total_num_faces()
-
-            if config.architecture == ChipArchitecture.BLACKHOLE:
-                bh_pack_mode = operation.bh_tilize.pack_mode_value
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, {bh_pack_mode}>(\n"
-                    f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {tile_c_dim}, {num_faces}\n"
-                    f");\n"
-                )
-            else:
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
-                    f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
-                    f");\n"
-                )
+        code = pack_common.hw_configure_pack(
+            first.output,
+            config.dest_acc.cpp_enum_value,
+            pack_src,
+            pack_dst,
+            pack_mode=operation.bh_tilize.pack_mode_value,
+        )
 
         self._pack_src = pack_src
         self._pack_dst = pack_dst
@@ -716,38 +500,15 @@ class FuserSentinel:
         if self._pack_src == pack_src and self._pack_dst == pack_dst:
             return ""
 
-        if config.architecture == ChipArchitecture.QUASAR:
-            output = pack_node.output
-            if output.buf_desc_id is None:
-                output.buf_desc_id = self._alloc_pack_buf_desc_id()
-            face_r_dim = output.tile_shape.face_r_dim
-            face_c_dim = output.tile_shape.face_c_dim
-            num_faces = output.tile_shape.total_num_faces()
-            code = "{\n"
-            code += f"buffer_descriptor_u bd_pack {{}};\n"
-            code += f"bd_pack.f.l1_addr_16B = {output.cpp_name}[0] / 16;\n"
-            code += f"bd_pack.f.format = static_cast<std::uint8_t>({self._fmt(pack_dst)});\n"
-            code += f"bd_pack.f.x_dim = {face_c_dim};\n"
-            code += f"bd_pack.f.y_dim = {face_r_dim};\n"
-            code += f"bd_pack.f.z_dim = {num_faces};\n"
-            code += f"tdma_descriptor_t td_pack;\n"
-            code += f"td_pack.buf_desc = bd_pack;\n"
-            code += f"td_pack.buf_desc_id = {output.buf_desc_id};\n"
-            code += f"td_pack.reg_data_format = static_cast<std::uint8_t>({self._fmt(pack_src)});\n"
-            code += (
-                f"_configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);\n"
-            )
-            code += f"_llk_pack_hw_configure_<p_pacr::PACK0>(td_pack);\n"
-            code += "}\n"
-        else:
-            dest_acc = config.dest_acc.cpp_enum_value
-            pack_size = pack_node.output.tile_size
+        self.ensure_pack_buf_desc_id(pack_node)
 
-            code = (
-                f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
-                f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}\n"
-                f");\n"
-            )
+        code = pack_common.configure_pack(
+            pack_node.output,
+            config.dest_acc.cpp_enum_value,
+            pack_src,
+            pack_dst,
+        )
+
         self._pack_src = pack_src
         self._pack_dst = pack_dst
         return code
