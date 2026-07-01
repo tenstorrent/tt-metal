@@ -305,9 +305,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t last_core_width_index =
         grid.mcast_1d ? cores.size() - 1 : (grid.row_wise ? grid.grid_size.x - 1 : grid.grid_size.y - 1);
 
-    // A column mask is needed only when a reduced tile contains padding, i.e. the final width tile is
-    // partially valid (logical width not a multiple of the tile width). Whole padding tiles past the
-    // logical width are excluded from the reduction by the per-core reduce-tile count instead.
+    // A column mask is needed only when a reduced tile contains padding, i.e. the last tile of the
+    // logical width is partially valid (logical width not a multiple of the tile width). Whole padding
+    // tiles past the logical width are excluded from the reduction by the per-core reduce-tile count
+    // instead.
     const bool col_mask_needed = (logical_K % tile_width != 0);
 
     // Compute packed values for writer.
@@ -341,12 +342,12 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // A non-tile-aligned width split across multiple cores is supported on every path. The non-Welford
     // path masks each core's final-tile padding columns with its per-core column mask (CB 19); the
     // per-element divide is 1/logical_K (winv*cinv), so the cross-core mean and variance reduce over
-    // exactly the logical width however the width tiles distribute across cores. Welford has no column
+    // exactly the logical width however its tiles distribute across cores. Welford has no column
     // mask, so each core is instead told its real (logical) column count (welford_reduce_w) and reduces
     // exactly those columns -- full block_w on the cores before the last, the remaining logical columns
     // (ending in a partial tile) on the final real core -- and the cross-core combine weights the final
     // block by its true width (last_block_w).
-    // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned final width tile so
+    // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned width's final tile so
     // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for
     // RMSNorm), except the post-all-gather stage, which reduces gathered stats rather than the input.
     // The mask is CB 19 at every masking site, generated on-device in the writer (generate_mask_w<T>)

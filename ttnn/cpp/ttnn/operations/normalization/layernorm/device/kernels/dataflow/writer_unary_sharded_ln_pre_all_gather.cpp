@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #ifdef DO_COL_MASK
 #include "ttnn/kernel/dataflow/moreh_common.hpp"  // generate_mask_w<T>
+#include "api/debug/assert.h"
 #endif
 
 void kernel_main() {
@@ -20,18 +21,21 @@ void kernel_main() {
         scalar_w_f);
 
 #ifdef DO_COL_MASK
-    // Generate this core's column mask on-device (block_w tiles, one per width-tile position), zeroing
-    // the boundary tile's padding columns and any all-padding tiles. The core's width position comes
-    // from gamma_tile_start_id (= width_index * block_w), so no extra runtime arg is needed.
+    // Generate this core's column mask on-device (block_w tiles, one per tile across the shard width),
+    // zeroing the boundary tile's padding columns and any all-padding tiles.
     {
         constexpr uint32_t block_w = get_compile_time_arg_val(3);
-        const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(5);
+        // This core's first tile index along the width (the normalized dimension): width_index * block_w,
+        // the start of this core's width shard. Here it supplies the column mask's width offset.
+        const uint32_t width_shard_tile_start_id = get_arg_val<uint32_t>(5);
         constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
         constexpr uint32_t logical_K = get_named_compile_time_arg_val("logical_K");
         constexpr uint32_t mask_fp32 = get_named_compile_time_arg_val("mask_fp32");
         constexpr uint32_t tile_w = 32;
         CircularBuffer cb_col_mask_obj(cb_col_mask);
-        const uint32_t core_start_col = (gamma_tile_start_id / block_w) * block_w * tile_w;
+        // A width shard always starts on a block boundary, so this offset is an exact multiple of block_w.
+        ASSERT(width_shard_tile_start_id % block_w == 0);
+        const uint32_t core_start_col = width_shard_tile_start_id * tile_w;
         for (uint32_t wt = 0; wt < block_w; wt++) {
             const uint32_t tile_start_col = core_start_col + wt * tile_w;
             uint32_t mask_w;

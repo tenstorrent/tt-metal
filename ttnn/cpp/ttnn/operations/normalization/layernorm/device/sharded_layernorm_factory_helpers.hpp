@@ -309,7 +309,7 @@ struct KernelConfig {
     bool welford_fp32_alias = false;
 
     // Legacy (non-Welford) column masking for non-tile-aligned widths: zero the padding columns of
-    // the final width tile so they do not enter E[x] or the variance.
+    // the final tile so they do not enter E[x] or the variance.
     bool do_col_mask = false;
     // Non-distributed stage generates the CB 19 mask on-device in the writer; these feed that
     // generation: the logical (un-padded) width and whether the compute data format is fp32 (vs bf16).
@@ -377,7 +377,7 @@ struct CBConfig {
     bool is_pre_all_gather = false;
     bool is_post_all_gather = false;
     bool skip_write_back = false;
-    // Column masking for non-tile-aligned widths (zero the final width tile's padding cols).
+    // Column masking for non-tile-aligned widths (zero the final tile's padding cols).
     // Gates the writer-generated CB 19 mask (every masking stage).
     bool do_col_mask = false;
     // Gates CB 14 (E[x] scratch) for the non-distributed LayerNorm only.
@@ -455,8 +455,9 @@ struct CoreIndices {
     uint32_t width_index = 0;
     uint32_t width_index_two_stage = 0;
     uint32_t all_to_all_worker_tile_offset_bytes = 0;
-    uint32_t gamma_tile_start_id = 0;
-    uint32_t beta_tile_start_id = 0;
+    // This core's first tile index along the width (the normalized dimension): width_index * block_wt,
+    // the start of this core's width shard.
+    uint32_t width_shard_tile_start_id = 0;
     uint32_t num_reduce_tiles_per_block_h = 0;
     // Real (logical) column count this core reduces over. Equals the per-core block width for full
     // shards and the remaining logical columns for the final real shard; used by the Welford compute

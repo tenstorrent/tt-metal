@@ -255,9 +255,8 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford, d
 
 
 # ---------------------------------------------------------------------------
-# FP32 tests
+# FP32 thresholds
 # ---------------------------------------------------------------------------
-
 _FP32_ULP_THRESHOLD = 2_500_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.004
 
@@ -340,15 +339,6 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, d
     assert passed, f"[FP32 {wb_mode} {desc} use_welford={use_welford} dist={distribution}] {msg}"
 
 
-# BF16 caps for the sharded non-tile-aligned tests. These are far tighter than the generic
-# BF16-accumulation cap because normalizing over the padded width leaks only a moderate error
-# (a few percent), which the generic cap would absorb. Correctly masked output is within a few
-# ULP and a tiny absolute error of the golden, so a tight cap turns padding contamination into a
-# test failure rather than a silent pass.
-_SHARDED_NONALIGNED_BF16_ULP_THRESHOLD = 64
-_SHARDED_NONALIGNED_BF16_NEAR_ZERO_ATOL_FRACTION = 0.004
-
-
 def _make_sharded_norm_mem_config(num_cores_w: int, h: int, shard_w: int):
     """Single-row block-sharded L1 config spanning num_cores_w cores, each owning an [h, shard_w] shard."""
     shard_spec = ttnn.ShardSpec(
@@ -371,6 +361,15 @@ def _to_poisoned_sharded(device, torch_tensor, mem_config):
     """
     tt = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
     return ttnn.fill_implicit_tile_padding(tt, PAD_VALUE)
+
+
+# BF16 caps for the sharded non-tile-aligned tests. These are far tighter than the generic
+# BF16-accumulation cap because normalizing over the padded width leaks only a moderate error
+# (a few percent), which the generic cap would absorb. Correctly masked output is within a few
+# ULP and a tiny absolute error of the golden, so a tight cap turns padding contamination into a
+# test failure rather than a silent pass.
+_SHARDED_NONALIGNED_BF16_ULP_THRESHOLD = 64
+_SHARDED_NONALIGNED_BF16_NEAR_ZERO_ATOL_FRACTION = 0.004
 
 
 def _assert_sharded_norm_ulp(golden, actual, dtype, log_prefix: str, spec: str, fail_prefix: str):
@@ -612,21 +611,21 @@ def test_rms_norm_ulp_sharded_unevenly_split_width_across_cores(device, w, distr
     )
 
 
-# Fused residual add (a + b computed on-device) over a non-tile-aligned width, on the legacy
-# (non-Welford) path. The residual sum is computed on-device, so the normalized input is
-# compute-produced rather than host-tilized; this verifies that padding is still excluded from the
-# statistics in that case. num_cores_w=2 also splits the width across shards.
 @pytest.mark.parametrize("w", [40, 72, 200])
 @pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("norm", ["layernorm", "rmsnorm"])
 @pytest.mark.parametrize("num_cores_w", [1, 2])
 def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dtype, norm, num_cores_w):
-    """Sharded layer_norm / rms_norm with a fused residual add over a non-tile-aligned width.
+    """Sharded layer_norm / rms_norm with a fused residual add: the norm is applied to a + b (a = the
+    input tensor, b = the residual tensor), over a non-tile-aligned width.
 
-    The residual sum a + b is computed on-device, so the normalized input is compute-produced rather
-    than host-tilized; padding must still be excluded from the statistics. Both the input and residual
-    tile padding are poisoned so any read of the padded columns is observable.
+    Runs the legacy (non-Welford) reduce. That is the path where the fused residual interacts with
+    padding handling: it reads full width tiles, including the padding columns, and zeroes them with a
+    column mask, so the sum a + b (whose padding columns are themselves compute-produced) must still be
+    masked out of the statistics. Welford reduces only each core's logical column count and ignores the
+    padding, so a fused residual adds no new padding risk there.
+    Both a and b have their tile padding poisoned so any read of the padded columns is observable.
     """
     torch.manual_seed(0)
     h = 32

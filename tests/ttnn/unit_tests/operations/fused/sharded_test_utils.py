@@ -494,9 +494,9 @@ def rms_norm_test_main(
 
 
 # Tolerances for the "normalize over the logical width" correctness check below, derived from the bf16
-# error budget (NOT from observed output, so the check cannot silently codify a wrong normalization).
+# error budget.
 # bf16 unit roundoff (round-to-nearest, 7 stored mantissa bits): u = 2^-8 ~= 0.0039. The input and unit
-# gamma / zero beta are quantized to bf16 and the SAME quantized values feed both the device op and the
+# gamma / zero beta are quantized to bf16 and the same quantized values feed both the device op and the
 # torch reference, so input quantization cancels. With fp32 dest accumulation the reduction is exact to
 # fp32; the residual is the 1/sqrt(var+eps) SFPU step (a few bf16 ulps, bounded generously by 8u ~=
 # 0.031, acting as a per-row scale) plus output bf16 quantization (<= u). So a correct result has
@@ -515,16 +515,14 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
     valid final tile plus pure-padding tiles).
 
     Covers two related cases with one path: a tile-aligned width whose tiles do not divide evenly across
-    cores (e.g. 96 over 2), and a non-tile-aligned width split across cores (e.g. 200 over 2). The
-    correctness property is the defining one for normalization: statistics are reduced over the logical
-    element count only. Dividing by the padded count (num_blocks * block_w) instead scales the output by
-    sqrt(padded/logical) -- a (near-)pure scale. The check therefore gates on the standard
+    cores (e.g. 96 over 2), and a non-tile-aligned width split across cores (e.g. 200 over 2).
+    The statistics should be reduced over the logical element count only (excluding padding).
+    Dividing by the padded count (num_blocks * block_w) instead causes the output to be too large by
+    a factor of ~sqrt(padded/logical), which is a near-pure scale. The check therefore gates on the
     relative-Frobenius and allclose metrics (both scale-sensitive) and DISABLES PCC, which is
     scale-invariant and so blind to this class of error. Tolerances are the bf16 budget defined above.
 
-    use_welford exercises the Welford reduction (LayerNorm only); it has no per-column mask and instead
-    reduces each core's exact logical column count, so it is the path most sensitive to a split where the
-    final core owns a partial tile.
+    use_welford applies to LayerNorm only, since RMSNorm does not support Welford.
     """
     assert not (use_welford and is_rmsnorm), "RMSNorm does not use the Welford reduction"
     kt = -(-w // TILE_WIDTH)  # ceil: a non-tile-aligned width rounds up to a whole number of tiles
