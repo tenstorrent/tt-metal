@@ -218,6 +218,8 @@ def test_bw_tensor_prefetcher(device, op_name, shape):
     methodology as the matmul bench (test_bench_dram_core_repeats).
     """
     _apply_shape(shape)
+    if device.dram_grid_size().x != 8:
+        pytest.skip("DRAM-core bench expects 8 unharvested DRAM banks")
 
     trace_repeats = _bench_trace_repeats()
     num_prefetch_layers = trace_repeats + 1  # 1 warmup + trace_repeats inside the trace
@@ -310,6 +312,8 @@ def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
       test_validator_dram_sender_recv_contig.
     """
     _apply_shape(shape)
+    if device.dram_grid_size().x != 8:
+        pytest.skip("DRAM-core bench expects 8 unharvested DRAM banks")
 
     trace_repeats = _bench_trace_repeats()
     num_prefetch_layers = trace_repeats + 1  # 1 warmup + trace_repeats inside the trace

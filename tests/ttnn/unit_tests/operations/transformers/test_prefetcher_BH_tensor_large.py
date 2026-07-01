@@ -584,6 +584,8 @@ def test_tensor_prefetcher_multi_tensor(device, num_tensors, num_layers):
 
 @pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (2, 5)])
 def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
+    if device.dram_grid_size().x != 8:
+        pytest.skip("Receiver-contiguous smoke test expects 8 unharvested DRAM banks")
     num_dram_banks = device.dram_grid_size().x
     num_recv_per_bank = _MT_NUM_RECV_PER_BANK
     num_receivers = num_dram_banks * num_recv_per_bank
