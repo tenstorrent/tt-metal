@@ -366,7 +366,7 @@ models:
   sweep_tier2:
     wh_n150: 30
     wh_llmbox_perf: 60
-    bh_quietbox_2: 60
+    bh_quietbox_2: 30
     bh_p150: 30
 umd:
   unit:

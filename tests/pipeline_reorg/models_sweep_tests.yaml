@@ -52,9 +52,7 @@
     wh_llmbox_perf:
       timeout: 25
       tier: 2
-    bh_quietbox_2:
-      timeout: 25
-      tier: 2
+    # bh_quietbox_2 descoped: 70B prefill exceeds Blackhole 4-device L1 (circular-buffer clash). See #48533.
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
