@@ -38,6 +38,19 @@ constexpr uint32_t K_TRID_RING = 4;
 //                         chunk_global apart in natural order but only chunk_local apart physically -> pull
 //                         slab s back by slab*gap.
 // Sentinels (0xFFFFFFFF) never reach here — the reader only gathers the valid (< nv) prefix.
+
+// natural (logical) index n -> block-cyclic physical row (invP). See the file header for the layout
+// reasoning. Parameterized (rather than reading the BC_* defines directly) so other block-cyclic gather
+// kernels (e.g. the indexer) can reuse the same remap. All args are compile-time constants at the call
+// site, so this folds to one compile-time divide (mul+shift) + shift/mask.
+FORCE_INLINE uint32_t logical_to_chunked_physical(
+    uint32_t n, uint32_t chunk_local, uint32_t sp, uint32_t shard_stride_gap, uint32_t slab_stride_gap) {
+    const uint32_t block_idx = n / chunk_local;  // = slab*sp + shard (natural-order block index)
+    const uint32_t slab = block_idx / sp;
+    const uint32_t shard = block_idx - slab * sp;
+    return n + shard * shard_stride_gap - slab * slab_stride_gap;
+}
+
 template <typename Accessor>
 FORCE_INLINE void trid_ring_gather(
     Noc& noc,
@@ -62,10 +75,7 @@ FORCE_INLINE void trid_ring_gather(
 #ifdef BC_ENABLE
         // natural index n -> block-cyclic physical row (invP). All terms compile-time (T is hashed), so this is
         // one compile-time divide (mul+shift) + shift/mask. See the header comment for the layout reasoning.
-        const uint32_t block_idx = page / BC_CHUNK_LOCAL;  // = slab*BC_SP + shard (natural-order block index)
-        const uint32_t slab = block_idx / BC_SP;
-        const uint32_t shard = block_idx - slab * BC_SP;
-        page = page + shard * BC_SHARD_STRIDE_GAP - slab * BC_SLAB_STRIDE_GAP;
+        page = logical_to_chunked_physical(page, BC_CHUNK_LOCAL, BC_SP, BC_SHARD_STRIDE_GAP, BC_SLAB_STRIDE_GAP);
 #endif
         noc.async_read(kv, k_cb, k_row_bytes, {.page_id = page_offset + page}, {.offset_bytes = p * k_row_bytes});
     }

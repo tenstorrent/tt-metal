@@ -204,7 +204,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // cache length T is folded into the program hash for this path), so the remap is one mul+shift divide +
     // shift/mask. Stride gaps: BC_SHARD_STRIDE_GAP = T/sp - chunk_local (= shard_len - chunk_local);
     // BC_SLAB_STRIDE_GAP = chunk_local*(sp-1).
-    const auto add_bc_defines = [&](std::map<std::string, std::string>& defs) {
+    const auto add_bc_defines = [&attrs, &t](std::map<std::string, std::string>& defs) {
         if (!attrs.has_block_cyclic()) {
             return;
         }
