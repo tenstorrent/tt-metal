@@ -123,8 +123,8 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     }
 
     // CB c_1 is no longer used for the transpose round-trip (the compute kernel now uses
-    // transpose_wh_dest to transpose in-place in DEST), but remains allocated for
-    // compute_kernel_hw_startup and transpose_wh_init format configuration.
+    // transpose_dest to transpose in-place in DEST), but remains allocated for
+    // compute_kernel_hw_startup and transpose_init format configuration.
 
     KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
         {"welford_unpack_fp32_active", welford_unpack_fp32_active ? 1u : 0u},
