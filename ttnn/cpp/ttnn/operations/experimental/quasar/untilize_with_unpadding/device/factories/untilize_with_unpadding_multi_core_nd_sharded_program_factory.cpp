@@ -125,7 +125,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ------------------------------------------------------------------------
@@ -185,7 +187,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"output_tensor_height", output_tensor_height},
              {"tensor_rank", static_cast<uint32_t>(input.padded_shape().rank())}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         .advanced_options =
             KernelAdvancedOptions{
                 .num_common_runtime_varargs = static_cast<uint32_t>(writer_common_runtime_args.size())},

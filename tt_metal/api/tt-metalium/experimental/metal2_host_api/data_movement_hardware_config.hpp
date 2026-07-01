@@ -25,10 +25,10 @@ namespace tt::tt_metal::experimental {
 // architecture, so architecture-agnostic host code may populate both.
 //
 // Gen1 DM config (i.e., which RISC and NOC a kernel uses) is performance-critical,
-// but the common case is handled for you: set the `role` hint to READER or WRITER
-// and the runtime fills in the conventional processor/NOC/NOC-mode. Power users
-// who want to override that convention can provide an explicit Gen1Config
-// (alongside RoleHint::UNSPECIFIED).
+// but the common case is handled for you: build the Gen1Config with
+// Gen1Config::create_from_role(READER/WRITER), which fills in the conventional
+// processor/NOC/NOC-mode. Power users who want to override that convention construct
+// a Gen1Config directly.
 //
 // Gen2 has a unified NOC and its DM kernel core selection is fully automated.
 // The gen2_config controls only whether the ISR-based DFB implicit sync is enabled.
@@ -37,22 +37,23 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 struct DataMovementHardwareConfig {
-    // Declares what the DM kernel does.
-    //  - If specified, the runtime will automatically fill in an omitted Gen1Config
-    //    with the standard optimal Gen1 DM config for a READER or WRITER kernel.
-    //  - If an explicit Gen1Config is provided, set the role hint to UNSPECIFIED.
-    //  - For Gen2, the role hint is ignored / informational.
-    enum class RoleHint { READER, WRITER, UNSPECIFIED };
-    RoleHint role = RoleHint::UNSPECIFIED;
+    // Names the common DM kernel roles, used only as an argument to
+    // Gen1Config::create_from_role() to build the conventional Gen1 placement.
+    enum class RoleHint { READER, WRITER };
 
     struct Gen1Config {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
         tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+
+        // Build the conventional Gen1 placement for a READER/WRITER kernel
+        // (mirrors the legacy Reader/WriterDataMovementConfig convention):
+        //   READER -> NCRISC (RISCV_1) on NOC_0;  WRITER -> BRISC (RISCV_0) on NOC_1
+        // Power users who need a non-conventional placement construct a Gen1Config directly.
+        static Gen1Config create_from_role(RoleHint role);
     };
-    // For a Gen1 DM kernel, specifying the Gen1Config is optional.
-    // If unspecified, the runtime infers the settings from the role hint (READER/WRITER).
-    // (A Gen1 DM kernel must provide either a role hint or an explicit Gen1Config.)
+    // For a Gen1 DM kernel (Wormhole / Blackhole), specify the Gen1Config — either built via
+    // Gen1Config::create_from_role(READER/WRITER) for the common case, or constructed directly.
     std::optional<Gen1Config> gen1_config = std::nullopt;
 
     struct Gen2Config {

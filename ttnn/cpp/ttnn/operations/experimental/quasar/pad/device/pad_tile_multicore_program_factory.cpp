@@ -133,7 +133,9 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = {{"num_dims", num_dims}, {"page_size", page_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
     reader_spec.advanced_options.num_runtime_varargs = 4 * num_dims;
 
@@ -152,7 +154,9 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
              {"pad_value", packed_pad_value},
              {"element_size", static_cast<uint32_t>(output.element_size())}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
     writer_spec.advanced_options.num_runtime_varargs = 4 * num_dims;
 

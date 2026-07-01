@@ -273,7 +273,9 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         .compile_time_args =
             {{"stick_size_padded", static_cast<uint32_t>(stick_size_padded)},
              {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };
 

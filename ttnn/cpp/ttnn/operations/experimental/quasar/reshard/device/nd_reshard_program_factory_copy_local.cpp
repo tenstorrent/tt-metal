@@ -132,7 +132,6 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
         .hw_config =
             DataMovementHardwareConfig{
-                .role = DataMovementRoleHint::UNSPECIFIED,
                 .gen1_config =
                     DataMovementHardwareConfig::Gen1Config{
                         .processor = DataMovementProcessor::RISCV_0,
@@ -150,7 +149,6 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
         .hw_config =
             DataMovementHardwareConfig{
-                .role = DataMovementRoleHint::UNSPECIFIED,
                 .gen1_config =
                     DataMovementHardwareConfig::Gen1Config{
                         .processor = DataMovementProcessor::RISCV_1,
