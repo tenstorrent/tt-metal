@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -82,7 +83,16 @@ tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumWFactory::create_desc
     ProgramDescriptor desc;
 
     // ---- Circular buffers ----
-    constexpr uint32_t num_input_tiles = 2;
+    // Reader batches read_batch async reads per NoC barrier (see
+    // reader_moreh_sum_w.cpp). Size cb_in0 to 2*read_batch so the reader can
+    // double-buffer (run a batch ahead of compute), overlapping NoC round-trips.
+    // The op was reader(BRISC)-bound; read_batch=4 measured optimal on Blackhole
+    // P100 (-16% to -41% DEVICE KERNEL DURATION across Wt={4,8,16}; tiny Wt=2
+    // gets -4.5%). Larger batches revert the gain once NoC-read overlap
+    // saturates (coarser reserve/push granularity stalls the handoff). Cap by Wt
+    // so short per-row streams don't over-reserve.
+    const uint32_t read_batch = std::min<uint32_t>(4u, std::max<uint32_t>(Wt, 1u));
+    const uint32_t num_input_tiles = std::max<uint32_t>(2u * read_batch, 2u);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * src0_single_tile_size,
         .core_ranges = all_cores,
@@ -147,6 +157,7 @@ tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumWFactory::create_desc
     KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
     reader_compile_time_args.push_back(packed_scaler_value);
+    reader_compile_time_args.push_back(read_batch);
 
     KernelDescriptor::Defines reader_defines;
     if (do_mask_w) {
