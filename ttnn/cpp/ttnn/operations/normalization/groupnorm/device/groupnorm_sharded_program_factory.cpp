@@ -580,25 +580,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // Mask data path selection. Three paths in priority order:
     //   1. MASK_SYNTHESIZE: writer kernel writes row 0 of face 0 + face 1
     //      directly into L1 from `num_cols_per_group` and the per-group
-    //      start_stride recurrence — no DRAM mask read at all. Requires
-    //      non-block-float dtype and non-Welford compute (Welford reads the
-    //      full mask tile).
+    //      start_stride recurrence — no DRAM mask read at all. Fires only
+    //      when the caller did NOT pass an input_mask (the auto-built format
+    //      is always bf16 and always synth-safe).
     //   2. MASK_PARTIAL_READ: writer issues a gamma-style two-strip NOC read
-    //      of the DRAM mask, populating only face 0 row 0 + face 1 row 0
-    //      (Phase 2 optimization). Same dtype constraint as SYNTHESIZE.
+    //      of the DRAM mask, populating only face 0 row 0 + face 1 row 0.
+    //      Used when the caller passed a mask of a non-block-float dtype.
     //   3. fallthrough: writer NOC-reads the entire 2 KB mask tile from DRAM
     //      (legacy path, used for BFP8).
-    // Synthesis can fire even when no input_mask tensor was provided to the
-    // device op — the kernel writes the {0/1} pattern from num_cols_per_group
-    // directly into L1, no DRAM tensor needed. We always pick BFLOAT16 for
-    // the auto-built mask format, so synthesis always fires when no mask is
-    // passed. Welford support: the Welford compute kernels were reordered to
-    // do `((x − μ) · rsqrt) · mask` with mask on the RHS row-source — same
-    // gate as the non-Welford path.
-    const bool synth_mask =
-        !input_mask.has_value() ? true : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
-    const bool synth_neg_mask =
-        negative_mask.has_value() && mask_supports_synthesis(in_negative_mask_cb_data_format, use_welford);
+    // A user-supplied mask is always used (bytes NOC-read, not synthesized) —
+    // synthesis only substitutes for the DRAM-mask allocation the host used
+    // to build. NEGATIVE_MASK_SYNTHESIZE is unreachable today for the same
+    // reason (negative_mask has no auto-generation path) — a follow-up
+    // `fuse_negative_mask` opt-in flag would make it reachable.
+    const bool synth_mask = !input_mask.has_value();
+    const bool synth_neg_mask = false;
     if (synth_mask) {
         writer_defines["MASK_SYNTHESIZE"] = "1";
         writer_defines["MASK_NUM_COLS_PER_GROUP"] = std::to_string(num_datum_row_per_group);

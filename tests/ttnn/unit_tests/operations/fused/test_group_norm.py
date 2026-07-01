@@ -1263,14 +1263,12 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, s
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
-def test_group_norm_bf16_negative_mask_synth(device, N, C, H, W, num_groups):
+def test_group_norm_bf16_negative_mask_partial_read(device, N, C, H, W, num_groups):
     """
-    Exercises the NEGATIVE_MASK_SYNTHESIZE writer path on the sharded factory.
-
-    The existing SDXL negative-mask coverage passes BFP8 masks and hits the
-    legacy full-tile-read path. This test passes both input_mask and
-    negative_mask as bf16 so that mask_supports_synthesis returns true and
-    both synthesis defines fire.
+    Exercises MASK_PARTIAL_READ + NEGATIVE_MASK_PARTIAL_READ on the sharded
+    factory. The existing SDXL negative-mask coverage passes BFP8 masks and
+    hits the legacy full-tile-read path; this test passes both masks as
+    bf16 so the writer takes the two-strip partial-read path for each.
     """
     torch.manual_seed(0)
     grid_size = ttnn.CoreGrid(y=8, x=8)

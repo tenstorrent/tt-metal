@@ -755,12 +755,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     std::map<std::string, std::string> writer_defines;
     // See groupnorm_sharded_program_factory.cpp for the mask data path
     // selection (synthesize / partial read / full read). Synthesis fires
-    // even when the device op got no input_mask tensor — see that comment.
-    // The Welford writer (welford_writer_unary_gn_rm_gb.cpp) and compute
-    // kernel (welford_groupnorm.cpp) both support synthesis + row-0-only
-    // mask data after the mask-multiply reorder.
-    const bool synth_mask =
-        !input_mask.has_value() ? true : mask_supports_synthesis(in_mask_cb_data_format, use_welford);
+    // only when the caller did not pass an input_mask tensor.
+    const bool synth_mask = !input_mask.has_value();
     if (synth_mask) {
         writer_defines["MASK_SYNTHESIZE"] = "1";
         writer_defines["MASK_NUM_COLS_PER_GROUP"] = std::to_string(num_channels_per_group);
