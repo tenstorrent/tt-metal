@@ -31,7 +31,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
 
     constexpr float POLYNOMIAL_THRESHOLD = 0.6f;
 
-    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::Biased);
     sfpi::vInt mantissa = sfpi::exman(val);
     // exp==255: NaN (default) or ±Inf (mantissa==0)
     v_if(exponent == 255) {
