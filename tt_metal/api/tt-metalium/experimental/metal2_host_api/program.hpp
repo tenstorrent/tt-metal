@@ -53,7 +53,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 // the full ProgramRunArgs if only a few arguments change per iteration. The onus is on the
 // programmer to ensure that the retained arguments remain valid across iterations.
 //
-// NOTE: If DFB size overrides are unspecified, they revert to the ProgramSpec-defined defaults.
+// NOTE: DFB size overrides follow the same stateful rule — a DFB whose size is not overridden here
+//       retains its current size (as last set), rather than reverting to the ProgramSpec default.
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.

@@ -1067,7 +1067,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             name);
     }
 
-    // DFB run overrides: same checks as the full path (duplicates; size overrides unimplemented).
+    // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides).
     std::unordered_set<DFBSpecName> dfbs_with_params;
     for (const auto& dfb_params : params.dfb_run_overrides) {
         auto [it, inserted] = dfbs_with_params.insert(dfb_params.dfb);
@@ -1075,10 +1075,20 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             inserted,
             "Duplicate DFB '{}' in ProgramRunArgs.dfb_run_overrides. Each DFB must appear at most once.",
             dfb_params.dfb);
-        TT_FATAL(
-            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented for DFB '{}'.",
-            dfb_params.dfb);
+        if (dfb_params.entry_size.has_value()) {
+            TT_FATAL(
+                dfb_params.entry_size.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has entry_size override = 0. entry_size must be set to a "
+                "non-zero value.",
+                dfb_params.dfb);
+        }
+        if (dfb_params.num_entries.has_value()) {
+            TT_FATAL(
+                dfb_params.num_entries.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has num_entries override = 0. num_entries must be set to a "
+                "non-zero value.",
+                dfb_params.dfb);
+        }
     }
 
     // Tensor args: non-invariant TensorParameters must be supplied; invariant ones may be omitted.
@@ -1182,6 +1192,20 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             }
         }
     }
+
+    // ---- DFB size overrides (stateful: an unspecified DFB retains its current size) ----
+    // Apply BEFORE re-attaching borrowed buffers below, so the borrowed per-bank fit check sees the
+    // new size. Mirrors the SetProgramRunArgs path.
+    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    size_overrides.reserve(params.dfb_run_overrides.size());
+    for (const auto& dfb_params : params.dfb_run_overrides) {
+        if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+            continue;
+        }
+        size_overrides.push_back(
+            {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
+    }
+    program_impl.apply_dfb_size_overrides(size_overrides);
 
     // ---- Tensor bindings: patch CRTA address slots for SUPPLIED tensors only ----
     // (Invariant tensors omitted from params keep their previously-patched binding slots.)

@@ -96,7 +96,8 @@ struct ProgramRunArgs {
 
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
-        // If unset, the ProgramSpec value is used.
+        // These overrides are stateful across executions: if unset, the DFB keeps its current size
+        // (initially the ProgramSpec value; a prior override persists until changed).
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 

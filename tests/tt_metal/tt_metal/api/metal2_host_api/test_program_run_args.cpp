@@ -2386,6 +2386,46 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingAllInvariantKernel
         << "invariant CRTA retained even when its kernel is omitted entirely";
 }
 
+// --- DFB size overrides on the fast path (mock fixture: inspects config, no enqueue) ---
+
+// UpdateProgramRunArgs applies a DFB size override, mirroring the SetProgramRunArgs path.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_AppliesDFBSizeOverride) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // A full set must precede any partial update.
+    SetProgramRunArgs(program, MakeRunArgsForMinimalSpec(node, {}, {}));
+
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 1024u);  // unchanged
+    EXPECT_EQ(dfb->config.num_entries, 4u);    // overridden via UpdateProgramRunArgs
+}
+
+// DFB size overrides are stateful: a DFB not re-specified in a later update keeps its current
+// size rather than reverting to the ProgramSpec default.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsDFBSizeOverrideWhenUnspecified) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Establish an override (the spec default num_entries is 2).
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
+    SetProgramRunArgs(program, params);
+
+    // A subsequent update that omits the DFB must not reset it to the spec default.
+    ProgramRunArgs upd;
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.num_entries, 4u) << "override must persist across an update that omits it";
+}
+
 // --- MergeProgramRunArgs (pure data helper; no device needed) ---
 
 const ProgramRunArgs::KernelRunArgs* FindKernel(const ProgramRunArgs& p, const std::string& name) {
