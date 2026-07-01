@@ -411,6 +411,17 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
+def pytest_ignore_collect(collection_path, config):
+    # Skip collecting the quasar/ dir on non-quasar arch — those tests are
+    # deselected there anyway, so there's no need to collect them.
+    if (
+        get_chip_architecture() != ChipArchitecture.QUASAR
+        and "quasar" in collection_path.parts
+    ):
+        return True
+    return None
+
+
 def pytest_collection_modifyitems(config, items):
     test_order_file = config.getoption("--test-order-file")
 
@@ -704,6 +715,10 @@ def counter_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
+    temp_report.assert_single_schema(
+        context=f"{test_module} counters (worker {worker_id})"
+    )
+
     counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
 
     if counters_path.exists():
@@ -729,6 +744,11 @@ def perf_report(request, worker_id):
 
     if PerfConfig.TEST_COUNTER == 0:
         return
+
+    # Fail loud before writing: a single CSV must hold exactly one column schema.
+    # More than one means two unrelated tests/ops share this module (split them
+    # into separate files) or one test emits inconsistent columns across its sweep.
+    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
 
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"

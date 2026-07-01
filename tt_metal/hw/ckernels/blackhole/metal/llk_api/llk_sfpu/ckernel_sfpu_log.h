@@ -103,7 +103,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         // For zero, result is negative before this multiply, so result * +inf
         // gives -inf. For +inf, result is positive, so result * +inf gives
         // +inf. NaNs either skip the main block or propagate here.
-        v_if(sfpi::exexp(a, sfpi::ExponentMode::NoDebias) - 255 >= 0) { result *= a; }
+        v_if(sfpi::exexp(a, sfpi::ExponentMode::Biased) - 255 >= 0) { result *= a; }
         v_endif;
     }
     v_endif;

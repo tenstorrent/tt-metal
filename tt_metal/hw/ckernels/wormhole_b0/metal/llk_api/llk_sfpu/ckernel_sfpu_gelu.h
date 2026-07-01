@@ -88,7 +88,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     sfpi::vFloat x_poly = x * poly;  // x * poly ≈ -9 to -13 (safe range)
 
     // Step 5: Exponent bit manipulation on the FUSED result
-    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::NoDebias);  // Extract exponent of x*poly
+    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::Biased);  // Extract exponent of x*poly
     sfpi::vInt new_exp = xpoly_exp + k_int;               // Shift by 2^k
 
     // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
@@ -156,7 +156,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
-        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
         sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
         sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);

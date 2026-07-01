@@ -24,6 +24,7 @@
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
+#include "impl/device/device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -333,7 +334,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // through the num_virtual_eth_cores() function.
         // The physical device itself may have less ethernet cores than what is queried here and will dispatch
         // accordingly.
-        num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
+        num_virtual_eth_cores = mesh_device_->impl().num_virtual_eth_cores(sub_device_id);
         num_workers += num_virtual_eth_cores;
     }
 
@@ -368,7 +369,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
         for (auto* device : mesh_device_->get_devices()) {
             program_dispatch::reset_expected_num_workers_completed_on_device(
-                device, sub_device_id, expected_num_workers_completed, id());
+                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                sub_device_id,
+                expected_num_workers_completed,
+                id());
         }
     }
 
@@ -1048,12 +1052,14 @@ void FDMeshCommandQueue::reset_worker_state(
             expected_num_workers_completed_,
             reset_launch_msg_state);
         program_dispatch::set_num_worker_sems_on_dispatch(
-            mesh_device_, device->sysmem_manager(), id_, num_sub_devices, workers_per_sub_device);
-        program_dispatch::set_go_signal_noc_data_on_dispatch(
-            mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
+            device->sysmem_manager(), id_, num_sub_devices, workers_per_sub_device);
+        program_dispatch::set_go_signal_noc_data_on_dispatch(go_signal_noc_data, device->sysmem_manager(), id_);
         if (reset_launch_msg_state) {
             program_dispatch::set_core_go_message_mapping_on_device(
-                device, core_go_message_mapping, device->sysmem_manager(), id_);
+                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                core_go_message_mapping,
+                device->sysmem_manager(),
+                id_);
         }
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
@@ -1364,7 +1370,7 @@ void FDMeshCommandQueue::record_end() {
                 }
                 if (unicast) {
                     trace_worker_descriptor.num_completion_worker_cores +=
-                        mesh_device_->num_virtual_eth_cores(sub_device);
+                        mesh_device_->impl().num_virtual_eth_cores(sub_device);
                     worker_launch_msg_state.inc_unicast_wptr(1);
                     trace_worker_descriptor.num_traced_programs_needing_go_signal_unicast++;
                 }
@@ -1391,7 +1397,7 @@ void FDMeshCommandQueue::record_end() {
             uint32_t num_virtual_eth_cores = 0;
 
             if (mesh_node.unicast_go_signals) {
-                num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
+                num_virtual_eth_cores = mesh_device_->impl().num_virtual_eth_cores(sub_device_id);
             }
 
             // Access the program dispatch-command cache
