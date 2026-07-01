@@ -47,8 +47,8 @@ def decide_tp(weight_bytes: int, per_chip_capacity: int, total_chips: int, num_h
 LATENCY_METRICS = ("device_ms", "wall_ms")
 
 
-def tp_latency_eligible(metric: str, allow_tp_latency: bool, total_chips: int) -> bool:
-    return bool(allow_tp_latency) and (metric or "").lower() in LATENCY_METRICS and total_chips >= 2
+def tp_latency_eligible(metric: str, total_chips: int) -> bool:
+    return (metric or "").lower() in LATENCY_METRICS and total_chips >= 2
 
 
 def decide_parallelism(
@@ -58,22 +58,23 @@ def decide_parallelism(
     num_heads: int,
     hidden: int,
     metric: str = "device_ms",
-    allow_tp_latency: bool = False,
 ) -> dict:
     if fits_on_one_chip(weight_bytes, per_chip_capacity):
-        if tp_latency_eligible(metric, allow_tp_latency, total_chips):
+        if tp_latency_eligible(metric, total_chips):
             return {
                 "route": "single-chip+tp-latency",
                 "tp": 1,
                 "dp": total_chips,
                 "tp_regime": True,
-                "reason": "model fits on one chip; --tp-latency under a latency metric -> may sweep TP up to cut latency (spends DP throughput)",
+                "floor": 1,
+                "reason": "model fits on one chip; latency metric on a mesh -> sweep TP per matmul, keep fastest",
             }
         return {
             "route": "single-chip",
             "tp": 1,
             "dp": total_chips,
             "tp_regime": False,
+            "floor": 1,
             "reason": "model fits on one chip -> single-chip optimize; DP across the rest for throughput at deploy",
         }
     sized = decide_tp(weight_bytes, per_chip_capacity, total_chips, num_heads, hidden)
@@ -84,5 +85,6 @@ def decide_parallelism(
         "tp": sized["tp"],
         "dp": sized["dp"],
         "tp_regime": True,
+        "floor": sized["tp"],
         "reason": f"model does not fit on one chip -> TP={sized['tp']}, DP={sized['dp']}",
     }
