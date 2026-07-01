@@ -32,7 +32,7 @@ void ObjectIntentTracker::pre_launch_snapshot(
     std::size_t num_kernels,
     const std::vector<uint32_t>& single_kernel_rt_args,
     const uint8_t* l1_data,
-    const std::vector<uint32_t>& persistent_cb_starts,
+    const std::vector<uint64_t>& persistent_cb_ranges,
     [[maybe_unused]] uint32_t lx,
     [[maybe_unused]] uint32_t ly) {
     if (!oob.object_intent_strict || oob.tensor_ranges == nullptr) {
@@ -54,10 +54,18 @@ void ObjectIntentTracker::pre_launch_snapshot(
         if (r_end <= r_start) {
             continue;
         }
-        // Skip persistent (globally-allocated CB) buffers: the kernel is allowed
-        // to write to them. Their address() == the buffer's start offset.
-        if (std::find(persistent_cb_starts.begin(), persistent_cb_starts.end(), r_start) !=
-            persistent_cb_starts.end()) {
+        // Skip any range overlapping a globally-allocated CB: the kernel may write
+        // anywhere in such a CB (e.g. sharded move copies its whole dst), and a
+        // live range overlapping one is either the CB's own buffer or a stale extent
+        // nested in it — indistinguishable from an authorized CB write. See §12.
+        bool overlaps_persistent_cb = false;
+        for (uint64_t cb : persistent_cb_ranges) {
+            if (r_start < static_cast<uint32_t>(cb) && static_cast<uint32_t>(cb >> 32) < r_end) {
+                overlaps_persistent_cb = true;
+                break;
+            }
+        }
+        if (overlaps_persistent_cb) {
             continue;
         }
         // Skip I/O tensors this kernel was handed (see above).

@@ -92,7 +92,7 @@ public:
         std::size_t num_kernels,
         const std::vector<uint32_t>& single_kernel_rt_args,
         const uint8_t* l1_data,
-        const std::vector<uint32_t>& persistent_cb_starts,
+        const std::vector<uint64_t>& persistent_cb_ranges,
         uint32_t lx,
         uint32_t ly);
     void setup_kernel_tls(const EmuleOobTensorState& oob, uint64_t* local_log, uint32_t cap, uint32_t* count);

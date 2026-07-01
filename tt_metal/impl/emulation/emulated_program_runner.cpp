@@ -517,9 +517,9 @@ struct CoreSetup {
     bool has_dfbs = false;
     uint32_t sem_base;
     uint32_t sem_size;
-    // Globally-allocated (persistent) CB starts on this core; Object-Intent exempts
-    // kernel writes to them (§12).
-    std::vector<uint32_t> persistent_cb_starts;
+    // Globally-allocated (persistent) CB extents on this core, packed (start<<32|end);
+    // Object-Intent exempts kernel writes to them (§12).
+    std::vector<uint64_t> persistent_cb_ranges;
 };
 
 // Per-slot initialization data for a DFB tile-counter slot. wr_ptr and rd_ptr
@@ -1864,15 +1864,16 @@ static void init_core_cb_sync(
     tt_emule::Core* core,
     detail::ProgramImpl& impl,
     const CoreCoord& logical_core,
-    std::vector<uint32_t>& persistent_cb_starts) {
+    std::vector<uint64_t>& persistent_cb_ranges) {
     core->reset_cb_sync();
-    // Record this core's globally-allocated (persistent) CBs so Object-Intent exempts
-    // the kernel's writes to them (see §12). Its own pass — not folded into the
-    // configure lambda below, which also walks remote pass-2 CBs — to keep the exempt
-    // set exactly the local ones.
+    // Record this core's globally-allocated (persistent) CB extents so Object-Intent
+    // exempts the kernel's writes anywhere in them (see §12). Its own pass — not folded
+    // into the configure lambda below, which also walks remote pass-2 CBs — to keep the
+    // exempt set exactly the local ones.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
         if (cb_impl->globally_allocated()) {
-            persistent_cb_starts.push_back(cb_impl->address());
+            uint32_t start = cb_impl->address();
+            persistent_cb_ranges.push_back((static_cast<uint64_t>(start) << 32) | (start + cb_impl->size()));
         }
     }
 
@@ -2051,8 +2052,8 @@ static void setup_core_state(
         uint8_t phys_x = static_cast<uint8_t>(phys.x);
         uint8_t phys_y = static_cast<uint8_t>(phys.y);
 
-        std::vector<uint32_t> persistent_cb_starts;
-        init_core_cb_sync(core, impl, logical_core, persistent_cb_starts);
+        std::vector<uint64_t> persistent_cb_ranges;
+        init_core_cb_sync(core, impl, logical_core, persistent_cb_ranges);
         init_core_semaphores(core, impl, logical_core, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
@@ -2070,7 +2071,7 @@ static void setup_core_state(
              has_dfbs,
              emule_sem_base,
              sem_region_size,
-             std::move(persistent_cb_starts)});
+             std::move(persistent_cb_ranges)});
     }
 }
 
@@ -2397,7 +2398,7 @@ static void launch_cores(
                         kil_for_oi.size(),
                         kil_for_oi.size() == 1 ? kil_for_oi[0].rt_arg_values : kEmptyRtArgs,
                         l1_data,
-                        cs.persistent_cb_starts,
+                        cs.persistent_cb_ranges,
                         static_cast<uint32_t>(cs.logical_core.x),
                         static_cast<uint32_t>(cs.logical_core.y));
 
