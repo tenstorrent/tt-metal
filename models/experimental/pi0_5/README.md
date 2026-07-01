@@ -7,6 +7,34 @@ SigLIP DP + prefill TP=8 + replicated denoise on one 1×8 Blackhole mesh.
 
 ---
 
+## Prerequisites
+
+Build tt-metal from this branch and set up the Python env:
+
+```bash
+git clone -b tt_bh_glx_pi05_8_chips https://github.com/tenstorrent/tt-metal.git --recurse-submodules
+cd tt-metal
+./install_dependencies.sh
+./build_metal.sh
+./create_venv.sh
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+```
+
+**Resetting / selecting devices** (Blackhole Galaxy = 32 chips, numbered 0–31):
+
+```bash
+tt-smi -r                    # reset all devices  (Galaxy: `tt-smi -glx_reset` also works)
+tt-smi -r 0,1                # reset only specific device(s) by number (0..31)
+TT_VISIBLE_DEVICES=0,1 <cmd> # run on a specific device subset only
+```
+
+The 1×8 tests/pipeline need 8 chips on one healthy tray — e.g.
+`TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15`. Reset first if mesh-open reports a
+fabric router-sync / ethernet-handshake timeout.
+
+---
+
 ## Architecture
 
 ```
