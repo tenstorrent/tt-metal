@@ -168,7 +168,7 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
     sfpi::vFloat p = PolynomialEvaluator::eval(
         r, sfpi::vConst1, sfpi::vConst1, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
 
-    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::NoDebias) + k_int);
+    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
 
     // Handle overflow
     v_if(z >= 128.0f) { result = std::numeric_limits<float>::infinity(); }

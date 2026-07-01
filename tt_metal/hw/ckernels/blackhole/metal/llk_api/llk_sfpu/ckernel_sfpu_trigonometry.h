@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_sqrt.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_log1p.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
@@ -300,7 +301,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vFloat result = sfpi::vConst0;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::Biased);
     sfpi::vInt mantissa = sfpi::exman(val);
     v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
@@ -786,87 +787,237 @@ inline void _calculate_cosine_(const int iterations) {
     }
 }
 
-// https://en.wikipedia.org/wiki/Inverse_hyperbolic_functions#Definitions_in_terms_of_logarithms
-// acosh(x) = log(x + sqrt(x^2 - 1))
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+// Self-contained square root for the inverse-hyperbolic kernels.
+//
+// The shared _calculate_sqrt_body_ stores its magic seed and Newton refinement
+// constants in vConstIntPrgm0 / vConstFloatPrgm1 / vConstFloatPrgm2. Those same
+// program registers are owned by the log1p polynomial (vConstFloatPrgm0/1/2)
+// that asinh/acosh now route through, so the two cannot coexist in one pass.
+// This helper bakes the magic seed and refinement constants in as immediates so
+// it leaves the program registers untouched for log1p. Input is assumed >= 0
+// (always true here: x*x + 1 for asinh, (x-1)*(x+1) for acosh with x >= 1).
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
+    // Fast inverse-square-root seed (same constant the shared sqrt kernel uses
+    // for the high-precision path) followed by Newton-Raphson refinement of
+    // y ~= 1 / sqrt(x): y <- y * (1.5 - 0.5 * x * y * y).
+    sfpi::vFloat half_x = sfpi::addexp(x, -1);  // 0.5 * x
+    sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(x) >> 1);
+    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(0x5f1110a0 - i);
+
+    y = y * (1.5f - half_x * y * y);
+    y = y * (1.5f - half_x * y * y);
+    if constexpr (is_fp32_dest_acc_en) {
+        y = y * (1.5f - half_x * y * y);
+    }
+
+    // sqrt(x) = x / sqrt(x) = x * (1 / sqrt(x)). One Newton step on the product
+    // form (a = x * y; a <- 0.5 * (a + x / a)) is folded as a <- a + 0.5 * (x - a*a) * y.
+    sfpi::vFloat a = x * y;
+    a = a + 0.5f * (x - a * a) * y;
+
+    // sqrt(0) must be exactly 0; the reciprocal seed produces inf*0 = NaN there.
+    v_if(x == 0.0f) { a = sfpi::vConst0; }
+    v_endif;
+    return a;
+}
+
+// acosh(x) = log(x + sqrt(x^2 - 1)), reformulated through log1p to remove the
+// absorption error at x -> 1+ and the x^2 overflow at large x. Three regions:
+//   x < 1            -> NaN
+//   x == 1           -> +0
+//   1 < x < 1.5      -> log1p((x - 1) + sqrt((x - 1) * (x + 1)))  (small-(x-1) stable)
+//   1.5 <= x < 2^28  -> log1p((x + sqrt(x^2 - 1)) - 1)            (safe reconstruction)
+//   x >= 2^28        -> ln(2x) = log1p(2x - 1)                    (avoids x^2 overflow)
+// LOG1P_LARGE is the threshold past which x^2 - 1 == x^2 to working precision and
+// acosh(x) == ln(2x) to <1 ulp; using log1p(2x - 1) also dodges the x^2 overflow
+// that makes the classic form return +inf for x >= ~1.84e19.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_acosh() {
+    constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
+    constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat res;
-        v_if(inp < sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(inp == sfpi::vConst1) { res = sfpi::vConst0; }
-        v_else {
-            sfpi::vFloat tmp = inp * inp;
-            tmp = tmp - sfpi::vConst1;
-            tmp = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
-            tmp = tmp + inp;
-            res = _calculate_log_body_no_init_(tmp);
+
+        // Build the log1p argument per region, clamping the out-of-domain lanes
+        // (x < 1) to a safe value so the shared log1p runs over the whole vector.
+        // The argument is materialised to DST before log1p; round-tripping through
+        // DST severs the sqrt/reciprocal expression from the log1p polynomial so
+        // the SFPU register allocator stays within its reload budget. The x <= 1
+        // lanes are overwritten with their exact results afterwards.
+        //
+        // arg = x - 1 is the common term in every region, so it is computed once
+        // and the per-region sqrt term is accumulated onto it:
+        //   x >= 2^28        -> arg = x - 1                 (large; acosh ~= LN2 +
+        //                                                    log1p(x-1), +LN2 added later)
+        //   1 < x < 2^28     -> arg += sqrt((x-1)(x+1))     (sqrt(x^2-1) without the
+        //                                                    x^2-1 cancellation)
+        // The large region falls through the predicated block and keeps arg = x-1.
+        sfpi::vFloat arg = inp - sfpi::vConst1;
+        v_if(inp < LOG1P_LARGE) {
+            arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + sfpi::vConst1) * arg);
         }
         v_endif;
+        sfpi::dst_reg[0] = arg;
+
+        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        // Large region carries the extra ln(2) from acosh(x) ~= LN2 + ln(x).
+        v_if(inp >= LOG1P_LARGE) { res = res + LN2; }
+        v_endif;
+
+        // Domain fix-ups: x == 1 -> +0, x < 1 -> NaN.
+        v_if(inp == sfpi::vConst1) { res = sfpi::vConst0; }
+        v_elseif(inp < sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+        }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
 
-// asinh(x) = log(x + sqrt(x^2 + 1))
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+// asinh(x) = sign(x) * log(|x| + sqrt(x^2 + 1)), reformulated to remove the
+// cancellation at x -> 0 and the x^2 overflow at large |x|. Regions in a = |x|:
+//   a < 0.75          -> a * P(a^2), degree-6 minimax polynomial (<=1 ulp)
+//   0.75 <= a < 2^28  -> log1p(a + a*a / (1 + sqrt(1 + a*a)))  (cancellation-free)
+//   a >= 2^28         -> ln(2a) = LN2 + log1p(a - 1)           (avoids x^2 overflow)
+// Sign is restored at the end. The small region is a plain polynomial (no
+// sqrt/reciprocal/log1p), which keeps SFPU register pressure within the reload
+// budget. The mid region uses a + sqrt(1+a^2) - 1 = a + a^2 / (1 + sqrt(1+a^2))
+// so the log1p argument never loses precision through a subtract-1 cancellation;
+// the large region exits the x^2 regime entirely so |x| up to fp32 max no longer
+// overflows (the old x^2 + 1 produced +inf at ~1.84e19).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
+    constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
+    constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
+        // Keep only the original input live across the body (matching calculate_acosh,
+        // which compiles within the SFPU reload budget). a = |x| and x2 = x*x are
+        // recomputed inline rather than held in their own long-lived registers:
+        // hoisting them into vFloats pushes the SFPU register allocator past its
+        // reload budget and the kernel fails to compile (internal compiler error:
+        // maximum number of generated reload insns), so the recompute is deliberate.
+        // Build the per-region log1p argument over |x|, clamp |x| < 0.75 lanes to a
+        // safe value, materialise to DST, run the shared log1p, then overwrite the
+        // |x| < 0.75 lanes with the direct polynomial. Sign is restored from inp.
         sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat tmp = inp * inp + sfpi::vConst1;
-        tmp = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
-        tmp = tmp + sfpi::abs(inp);
-        auto res = _calculate_log_body_no_init_(tmp);
-        v_if(inp < sfpi::vConst0) { res = -res; }
+
+        // Mid/large region (|x| >= 0.75): asinh(|x|) = log1p(arg). The large
+        // sub-region drops the x^2 term (LN2 + log1p(|x| - 1)) to dodge fp32
+        // overflow. For the safe sub-region use the cancellation-free identity
+        //   |x| + sqrt(1+x^2) - 1 = |x| + x^2 / (1 + sqrt(1+x^2))
+        // which avoids the subtract-1 cancellation that otherwise costs ~3-4 ulp
+        // near the crossover. Lanes below 0.75 are clamped here and overwritten by
+        // the polynomial after log1p.
+        sfpi::vFloat arg = sfpi::vConst0;
+        v_if(sfpi::abs(inp) >= LOG1P_LARGE) {
+            arg = sfpi::abs(inp) - sfpi::vConst1;
+        }
+        v_elseif(sfpi::abs(inp) >= 0.75f) {
+            sfpi::vFloat root = _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp + sfpi::vConst1);
+            arg = sfpi::abs(inp) +
+                  (inp * inp) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(sfpi::vConst1 + root);
+        }
         v_endif;
+        sfpi::dst_reg[0] = arg;
+
+        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        v_if(sfpi::abs(inp) >= LOG1P_LARGE) { res = res + LN2; }
+        v_endif;
+
+        // Small region (|x| < 0.75): asinh(|x|) = |x| * P(x^2), a degree-6 (in x^2)
+        // minimax fit (<=1 ulp on [0, 0.75]). No sqrt/reciprocal/log1p here.
+        v_if(sfpi::abs(inp) < 0.75f) {
+            sfpi::vFloat s = inp * inp;
+            sfpi::vFloat p = 4.375355784e-03f;
+            p = p * s + -1.484858524e-02f;
+            p = p * s + 2.785361186e-02f;
+            p = p * s + -4.417778924e-02f;
+            p = p * s + 7.495806366e-02f;
+            p = p * s + -1.666652262e-01f;
+            p = p * s + 1.000000000e+00f;
+            res = sfpi::abs(inp) * p;
+        }
+        v_endif;
+
+        // res is asinh(|x|) >= 0; restore the original sign.
+        res = sfpi::copysgn(res, inp);
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+        }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
 
-// atanh[x] = 0.5 * ln((1 + x) / (1 - x))
+// atanh(x) = 0.5 * log((1 + x) / (1 - x)), reformulated as
+// 0.5 * log1p(2 * x / (1 - x)) to remove the cancellation at x -> 0 and the
+// (1 + x)/(1 - x) ratio that loses precision there.
+//   |x| > 1   -> NaN
+//   |x| == 1  -> copysgn(+inf, x)
+//   else      -> sign(x) * 0.5 * log1p(2 * a / (1 - a)),  a = |x|
+// Working with a = |x| keeps 1 - a positive (away from 0 except at the |x| == 1
+// boundary, handled separately), and the sign is restored at the end.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atanh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat abs_inp = sfpi::abs(inp);
-        sfpi::vFloat res;
-        v_if(abs_inp > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(abs_inp == sfpi::vConst1) {
+        sfpi::vFloat a = sfpi::abs(inp);
+
+        // Clamp |x| >= 1 lanes to 0 so the interior formula stays finite there;
+        // those lanes are overwritten by the boundary fix-up below.
+        v_if(a >= sfpi::vConst1) { a = sfpi::vConst0; }
+        v_endif;
+
+        // Build the log1p argument, then materialise it to DST before the log1p
+        // polynomial. Round-tripping through DST cuts the reciprocal->log1p
+        // expression so the SFPU register allocator does not exceed its reload
+        // budget (the fused form overflows it). The boundary lanes are restored
+        // from `inp` afterwards, so clobbering DST here is safe.
+        sfpi::vFloat den = sfpi::vConst1 - a;
+        sfpi::dst_reg[0] = (a + a) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(den);
+
+        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        res = sfpi::copysgn(0.5f * res, inp);
+
+        // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN. abs(inp) is
+        // recomputed inline here rather than cached in a register; a cached
+        // |x| - 1 variant pushed the allocator past the reload budget.
+        v_if(sfpi::abs(inp) > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(sfpi::abs(inp) == sfpi::vConst1) {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
             res = sfpi::copysgn(inf, inp);
         }
-        v_else {
-            sfpi::vFloat num = sfpi::vConst1 + inp;
-            sfpi::vFloat den = sfpi::vConst1 - inp;
-            sfpi::vFloat tmp = sfpu_reciprocal_iter<APPROXIMATION_MODE ? 0 : 2>(den);
-            tmp = sfpi::copysgn(tmp, den);
-            if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE) {
-                den = tmp;
-            } else {
-                den = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::Nearest);
-            }
-            num = num * den;
-            den = _calculate_log_body_no_init_(num);
-            res = 0.5f * den;
-        }
         v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+        }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_inverse_hyperbolic() {
-    sqrt_init<APPROXIMATION_MODE>();
+    // asinh/acosh route through calculate_log1p_fp32, which expects the log1p
+    // polynomial constants in vConstFloatPrgm0/1/2. The sqrt used internally is
+    // self-contained (_sfpu_sqrt_ge0_) and does not touch the program registers.
+    log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_atanh() {
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    // atanh routes through calculate_log1p_fp32; the reciprocal it uses is the
+    // self-contained _sfpu_reciprocal_gt0_, so log1p owns the program registers.
+    log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu
