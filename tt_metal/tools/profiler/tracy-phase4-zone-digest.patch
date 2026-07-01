@@ -1,0 +1,43 @@
+From bca92636efc1332965d073bf1a5e3781a8b3b68a Mon Sep 17 00:00:00 2001
+From: smarton <smarton@tenstorrent.com>
+Date: Wed, 1 Jul 2026 16:12:53 +0000
+Subject: [PATCH] TT: Phase 4 -- append per-op HW-counter digest to GPU zone
+ srcloc label
+
+Lets the profiler surface an op's captured counters on its Tracy zone (hover) via
+the existing serial GpuZone source-location path, with no protocol/server change.
+Isolated behind // TT: markers; no-op unless the marker carries a zone_summary.
+---
+ public/tracy/TracyTTDevice.hpp | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/public/tracy/TracyTTDevice.hpp b/public/tracy/TracyTTDevice.hpp
+index 4e530b43..0b9c7489 100644
+--- a/public/tracy/TracyTTDevice.hpp
++++ b/public/tracy/TracyTTDevice.hpp
+@@ -202,7 +202,21 @@ namespace tracy {
+ 
+         void PushStartMarker(const TTDeviceMarker& marker) {
+             const auto queryId = this->NextQueryId(EventInfo{marker, EventPhase::Begin});
+-            const std::string run_id_string = this->getRunIdString(marker);
++            std::string run_id_string = this->getRunIdString(marker);
++
++            // TT: Phase 4 (Nsight-like zone tooltips). Surface the op's captured HW-counter digest
++            // on the zone by appending it to the source-location "function" field, which the Tracy
++            // GUI shows when a zone is hovered/selected. This rides the existing serial GpuZone
++            // srcloc path with NO Tracy protocol/server change (verified: no GpuZoneText QueueType
++            // exists). The digest is attached upstream only to op FW zones (bounded #srclocs, so the
++            // 32K srcloc cap is respected); other zones are untouched and the default path is byte-
++            // identical. Keep this block isolated so the vendored fork stays rebasable. // TT-END
++            if (marker.meta_data.contains("zone_summary")) {
++                const std::string summary = marker.meta_data["zone_summary"].get<std::string>();
++                if (!summary.empty()) {
++                    run_id_string += run_id_string.empty() ? summary : ("  " + summary);
++                }
++            }
+ 
+             const tracy::Color::ColorType color = this->getMarkerColor(marker);
+ 
+-- 
+2.34.1
+
