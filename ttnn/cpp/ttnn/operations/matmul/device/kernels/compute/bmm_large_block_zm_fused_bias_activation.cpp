@@ -343,7 +343,6 @@ void kernel_main() {
                         NoKBlockInnerDimFn,                // KBlockInnerDimFn
                         NoIn0Source,                       // In0SourceFn
                         NoIn1BaseOffset,                   // In1BaseOffsetFn
-                        false,                             // caller_owns_pack_target
                         ActivationOp<matmul_activation, activation_param0, activation_param1, activation_param2>>(
                         in0_buf,
                         in1_buf,
@@ -370,7 +369,6 @@ void kernel_main() {
                         NoKBlockInnerDimFn,
                         NoIn0Source,
                         NoIn1BaseOffset,
-                        false,
                         ActivationOp<matmul_activation, activation_param0, activation_param1, activation_param2>>(
                         in0_buf,
                         in1_buf,

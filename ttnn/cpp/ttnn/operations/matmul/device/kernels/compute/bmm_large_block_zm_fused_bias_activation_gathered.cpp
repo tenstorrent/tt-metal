@@ -505,7 +505,6 @@ void kernel_main() {
             InnerDimFn,   // KBlockInnerDimFn
             In0SrcFn,     // In0SourceFn
             In1OffsetFn,  // In1BaseOffsetFn
-            /*caller_owns_pack_target=*/false,
             ActivationOp<activation_type, activation_param0, activation_param1, activation_param2>>(
             in0_buf,
             in1_buf,
