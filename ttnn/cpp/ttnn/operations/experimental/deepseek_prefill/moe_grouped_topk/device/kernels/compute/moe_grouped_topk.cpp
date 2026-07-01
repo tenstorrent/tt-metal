@@ -306,7 +306,7 @@ void normalize_scores(
     CircularBuffer cb_reciprocal_sums(cb_reciprocal_sums_id);
     CircularBuffer cb_epsilon_scalar(cb_epsilon_scalar_id);
     CircularBuffer cb_normalized_scores(cb_normalized_scores_id);
-    reconfig_data_format(cb_gathered_sigmoid_id, cb_reduce_ones_scalar_id);
+    reconfig_data_format(cb_reduce_ones_scalar_id, cb_gathered_sigmoid_id);
     pack_reconfig_data_format(cb_normalized_scores_id);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
         cb_gathered_sigmoid_id, cb_reduce_ones_scalar_id, cb_reduce_intermediate_id);

@@ -206,7 +206,7 @@ public:
 
     uint32_t version() const { return DISPATCH_TELEMETRY_VERSION; }
 
-    float get_normalized_utilization(
+    std::optional<float> get_normalized_utilization(
         const DispatchCoreTelemetry& current_dispatch_core_telemetry,
         const DispatchCoreTelemetry& last_read_dispatch_core_telemetry) {
         auto current_utilization_work_runtime = current_dispatch_core_telemetry.utilization_work_runtime;
@@ -237,7 +237,10 @@ public:
 
         auto runtime = calc_delta(
             current_dispatch_core_telemetry.current_timestamp, last_read_dispatch_core_telemetry.current_timestamp);
-        TT_ASSERT(runtime > 0, "Runtime must be greater than 0");
+        if (runtime == 0) {
+            log_warning(tt::LogMetal, "No time has elapsed since last read");
+            return std::nullopt;
+        }
 
         float utilization = static_cast<float>(utilization_runtime) / static_cast<float>(runtime);
         TT_ASSERT(utilization <= 1.0f, "If utilization is greater than 100%, there is an issue with the telemetry");

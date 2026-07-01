@@ -63,8 +63,7 @@ void kernel_main() {
         cb_scale,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        /*reduce_factor=*/1,
-        /*compute_uses_reduce_tile=*/true>();
+        /*reduce_factor=*/1>();
 
     // Col-identity (column 0 = 1.0): compute matmul-reduces the partial row-sum against it to finalize the
     // within-tile reduction in normalize_row_streaming.

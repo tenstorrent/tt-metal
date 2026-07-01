@@ -27,8 +27,6 @@ namespace {
 
 // Metal 2.0 resource names (ProgramSpec scope).
 const m2::KernelSpecName READER{"reader"};
-const m2::DFBSpecName SRC_CB{"src_cb"};
-const m2::DFBSpecName DST_CB{"dst_cb"};
 const m2::TensorParamName INPUT{"input"};
 const m2::TensorParamName OUTPUT{"output"};
 
@@ -45,7 +43,6 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
     const auto& input_mt = input.mesh_tensor();
     const auto& output_mt = output.mesh_tensor();
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const auto shard_spec = input.shard_spec().value();
     const auto shard_shape = shard_spec.shape;
     const auto shard_grid = shard_spec.grid;
@@ -60,8 +57,6 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
     // total_size_bytes is derived from the tensor spec (aligned size per bank), not from any
     // storage address, so it is safe to send to the kernel as a runtime arg.
     const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
-    const uint32_t page_size_bytes = input.buffer()->aligned_page_size();
-    const uint32_t num_entries = total_size_bytes / page_size_bytes;
 
     TT_FATAL(
         input.buffer()->alignment() == output.buffer()->alignment(),
@@ -78,60 +73,26 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
     // create_descriptor() to recompute that delta from freshly-allocated buffer addresses.  The
     // Metal 2.0 factory concept does NOT re-run the factory on a cache hit (it only refreshes
     // tensor bindings), so a same-spec/different-storage hit would have read a STALE delta and
-    // produced silently-wrong numerics.  We eliminate the host-computed delta entirely: src_cb and
-    // dst_cb are bound as borrowed-memory DFBs onto the input and output tensors, so their base
-    // pointers are the real (refreshed-on-cache-hit) L1 buffer addresses, and the kernel recomputes
-    // the chunk size in-kernel as (dst_cb_base - src_cb_base).  Only total_size_bytes (spec-derived,
-    // storage-independent) is delivered as a runtime arg.
+    // produced silently-wrong numerics.  We eliminate the host-computed delta entirely: the kernel
+    // reads the input/output resident-shard base addresses from local TensorAccessors (over the
+    // INPUT/OUTPUT tensor bindings, refreshed on cache hit) and recomputes the chunk size in-kernel
+    // as (dst_base - src_base).  Only total_size_bytes (spec-derived, storage-independent) is
+    // delivered as a runtime arg.
 
     m2::ProgramSpec spec;
     spec.name = "move_sharded";
 
     // Tensor parameters (src / dst).  Their addresses reach the kernel through the typed binding
-    // channel (refreshed on cache hit) and back the two borrowed-memory DFBs below.
+    // channel (refreshed on cache hit); the kernel recovers each resident shard's local L1 base via
+    // a TensorAccessor over these (no borrowed self-loop DFBs, which Metal 2.0 forbids on DM kernels).
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
-
-    // Sharded src DFB: borrowed onto the input tensor's L1 memory.  Fake-CB / self-loop (see kernel
-    // bindings below) — used purely as an address source, not as a real FIFO.
-    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
-        .unique_id = SRC_CB,
-        .entry_size = page_size_bytes,
-        .num_entries = num_entries,
-        .data_format_metadata = cb_data_format,
-        .borrowed_from = INPUT,
-    });
-
-    // Sharded dst DFB: borrowed onto the output tensor's L1 memory.  Fake-CB / self-loop.
-    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
-        .unique_id = DST_CB,
-        .entry_size = page_size_bytes,
-        .num_entries = num_entries,
-        .data_format_metadata = cb_data_format,
-        .borrowed_from = OUTPUT,
-    });
 
     m2::KernelSpec reader{
         .unique_id = READER,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
             "reader_unary_local_l1_copy_backwards.cpp",
-        .dfb_bindings =
-            {
-                // Fake-CB workaround: src_cb and dst_cb are address-only (no real producer/consumer
-                // FIFO), but a Metal 2.0 DFB requires >=1 PRODUCER and >=1 CONSUMER binding.  Bind
-                // each as a self-loop (PRODUCER + CONSUMER on the same reader kernel) to satisfy the
-                // validator; the kernel reads the memory by base pointer exactly as before.  This is
-                // an interim validator-satisfying device, NOT a real FIFO.
-                m2::DFBBinding{
-                    .dfb_spec_name = SRC_CB, .accessor_name = "src_cb", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{
-                    .dfb_spec_name = SRC_CB, .accessor_name = "src_cb", .endpoint_type = m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{
-                    .dfb_spec_name = DST_CB, .accessor_name = "dst_cb", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{
-                    .dfb_spec_name = DST_CB, .accessor_name = "dst_cb", .endpoint_type = m2::DFBEndpointType::CONSUMER},
-            },
         .tensor_bindings =
             {
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},

@@ -55,4 +55,22 @@ constexpr uint32_t rows_for_groups(uint32_t groups, uint32_t grid_y) { return la
 /** Grid columns for U k-bands: min(U, grid_x); spare columns idle when U < grid_x. */
 constexpr uint32_t cols_for_bands(uint32_t bands, uint32_t grid_x) { return bands < grid_x ? bands : grid_x; }
 
+/** Row-block replication factor: when G groups under-fill the grid rows (short sequences), replicate each
+ *  group across this many row-blocks and split its band range across them, filling the idle rows. Capped by
+ *  the idle-row count (grid_y / group_rows) and by one band per (block, column) cell (bands / cols), so it is
+ *  always >= 1. 1 == the single-band-row schedule (deployed long-sequence cases, where group_rows == grid_y). */
+constexpr uint32_t band_row_blocks(uint32_t groups, uint32_t bands, uint32_t grid_x, uint32_t grid_y) {
+    const uint32_t fill = grid_y / rows_for_groups(groups, grid_y);  // idle-row fill factor
+    const uint32_t deep = bands / cols_for_bands(bands, grid_x);     // never finer than one band per cell
+    const uint32_t blocks = fill < deep ? fill : deep;
+    return blocks < 1u ? 1u : blocks;
+}
+
+/** Cores the banded schedule lights up: (group_rows * row_blocks) rows x cols columns. Single-sourced so the
+ *  factory's core rectangle and the perf model's core count cannot drift. */
+constexpr uint32_t banded_core_count(uint32_t groups, uint32_t bands, uint32_t grid_x, uint32_t grid_y) {
+    return rows_for_groups(groups, grid_y) * band_row_blocks(groups, bands, grid_x, grid_y) *
+           cols_for_bands(bands, grid_x);
+}
+
 }  // namespace ttnn::operations::experimental::indexer_score

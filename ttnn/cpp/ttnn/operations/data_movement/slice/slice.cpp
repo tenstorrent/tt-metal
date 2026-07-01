@@ -525,6 +525,16 @@ template ttnn::Tensor slice<int32_t>(
     const std::optional<float>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
+template ttnn::Tensor slice<int64_t>(
+    const ttnn::Tensor& input_tensor,
+    ttsl::Span<const int64_t> begins,
+    ttsl::Span<const int64_t> ends,
+    ttsl::Span<const int64_t> step,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids);
+
 template ttnn::Tensor slice<uint32_t>(
     const ttnn::Tensor& input_tensor,
     ttsl::Span<const uint32_t> begins,

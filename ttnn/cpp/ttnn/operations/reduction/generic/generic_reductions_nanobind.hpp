@@ -83,7 +83,7 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
 template <auto Func>
 Tensor generic_reduction_with_deprecated_correction(
     const Tensor& input_tensor,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,

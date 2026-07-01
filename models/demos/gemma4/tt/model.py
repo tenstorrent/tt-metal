@@ -18,6 +18,7 @@ Compatible with tt_transformers Generator interface.
 
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
@@ -26,6 +27,15 @@ from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
+
+# Tracy signpost headers — paired begin/end with the same name. The
+# ``models/tt_transformers/scripts/op_perf_results.py --signpost <NAME>``
+# tool consumes these to filter the op CSV to a single region. Targets
+# from issue #44953: lm_head + sampling ≤ 10% of decode step time and
+# sampling alone < 5%. On-device sampling itself runs in the
+# tt_transformers Generator (the model returns logits in sampling layout),
+# so it is profiled there / by op name (SamplingDeviceOperation, TopK).
+LM_HEAD_SIGNPOST = "gemma4_lm_head"
 
 
 def _compute_per_device_vocab(vocab_size, num_tp):
@@ -36,6 +46,68 @@ def _compute_per_device_vocab(vocab_size, num_tp):
     """
     per_device = (((vocab_size + num_tp - 1) // num_tp + 31) // 32) * 32
     return 1 << (per_device - 1).bit_length()
+
+
+def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
+    """Build a 1D-mcast matmul program config for the LM head.
+
+    LM head shape is [B, 1, H] x [H, V_per_dev] with B padded to 32 for
+    decode (so M_tiles=1). Primary target is gemma-4-31B-it on T3K (1x8):
+    H=5376 (K_tiles=168), vocab=262144, V_per_dev=32768 (N_tiles=1024).
+    Layout: the activation tile is small,
+    the weight slab is large — mcast in0 across the whole compute grid and
+    split N evenly across cores.
+
+    Picks per_core_N = ceil(N_tiles / num_cores) — the kernel pads the
+    trailing core when num_cores doesn't divide N_tiles (e.g. 80 BH cores
+    against 1024 tiles → 13 per core with a partial tail). in0_block_w is
+    the largest power of 2 dividing K_tiles, capped at 32 so the in0 CB
+    stays small. out_subblock_w stays <=4 to fit the dest register file.
+    """
+    tile_size = 32
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+
+    m_tiles = max(1, (m + tile_size - 1) // tile_size)
+    k_tiles = max(1, k // tile_size)
+    n_tiles = max(1, n // tile_size)
+
+    # Scope the explicit 1D-mcast config to the regime it is tuned for:
+    # the sharded-vocab decode / last-token shape [B<=32, 1, H] x [H, V_per_dev]
+    # with M_tiles==1 and a per-device vocab shard bounded at 64K (the same
+    # width at which on-device sampling stays enabled, i.e. TP shards the 262144
+    # vocab down to <=64K). Outside that regime this config overruns L1:
+    #   - tp==1 (e.g. E2B on a single WH N150) keeps the full 262144-wide vocab
+    #     on one chip, so per_core_N explodes and the in1 CB grows to ~8 MB,
+    #     well past the ~1.4 MB L1 (program.cpp circular-buffer validation throw);
+    #   - a non-last-token prefill slice (get_last_token==-1 -> M==seq_len) scales
+    #     the output CB by M_tiles.
+    # In those cases return None so ttnn.linear falls back to its default matmul
+    # heuristic, which blocks N/M to fit L1 (the pre-tuning behaviour).
+    if m_tiles > 1 or n > 64 * 1024:
+        return None
+
+    per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
+
+    in0_block_w = 32
+    while in0_block_w > 1 and k_tiles % in0_block_w != 0:
+        in0_block_w //= 2
+
+    out_subblock_w = min(per_core_n, 4)
+    while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
+        out_subblock_w -= 1
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=m_tiles,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
 
 
 def create_rope_caches(mesh_device, hf_config, max_seq_len):
@@ -147,11 +219,13 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared
 
 
 class Gemma4Model:
-    # Generator-interface flags. Decode refreshes host-staged token IDs (+ PLI
-    # when enabled) every step, so trace input buffers are updated on every
-    # replay rather than only after a shape change. On-device sampling stays
-    # off until the host-sampling path is solid; flip once verified end-to-end.
+    # Generator-interface flags. Decode inputs are recomputed on host every
+    # token (host embedding + PLI), so the captured trace's input buffers
+    # have to be refreshed on every replay rather than just on the first
+    # call after a token-shape change.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
+    # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
 
     def __init__(
@@ -420,6 +494,13 @@ class Gemma4Model:
             mesh_config=mesh_config,
         )
 
+        # sampling_dp: number of independent sampling groups (one per mesh row).
+        # This is 1 for standard TP-only meshes (e.g. 1x8), and >1 for multi-row
+        # meshes where each row samples users independently (e.g. Galaxy 4x8).
+        #
+        # tt_transformers' Generator reads this attribute via _get_sampling_contract.
+        self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
+
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
         if is_mesh and tp > 1:
@@ -433,6 +514,8 @@ class Gemma4Model:
                 logger.info(
                     f"On-device sampling initialized (vocab={hf_config.vocab_size}, per_device={per_device_padded})"
                 )
+        # Generator/vLLM entry points gate on this flag (and sampling != None).
+        self._supports_on_device_sampling = self.sampling is not None
 
     @staticmethod
     def _make_sampling_args(hf_config, mesh_device, tp):
@@ -447,7 +530,7 @@ class Gemma4Model:
         args.padded_vocab_size = per_device_vocab * tp
         args.cluster_shape = tuple(mesh_device.shape)
         args.sampling_all_gather_axis = 1  # gather across TP (column) axis
-        args.sampling_dp = 1
+        args.sampling_dp = mesh_device.shape[0]
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}
@@ -619,8 +702,26 @@ class Gemma4Model:
         # Store K/V from source layers for sharing during prefill
         shared_kv_store = {}  # source_layer_idx -> (tt_k, tt_v) kept alive on device
 
+        # Decode RoPE: slice cos/sin ONCE per layer_type and share across all layers.
+        # There are only two layer_types (sliding / global), so the position-gather
+        # (ttnn.embedding) runs twice per decode step instead of once per layer. The
+        # gathered [1, 1, batch_pad, head_dim] tensors are passed down with
+        # rope_presliced=True and freed after the layer loop. Only taken on the
+        # internal-cache decode path (rope_mats override paths keep their behavior).
+        decode_rope_presliced = {}
+        if is_decode and rope_mats is None and self.rope_caches_2d and position_idx is not None:
+            used_types = {self.hf_config.layer_types[i] for i in range(len(self.layers))}
+            for lt in used_types:
+                if lt not in self.rope_caches_2d:
+                    continue
+                cos_2d, sin_2d = self.rope_caches_2d[lt]
+                cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
+                sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
+                decode_rope_presliced[lt] = (cos_pos, sin_pos)
+
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
+            rope_presliced = False
             if rope_mats is not None:
                 if isinstance(rope_mats, dict):
                     # Dict mapping layer_type -> (cos, sin) — pre-sliced for trace decode
@@ -628,8 +729,12 @@ class Gemma4Model:
                     layer_rope = rope_mats[layer_type]
                 else:
                     layer_rope = rope_mats  # Single (cos, sin) override (backward compat / tests)
+            elif is_decode and decode_rope_presliced:
+                # Decode: use the per-layer-type cos/sin gathered once before the loop.
+                layer_rope = decode_rope_presliced[self.hf_config.layer_types[i]]
+                rope_presliced = True
             elif is_decode:
-                # Decode: return 2D caches for on-device embedding lookup
+                # Decode fallback: return 2D caches for on-device embedding lookup
                 layer_rope = self._get_rope_mats(i, for_decode=True)
             else:
                 layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len)
@@ -687,12 +792,18 @@ class Gemma4Model:
                 user_id=user_id,
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
+                rope_presliced=rope_presliced,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
             if keep_kv and layer.self_attn._last_kv is not None:
                 shared_kv_store[i] = layer.self_attn._last_kv
+
+        # Free the per-layer-type decode RoPE tensors shared across the loop.
+        for cos_pos, sin_pos in decode_rope_presliced.values():
+            cos_pos.deallocate(True)
+            sin_pos.deallocate(True)
 
         # Deallocate any stored shared K/V tensors
         for kv_pair in shared_kv_store.values():
@@ -759,14 +870,35 @@ class Gemma4Model:
         slice outside the trace; see ``process_logits_after_prefill_trace``).
 
         - lm_head is column-parallel on the vocab dim when TP > 1.
+        - Decode + prefill last-token both feed an M=32-row tile here (decode
+          batch <=32 pads to a tile; prefill is sliced to 32 above), so the
+          1D-mcast program config from ``_get_lm_head_program_config`` is shared
+          across both paths. ttnn.linear's default heuristic picks a generic
+          config that doesn't account for the 1024-N-tile width of the 262k-vocab
+          shard; pinning an explicit MatmulMultiCoreReuseMultiCast1DProgramConfig
+          keeps the split across the full compute grid (8x8 WH / 8x10 BH)
+          deterministic.
         - Softcapping (``tanh(logits/cap)*cap``) is element-wise and works on the
           sharded vocab. ttnn.mul/ttnn.tanh are not in-place, so the results are
           captured — dropping them silently no-ops the cap and tanks PCC vs HF.
         - The sharded vocab is all-gathered back to full width, except in decode
           on-device sampling (the sampling module consumes sharded logits).
         """
+        # Bracket the lm_head matmul + softcap with a Tracy signpost so the
+        # op_perf_results.py --signpost gemma4_lm_head filter sums just this
+        # region (issue #44953 — measure LM head dispatch share of decode step).
+        # Gated on is_decode so prefill last-token calls don't mix into the
+        # decode region totals.
+        if is_decode:
+            signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            logits = ttnn.linear(hidden_states, self.lm_head_weight)
+            lm_head_pc = _get_lm_head_program_config(
+                self.mesh_device,
+                m=hidden_states.shape[2],
+                k=self.hidden_size,
+                n=self.lm_head_weight.shape[-1],
+            )
+            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
             hidden_states.deallocate(True)
         else:
             logits = hidden_states
@@ -776,6 +908,8 @@ class Gemma4Model:
             logits = ttnn.mul(logits, 1.0 / cap)
             logits = ttnn.tanh(logits)
             logits = ttnn.mul(logits, cap)
+        if is_decode:
+            signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
             if self.sampling is not None and is_decode:
