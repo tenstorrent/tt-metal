@@ -569,31 +569,63 @@ class Ideogram4Pipeline:
             # Image tokens are at the FRONT [0:num_img] (constant [image | text | pad] layout).
             return ttnn.slice(out, [0, 0, 0], [1, num_img, cfg.in_channels])
 
-        # The ENTIRE per-step computation runs in a SINGLE trace: cond forward, uncond
-        # forward, the two SP-axis velocity gathers, the asymmetric-CFG blend and the Euler
-        # update. Capturing all of it in one trace is what makes tracing CORRECT here: the
-        # Tracer runs a prep pass that allocates every persistent buffer (both branches'
-        # ring-SDPA / all-gather buffers, the blend/Euler temporaries) BEFORE capture, so no
-        # device buffer is allocated while a trace is active ("Allocating device buffers is
-        # unsafe ... may be corrupted once a trace is executed"). The only per-step inputs are
-        # HOST tensors (x_cond, x_uncond, t_sin) plus two 1-element device scalars (gw, s-t);
-        # the Tracer copies host inputs into the captured slots, allocating nothing new.
-        # x_cond/x_uncond already carry the running latent z (built on host from the previous
-        # z), and the trace returns the next z (device) which is read back to host each step.
+        # The ENTIRE per-step computation runs in a SINGLE trace: build x from z on device,
+        # cond forward, uncond forward, the two SP-axis velocity gathers, the asymmetric-CFG
+        # blend and the Euler update. Capturing all of it in one trace is what makes tracing
+        # CORRECT here: the Tracer runs a prep pass that allocates every persistent buffer
+        # (the x pad/partition output, both branches' ring-SDPA / all-gather buffers, the
+        # blend/Euler temporaries) BEFORE capture, so no device buffer is allocated while a
+        # trace is active ("Allocating device buffers is unsafe ... may be corrupted once a
+        # trace is executed"). Per-step inputs: the resident device latent z (the previous
+        # step's output, copied into the captured z slot in place -> the latent NEVER round-
+        # trips to host mid-loop), a HOST t_sin, and 3 scalar HOST tensors (gw, 1-gw, s-t).
+        # The trace RETURNS the next z (device), fed straight back next step; z is read back
+        # to host exactly ONCE, after the loop, for decode.
         # Constant total length L (same for cond/uncond now that the layout is [image|text|pad]).
         L = cond_b["padded_len"]
         assert uncond_b["padded_len"] == L
 
-        def step_fn(x_cond, x_uncond, t_sin, z_in, gw, one_minus_gw, smt):
+        # Number of trailing (text|pad) rows to append to z to reach the constant length L.
+        # Image tokens are at the FRONT [0:num_img]; the model masks all non-image rows to 0
+        # (forward: x = input_proj(x * output_image_mask) * output_image_mask), so appending
+        # zeros here is numerically identical to the host-built [image|zeros...] tensor.
+        _x_pad_rows = L - num_img
+
+        def _x_full_from_z(z_dev):
+            """Build the SP-sharded transformer x input ON DEVICE from the replicated latent z.
+
+            z_dev: [1, num_img, in_ch] replicated. Pads trailing rows to the constant length L
+            (image-first layout), then SP-shards dim 1 across the SP axis via mesh_partition
+            (the inverse of the SP all-gather -> each device gets its [1, L/sp, in_ch] shard).
+            Replaces the per-step HOST rebuild + host->device copy of x_cond/x_uncond. cond and
+            uncond consume IDENTICAL x (conditioning lives only in llm/masks/idx/logical_n), and
+            the block never mutates x in place, so a single shared tensor feeds both branches.
+            """
+            x_full = ttnn.pad(z_dev, [(0, 0), (0, _x_pad_rows), (0, 0)], value=0.0)  # [1, L, in_ch] repl
+            if self.sp_factor > 1:
+                x_full = ttnn.mesh_partition(x_full, dim=1, cluster_axis=self.sp_axis)  # [1, L/sp, in_ch]
+            return x_full
+
+        def step_fn(z_dev, t_sin, gw, one_minus_gw, smt):
             # t_sin feeds both branches' adaln; share the same per-step embedding.
             cond_b["t_sin"] = t_sin
             uncond_b["t_sin"] = t_sin
-            v_cond = _branch_velocity(self.cond, cond_b, x_cond)
-            v_uncond = _branch_velocity(self.uncond, uncond_b, x_uncond)
+            # Build the (padded, SP-sharded) x input on device from the resident z (no host round-trip).
+            x_sp = _x_full_from_z(z_dev)
+            v_cond = _branch_velocity(self.cond, cond_b, x_sp)
+            v_uncond = _branch_velocity(self.uncond, uncond_b, x_sp)
             # Asymmetric CFG: v = gw*v_cond + (1-gw)*v_uncond, scalars as 1-element device
             # tensors (broadcast multiply) so they can be updated per step inside the trace.
             v = v_cond * gw + v_uncond * one_minus_gw
-            return z_in + v * smt  # Euler update -> next z [1, num_img, in_ch]
+            z_next = z_dev + v * smt  # Euler update -> next z [1, num_img, in_ch] (replicated)
+            # Write the update back INTO the resident z buffer in place, so the SAME buffer is
+            # both this step's input (pad reads it at the top) and the running state the next
+            # replay reads. The trace records read(z_dev) -> ... -> copy(z_next -> z_dev); on
+            # replay this executes as an in-place recurrence with NO host feedback and NO
+            # post-capture device allocation (the caller reuses the identical z buffer each
+            # step, so the Tracer's _update_input is a no-op -> no ttnn.copy from the host side).
+            ttnn.copy(z_next, z_dev)
+            return z_dev
 
         def _scalar_host(val):
             # 1-element bf16 HOST tensor, replicated across the mesh; the tracer moves it into
@@ -608,8 +640,8 @@ class Ideogram4Pipeline:
             )
 
         def _host_repl(t: torch.Tensor):
-            # bf16 HOST tensor replicated across the mesh (for t_sin / z_in, which the model
-            # consumes replicated, not SP-sharded).
+            # bf16 HOST tensor replicated across the mesh (for t_sin, which the model consumes
+            # replicated, not SP-sharded). The tracer moves it onto its captured device slot.
             return tensor.from_torch(
                 t.to(torch.bfloat16),
                 device=dev,
@@ -619,40 +651,33 @@ class Ideogram4Pipeline:
                 on_host=True,
             )
 
-        def _x_inputs(z_host):
-            """Build the image-latent input on HOST from the current z.
-
-            Image-first layout: the noise latent z goes at [0:num_img] for BOTH branches; the
-            rest of the constant-length-L sequence is zeros. cond and uncond x are now IDENTICAL
-            (the conditioning difference lives only in llm/masks/idx/logical_n), so we build one
-            tensor and feed it to both branches.
-            """
-            x_full = torch.zeros(1, L, cfg.in_channels, dtype=torch.bfloat16)
-            x_full[:, :num_img] = z_host.to(torch.bfloat16)
-            # Shard on the SP axis (host tensors; the tracer moves them onto its captured
-            # device slots). _host_seq shards-or-replicates exactly as the model expects.
-            # Build two DISTINCT tensors (same contents) so the traced step keeps independent
-            # input slots for the cond/uncond branches.
-            return self._host_seq(x_full, 1), self._host_seq(x_full, 1)
-
         _td = _time.perf_counter()
         self.step_trace = []
-        z_host = z.clone()
+        # The latent z stays RESIDENT ON DEVICE across the whole loop in a SINGLE persistent
+        # buffer. It is uploaded once here (replicated) and thereafter the trace updates it
+        # IN PLACE each step (step_fn: read z -> ... -> ttnn.copy(z_next, z_dev)). No per-step
+        # device->host readback, no per-step host x rebuild, and no host-side feedback of the
+        # output -> the caller reuses the identical z buffer every step (passes None after step
+        # 0 so the Tracer's _update_input is a no-op), so nothing is allocated on device once
+        # the trace is live. The x transformer input is built on device from z each step
+        # (pad -> SP mesh_partition), inside the trace.
+        z_dev = _host_repl(z).to(dev)  # [1, num_img, in_ch] replicated, device-resident persistent
+        z_out = z_dev
         steps = list(reversed(range(sampler.num_steps)))
+        _verbose = getattr(self, "_verbose_steps", False)
         for n, i in enumerate(steps):
             t_val, s_val = sampler.times_for_step(i)
             gw = sampler.guidance_weight(i) if guidance_scale is None else guidance_scale
             smt = s_val - t_val
             t_sin = Ideogram4Transformer.sinusoidal_embedding(torch.tensor([t_val]), cfg.emb_dim).unsqueeze(1)
-            # All per-step inputs are HOST tensors: on capture the Tracer moves them onto the
-            # captured device slots; on replay it copies host->slot in place. Nothing is
-            # allocated on device after capture, so the active trace cannot corrupt them.
-            x_cond_h, x_uncond_h = _x_inputs(z_host)
+            # Traced: pass the persistent z buffer on step 0, then None to REUSE it (the trace
+            # updates it in place, so no host->device copy, no device allocation once the trace
+            # is live). Untraced: always pass z_dev (step_fn reads it and writes the update back
+            # in place, returning the same buffer). t_sin + 3 scalars are HOST tensors.
+            z_arg = z_dev if (not traced or n == 0) else None
             args = (
-                x_cond_h,
-                x_uncond_h,
+                z_arg,
                 _host_repl(t_sin),
-                _host_repl(z_host),
                 _scalar_host(gw),
                 _scalar_host(1.0 - gw),
                 _scalar_host(smt),
@@ -671,13 +696,15 @@ class Ideogram4Pipeline:
                 # capture/replay). Same device computation, just per-op host dispatch each step.
                 z_out = step_fn(*(a.to(dev) if isinstance(a, ttnn.Tensor) and a.device() is None else a for a in args))
 
-            z_host = tensor.to_torch(z_out, mesh_axes=[None, None, None]).float()
-            self.step_trace.append((t_val, s_val, gw, 0.0, float(z_host.std()), 0.0))
-            if getattr(self, "_verbose_steps", False):
+            # z stays on device; only read it back for the (optional) per-step std log.
+            z_std = float(tensor.to_torch(z_out, mesh_axes=[None, None, None]).float().std()) if _verbose else 0.0
+            self.step_trace.append((t_val, s_val, gw, 0.0, z_std, 0.0))
+            if _verbose:
                 _lg.info(
-                    f"  step {n + 1}/{sampler.num_steps}: t={t_val:.4f} s={s_val:.4f} gw={gw:.0f} "
-                    f"z_std={z_host.std():.4f}"
+                    f"  step {n + 1}/{sampler.num_steps}: t={t_val:.4f} s={s_val:.4f} gw={gw:.0f} z_std={z_std:.4f}"
                 )
+        # One readback after the loop for decode (z never touched host inside the loop).
+        z_host = tensor.to_torch(z_out, mesh_axes=[None, None, None]).float()
         ttnn.synchronize_device(dev)
         self.timings["denoise"] = _time.perf_counter() - _td
         self.timings["denoise_per_step"] = self.timings["denoise"] / sampler.num_steps
