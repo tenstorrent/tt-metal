@@ -12,9 +12,8 @@ What it covers:
     - Prefill TP=8 (sharded MLP + all_reduce per block)
     - Replicated 5-step Euler denoise on all 8 chips
 
-Two tests (on by default — they run a slow CPU torch ref; set PI05_E2E_PCC=0 to skip):
+On by default (runs a slow CPU torch ref; set PI05_E2E_PCC=0 to skip):
     test_pcc_1x8_all_stages — per-stage (vision / prefill) + e2e PCC vs torch.
-    test_pcc_1x8_vs_torch   — e2e actions vs torch Pi0_5Model.sample_actions.
 
 Run:
     export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
@@ -285,50 +284,3 @@ def test_pcc_1x8_all_stages():
         assert pcc_vision >= 0.99, f"vision PCC {pcc_vision:.6f} < 0.99"
         assert pcc_prefill >= 0.99, f"prefill PCC {pcc_prefill:.6f} < 0.99"
         assert pcc_e2e >= 0.99, f"e2e PCC {pcc_e2e:.6f} < 0.99"
-
-
-@pytest.mark.skipif(
-    os.environ.get("PI05_E2E_PCC", "1").lower() in ("0", "false", "no", "off"),
-    reason="PCC disabled via PI05_E2E_PCC=0 (on by default; runs a slow CPU torch ref)",
-)
-def test_pcc_1x8_vs_torch():
-    """OPTIONAL PCC check: compare 1×8 eager actions vs the torch
-    Pi0_5Model.sample_actions reference.
-
-    Slow (CPU reference); on by default (set PI05_E2E_PCC=0 to skip). Target
-    PCC ≥ 0.99 (the production traced baseline reports ≈ 0.9988).
-    """
-    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
-    from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
-
-    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
-        pipe, cfg = _make_pipeline(mesh)
-        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
-        img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(N_CAMS)]
-        lang_masks = torch.ones(1, LANG_LEN, dtype=torch.bool)
-
-        # FIXED_NOISE: pin RNG so eager and torch ref use the same x_0. The
-        # pipeline's _refresh_noise_buffer uses torch.randn — seed before each
-        # path so both pull the same noise stream.
-        torch.manual_seed(SEED)
-        tt_actions = pipe.sample_actions(images, lang_tokens=lang_tokens)
-
-        # Torch reference. Loaded from the SAME checkpoint as the pipeline so
-        # PCC is a fidelity number (not a model-mismatch number). Uses the same
-        # constructor pattern as test_pcc_1x8_all_stages (seed-around-both).
-        torch.manual_seed(SEED)
-        ref_model = Pi0_5Model(cfg, Pi0_5WeightLoader(str(CHECKPOINT_DIR)))
-        with torch.no_grad():
-            ref_actions = ref_model.sample_actions(images, img_masks, lang_tokens, lang_masks)
-
-        # PCC over the action_horizon slice.
-        a = tt_actions.flatten().float()
-        b = ref_actions.flatten().float()
-        m1, m2 = a.mean(), b.mean()
-        s1, s2 = a.std(), b.std()
-        pcc = ((a - m1) * (b - m2)).mean() / (s1 * s2)
-        pcc = float(pcc.item())
-
-        print(f"\n✅ 1×8 PCC vs torch ref: {pcc:.6f}  (shape {tuple(tt_actions.shape)})")
-        assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
