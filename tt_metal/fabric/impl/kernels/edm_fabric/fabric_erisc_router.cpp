@@ -571,6 +571,107 @@ bool combine_window_active = false;
 // [debug] Gate so first_pkt_cycles is captured exactly once per window. Reset at the start marker.
 bool combine_first_pkt_seen = false;
 
+// ============================================================================
+// [debug] Receiver flow-control trace
+//
+// A change-triggered append log of the VC0 receiver channel's flow-control state, captured during a combine
+// window. One record is appended only when the observed state differs from the last recorded state (see
+// record_receiver_flow_state), so a burst of identical polling iterations collapses to a single row and the
+// log spans a meaningful stretch of activity rather than a handful of adjacent iterations. Dumped in order
+// via DEVICE_PRINT at the combine STOP marker (which stalls the eRisc, acceptable post-window).
+//
+// Overlaid on the RECEIVER_LOG_BUFFER_ADDR region carved by the builder (4096 B). Records are 28 B, so the
+// region holds far more than the RECEIVER_LOG_CAPACITY cap below.
+struct ReceiverLogRecord {
+    uint32_t ts_delta;    // wall-clock cycles since the previous record (get_timestamp_32b domain)
+    uint32_t iter_index;  // monotonic main-loop pass index at capture time
+    uint32_t ready;       // to_receiver_pkts_sent doorbell (unconsumed arrivals)
+    uint32_t ack;         // ack_counter.counter (first-level ack; 0 when that path is disabled)
+    uint32_t wr_sent;     // wr_sent_counter.counter (forward NoC write issued)
+    uint32_t wr_flush;    // wr_flush_counter.counter (forward write flushed)
+    uint32_t completion;  // completion_counter.counter (completion credit returned)
+};
+static_assert(sizeof(ReceiverLogRecord) == 28, "ReceiverLogRecord must be 28 bytes");
+
+// Cap the number of records so the dump is bounded and we never run past the carved region. 128 * 28 B of
+// records + 16 B header = 3600 B, comfortably under the 4096 B RECEIVER_LOG_BUFFER_SIZE.
+constexpr uint32_t RECEIVER_LOG_CAPACITY = 128;
+constexpr uint32_t RECEIVER_LOG_MAGIC = 0xC0FFEE02;
+
+struct ReceiverLog {
+    uint32_t magic;    // sanity tag (set at the start marker); 0 / garbage => bad address
+    uint32_t count;    // number of valid records in `records` (saturates at RECEIVER_LOG_CAPACITY)
+    uint32_t dropped;  // records skipped after the buffer filled (for honest reporting on dump)
+    uint32_t spare;    // pad to 16 B header / room to grow
+    ReceiverLogRecord records[RECEIVER_LOG_CAPACITY];
+};
+static_assert(sizeof(ReceiverLog) <= 4096, "ReceiverLog exceeds the carved receiver_log_buffer region");
+
+// Accessor folds to the constant base address (receiver_log_buffer_addr is a CT-arg constexpr), so it
+// occupies no storage in local RAM.
+FORCE_INLINE volatile ReceiverLog* receiver_log() {
+    return reinterpret_cast<volatile ReceiverLog*>(receiver_log_buffer_addr);
+}
+
+// [debug] Last recorded state, kept in RISC RAM (not L1) so the change-detection compare is cheap and does
+// not re-read the log buffer. Seeded by reset_receiver_log() at the start marker.
+uint32_t receiver_log_last_ts = 0;
+uint32_t receiver_log_last_ready = 0xFFFFFFFF;
+uint32_t receiver_log_last_ack = 0xFFFFFFFF;
+uint32_t receiver_log_last_wr_sent = 0xFFFFFFFF;
+uint32_t receiver_log_last_wr_flush = 0xFFFFFFFF;
+uint32_t receiver_log_last_completion = 0xFFFFFFFF;
+
+// [debug] Reset the receiver trace at the combine start marker: clear the log and prime the last-state so the
+// very first observed state during the window is always emitted (last_* set to an impossible sentinel).
+FORCE_INLINE void reset_receiver_log(uint32_t window_start_cycles) {
+    volatile ReceiverLog* log = receiver_log();
+    log->magic = RECEIVER_LOG_MAGIC;
+    log->count = 0;
+    log->dropped = 0;
+    log->spare = 0;
+    receiver_log_last_ts = window_start_cycles;
+    receiver_log_last_ready = 0xFFFFFFFF;
+    receiver_log_last_ack = 0xFFFFFFFF;
+    receiver_log_last_wr_sent = 0xFFFFFFFF;
+    receiver_log_last_wr_flush = 0xFFFFFFFF;
+    receiver_log_last_completion = 0xFFFFFFFF;
+}
+
+// [debug] Append a record iff the flow-control state changed since the last recorded row. Gated by the caller
+// on combine_window_active. Cheap when nothing changed: 5 compares and an early return. `iter_index` is the
+// monotonic loop-pass counter; the counter values are the free-running ChannelCounter::counter fields.
+FORCE_INLINE void record_receiver_flow_state(
+    uint32_t iter_index, uint32_t ready, uint32_t ack, uint32_t wr_sent, uint32_t wr_flush, uint32_t completion) {
+    if (ready == receiver_log_last_ready && ack == receiver_log_last_ack && wr_sent == receiver_log_last_wr_sent &&
+        wr_flush == receiver_log_last_wr_flush && completion == receiver_log_last_completion) {
+        return;  // no change -> collapse
+    }
+    receiver_log_last_ready = ready;
+    receiver_log_last_ack = ack;
+    receiver_log_last_wr_sent = wr_sent;
+    receiver_log_last_wr_flush = wr_flush;
+    receiver_log_last_completion = completion;
+
+    volatile ReceiverLog* log = receiver_log();
+    uint32_t idx = log->count;
+    if (idx >= RECEIVER_LOG_CAPACITY) {
+        log->dropped++;  // buffer full: keep counting drops so the dump can report truncation honestly
+        return;
+    }
+    uint32_t now = get_timestamp_32b();
+    volatile ReceiverLogRecord* rec = &log->records[idx];
+    rec->ts_delta = now - receiver_log_last_ts;
+    rec->iter_index = iter_index;
+    rec->ready = ready;
+    rec->ack = ack;
+    rec->wr_sent = wr_sent;
+    rec->wr_flush = wr_flush;
+    rec->completion = completion;
+    receiver_log_last_ts = now;
+    log->count = idx + 1;
+}
+
 // [debug] Record one detected packet into the global packet-detection counters. Called once per packet at
 // the consume edge of any buffer (a tensix-sender channel send, or a receiver/forwarding channel forward),
 // where exactly one buffer slot is drained -- so there is no double counting from the level-triggered
@@ -2356,6 +2457,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
 
     uint16_t fabric_heartbeat_counter = 0;
+    // [debug] Monotonic main-loop pass index for the receiver flow-control trace (see record_receiver_flow_state).
+    uint32_t receiver_log_iter = 0;
 #if defined(ARCH_BLACKHOLE)
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
 #else
@@ -2684,6 +2787,21 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         "VC2 receiver channel not serviced");
 #endif  // FABRIC_2D_VC2_SERVICED
                 }
+
+                // [debug] Receiver flow-control trace: sample VC0 receiver channel state once per loop pass.
+                // record_receiver_flow_state appends only when the state differs from the last recorded row,
+                // so identical polling passes collapse. Gated on the combine window so it costs nothing (and
+                // captures nothing) outside the monitored region. `ready` is the doorbell stream register.
+                if (combine_window_active) {
+                    record_receiver_flow_state(
+                        receiver_log_iter,
+                        static_cast<uint32_t>(get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
+                        receiver_channel_pointers_ch0.ack_counter.counter,
+                        receiver_channel_pointers_ch0.wr_sent_counter.counter,
+                        receiver_channel_pointers_ch0.wr_flush_counter.counter,
+                        receiver_channel_pointers_ch0.completion_counter.counter);
+                }
+                receiver_log_iter++;
             }
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -2736,6 +2854,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             c->att_txqbusy = 0;
                             c->att_other = 0;
                         }
+                        // [debug] Reset the receiver flow-control trace for the new window, priming the
+                        // last-state sentinel so the first observed state is recorded. Uses the same
+                        // wall-clock window start so the first record's ts_delta is time-since-window-open.
+                        reset_receiver_log(d->window_start_cycles);
                         combine_window_active = true;
                     } else {
                         // END event: close the window, print the loop-level deltas, then one line per
@@ -2768,6 +2890,26 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                 c->att_rxfull,
                                 c->att_txqbusy,
                                 c->att_other);
+                        }
+                        // [debug] Dump the receiver flow-control trace in capture order. This spins the eRisc
+                        // for the duration of the prints, which is fine: the monitored window has just closed.
+                        // Columns: iter=loop pass, dt=cycles since prev record, rdy=doorbell, ack/wsent/wflush/
+                        // cmpl=the four ChannelCounter values. n=records captured, drop=records lost after fill.
+                        {
+                            volatile ReceiverLog* rlog = receiver_log();
+                            DEVICE_PRINT("[rxlog] n={} drop={}\n", rlog->count, rlog->dropped);
+                            for (uint32_t r = 0; r < rlog->count; r++) {
+                                volatile ReceiverLogRecord* rec = &rlog->records[r];
+                                DEVICE_PRINT(
+                                    "[rxlog] iter={} dt={} rdy={} ack={} wsent={} wflush={} cmpl={}\n",
+                                    rec->iter_index,
+                                    rec->ts_delta,
+                                    rec->ready,
+                                    rec->ack,
+                                    rec->wr_sent,
+                                    rec->wr_flush,
+                                    rec->completion);
+                            }
                         }
                     }
                 }

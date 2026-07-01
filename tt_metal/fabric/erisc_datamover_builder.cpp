@@ -377,6 +377,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->combine_debug_buffer_address = buffer_address;
     buffer_address += COMBINE_DEBUG_BUFFER_SIZE;
 
+    // [debug] Carve a second L1 scratch region for the receiver flow-control trace (ReceiverLog in the
+    // kernel): a ring-buffer-free append log of {ts_delta, iter, ready, ack, wr_sent, wr_flush, completion}
+    // records, one appended per change of the receiver channel's flow-control state during a combine window.
+    // 4096 B holds >100 of the 28-byte records; total debug carve (combine + receiver) is 5 KiB, which must
+    // stay well under the unused channel-buffer headroom (the allocator's TT_FATAL catches overflow).
+    constexpr std::size_t RECEIVER_LOG_BUFFER_SIZE = 4096;  // 1024 uint32 words
+    this->receiver_log_buffer_address = buffer_address;
+    buffer_address += RECEIVER_LOG_BUFFER_SIZE;
+
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -861,6 +870,9 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
     // [debug] Combine-telemetry scratch buffer address (carved from channel-buffer headroom).
     named_args["COMBINE_DEBUG_BUFFER_ADDR"] = static_cast<uint32_t>(config.combine_debug_buffer_address);
+
+    // [debug] Receiver flow-control trace buffer address (carved from channel-buffer headroom).
+    named_args["RECEIVER_LOG_BUFFER_ADDR"] = static_cast<uint32_t>(config.receiver_log_buffer_address);
 
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {

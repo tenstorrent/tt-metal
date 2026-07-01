@@ -476,6 +476,10 @@ constexpr size_t perf_telemetry_buffer_addr = NAMED_CT_ARG("PERF_TELEMETRY_BUFFE
 // headroom by the builder (see FabricEriscDatamoverConfig). Overlaid by CombineDebug in the kernel.
 constexpr size_t combine_debug_buffer_addr = NAMED_CT_ARG("COMBINE_DEBUG_BUFFER_ADDR");
 
+// [debug] Base L1 address of the receiver flow-control trace region, carved from the channel-buffer
+// headroom by the builder (see FabricEriscDatamoverConfig). Overlaid by ReceiverLog in the kernel.
+constexpr size_t receiver_log_buffer_addr = NAMED_CT_ARG("RECEIVER_LOG_BUFFER_ADDR");
+
 // ============================================================================
 // Code Profiling
 // ============================================================================
