@@ -66,6 +66,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
+    // When the welford stats CBs are fp32, the welford reader kernels must combine mean/variance
+    // as fp32 rather than bf16 (see welford_reader_*_sharded_gn_v2.cpp).
+    const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     if (gamma.has_value()) {
         gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype());
@@ -332,8 +335,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // these constants). bf16/welford paths are unaffected (cb_data_format is already bf16 there).
     uint32_t eps_single_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t scalar_single_tile_size = eps_single_tile_size;
-    // in2 - scaler
-    uint32_t in2_CB_size = scalar_single_tile_size * (use_welford ? 3 : 1);
+    // in2 (c_2): a bf16 reduce scaler on the legacy path, but the welford kernel repurposes c_2 as
+    // cb_xmm — an (x-mean)/scale intermediate that must follow cb_data_format (fp32 when stats are
+    // fp32), and needs 3 tile slots. Sizing/formatting it bf16 on the fp32 welford path would make
+    // the kernel write fp32 into a bf16 CB -> garbage.
+    const tt::DataFormat in2_cb_data_format = use_welford ? cb_data_format : tt::DataFormat::Float16_b;
+    const uint32_t in2_single_tile_size = use_welford ? single_tile_size : scalar_single_tile_size;
+    uint32_t in2_CB_size = in2_single_tile_size * (use_welford ? 3 : 1);
     // in3 - eps.
     uint32_t in3_CB_size = eps_single_tile_size;
     // gamma
@@ -521,6 +529,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_sender_compile_time_args.push_back(block_ht * block_wt);
         reader_mcast_sender_compile_time_args.push_back(num_groups_per_core);
         reader_mcast_sender_compile_time_args.push_back(tile_width);
+        reader_mcast_sender_compile_time_args.push_back(static_cast<uint32_t>(stats_is_fp32));
     }
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         reduce_receiver_semaphore_id,
@@ -535,6 +544,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_receiver_compile_time_args.push_back(block_ht * block_wt);
         reader_mcast_receiver_compile_time_args.push_back(num_groups_per_core);
         reader_mcast_receiver_compile_time_args.push_back(tile_width);
+        reader_mcast_receiver_compile_time_args.push_back(static_cast<uint32_t>(stats_is_fp32));
     }
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -950,8 +960,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in2_cb_index),
-            .data_format = tt::DataFormat::Float16_b,
-            .page_size = scalar_single_tile_size,
+            .data_format = in2_cb_data_format,
+            .page_size = in2_single_tile_size,
         }}},
     });
     // in3 eps

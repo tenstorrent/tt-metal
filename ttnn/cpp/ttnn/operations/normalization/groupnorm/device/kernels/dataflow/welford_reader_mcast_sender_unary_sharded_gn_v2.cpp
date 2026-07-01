@@ -29,6 +29,9 @@ void kernel_main() {
     constexpr uint32_t block_hw = get_compile_time_arg_val(10);
     constexpr uint32_t num_groups = get_compile_time_arg_val(11);
     constexpr uint32_t tile_width = get_compile_time_arg_val(12);
+    // When true, the {mean, variance} stats CBs hold fp32 values (welford + fp32 DEST); the Welford
+    // combine below must read/write them as float, and the cross-core stride is in fp32 elements.
+    constexpr bool stats_is_fp32 = get_compile_time_arg_val(13) != 0;
 
     const bool has_mcast_first_group = get_arg_val<uint32_t>(0);
     const bool has_mcast_last_group = get_arg_val<uint32_t>(1);
@@ -123,7 +126,14 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     // This is the stride between two consecutive local means/variances in the cb_ex_partial
     constexpr uint32_t local_stride = 2;
-    constexpr uint32_t global_stride = NOC_L1_READ_ALIGNMENT_BYTES / 2;
+    // Cross-core stats are packed at NOC_L1_READ_ALIGNMENT_BYTES byte offsets; the combine reads
+    // them through an element-typed pointer, so the element stride is the byte gap / element size.
+    constexpr uint32_t stats_elem_size = stats_is_fp32 ? 4 : 2;
+    constexpr uint32_t global_stride = NOC_L1_READ_ALIGNMENT_BYTES / stats_elem_size;
+    // Element types for reading/writing the stats CBs. The combine overload is selected by pointer
+    // type: const float* -> fp32 combine, volatile uint16_t* -> bf16 combine.
+    using stats_read_t = std::conditional_t<stats_is_fp32, const float, volatile uint16_t>;
+    using stats_write_t = std::conditional_t<stats_is_fp32, float, uint16_t>;
     constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tile_height;
     constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
@@ -162,15 +172,15 @@ void kernel_main() {
         auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
 
         for (uint32_t m = 0; m < num_groups; ++m) {
-            auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_means_ptr);
-            auto p_local_vars = reinterpret_cast<volatile uint16_t*>(local_vars_ptr);
+            auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
+            auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
             auto local_result =
                 combine_welford_stats<tile_width, block_hw * tile_width, local_stride>(p_local_means, p_local_vars);
 
             // Write this to cb_ex_global
-            auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
-            auto p_global_vars = reinterpret_cast<volatile uint16_t*>(global_vars_ptr);
+            auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
+            auto p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
@@ -197,10 +207,14 @@ void kernel_main() {
                 noc.async_read_barrier();
             }
 
-            // Read mean and variance arrays from cb_ex_global, then combine using Welford
+            // Read mean and variance arrays from cb_ex_global, then combine using Welford. Read
+            // through read-typed (const/volatile) views; the writes below reuse the write-typed
+            // pointers. Both views alias the same L1 addresses.
+            auto p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
+            auto p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
             auto global_result =
                 combine_welford_stats<num_mcast_cores, block_hw * tile_width * tile_height, global_stride>(
-                    p_global_means, p_global_vars);
+                    p_global_means_read, p_global_vars_read);
 
             // Write this to cb_ex_global
             p_global_means[0] = global_result.mean;

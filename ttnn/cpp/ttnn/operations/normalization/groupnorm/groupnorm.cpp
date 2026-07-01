@@ -360,10 +360,13 @@ Tensor group_norm(
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            // Legacy fp32 stores intermediates/stats in fp32 (LayerNorm cb_data_format mirror).
-            // Welford keeps bf16 here and relies on its UnpackToDestFp32 c_29/c_31 aliases.
-            .im_data_format =
-                (input_tensor.dtype() == DataType::FLOAT32 && !use_welford) ? DataType::FLOAT32 : DataType::BFLOAT16,
+            // fp32 intermediates/stats when the fp32 intake path is active (LayerNorm cb_data_format
+            // mirror): legacy fp32 always, and welford fp32 input with fp32 DEST (matches
+            // welford_fp32_alias in the factory). bf16 input keeps bf16 stats — bf16-input +
+            // fp32-stats needs a reconfig retune in welford_groupnorm_sharded_v2.cpp.
+            .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
+                                  ? DataType::FLOAT32
+                                  : DataType::BFLOAT16,
             .out_data_format = dtype.value_or(input_tensor.dtype()),
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
