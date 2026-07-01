@@ -28,6 +28,12 @@ void kernel_main() {
     // Compile-time args:
     // Number of tiles along the H (reduction) dimension.
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    // The DST window is opened with tile_regs_acquire() before the ht loop and only closed by
+    // tile_regs_commit() inside the last-tile (ht == Ht-1) branch. If Ht were 0 the loop body would
+    // never run, tile_regs_commit() would be skipped, and the paired tile_regs_wait() below would
+    // deadlock with cb_out reserved-but-never-pushed. All current callers guarantee Ht >= 1 for an
+    // H-reduce; enforce it so a future Ht=0 caller fails to compile instead of hanging (issue #48486).
+    static_assert(Ht >= 1, "Welford H-reduce requires at least one height tile (Ht >= 1)");
     // The actual number of elements along H (before padding).
     constexpr uint32_t H = get_compile_time_arg_val(1);
     // Number of elements per tile in the H dimension (typically 32).
