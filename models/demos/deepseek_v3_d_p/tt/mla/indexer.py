@@ -203,7 +203,8 @@ class TtIndexer:
         layer_idx: int,
         tt_ccl,
         ccl_num_links: int,
-        ccl_topology,
+        sp_ccl_topology,
+        tp_ccl_topology,
         seq_len: int = 1024,
         slot_num: int = 1,
         layer_num: int = 1,
@@ -238,7 +239,11 @@ class TtIndexer:
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
         self.ccl_num_links = ccl_num_links
-        self.ccl_topology = ccl_topology
+        # Per-axis topology: the TP collectives (_tp_rs_ag) use tp_ccl_topology, the SP-axis
+        # all-gather (_sp_all_gather) uses sp_ccl_topology. Conflating them would deadlock the
+        # SP-axis gather under an X-only torus (TP Ring, SP has no physical wrap) — mirrors ttMLA.
+        self.sp_ccl_topology = sp_ccl_topology
+        self.tp_ccl_topology = tp_ccl_topology
         # Indexer geometry comes from the config with no defaults: a sparse config that omits any of these
         # fields fails loudly here rather than silently binding a wrong-shaped indexer.
         _required = ("index_n_heads", "index_head_dim", "index_topk", "index_rope_interleave")
@@ -306,7 +311,7 @@ class TtIndexer:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
         if rs_only:
@@ -318,7 +323,7 @@ class TtIndexer:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
@@ -333,7 +338,7 @@ class TtIndexer:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+            topology=self.sp_ccl_topology,
             cluster_axis=self.sp_axis,
         )
 
@@ -350,7 +355,7 @@ class TtIndexer:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
