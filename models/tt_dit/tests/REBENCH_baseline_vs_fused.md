@@ -124,24 +124,29 @@ are inherently heavier. The big lever was the cross-shard merge: profiling showe
 
 ---
 
-## Blackhole 4×8 torus (TARGET — 2 links, 12×10 grid, worker cap 48)
+## Blackhole 4×8 torus (TARGET — 2 links, 12×10 grid, ring+row-aware worker knee)
 
-Traced `test_bench` on the **BH 4×8 galaxy** (`bh4x8links2`, 32 chips), forwarder fused op
-(origin `2d56fbdd64e`), `WAN_GALAXY_LINKS=2`. `baseline µs` = on-device composite (measured
-fresh on BH); `fused µs` = forwarder fused; `↑BH` = baseline/fused; `↑WH` = the Wormhole-proxy
-`↑F` above for the same config. Correctness re-validated on BH first (det=OK, PCC 99.99–100%
-across all ring configs). **chunk=1.**
+Traced `test_bench` on the **BH 4×8 galaxy** (`bh4x8links2`, 32 chips), forwarder fused op,
+`WAN_GALAXY_LINKS=2`. `baseline µs` = on-device composite (measured fresh on BH); `fused µs` =
+forwarder fused; `↑BH` = baseline/fused; `↑WH` = the Wormhole-proxy `↑F` above for the same
+config. Correctness re-validated on BH first (det=OK, PCC 99.99–100%, det_ndiff=0/9 across all
+ring configs). **chunk=1. Numbers below are the current default heuristic (see below).**
 
-> **Two BH-specific findings (see FINDINGS "Blackhole port"):**
-> 1. **Worker cap must be clamped to ≤ 2×sticks_per_packet = 64 on BH.** The grid-derived
->    default (~108 on 12×10) is *invalid*: with only 2 forwarders it puts 54 workers/forwarder,
->    exceeding the coalesced fabric packet (32 sticks) → `TT_FATAL: sticks_per_packet >=
->    workers_per_forwarder` on every large config. `derive_worker_cap` needs that clamp for BH.
-> 2. **The BH perf optimum is ~48, not 64.** Re-sweep (large configs, fused µs):
->    N16384 389(c32) / **276(c48)** / 335(c64); self_sp4 457 / **411** / 477; self_sp8 282 /
->    220 / **204(c64)**. 48 ≈ the DRAM/compute knee — the forwarder made fabric cheap so the op
->    is compute/DRAM-bound (matches the WH ablation). cap48 wins most; the 296-tile-row
->    self_sp8 prefers 64. All numbers below are **cap48**.
+> **BH worker-count heuristic (re-swept 2026-07-01, `derive_worker_cap`):**
+> 1. **Validity clamp:** workers_per_forwarder ≤ sticks_per_packet, i.e. cap ≤ sticks_per_packet ×
+>    num_forwarders = **64 for RMS** (128 B sticks) / **32 for LayerNorm** (256 B, 2-stat Welford).
+>    The raw grid budget (~108 on 12×10, 2 forwarders → 54/fwd) would `TT_FATAL`; this clamps it.
+> 2. **The perf optimum is workload-dependent — a fixed cap is wrong.** The full sweep (cap
+>    32/48/64) shows two competing effects: per-round DRAM/NoC+fabric contention (favours fewer
+>    workers, scales with ring_size and rows) vs round count = ceil(rows/workers) (favours more).
+>    The knee: **ring_size ≥ 8 → 48** (heavy 8-hop fabric: FLUX tp8 N16384 275@48 vs 335@64);
+>    **ring_size ≤ 4 & rows > 448 → 48** (contention on the two most expensive shapes: Wan
+>    self/cross_sp4 592-row, 410/357@48 vs 477/434@64); **ring_size ≤ 4 & rows ≤ 448 → 64**
+>    (round-bound; biggest wins the 152-row LTX s2 shapes, e.g. videoQ_s2 **143→75µs, 1.9×**, and
+>    Wan sp8 296-row 220→205, FLUX tp4 N2048/N8192). (Round-*balancing* to fewer even workers was
+>    tried and did NOT help — it is a round-count win, not a remainder-balance one.) LayerNorm is
+>    validity-capped at 32 and monotonically wants that max, so the ring/row branch never binds it.
+>    Cost of the knee: the 74-row Wan sp32 shapes lose ~3–4% (79→82µs) — negligible vs the wins.
 
 > **`eff GB/s` = effective per-chip DRAM bandwidth of the fused op** = (input read + output
 > write) ÷ fused µs = `N × feat_local × 4` (bf16 activation in **and** out, 2 B each) ÷ `t`.
@@ -154,12 +159,12 @@ across all ring configs). **chunk=1.**
 
 | config | rows | pattern | baseline µs | fused µs | eff GB/s | ↑BH | ↑WH |
 |---|---:|---|---:|---:|---:|---:|---:|
-| self_sp4_N18944    | 18944 | qk+rope | 584.4 | 410.6 | 236 (46%) | **1.42×** | 1.82× |
-| self_sp8_N9472     | 9472  | qk+rope | 313.3 | 220.2 | 220 (43%) | **1.42×** (1.54× @c64) | 1.65× |
-| self_sp32_N2368    | 2368  | qk+rope | 104.2 | 79.0  | 154 (30%) | 1.32× | 1.45× |
-| cross_q_sp4_N18944 | 18944 | qk      | 512.2 | 356.7 | 272 (53%) | **1.44×** | 1.82× |
-| cross_q_sp8_N9472  | 9472  | qk      | 272.6 | 187.0 | 259 (51%) | **1.46×** | 1.70× |
-| cross_q_sp32_N2368 | 2368  | qk      | 93.4  | 66.7  | 182 (36%) | 1.40× | 1.38× |
+| self_sp4_N18944    | 18944 | qk+rope | 584.4 | 410.3 | 236 (46%) | **1.42×** | 1.82× |
+| self_sp8_N9472     | 9472  | qk+rope | 313.3 | 204.6 | 237 (46%) | **1.53×** | 1.65× |
+| self_sp32_N2368    | 2368  | qk+rope | 104.2 | 82.0  | 148 (29%) | 1.27× | 1.45× |
+| cross_q_sp4_N18944 | 18944 | qk      | 512.2 | 356.6 | 272 (53%) | **1.44×** | 1.82× |
+| cross_q_sp8_N9472  | 9472  | qk      | 272.6 | 175.1 | 277 (54%) | **1.56×** | 1.70× |
+| cross_q_sp32_N2368 | 2368  | qk      | 93.4  | 68.6  | 177 (35%) | 1.36× | 1.38× |
 | cross_k_prompt_L512| 512   | qk      | 51.3  | 29.3  | 90 (17%)  | **1.75×** | 1.59× |
 
 ### LTX-2.3 AV — TP=4 ring
@@ -167,16 +172,16 @@ across all ring configs). **chunk=1.**
 | config | rows | feat | pattern | baseline µs | fused µs | eff GB/s | ↑BH | ↑WH |
 |---|---:|---:|---|---:|---:|---:|---:|---:|
 | tp4_v_block_s1       | 1216 | 1024 | block+addcmul | 86.9  | 38.7  | 129 (25%) | **2.25×** | 2.04× |
-| tp4_v_block_s2       | 4864 | 1024 | block+addcmul | 253.3 | 102.5 | 194 (38%) | **2.47×** | 2.71× |
+| tp4_v_block_s2       | 4864 | 1024 | block+addcmul | 253.3 | 94.0  | 212 (41%) | **2.69×** | 2.71× |
 | tp4_a_block          | 32   | 512  | block+addcmul | 28.1  | 18.6  | 4 (1%) | **1.51×** | 1.21× |
 | tp4_v_selfattn_qk_s1 | 1216 | 1024 | qk+rope       | 94.0  | 44.5  | 112 (22%) | **2.11×** | 1.84× |
-| tp4_v_selfattn_qk_s2 | 4864 | 1024 | qk+rope       | 264.4 | 169.9 | 117 (23%) | 1.56× | 1.96× |
+| tp4_v_selfattn_qk_s2 | 4864 | 1024 | qk+rope       | 264.4 | 126.2 | 158 (31%) | **2.10×** | 1.96× |
 | tp4_a_selfattn_qk    | 32   | 512  | qk+rope       | 38.1  | 20.7  | 3 (1%) | **1.84×** | 1.59× |
 | tp4_a2v_videoQ_s1    | 1216 | 512  | qk+rope       | 73.8  | 31.2  | 80 (16%) | **2.37×** | 1.96× |
-| tp4_a2v_videoQ_s2    | 4864 | 512  | qk+rope       | 171.2 | 143.7 | 69 (14%) | 1.19× | 2.13× |
+| tp4_a2v_videoQ_s2    | 4864 | 512  | qk+rope       | 171.2 | 75.5  | 132 (26%) | **2.27×** | 2.13× |
 | tp4_a2v_audioK       | 256  | 512  | qk+rope       | 54.9  | 24.7  | 21 (4%) | **2.23×** | 2.06× |
 | tp4_v_textcross_q_s1 | 1216 | 1024 | qk            | 62.5  | 36.2  | 138 (27%) | 1.72× | 1.38× |
-| tp4_v_textcross_q_s2 | 4864 | 1024 | qk            | 153.8 | 109.0 | 183 (36%) | 1.41× | 1.68× |
+| tp4_v_textcross_q_s2 | 4864 | 1024 | qk            | 153.8 | 87.0  | 229 (45%) | **1.77×** | 1.68× |
 | tp4_v_textcross_k    | 1024 | 1024 | qk            | 59.9  | 34.9  | 120 (23%) | 1.72× | 1.49× |
 | tp4_a_textcross_q    | 32   | 512  | qk            | 54.4  | 17.8  | 4 (1%) | **3.05×** | 1.26× |
 | tp4_a_textcross_k    | 1024 | 512  | qk            | 51.9  | 26.8  | 78 (15%) | **1.94×** | — |
@@ -194,9 +199,9 @@ are the tiny 32-row audio shapes; the fixes came in with the small-shape work in
 | flux_tp4_N512_phn1   | 4 | 512   | 1536 | 69.1  | 43.8  | 72 (14%) | 1.58× |
 | flux_tp4_N64_phn0    | 4 | 64    | 1536 | 65.5  | 58.1  | 7 (1%) | 1.13× |
 | flux_tp4_N64_phn1    | 4 | 64    | 1536 | 65.5  | 41.1  | 10 (2%) | 1.60× |
-| flux_tp4_N2048_phn0  | 4 | 2048  | 1536 | 104.2 | 82.3  | 153 (30%) | 1.27× |
+| flux_tp4_N2048_phn0  | 4 | 2048  | 1536 | 104.2 | 70.0  | 180 (35%) | **1.49×** |
 | flux_tp4_N2048_phn1  | 4 | 2048  | 1536 | 104.1 | 70.2  | 179 (35%) | 1.48× |
-| flux_tp4_N8192_phn0  | 4 | 8192  | 1536 | 310.7 | 272.2 | 185 (36%) | 1.14× |
+| flux_tp4_N8192_phn0  | 4 | 8192  | 1536 | 310.7 | 255.1 | 197 (39%) | **1.22×** |
 | flux_tp4_N8192_phn1  | 4 | 8192  | 1536 | 310.8 | 197.1 | 255 (50%) | 1.58× |
 | flux_tp8_N1024_phn0  | 8 | 1024  | 768  | 77.3  | 36.7  | 86 (17%) | **2.10×** |
 | flux_tp8_N1024_phn1  | 8 | 1024  | 768  | 76.9  | 30.3  | 104 (20%) | **2.54×** |
@@ -207,30 +212,52 @@ are the tiny 32-row audio shapes; the fixes came in with the small-shape work in
 | flux_tp8_N16384_phn0 | 8 | 16384 | 768  | 552.5 | 276.6 | 182 (36%) | **2.00×** (WH 2.34×) |
 | flux_tp8_N16384_phn1 | 8 | 16384 | 768  | 550.3 | 208.7 | 241 (47%) | **2.64×** |
 
-### FLUX LayerNorm (BH) — TODO
+### FLUX LayerNorm (BH) — TP=4 + TP=8 (ring)
 
-Not yet benched on Blackhole (LN work was done on the WH galaxy). Re-run the WH LayerNorm
-table above on the BH 4×8 galaxy with `WAN_GALAXY_LINKS=2`:
-`WAN_GALAXY_LINKS=2 pytest .../test_distributed_rmsnorm_fused.py::test_layernorm_module_bench -k flux -s`
-and paste ↑BH here next to the WH ↑LN. Expect BH ↑LN to sit ~15–25% below the WH proxy (2 links
-vs 4), same as the RMSNorm BH-vs-WH gap above.
+Benched on the **BH 4×8 galaxy** (`WAN_GALAXY_LINKS=2`, `test_layernorm_module_bench -k flux`),
+branch `cglagovich/fused_layernorm_bringup`, 2026-07-01. `↑BH` = baseline/fused; `↑WH` = the WH
+LayerNorm `↑LN` above for the same shape. Correctness first (`test_layernorm_corr`): **5/5 pass,
+PCC 100.0003–100.0010%, bit-exact (det_ndiff=0/3)**.
 
-| config | tp | rows | feat | baseline µs | fused µs | ↑BH |
-|---|---:|---:|---:|---:|---:|:--:|
-| flux_tp4_* / flux_tp8_* | 4/8 | — | 1536/768 | _TBD_ | _TBD_ | _TBD_ |
+| config | tp | rows | feat | baseline µs | fused µs | ↑BH | ↑WH |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| flux_tp4_N64    | 4 | 64    | 1536 | 60.81  | 90.43  | 0.67× | 0.68× |
+| flux_tp4_N512   | 4 | 512   | 1536 | 69.50  | 60.20  | **1.15×** | 1.12× |
+| flux_tp4_N2048  | 4 | 2048  | 1536 | 115.47 | 111.40 | 1.04× | 1.05× |
+| flux_tp4_N8192  | 4 | 8192  | 1536 | 380.71 | 370.40 | 1.03× | 1.42× |
+| flux_tp8_N128   | 8 | 128   | 768  | 63.80  | 41.88  | **1.52×** | 1.58× |
+| flux_tp8_N1024  | 8 | 1024  | 768  | 93.44  | 53.17  | **1.76×** | 1.56× |
+| flux_tp8_N4096  | 8 | 4096  | 768  | 224.36 | 164.65 | **1.36×** | 1.79× |
+| flux_tp8_N16384 | 8 | 16384 | 768  | 707.17 | 635.26 | 1.11× | 1.87× |
+
+**Reading it:** small/mid shapes track WH closely and TP=8 mid even beats it (N1024 **1.76×** vs
+1.56×, from BH's ~2× compute), but the **large fabric-bound shapes drop hard** — N8192 tp4 1.03×
+(WH 1.42×), N16384 tp8 1.11× (WH 1.87×). This is a *bigger* BH-vs-WH gap than RMSNorm (~15–25%)
+because LayerNorm's Welford all-gather carries **2 stats (mean+var)** vs RMSNorm's 1, so it's
+~2× the fabric payload — and BH has **2 fabric links vs WH's 4**. The absolutes confirm it: on
+N16384 tp8 the BH *baseline* is faster than WH (707 vs 986 µs, more compute) yet the BH *fused*
+path is slower than WH (635 vs 528 µs) — the fused op is fabric-bound there and BH's half-BW
+fabric dominates, collapsing the ratio. Net: fused LN still wins on every shape except the tiny
+64-row tp4 (0.67×, dispatch-bound, same as WH), strongest on TP=8 mid-size (1.4–1.8×).
 
 ### Bottom line (BH)
 The forwarder fused op gives a **strong, real speedup on BH**: **~2× on all FLUX TP=8**,
 **1.4–2.5× across Wan/LTX/FLUX**, far above the old transpose-MUX op. BH runs ~15–25% below the
 WH proxy ↑ (2 links vs 4), as expected, but the goal — significant speedup over composite on the
 real target — is met. The earlier open items are now all resolved: `derive_worker_cap` is
-arch-aware (Blackhole knee 48, clamped to the fabric-packet validity limit), and the
-`tp4_a_block` regression is fixed (now 1.51×).
+arch- and workload-aware (BH ring+row knee — 64 for round-bound ring≤4 mid-size shapes, 48 for
+fabric/contention-bound ring≥8 or >448-row shapes, clamped to the fabric-packet validity limit),
+and the `tp4_a_block` regression is fixed (now 1.51×).
 
-**Re-verified 2026-06-26 (after rebase onto main):** all Wan/LTX/FLUX shapes re-run on BH —
-PCC 99.99–100% (F:torch) and bit-exact determinism (`det_ndiff=0/9`) on every config; fused perf
-matches the tables within run-to-run noise except the two LTX 32-row audio shapes above
-(`tp4_a_block`, `tp4_a_selfattn_qk`) and `flux_tp8_N1024_phn1`, which improved and are updated.
+**Re-swept + re-verified 2026-07-01 (on `cglagovich/fused_layernorm_bringup`):** full worker
+sweep (cap 32/48/64) over all RMS + LN shapes → the ring+row-aware knee above. All Wan/LTX/FLUX
+RMS shapes re-run at the new default: PCC 99.99–100% (F:torch), bit-exact (`det_ndiff=0/9`),
+flagged NONE. The knee moved the mid-size ring≤4 shapes to 64 workers: **LTX s2 shapes 8–47%
+faster** (videoQ_s2 143.7→75.5, selfattn_qk_s2 169.9→126.2, textcross_q_s2 109.0→87.0,
+v_block_s2 102.5→94.0), **Wan sp8 7%** (220→205 / 187→175), **FLUX tp4 N2048/N8192 6–15%**
+(82→70 / 272→255); the 592/512-row and ring8 shapes are unchanged (stay at 48), and the 74-row
+Wan sp32 pair regress ~3–4% (the knee's only cost). LN unchanged (validity-capped at 32, already
+optimal). All updated in the tables above.
 
 **Effective DRAM bandwidth (`eff GB/s`):** the largest all-gather-bound configs reach
 **~46–53% of the ~512 GB/s per-chip peak** (cross_q_sp4 **272 GB/s / 53%**, self_sp4 236/46%,
