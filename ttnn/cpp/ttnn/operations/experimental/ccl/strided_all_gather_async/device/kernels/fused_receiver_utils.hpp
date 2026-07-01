@@ -60,8 +60,14 @@ struct MinimalMatmulOpReceiver {
     uint32_t num_k_blocks = 0;
     uint32_t local_k_start = 0;
     uint32_t local_k_end = 0;
-    std::array<volatile tt_l1_ptr uint32_t*, 3> signal_op_semaphore_addr_ptrs = {};  // backward, forward, self
-    std::array<uint32_t, 3> sem_targets = {};
+    // Per-worker signaling: each of the N all-gather workers in a remote direction increments its own
+    // semaphore, so a k-block is ready only once all N have signaled. self is a single semaphore
+    // (aggregated by the writer-side worker barrier). N==1 reproduces the legacy [backward,forward,self].
+    uint32_t num_ag_workers = 1;
+    uint32_t* backward_sem_addrs = nullptr;  // [num_ag_workers] L1 semaphore addresses
+    uint32_t* forward_sem_addrs = nullptr;   // [num_ag_workers] L1 semaphore addresses
+    volatile tt_l1_ptr uint32_t* self_sem_ptr = nullptr;
+    std::array<uint32_t, 3> sem_targets = {};  // indexed by direction: [backward, forward, self]
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     bool read_local_slice_from_input;
 
@@ -87,8 +93,12 @@ struct MinimalMatmulOpReceiver {
         uint8_t* k_block_device_received,
         uint32_t* device_k_block_counts,
         uint32_t* device_k_block_start_ids,
-        uint32_t* forward_k_block_schedule) :
+        uint32_t* forward_k_block_schedule,
+        uint32_t* backward_sem_addrs,
+        uint32_t* forward_sem_addrs) :
         wait_for_op_signal(wait_for_op_signal),
+        backward_sem_addrs(backward_sem_addrs),
+        forward_sem_addrs(forward_sem_addrs),
         k_block_device_expected(k_block_device_expected),
         k_block_device_received(k_block_device_received),
         device_k_block_counts(device_k_block_counts),
@@ -108,13 +118,17 @@ struct MinimalMatmulOpReceiver {
         read_local_slice_from_input = (bool)get_arg_val<uint32_t>(rt_args_idx++);
         local_k_start = get_arg_val<uint32_t>(rt_args_idx++);
         local_k_end = get_arg_val<uint32_t>(rt_args_idx++);
+        num_ag_workers = get_arg_val<uint32_t>(rt_args_idx++);
 
         if (this->wait_for_op_signal) {
-            this->signal_op_semaphore_addr_ptrs[0] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
-            this->signal_op_semaphore_addr_ptrs[1] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
-            this->signal_op_semaphore_addr_ptrs[2] =
+            // Semaphore ids arrive as [backward_0..N-1, forward_0..N-1, self].
+            for (uint32_t w = 0; w < num_ag_workers; w++) {
+                this->backward_sem_addrs[w] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+            }
+            for (uint32_t w = 0; w < num_ag_workers; w++) {
+                this->forward_sem_addrs[w] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+            }
+            this->self_sem_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
         }
 
@@ -215,9 +229,19 @@ struct MinimalMatmulOpReceiver {
         if (is_first_n_block_iter) {
             while (true) {
                 if (wait_for_op_signal && !(read_local_slice_from_input && (curr_k_block_dir == 2))) {
-                    volatile tt_l1_ptr uint32_t* semaphore = signal_op_semaphore_addr_ptrs[curr_k_block_dir];
                     uint32_t sem_target = sem_targets[curr_k_block_dir];
-                    noc_semaphore_wait_min(semaphore, sem_target + 1);
+                    if (curr_k_block_dir == 2) {
+                        // self: single semaphore (writer-side worker barrier already aggregated all workers)
+                        noc_semaphore_wait_min(self_sem_ptr, sem_target + 1);
+                    } else {
+                        // remote direction: a k-block is ready only once all N workers have signaled their
+                        // own semaphore (per-worker counters are drift-safe across independent fabric links)
+                        uint32_t* addrs = (curr_k_block_dir == 0) ? backward_sem_addrs : forward_sem_addrs;
+                        for (uint32_t w = 0; w < num_ag_workers; w++) {
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addrs[w]), sem_target + 1);
+                        }
+                    }
                     sem_targets[curr_k_block_dir]++;
                 }
                 int32_t k_block = process_chunk(

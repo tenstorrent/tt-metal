@@ -58,6 +58,12 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
 
 inline constexpr uint32_t sharded_args_start_idx = 24 + ccl_routing_utils::num_line_unicast_args;
 
+// Mirrors the out_ready_sem gate inside write_chunk(): this writer forwards a chunk over fabric to a
+// remote device only when its direction has a target. When true, the writer also owns signaling the
+// remote device's matmul (semaphores[dir]) for each chunk it delivers (see writer_signals_mm).
+inline constexpr bool has_remote_target =
+    (direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction);
+
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -110,8 +116,18 @@ void kernel_main() {
 
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
+    bool writer_signals_mm = false;
+    uint32_t agg_core_noc_x = 0;
+    uint32_t agg_core_noc_y = 0;
+    uint32_t agg_per_worker_sem_addr = 0;
     if constexpr (fuse_op) {
         op_signaler_sender = OpSignaler(arg_idx);
+        writer_signals_mm = get_arg_val<uint32_t>(arg_idx++) == 1;
+        // Option W: this worker signals its own per-worker semaphore on the direction's aggregation
+        // core (a single remote core), which collects all N workers and signals the matmul once.
+        agg_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
+        agg_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+        agg_per_worker_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     }
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
@@ -175,6 +191,21 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
+
+    // Dedicated header for signaling the remote device's matmul directly (writer_signals_mm). Only
+    // allocated when enabled, to avoid consuming a packet-header pool slot on the default path.
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_mm_sem_inc = nullptr;
+    if (fuse_op && writer_signals_mm && has_remote_target) {
+        pkt_hdr_mm_sem_inc = PacketHeaderPool::allocate_header();
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_mm_sem_inc,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,                           // ignore (set per-core below)
+                static_cast<uint16_t>(1)});  // increment 1
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_mm_sem_inc, unicast_route_info);
+    }
     // 2. unicast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -246,6 +277,17 @@ void kernel_main() {
                     // Synchronize and signal that the local tensor slice is available
                     op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
                 }
+                // This device's local slice just landed on the remote device's output tensor above;
+                // signal this worker's per-worker semaphore on the remote direction's aggregation core.
+                if (fuse_op && writer_signals_mm && has_remote_target) {
+                    DeviceZoneScopedN("AG-MM-SIGNAL-FABRIC");
+                    uint64_t agg_sem_noc_addr =
+                        safe_get_noc_addr((uint8_t)agg_core_noc_x, (uint8_t)agg_core_noc_y, agg_per_worker_sem_addr, 0);
+                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        &mux_connection,
+                        pkt_hdr_mm_sem_inc,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{agg_sem_noc_addr, 0, 0});
+                }
             }
 
             // Forward chunks
@@ -286,6 +328,17 @@ void kernel_main() {
                         num_targets_forward_direction,
                         num_targets_backward_direction,
                         false);
+                    // Forwarded chunk (from actual_sender_chip_id) just landed on the remote device;
+                    // signal this worker's per-worker semaphore on the remote direction's aggregation core.
+                    if (fuse_op && writer_signals_mm && has_remote_target) {
+                        DeviceZoneScopedN("AG-MM-SIGNAL-FABRIC");
+                        uint64_t agg_sem_noc_addr = safe_get_noc_addr(
+                            (uint8_t)agg_core_noc_x, (uint8_t)agg_core_noc_y, agg_per_worker_sem_addr, 0);
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            &mux_connection,
+                            pkt_hdr_mm_sem_inc,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{agg_sem_noc_addr, 0, 0});
+                    }
                 }
                 slice_writes++;
             }

@@ -31,6 +31,7 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+#include <cstdlib>
 
 using namespace tt::constants;
 
@@ -295,6 +296,16 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
 
+    // Experimental (env-gated): have the AG writer signal the *remote* device's matmul directly over
+    // fabric, right after the chunk's data + out_ready_sem land, instead of relying on the remote AG
+    // reader to relay the signal after its forwarding read. Decouples matmul start from the remote
+    // reader's pace. Multi-worker safe: each of the N = num_links * num_workers_per_direction workers
+    // signals its own per-worker matmul semaphore, and the matmul waits for all N per k-block (see
+    // MinimalMatmulOpReceiver). The matmul-side semaphore count must agree (see the fused program's
+    // MinimalMatmulFusedOpSignaler::num_ag_workers), so both read the same env var.
+    const bool writer_signals_mm = fuse_op && (std::getenv("TT_METAL_AGMM_WRITER_SIGNALS_MM") != nullptr);
+    const uint32_t num_ag_workers = num_links * num_workers_per_direction;
+
     // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_forward;
@@ -312,8 +323,14 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
 
+    // Option W: carve `num_directions_per_link` extra trailing cores as per-direction matmul-signal
+    // aggregators. choose_worker_cores(1, T) fills T cores row-major from the offset, so the first
+    // num_links*num_cores_per_link are the AG worker/mux cores (unchanged layout) and the last ones
+    // are the aggregators.
+    const uint32_t num_agg_cores = writer_signals_mm ? num_directions_per_link : 0;
+    const uint32_t total_worker_cores = num_links * num_cores_per_link + num_agg_cores;
     const auto [all_core_range, all_cores] =
-        ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, std::nullopt, core_grid_offset);
+        ttnn::ccl::choose_worker_cores(1, total_worker_cores, mesh_device, std::nullopt, core_grid_offset);
     std::set<CoreRange> sender_worker_core_ranges;
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -348,6 +365,24 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
     CoreRangeSet mux_forward_core_range_set = CoreRangeSet(mux_forward_core_ranges);
     CoreRangeSet mux_backward_core_range_set = CoreRangeSet(mux_backward_core_ranges);
+
+    // Option W: per-direction matmul-signal aggregator cores (the trailing cores from choose_worker_cores),
+    // each holding N per-worker semaphores that the AG writer workers of that direction increment.
+    // Indexed by direction (0 = backward, 1 = forward).
+    std::vector<CoreCoord> agg_core_logical(num_directions_per_link);
+    std::vector<CoreCoord> agg_core_virtual(num_directions_per_link);
+    std::vector<std::vector<uint32_t>> agg_per_worker_sem_ids(num_directions_per_link);
+    if (writer_signals_mm) {
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            CoreCoord agg_logical = all_cores[(num_links * num_cores_per_link) + dir];
+            agg_core_logical[dir] = agg_logical;
+            agg_core_virtual[dir] = mesh_device->worker_core_from_logical_core(agg_logical);
+            for (uint32_t w = 0; w < num_ag_workers; w++) {
+                agg_per_worker_sem_ids[dir].push_back(
+                    tt::tt_metal::CreateSemaphore(program, CoreRange(agg_logical), 0));
+            }
+        }
+    }
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -558,6 +593,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                             worker + (link * num_workers_per_direction),
                             0);
                     }
+                    // When the writer signals the matmul directly over fabric, the reader must not
+                    // also relay the signal (it would double-count the matmul semaphore).
+                    reader_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? 1 : 0));
                 }
 
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
@@ -639,14 +677,73 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     num_workers_per_direction,
                     writer_rt_args);
                 if (fuse_op) {
+                    // Local self-signal path (op_signaler_sender): targets the single 'self' semaphore,
+                    // which is the last entry in the matmul semaphore vector [backward_0..N-1,
+                    // forward_0..N-1, self].
+                    const uint32_t self_sem_index =
+                        fused_op_signaler_sender_workers->fused_op_receiver_signal_semaphores.size() - 1;
                     fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
                         writer_rt_args,
                         num_workers_per_direction * num_links,
                         worker + (link * num_workers_per_direction),
-                        2);
+                        self_sem_index);
+                    // Option W: this worker signals its own per-worker semaphore on the remote direction's
+                    // aggregation core (single core), which collects all N workers and signals the matmul.
+                    writer_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? 1 : 0));
+                    writer_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? agg_core_virtual[dir].x : 0));
+                    writer_rt_args.push_back(static_cast<uint32_t>(writer_signals_mm ? agg_core_virtual[dir].y : 0));
+                    writer_rt_args.push_back(
+                        static_cast<uint32_t>(writer_signals_mm ? agg_per_worker_sem_ids[dir][global_worker_id] : 0));
                 }
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
             }
+        }
+    }
+
+    // Option W: create one matmul-signal aggregator kernel per direction. Each waits for all N AG
+    // writer workers of its direction to signal a k-block landed, then signals every matmul core's
+    // direction semaphore once - decoupling the matmul from the AG reader's forwarding pace.
+    if (writer_signals_mm) {
+        const uint32_t num_mm_cores = fused_op_signaler.value().num_fused_op_cores_to_signal;
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            std::vector<uint32_t> agg_ct_args = {
+                ring_index,
+                num_targets_forward,
+                num_targets_backward,
+                static_cast<uint32_t>(topology),
+                dir,
+                num_ag_workers,
+                num_mm_cores,
+            };
+            auto agg_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"
+                "minimal_default_mm_signal_aggregator.cpp",
+                {agg_core_logical[dir]},
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = agg_ct_args});
+
+            std::vector<uint32_t> agg_rt_args = {
+                ring_size,
+                batch_head_size,
+                input_tensor_Ht,
+                mm_cores_y_val,
+                mm_block_ht_val,
+                fused_op_signaler.value().fused_op_receiver_signal_semaphores[dir],  // mm direction sem id
+            };
+            for (uint32_t d = 0; d < ring_size; d++) {
+                agg_rt_args.push_back(device_k_block_counts[d]);
+            }
+            for (uint32_t w = 0; w < num_ag_workers; w++) {
+                agg_rt_args.push_back(agg_per_worker_sem_ids[dir][w]);
+            }
+            for (const auto& mm_core : fused_op_signaler.value().fused_op_receiver_cores_noc) {
+                agg_rt_args.push_back(static_cast<uint32_t>(mm_core.x));
+                agg_rt_args.push_back(static_cast<uint32_t>(mm_core.y));
+            }
+            tt::tt_metal::SetRuntimeArgs(program, agg_kernel_id, {agg_core_logical[dir]}, agg_rt_args);
         }
     }
 
