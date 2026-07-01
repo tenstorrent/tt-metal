@@ -39,16 +39,15 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
-// (2) Metadata form (traceable): the reader reads `kv_actual_global` on-device from `metadata` — a
-//     small uint32 DRAM tensor (the runner's h2d_socket_sync payload [slot_id, actual_start,
-//     actual_end]) at index 1 (= actual_start). Off the host dispatch path, so one captured program
-//     replays across chunks.
+// (2) Tensor form (traceable): `kv_actual_global` is its OWN 1-element uint32 DRAM tensor that the reader
+//     reads on-device (element [0]). Off the host dispatch path, so one captured program replays across
+//     chunks (the host updates the 1-element tensor in place per chunk).
 ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,
     const ttnn::Tensor& sin,
     const ttnn::Tensor& trans_mat,
-    const ttnn::Tensor& metadata,
+    const ttnn::Tensor& kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);

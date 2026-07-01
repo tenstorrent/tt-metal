@@ -437,9 +437,10 @@ void kernel_main() {
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
     constexpr bool diag_tile_enabled = (is_causal == 1) || chunked_enabled;
-    // Slot 34: trace-safe KV-pad derivation. When set, the writer reads kv_actual_isl from metadata[1]
-    // and recomputes logical_nt + ring masks on-device (it's a dataflow kernel, can NoC-read), so a
-    // captured trace replays across chunks. Output accessors therefore start at compile-arg slot 35.
+    // Slot 34: trace-safe KV-pad derivation. When set, the writer reads kv_actual_isl from the
+    // kv_actual_isl tensor[0] (common runtime arg 0 = its DRAM addr) and recomputes logical_nt + ring
+    // masks on-device (it's a dataflow kernel, can NoC-read), so a captured trace replays across chunks.
+    // Output accessors therefore start at compile-arg slot 35.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(34) == 1;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
@@ -494,18 +495,21 @@ void kernel_main() {
     Noc noc;
 
     // Trace-safe KV-pad derivation: recompute logical_nt + ring masks on-device from kv_actual_isl =
-    // metadata[1] (the per-core logical_nt/masks args are placeholders on the metadata path and would be
-    // frozen by a captured trace). The writer is a dataflow kernel, so it reads metadata directly via
-    // NoC into cb_out's L1 scratch (free before the output write loop). chunk_size_t == q_chunk_group.
+    // kv_actual_isl tensor[0] (the per-core logical_nt/masks args are placeholders on the metadata path
+    // and would be frozen by a captured trace). The writer is a dataflow kernel, so it reads the tensor
+    // directly via NoC into cb_out's L1 scratch (free before the output write loop). chunk_size_t ==
+    // q_chunk_group.
     if constexpr (kv_pad_from_metadata) {
-        const uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
-        const auto s_meta = TensorAccessor(meta_args, metadata_addr);
+        // kv_actual_isl is a 1-element uint32 DRAM tensor (was metadata[1]); its DRAM address is common
+        // runtime arg 0. Read its page 0 (4B).
+        const uint32_t kv_actual_isl_addr = get_common_arg_val<uint32_t>(0);
+        const auto s_meta = TensorAccessor(meta_args, kv_actual_isl_addr);
         CircularBuffer cb_meta_scratch(cb_out);
         const uint32_t meta_l1 = cb_meta_scratch.get_write_ptr();
-        noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1), 16, {.page_id = 0}, {});
+        noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1), 4, {.page_id = 0}, {});
         noc.async_read_barrier();
         CoreLocalMem<volatile uint32_t> meta(meta_l1);
-        const uint32_t kv_actual_isl = meta[1];
+        const uint32_t kv_actual_isl = meta[0];
         logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
         const auto masks = ring_joint::build_ring_work_masks_device(
             fused_op_receiver.seq.ring_index,

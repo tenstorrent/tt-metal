@@ -45,11 +45,14 @@ struct ZeroPaddedKvCacheDeviceOperation {
         // In-place: the op reads the boundary tile from the cache, masks it, and writes it back; the
         // full pad tiles are written from the L1 zeros buffer. No separate input tensor.
         const Tensor& cache;
-        // Optional. When set: a small uint32 DRAM tensor, replicated across the mesh — the runner's
-        // h2d_socket_sync metadata payload [slot_id, actual_start, actual_end]. The reader/writer read
-        // slot_idx from index 0 and valid_global (= actual_end) from index 2 on-device (traceable
-        // path). When empty, the op uses the scalar `slot_idx`/`valid_global` attributes.
-        std::optional<Tensor> metadata;
+        // Optional traceable path. When set: two 1-element uint32 DRAM tensors (each replicated across
+        // the mesh, identical [1,1,1,1] layout) — the un-packed per-element views of the runner's
+        // h2d_socket_sync payload [slot_id, actual_start, actual_end]. `slot_idx` holds element 0 and
+        // `valid_global` holds element 2 (= actual_end). The reader/writer read element 0 of each
+        // tensor on-device (traceable path). When empty, the op uses the scalar `slot_idx`/`valid_global`
+        // attributes. Both are set together or both empty.
+        std::optional<Tensor> slot_idx;
+        std::optional<Tensor> valid_global;
     };
 
     using spec_return_value_t = TensorSpec;
@@ -106,12 +109,13 @@ struct ZeroPaddedKvCacheDeviceOperation {
 
 namespace ttnn::prim {
 
-// Unified primitive. `metadata` selects the path: set -> traceable on-device read of slot_idx
-// (= index 0) and valid_global (= actual_end = index 2); the scalar args are ignored (pass 0). Empty
-// -> scalar path using slot_idx/valid_global.
+// Unified primitive. The tensors select the path: when both `slot_idx_tensor` and
+// `valid_global_tensor` are set -> traceable on-device read of element 0 of each (the scalar args are
+// ignored, pass 0). Both empty -> scalar path using slot_idx/valid_global.
 ttnn::Tensor zero_padded_kv_cache(
     const ttnn::Tensor& cache,
-    const std::optional<ttnn::Tensor>& metadata,
+    const std::optional<ttnn::Tensor>& slot_idx_tensor,
+    const std::optional<ttnn::Tensor>& valid_global_tensor,
     uint32_t slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,

@@ -3000,11 +3000,10 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
 META_PATH_HOST_SCALARS = {"kv_actual_isl"}
 
 
-def _make_ring_mla_metadata(mesh_device, slot_id, actual_start, actual_end):
-    """Replicated uint32 DRAM tensor holding [slot_id, actual_start, actual_end] -- the runner's
-    canonical h2d_socket_sync payload that the trace-safe ring_mla reads on-device. A trailing 0
-    pads to 4 words (mirrors the update_padded_kv_cache / rotary metadata tensors)."""
-    payload = torch.tensor([slot_id, actual_start, actual_end, 0], dtype=torch.int64).reshape(1, 1, 1, 4)
+def _make_ring_mla_scalar_tensor(mesh_device, value):
+    """1-element uint32 replicated DRAM tensor ([1,1,1,1]) holding a single per-chunk scalar that the
+    trace-safe ring_mla reads on-device. Mirrors the update_padded_kv_cache / rotary metadata layout."""
+    payload = torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
     return ttnn.from_torch(
         payload,
         device=mesh_device,
@@ -3012,6 +3011,16 @@ def _make_ring_mla_metadata(mesh_device, slot_id, actual_start, actual_end):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _make_ring_mla_metadata(mesh_device, slot_id, actual_start, actual_end):
+    """Build the two 1-element uint32 DRAM tensors the trace-safe ring_mla reads on-device: slot_id
+    (was metadata[0]) and kv_actual_isl == actual_start (was metadata[1]). actual_end is unused by the
+    op (logical_n is still passed as a host arg). Returns (slot_id_tensor, kv_actual_isl_tensor)."""
+    return (
+        _make_ring_mla_scalar_tensor(mesh_device, slot_id),
+        _make_ring_mla_scalar_tensor(mesh_device, actual_start),
     )
 
 
@@ -3088,7 +3097,9 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
         )
 
         # No rotation here: the whole sq is valid, so actual_start=0, actual_end=logical_n=sq.
-        tt_meta = _make_ring_mla_metadata(mesh_device, slot_id=kv_cache_batch_idx, actual_start=0, actual_end=sq)
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(
+            mesh_device, slot_id=kv_cache_batch_idx, actual_start=0, actual_end=sq
+        )
 
         main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
         main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
@@ -3117,7 +3128,8 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
                 ccl_core_grid_offset=(runtime.ccl_column, 0),
                 use_column_major_ccl=True,
                 kv_cache_batch_idx=kv_cache_batch_idx if pass_kv_idx else None,
-                metadata=tt_meta if use_metadata else None,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
             )
             return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :sq, :d_v]
 
@@ -3208,8 +3220,10 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
             k_chunk_size=32,
             exp_approx_mode=False,
         )
-        # metadata = [slot_id=0, actual_start=kv_actual_isl, actual_end=logical_n]
-        tt_meta = _make_ring_mla_metadata(mesh_device, slot_id=0, actual_start=kv_actual_isl, actual_end=logical_n)
+        # metadata tensors: slot_id=0, kv_actual_isl tensor = kv_actual_isl (actual_end=logical_n unused).
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(
+            mesh_device, slot_id=0, actual_start=kv_actual_isl, actual_end=logical_n
+        )
 
         main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
         main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
@@ -3238,7 +3252,8 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
                 # the q-mapping must be derived on-device from metadata[1].
                 kv_cache_batch_idx=None if use_metadata else 0,
                 kv_actual_isl=None if use_metadata else kv_actual_isl,
-                metadata=tt_meta if use_metadata else None,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
             )
             return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, valid_rows, :d_v]
 

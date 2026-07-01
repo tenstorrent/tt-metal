@@ -78,16 +78,19 @@ static void run_reader() {
     // program never instantiates this (would be an out-of-range compile-time arg).
     uint32_t kv_actual_global;
     if constexpr (HasMeta) {
+        // Per-element-tensor path: `kv_actual_global` is its OWN 1-element uint32 DRAM tensor (no packed
+        // metadata layout). Read element [0] directly (4 bytes). The tensor's raw DRAM address is common
+        // arg 2. Accessor offset gated on HasMeta so the scalar program never instantiates it.
         constexpr uint32_t cb_id_meta = get_compile_time_arg_val(13);
         constexpr uint32_t kMetaArgsOffset = HasMeta ? trans_mat_args.next_compile_time_args_offset() : 0;
         constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
         CircularBuffer cb_meta(cb_id_meta);
         const auto s_meta = TensorAccessor(meta_args, per_call_arg2);
         cb_meta.reserve_back(1);
-        noc.async_read(s_meta, cb_meta, 8, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read(s_meta, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         CoreLocalMem<volatile uint32_t> meta(cb_meta.get_write_ptr());
-        kv_actual_global = meta[1];  // index 1 = actual_start
+        kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
         cb_meta.push_back(1);
     } else {
         kv_actual_global = per_call_arg2;

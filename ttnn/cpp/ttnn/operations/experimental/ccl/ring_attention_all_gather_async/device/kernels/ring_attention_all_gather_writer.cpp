@@ -41,8 +41,9 @@ constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is 
 constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(14);
 constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
 // Trace-safe metadata path: when set, the writer recomputes the gather extent (valid_pages) on-device
-// from metadata[1] so it stays matched to the reader's on-device recompute (else they desync under a
-// placeholder host logical_n). When false neither this nor the metadata accessor is emitted.
+// from kv_actual_isl[0] (a 1-element uint32 DRAM tensor) so it stays matched to the reader's on-device
+// recompute (else they desync under a placeholder host logical_n). When false neither this nor the
+// metadata accessor is emitted.
 constexpr bool has_metadata = get_compile_time_arg_val(16);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(17);
 
@@ -98,20 +99,22 @@ void kernel_main() {
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
 
-    // Trace-safe metadata path: recompute the gather extent (valid_pages) on-device from metadata[1] so
-    // it matches the reader's recompute even when the host logical_n is a placeholder. metadata_addr and
-    // chunk_local_tiles are the next two runtime args (after the output-buffer addrs, before the fabric
-    // args). Identical formula to the all-gather reader / host compute_gather_valid_Ht.
+    // Trace-safe metadata path: recompute the gather extent (valid_pages) on-device from kv_actual_isl[0]
+    // so it matches the reader's recompute even when the host logical_n is a placeholder. The
+    // kv_actual_isl DRAM address and chunk_local_tiles are the next two runtime args (after the
+    // output-buffer addrs, before the fabric args). Identical formula to the all-gather reader / host
+    // compute_gather_valid_Ht.
     if constexpr (has_metadata) {
-        const uint32_t metadata_addr = get_arg_val<uint32_t>(arg_idx++);
+        // kv_actual_isl is a 1-element uint32 DRAM tensor (was metadata[1]); read its page 0.
+        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
         CircularBuffer cb_meta(cb_meta_id);
-        const auto s_meta = TensorAccessor(meta_args, metadata_addr);
-        meta_noc.async_read(s_meta, CoreLocalMem<uint8_t>(cb_meta.get_write_ptr()), 16, {.page_id = 0}, {});
+        const auto s_meta = TensorAccessor(meta_args, kv_actual_isl_addr);
+        meta_noc.async_read(s_meta, CoreLocalMem<uint8_t>(cb_meta.get_write_ptr()), 4, {.page_id = 0}, {});
         meta_noc.async_read_barrier();
         CoreLocalMem<volatile uint32_t> meta(cb_meta.get_write_ptr());
-        const uint32_t kv_actual = meta[1];  // metadata[1] = actual_start = kv_actual_isl (tile-aligned)
+        const uint32_t kv_actual = meta[0];  // kv_actual_isl (tile-aligned)
         const uint32_t chunk_global_tiles = chunk_local_tiles * ring_size;
         const uint32_t logical_nt_local = (kv_actual >> 5) + chunk_global_tiles;
         const uint32_t valid_slabs = (logical_nt_local + chunk_global_tiles - 1) / chunk_global_tiles;

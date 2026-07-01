@@ -549,19 +549,23 @@ def run_chunked_transformer_padded_trace(
         chunk_tok_host[0], device=mesh_device, dtype=ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper,
     )
-    trace_metadata = ttnn.from_torch(
-        torch.tensor([0, starts[0][0], starts[0][1], 0], dtype=torch.int64).reshape(1, 1, 1, 4),
-        device=mesh_device, dtype=ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep_mapper,
-    )
-    tok_host_tt = [ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper) for t in chunk_tok_host]
-    meta_host_tt = [
-        ttnn.from_torch(
-            torch.tensor([0, ks, e, 0], dtype=torch.int64).reshape(1, 1, 1, 4),
+    # Per-element-tensor metadata: 3 persistent 1-element tensors (slot_id, actual_start, actual_end).
+    def _meta1_dev(val):
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1), device=mesh_device,
+            dtype=ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep_mapper,
+        )
+
+    def _meta1_host(val):
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
             dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep_mapper,
         )
-        for (ks, e) in starts
-    ]
+
+    trace_metadata = (_meta1_dev(0), _meta1_dev(starts[0][0]), _meta1_dev(starts[0][1]))
+    tok_host_tt = [ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper) for t in chunk_tok_host]
+    meta_host_tt = [(_meta1_host(0), _meta1_host(ks), _meta1_host(e)) for (ks, e) in starts]
 
     def _fwd_meta():
         transformer.forward(
@@ -582,13 +586,15 @@ def run_chunked_transformer_padded_trace(
 
     for c, (ks, e) in enumerate(starts):
         ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
-        ttnn.copy_host_to_device_tensor(meta_host_tt[c], trace_metadata)
+        for src, dst in zip(meta_host_tt[c], trace_metadata):
+            ttnn.copy_host_to_device_tensor(src, dst)
         controller.replay()
     ttnn.synchronize_device(mesh_device)
     controller.release()
     transformer.set_trace_controller(None)
     ttnn.deallocate(trace_input)
-    ttnn.deallocate(trace_metadata)
+    for t in trace_metadata:
+        ttnn.deallocate(t)
     logger.info("[padded-trace] PASS B (metadata trace) done; recording per-layer KV PCC vs golden")
     _, pcc_B = _record_kv_cache_pcc(
         trace_dir, layout, cache_B, mesh_device, sp, num_layers, seq_len_cache, total_len,
@@ -958,19 +964,25 @@ def run_chunked_transformer_no_pcc(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
         )
-        # Replicated uint32 [slot_id, actual_start, actual_end, 0] — the runner's h2d_socket_sync payload
-        # (trailing 0 pads to 4 words). Seeded with chunk 0's values; updated in-place per chunk.
-        trace_metadata = ttnn.from_torch(
-            torch.tensor([0, 0, CHUNK, 0], dtype=torch.int64).reshape(1, 1, 1, 4),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        # Per-element-tensor metadata: 3 persistent 1-element uint32 replicated-DRAM tensors
+        # (slot_id, actual_start, actual_end), seeded with chunk 0; updated in place per chunk.
+        def _meta1_dev(val):
+            return ttnn.from_torch(
+                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1), device=mesh_device,
+                dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
 
-        # Pre-build the per-chunk HOST tensors (no device=) used for the cheap in-place updates: the
-        # SP-sharded token tile and the [0, c*CHUNK, c*CHUNK+CHUNK, 0] metadata for each chunk.
+        def _meta1_host(val):
+            return ttnn.from_torch(
+                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        trace_metadata = (_meta1_dev(0), _meta1_dev(0), _meta1_dev(CHUNK))
+
+        # Pre-build the per-chunk HOST tensors (no device=) for the cheap in-place updates: the SP-sharded
+        # token tile and the (slot, c*CHUNK, c*CHUNK+CHUNK) per-element metadata triple for each chunk.
         tok_host_tt = [
             ttnn.from_torch(
                 chunk_tok_host[c],
@@ -980,15 +992,7 @@ def run_chunked_transformer_no_pcc(
             )
             for c in range(n_chunks)
         ]
-        meta_host_tt = [
-            ttnn.from_torch(
-                torch.tensor([0, c * CHUNK, c * CHUNK + CHUNK, 0], dtype=torch.int64).reshape(1, 1, 1, 4),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            for c in range(n_chunks)
-        ]
+        meta_host_tt = [(_meta1_host(0), _meta1_host(c * CHUNK), _meta1_host(c * CHUNK + CHUNK)) for c in range(n_chunks)]
 
         def _forward_meta():
             # actual_start/actual_end = None: every per-chunk scalar comes from `metadata` on-device.
@@ -1032,7 +1036,8 @@ def run_chunked_transformer_no_pcc(
             iter_start = time.time()
             for c in range(n_chunks):
                 ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
-                ttnn.copy_host_to_device_tensor(meta_host_tt[c], trace_metadata)
+                for src, dst in zip(meta_host_tt[c], trace_metadata):
+                    ttnn.copy_host_to_device_tensor(src, dst)
                 chunk_start = time.time()
                 controller.replay()
                 ttnn.synchronize_device(mesh_device)
@@ -1072,7 +1077,8 @@ def run_chunked_transformer_no_pcc(
         controller.release()
         transformer.set_trace_controller(None)
         ttnn.deallocate(trace_input)
-        ttnn.deallocate(trace_metadata)
+        for t in trace_metadata:
+            ttnn.deallocate(t)
     elif use_trace:
         # ----------------------------- TRACE PATH (pinned to chunk 0) -----------------------------
         # Capture the forward ONCE as a ttnn trace, then replay it every iteration with execute_trace.

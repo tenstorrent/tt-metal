@@ -30,13 +30,14 @@ ttnn::Tensor rotary_embedding_indexed(
         compute_kernel_config);
 }
 
-// Metadata form: kv_actual_global read on-device from `metadata` index 1 (the scalar attr is unused).
+// Tensor form: kv_actual_global is a 1-element uint32 DRAM tensor read on-device (element [0]); the
+// scalar attr is unused on this path.
 ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,
     const ttnn::Tensor& sin,
     const ttnn::Tensor& trans_mat,
-    const ttnn::Tensor& metadata,
+    const ttnn::Tensor& kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -45,7 +46,7 @@ ttnn::Tensor rotary_embedding_indexed(
         cos,
         sin,
         trans_mat,
-        metadata,
+        /*metadata=*/kv_actual_global,
         /*kv_actual_global=*/0,
         cluster_axis,
         memory_config,

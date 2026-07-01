@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache {
 
-// Scalar form: no metadata tensor; slot_idx/valid_global are host scalars.
+// Scalar form: no per-element tensors; slot_idx/valid_global are host scalars.
 ttnn::Tensor zero_padded_kv_cache(
     const ttnn::Tensor& cache,
     uint32_t slot_idx,
@@ -22,7 +22,8 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t pad_align) {
     return ttnn::prim::zero_padded_kv_cache(
         cache,
-        /*metadata=*/std::nullopt,
+        /*slot_idx_tensor=*/std::nullopt,
+        /*valid_global_tensor=*/std::nullopt,
         slot_idx,
         layer_idx,
         num_layers,
@@ -32,10 +33,12 @@ ttnn::Tensor zero_padded_kv_cache(
         pad_align);
 }
 
-// Metadata form: slot_idx/valid_global read on-device from `metadata` (the scalar attrs are unused).
+// Tensor form: slot_idx/valid_global read on-device from two 1-element uint32 tensors (the scalar
+// attrs are unused).
 ttnn::Tensor zero_padded_kv_cache(
     const ttnn::Tensor& cache,
-    const ttnn::Tensor& metadata,
+    const ttnn::Tensor& slot_idx,
+    const ttnn::Tensor& valid_global,
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t chunk_size_global,
@@ -43,7 +46,8 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t pad_align) {
     return ttnn::prim::zero_padded_kv_cache(
         cache,
-        metadata,
+        slot_idx,
+        valid_global,
         /*slot_idx=*/0,
         layer_idx,
         num_layers,

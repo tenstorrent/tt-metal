@@ -38,18 +38,20 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             Two call forms (identical results):
               - scalar: ``(cache, slot_idx, layer_idx, num_layers, valid_global, chunk_size_global,
                 cluster_axis, pad_align)`` -- host scalars patched on cache hits.
-              - metadata: ``(cache, metadata, layer_idx, num_layers, chunk_size_global, cluster_axis,
-                pad_align)`` -- the reader/writer read ``slot_idx`` (index 0) and ``valid_global``
-                (= ``actual_end``, index 2) on-device from ``metadata``, so they never touch the host
-                dispatch path. This form is trace-safe.
+              - tensor: ``(cache, slot_idx, valid_global, layer_idx, num_layers, chunk_size_global,
+                cluster_axis, pad_align)`` -- ``slot_idx`` and ``valid_global`` are 1-element uint32
+                tensors; the reader/writer read element 0 of each on-device, so they never touch the
+                host dispatch path. This form is trace-safe.
 
             Args:
                 cache (ttnn.Tensor): 4D KV cache tensor on device, TILE layout, head dim 1.
-                slot_idx (int, scalar form): user slot in the batched prefill cache.
-                valid_global (int, scalar form): number of real (non-pad) global tokens; window starts here.
-                metadata (ttnn.Tensor, metadata form): small uint32 DRAM tensor, replicated across the
-                    mesh (the runner's h2d_socket_sync payload [slot_id, actual_start, actual_end]); the
-                    reader/writer read slot_idx from index 0 and valid_global (= actual_end) from index 2.
+                slot_idx (int, scalar form / ttnn.Tensor, tensor form): user slot in the batched prefill
+                    cache. As a tensor: a 1-element uint32 DRAM tensor (replicated across the mesh, the
+                    runner's h2d_socket_sync payload element 0 [slot_id]); read on-device from element 0.
+                valid_global (int, scalar form / ttnn.Tensor, tensor form): number of real (non-pad)
+                    global tokens; window starts here. As a tensor: a 1-element uint32 DRAM tensor
+                    (replicated across the mesh, the runner's payload element 2 [actual_end]); read
+                    on-device from element 0.
                 layer_idx (int): Transformer layer index for this call (hashed/structural).
                 num_layers (int): Total layers folded into the cache batch dim (structural).
                 chunk_size_global (int): block-cyclic chunk size (= sp_factor * chunk_local).
@@ -71,12 +73,13 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             nb::arg("chunk_size_global"),
             nb::arg("cluster_axis"),
             nb::arg("pad_align") = 128),
-        // Metadata form (traceable).
+        // Tensor form (traceable): slot_idx + valid_global as 1-element uint32 tensors.
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
                 &zero_padded_kv_cache),
             nb::arg("cache").noconvert(),
-            nb::arg("metadata").noconvert(),
+            nb::arg("slot_idx").noconvert(),
+            nb::arg("valid_global").noconvert(),
             nb::arg("layer_idx"),
             nb::arg("num_layers"),
             nb::arg("chunk_size_global"),

@@ -71,12 +71,17 @@ def _build(runtime, kv_actual_isl):
     pc = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=runtime.sdpa_compute_grid, q_chunk_size=32, k_chunk_size=32, exp_approx_mode=False
     )
-    tt_meta = ttnn.from_torch(
-        torch.tensor([0, kv_actual_isl, logical_n, 0], dtype=torch.int64).reshape(1, 1, 1, 4),
-        device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=_META_MEM, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    return tt_q, tt_kv, pbuf, pc, tt_meta, logical_n, d_v
+    # Two 1-element uint32 tensors: slot_id (=0) and kv_actual_isl (was metadata[0]/metadata[1]).
+    def _scalar_tensor(value):
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=_META_MEM, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    tt_slot_id = _scalar_tensor(0)
+    tt_kv_actual_isl = _scalar_tensor(kv_actual_isl)
+    return tt_q, tt_kv, pbuf, pc, tt_slot_id, tt_kv_actual_isl, logical_n, d_v
 
 
 @pytest.mark.parametrize("mesh", [None], ids=["auto"])
@@ -85,7 +90,7 @@ def test_ring_mla_microperf(mesh):
     mesh_device = runtime.mesh_device
     try:
         for kv in KV_SIZES:
-            tt_q, tt_kv, pbuf, pc, tt_meta, logical_n, d_v = _build(runtime, kv)
+            tt_q, tt_kv, pbuf, pc, tt_slot_id, tt_kv_actual_isl, logical_n, d_v = _build(runtime, kv)
 
             def call(use_metadata):
                 ttnn.transformer.ring_mla(
@@ -97,7 +102,8 @@ def test_ring_mla_microperf(mesh):
                     use_column_major_ccl=True,
                     kv_cache_batch_idx=None if use_metadata else 0,
                     kv_actual_isl=None if use_metadata else kv,
-                    metadata=tt_meta if use_metadata else None,
+                    slot_id=tt_slot_id if use_metadata else None,
+                    kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
                 )
 
             logger.info(f"[microperf] kv={kv}: {N_ITERS} scalar then {N_ITERS} metadata calls")

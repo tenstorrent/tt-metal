@@ -546,7 +546,8 @@ class ttMLA:
         derives this chunk's per-chip shard offset on-device from kv_actual_global -- the same
         update_idxt math the KV-cache writer uses, keeping rotation and cache write consistent.
 
-        Metadata path: kv_actual_global is read on-device from the supplied metadata tensor (index 1).
+        Per-element-tensor path: `metadata` is a 3-tuple of 1-element uint32 tensors
+        (slot_id, actual_start, actual_end); rope reads kv_actual_global = actual_start = metadata[1].
         """
         if metadata is not None:
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
@@ -554,7 +555,7 @@ class ttMLA:
                 rope_tensors["cos_matrix"],
                 rope_tensors["sin_matrix"],
                 rope_tensors["trans_matrix"],
-                metadata,
+                metadata[1],  # actual_start = kv_actual_global (1-element tensor)
                 cluster_axis=self.sp_axis,
             )
         return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
@@ -622,12 +623,14 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
-        # Metadata path: slot_idx/kv_actual_global read on-device from the supplied metadata tensor.
+        # Per-element-tensor path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device,
+        # each its own 1-element tensor.
         if metadata is not None:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kvpe_cache,
                 tt_kvpe,
-                metadata,
+                metadata[0],  # slot_idx tensor
+                metadata[1],  # kv_actual_global tensor
                 layer_idx=cache_layer_idx,
                 num_layers=self.layer_num,
                 cluster_axis=self.sp_axis,
@@ -650,10 +653,12 @@ class ttMLA:
         if on_layer_complete is not None:
             assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
             if metadata is not None:
-                # Metadata path: slot_idx (metadata[0]) + valid_global=actual_end (metadata[2]) on-device.
+                # Per-element-tensor path: slot_idx (metadata[0]) + valid_global=actual_end (metadata[2]),
+                # each its own 1-element tensor.
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                     kvpe_cache,
-                    metadata,
+                    metadata[0],  # slot_idx tensor
+                    metadata[2],  # valid_global (= actual_end) tensor
                     cache_layer_idx,
                     self.layer_num,
                     chunk_size_global,
@@ -703,7 +708,8 @@ class ttMLA:
             # per-layer factor through so the readers recompute the full slot on-device -- otherwise every
             # layer would read layer 0's KV cache.
             meta_slot_kwargs = {
-                "metadata": metadata,
+                "slot_id": metadata[0],  # 1-element tensor (was metadata[0])
+                "kv_actual_isl_tensor": metadata[1],  # 1-element tensor (was metadata[1])
                 "kv_cache_num_layers": self.layer_num,
                 "kv_cache_layer_idx": cache_layer_idx,
             }
@@ -1091,11 +1097,12 @@ class ttMLA:
         # update_padded_kv_cache writes at the per-chip offset derived from kv_actual_global.
         chunk_size_global = seq_len_local * self.sp_factor
         if metadata is not None:
-            # Trace-safe: slot_idx + kv_actual_global read on-device from the metadata tensor.
+            # Per-element-tensor path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) tensors.
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kvpe_cache,
                 tt_kvpe,
-                metadata,
+                metadata[0],  # slot_idx tensor
+                metadata[1],  # kv_actual_global tensor
                 layer_idx=cache_layer_idx,
                 num_layers=self.layer_num,
                 cluster_axis=self.sp_axis,
@@ -1115,10 +1122,11 @@ class ttMLA:
         # then fire the per-layer ack (the populated cache is the only output of a kv-only last layer).
         if on_layer_complete is not None:
             if metadata is not None:
-                # Trace-safe: slot_idx + actual_end read on-device from the metadata tensor.
+                # Per-element-tensor path: slot_idx (metadata[0]) + valid_global=actual_end (metadata[2]).
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                     kvpe_cache,
-                    metadata,
+                    metadata[0],  # slot_idx tensor
+                    metadata[2],  # valid_global (= actual_end) tensor
                     cache_layer_idx,
                     self.layer_num,
                     chunk_size_global,

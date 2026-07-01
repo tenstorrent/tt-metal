@@ -784,7 +784,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
     const std::optional<uint32_t> latent_v_head_dim,
-    const std::optional<ttnn::Tensor>& metadata,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     const uint32_t kv_cache_num_layers,
     const uint32_t kv_cache_layer_idx) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
@@ -880,7 +881,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
         .gathered_v = persistent_output_buffer_v,
-        .metadata = metadata};
+        .slot_id = slot_id,
+        .kv_actual_isl = kv_actual_isl_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

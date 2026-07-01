@@ -107,7 +107,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     bool is_balanced,
     std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl,
-    const std::optional<ttnn::Tensor>& metadata,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
@@ -133,7 +134,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         strategy,
         kv_cache_batch_idx,
         kv_actual_isl,
-        metadata,
+        slot_id,
+        kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx);
 }
@@ -639,7 +641,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
         nb::arg("kv_actual_isl").noconvert() = nb::none(),
-        nb::arg("metadata").noconvert() = nb::none(),
+        nb::arg("slot_id").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 

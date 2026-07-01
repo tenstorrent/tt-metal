@@ -88,7 +88,7 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
             nb::arg("trans_mat").noconvert(),
-            nb::arg("metadata").noconvert(),
+            nb::arg("kv_actual_global").noconvert(),
             nb::arg("cluster_axis"),
             nb::arg("memory_config") = std::nullopt,
             nb::arg("compute_kernel_config") = std::nullopt));

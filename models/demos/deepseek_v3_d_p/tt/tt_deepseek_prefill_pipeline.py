@@ -276,14 +276,20 @@ class TtDeepSeekPrefillPipeline:
         self._trace_input = prepare_prefill_input_tensor(
             [0] * chunk, self.mesh_device, self.config.sp_factor, False, self.config.mesh_shape, self.config.sp_axis
         )
-        self._trace_metadata = ttnn.from_torch(
-            torch.tensor([0, 0, chunk, 0], dtype=torch.int64).reshape(1, 1, 1, 4),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        # Per-element-tensor metadata: 3 persistent 1-element uint32 replicated-DRAM tensors
+        # (slot_id, actual_start, actual_end), updated in place per chunk. The model threads them as the
+        # `metadata` 3-tuple; each MLA op reads the element it needs on-device.
+        def _meta1(val):
+            return ttnn.from_torch(
+                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        self._trace_metadata = (_meta1(0), _meta1(0), _meta1(chunk))  # (slot_id, actual_start, actual_end)
         self._trace_controller = SubDeviceTraceController(self.mesh_device)
 
         migration = self._on_layer_complete is not None
@@ -376,13 +382,15 @@ class TtDeepSeekPrefillPipeline:
             assert self._metadata_trace_captured, "call pipeline.capture_trace() after compile() before prefill()"
             ttnn.copy(input_tensor, self._trace_input)  # device->device into the persistent buffer
             ttnn.deallocate(input_tensor)
-            meta_host = ttnn.from_torch(
-                torch.tensor([slot_id, actual_start, actual_end, 0], dtype=torch.int64).reshape(1, 1, 1, 4),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            ttnn.copy_host_to_device_tensor(meta_host, self._trace_metadata)
+            # Update the 3 persistent 1-element metadata tensors in place (slot_id, actual_start, actual_end).
+            for val, dst in zip((slot_id, actual_start, actual_end), self._trace_metadata):
+                meta_host = ttnn.from_torch(
+                    torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                ttnn.copy_host_to_device_tensor(meta_host, dst)
             self._trace_controller.replay()
             return
 
@@ -438,7 +446,8 @@ class TtDeepSeekPrefillPipeline:
             ttnn.deallocate(self._trace_input)
             self._trace_input = None
         if self._trace_metadata is not None:
-            ttnn.deallocate(self._trace_metadata)
+            for t in self._trace_metadata:  # 3-tuple of 1-element tensors
+                ttnn.deallocate(t)
             self._trace_metadata = None
         self.model.release_sub_device_managers()
 

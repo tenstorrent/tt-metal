@@ -37,13 +37,15 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t cluster_axis,
     uint32_t pad_align = 128);
 
-// (2) Metadata form (traceable): the reader/writer read slot_idx (= index 0) and valid_global
-//     (= actual_end = index 2) on-device from `metadata` — a small uint32 DRAM tensor (the runner's
-//     h2d_socket_sync payload [slot_id, actual_start, actual_end]). Off the host dispatch path, so one
+// (2) Tensor form (traceable): the reader/writer read slot_idx and valid_global (= actual_end)
+//     on-device, each from its own 1-element uint32 DRAM tensor (replicated across the mesh). These are
+//     the un-packed per-element views of the runner's h2d_socket_sync payload [slot_id, actual_start,
+//     actual_end] (slot_idx = element 0, valid_global = element 2). Off the host dispatch path, so one
 //     captured program replays across chunks.
 ttnn::Tensor zero_padded_kv_cache(
     const ttnn::Tensor& cache,
-    const ttnn::Tensor& metadata,
+    const ttnn::Tensor& slot_idx,
+    const ttnn::Tensor& valid_global,
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t chunk_size_global,

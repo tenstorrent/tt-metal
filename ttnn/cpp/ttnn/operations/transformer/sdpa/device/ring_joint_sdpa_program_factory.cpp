@@ -1207,11 +1207,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TensorAccessorArgs(joint_tensor_k->buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(joint_tensor_v->buffer()).append_to(reader_compile_time_args);
     }
-    // Metadata accessor follows the tensor accessors (metadata path only) and precedes the chain
-    // semaphore compile args; the reader kernel gates its offset on slot_from_metadata. sem_args_offset
-    // below is computed after this append, so the chain/CB compile-arg indices stay correct.
+    // Metadata accessors follow the tensor accessors (metadata path only) and precede the chain semaphore
+    // compile args; the reader kernel gates their offsets on slot_from_metadata / kv_pad_from_metadata.
+    // sem_args_offset below is computed after this append, so the chain/CB compile-arg indices stay correct.
+    // slot_id and kv_actual_isl are SEPARATELY allocated single-page DRAM tensors that can land in different
+    // DRAM banks, so each needs its OWN accessor -- a shared accessor's dspec (bank for page 0) is baked
+    // from one buffer and reads the wrong bank for the other (kv read silently returned 0, breaking the
+    // rotation derivation). The writer already appends kv_actual_isl's own accessor for the same reason.
     if (slot_from_metadata) {
-        TensorAccessorArgs(tensor_args.metadata->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(tensor_args.slot_id->buffer()).append_to(reader_compile_time_args);
+        if (kv_pad_from_metadata) {
+            TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
+        }
     }
 
     /**
@@ -1331,9 +1338,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
     // Metadata accessor follows the output accessors (metadata path only); matches the writer kernel's
-    // meta_args_offset, which is gated on kv_pad_from_metadata.
+    // meta_args_offset, which is gated on kv_pad_from_metadata. The writer reads kv_actual_isl on-device,
+    // so it uses the kv_actual_isl tensor's accessor (same layout as slot_id).
     if (kv_pad_from_metadata) {
-        TensorAccessorArgs(tensor_args.metadata->buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
     }
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -2284,19 +2292,24 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
-    // Trace-safe slot select: the metadata tensor's raw DRAM address is common runtime arg 0; the reader
-    // reads slot_id = metadata[0] from it on-device. Raw address (not a Buffer* binding) mirrors the
-    // proven update_padded_kv_cache pattern. The address is constant across chunks (persistent tensor),
-    // so a captured trace replays correctly without re-patching.
+    // Trace-safe slot select: the slot_id tensor's raw DRAM address is common runtime arg 0; the reader
+    // reads slot = slot_id[0] from it on-device. Raw address (not a Buffer* binding) mirrors the proven
+    // update_padded_kv_cache pattern. The address is constant across chunks (persistent tensor), so a
+    // captured trace replays correctly without re-patching.
     if (slot_from_metadata) {
-        // Common arg 0: metadata DRAM address (reader reads slot_id = metadata[0]).
+        // Common arg 0: slot_id DRAM address (reader reads slot = slot_id[0]).
         // Common args 1/2: (user, layer)-major KV-cache batch factor, so the reader computes the slot as
-        // metadata[0] * kv_cache_num_layers + kv_cache_layer_idx (matches update_padded_kv_cache). These
+        // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (matches update_padded_kv_cache). These
         // are structural per-layer constants -- one program per layer -- so they're set once at create
         // time and need no per-dispatch re-patch (a captured trace replays correctly). Defaults (1, 0)
-        // reduce the slot to metadata[0], keeping single-layer callers bit-identical.
+        // reduce the slot to slot_id[0], keeping single-layer callers bit-identical.
+        // Common arg 3: kv_actual_isl DRAM address (reader reads kv_actual_isl = kv_actual_isl_tensor[0]
+        // when kv_pad_from_metadata). Both 1-element tensors share one accessor (meta_args).
         reader_kernel.emplace_common_runtime_args(
-            {tensor_args.metadata->buffer()->address(), args.kv_cache_num_layers, args.kv_cache_layer_idx});
+            {tensor_args.slot_id->buffer()->address(),
+             args.kv_cache_num_layers,
+             args.kv_cache_layer_idx,
+             tensor_args.kv_actual_isl->buffer()->address()});
     }
 
     KernelDescriptor writer_kernel{};
@@ -2307,10 +2320,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
-    // Trace-safe KV-pad derivation: the metadata tensor's raw DRAM address is common runtime arg 0; the
-    // writer reads kv_actual_isl = metadata[1] from it on-device (mirrors the reader).
+    // Trace-safe KV-pad derivation: the kv_actual_isl tensor's raw DRAM address is common runtime arg 0;
+    // the writer reads kv_actual_isl = kv_actual_isl_tensor[0] from it on-device (mirrors the reader).
     if (kv_pad_from_metadata) {
-        writer_kernel.emplace_common_runtime_args({tensor_args.metadata->buffer()->address()});
+        writer_kernel.emplace_common_runtime_args({tensor_args.kv_actual_isl->buffer()->address()});
     }
 
     KernelDescriptor compute_kernel{};
@@ -2517,11 +2530,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per
         // dispatch on cache hits in apply_ring_joint_scalar_runtime_args.
         compute_gather_valid_Ht(args, tensor_args),
-        tensor_args.metadata,
+        tensor_args.slot_id,
+        tensor_args.kv_actual_isl,
         // chunk_local_tiles: per-device Q slab in tiles, for the reader's on-device gather-extent recompute.
         tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
         // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
-        // metadata[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
+        // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
         args.kv_cache_num_layers,
         args.kv_cache_layer_idx);
 

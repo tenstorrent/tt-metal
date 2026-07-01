@@ -132,15 +132,17 @@ struct RingJointSDPAInputs {
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
 
-    // Trace-safe metadata path (opt-in): a small uint32 DRAM tensor holding the runner's
-    // h2d_socket_sync payload in canonical layout [slot_id, actual_start, actual_end]. When present,
-    // the per-chunk scalars that would otherwise be host-computed and frozen by a ttnn trace
-    // (kv_cache_batch_idx = slot_id; kv_actual_isl = actual_start; logical_n = actual_start +
-    // chunk_size_global) are read on-device from this tensor and recomputed in the kernels, so one
-    // captured program replays across chunks. std::nullopt => classic host-scalar path (unchanged).
-    std::optional<Tensor> metadata;
+    // Trace-safe metadata path (opt-in): two 1-element uint32 DRAM tensors holding the per-chunk
+    // scalars that would otherwise be host-computed and frozen by a ttnn trace. slot_id holds the
+    // cache-user slot (was metadata[0]); kv_actual_isl holds the prior valid global KV length (was
+    // metadata[1]). When present (both together), the readers/writer compute
+    // kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx and derive
+    // logical_nt / q-mapping / ring masks on-device from kv_actual_isl, so one captured program
+    // replays across chunks. std::nullopt => classic host-scalar path (unchanged).
+    std::optional<Tensor> slot_id;
+    std::optional<Tensor> kv_actual_isl;
 
-    bool has_metadata() const { return metadata.has_value(); }
+    bool has_metadata() const { return slot_id.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

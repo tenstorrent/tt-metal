@@ -26,10 +26,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // program per layer is reused across users and chunks.
         //
         // `slot_idx` and `kv_actual_global` are the per-call values for the SCALAR path (used only
-        // when `tensor_args.metadata` is empty). They are common runtime args patched on cache hits,
-        // so they stay out of the program hash. On the METADATA path they are unused (left 0) and the
-        // writer kernel reads them on-device from the `metadata` tensor (canonical payload indices 0
-        // and 1) instead — keeping the per-request values off the host dispatch path so the op is
+        // when `tensor_args.slot_idx`/`kv_actual_global` are empty). They are common runtime args
+        // patched on cache hits, so they stay out of the program hash. On the METADATA path they are
+        // unused (left 0) and the writer kernel reads them on-device from the per-element metadata
+        // tensors instead — keeping the per-request values off the host dispatch path so the op is
         // traceable.
         uint32_t slot_idx;          // scalar path only
         uint32_t kv_actual_global;  // scalar path only
@@ -41,12 +41,13 @@ struct UpdatePaddedKvCacheDeviceOperation {
     struct tensor_args_t {
         const Tensor& cache;
         const Tensor& input;
-        // Optional. When set: a small uint32 DRAM tensor, replicated across the mesh — the runner's
-        // h2d_socket_sync metadata payload, canonical layout [slot_id, actual_start, actual_end]. The
-        // writer kernel reads slot_idx from index 0 and kv_actual_global (= actual_start, tokens,
-        // tile-aligned) from index 1 on-device (traceable path). When empty, the op uses the scalar
-        // `slot_idx`/`kv_actual_global` attributes instead.
-        std::optional<Tensor> metadata;
+        // Optional, present together on the METADATA path: two 1-element uint32 DRAM tensors,
+        // replicated across the mesh ([1,1,1,1], ROW_MAJOR). `slot_idx` holds the user slot;
+        // `kv_actual_global` holds the prior valid global KV length in tokens (tile-aligned). The
+        // writer kernel reads element [0] of each on-device (traceable path). When both are empty, the
+        // op uses the scalar `slot_idx`/`kv_actual_global` attributes instead.
+        std::optional<Tensor> slot_idx;
+        std::optional<Tensor> kv_actual_global;
     };
 
     using spec_return_value_t = TensorSpec;
@@ -70,8 +71,8 @@ struct UpdatePaddedKvCacheDeviceOperation {
 
     // Wraps the ProgramDescriptor factory so the default adapter patches buffer bindings on cache
     // hits, and override_runtime_arguments additionally patches the per-call common runtime args the
-    // buffer-binding fast path would leave stale: the metadata tensor's raw DRAM address (metadata
-    // path) or slot_idx/kv_actual_global (scalar path).
+    // buffer-binding fast path would leave stale: the slot_idx/kv_actual_global tensors' raw DRAM
+    // addresses (metadata path) or slot_idx/kv_actual_global scalars (scalar path).
     struct MeshWorkloadFactory {
         using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
             DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
@@ -104,12 +105,14 @@ struct UpdatePaddedKvCacheDeviceOperation {
 
 namespace ttnn::prim {
 
-// Unified primitive. `metadata` selects the path: set -> traceable on-device read (slot_idx/
-// kv_actual_global ignored, pass 0); empty -> scalar path using slot_idx/kv_actual_global.
+// Unified primitive. The tensor operands select the path: both set -> traceable on-device read
+// (slot_idx/kv_actual_global scalars ignored, pass 0); both empty -> scalar path using the
+// slot_idx/kv_actual_global scalars.
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    const std::optional<ttnn::Tensor>& metadata,
+    const std::optional<ttnn::Tensor>& slot_idx_tensor,
+    const std::optional<ttnn::Tensor>& kv_actual_global_tensor,
     uint32_t slot_idx,
     uint32_t kv_actual_global,
     uint32_t layer_idx,

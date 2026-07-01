@@ -40,15 +40,17 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t kv_actual_global,
     uint32_t cluster_axis);
 
-// (2) Metadata form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the writer
-//     kernel from `metadata` — a small uint32 DRAM tensor holding the runner's h2d_socket_sync
-//     payload in canonical layout [slot_id, actual_start, actual_end] (slot_idx = index 0,
-//     kv_actual_global = actual_start = index 1). Because they never touch the host dispatch path,
-//     this form is trace-safe (one captured program replays across chunks/users).
+// (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
+//     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
+//     the mesh) — `slot_idx` holds the user slot, `kv_actual_global` holds the prior valid global KV
+//     length in tokens (tile-aligned). The writer reads element [0] of each. Because they never touch
+//     the host dispatch path, this form is trace-safe (one captured program replays across
+//     chunks/users).
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    const ttnn::Tensor& metadata,
+    const ttnn::Tensor& slot_idx,
+    const ttnn::Tensor& kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t cluster_axis);

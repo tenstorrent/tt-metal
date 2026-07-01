@@ -8,7 +8,6 @@ Seeds a block-cyclic cache with all-ones, runs the op, reconstructs natural orde
   * [ceil_128(v), :)               real (==1)  -- nothing past the window
 """
 import math
-import struct
 
 import pytest
 import torch
@@ -193,38 +192,35 @@ def test_zero_padded_kv_cache_layers_users(
     logger.success(f"layers={num_layers} users={num_users} slot={slot_idx} layer={layer_idx} PASSED")
 
 
-# 3 x uint32: [slot_id, actual_start, actual_end] -- the runner's canonical h2d_socket_sync payload.
-# zero_padded_kv_cache reads slot_idx (index 0) and valid_global (= actual_end, index 2).
-_H2D_METADATA_SIZE_BYTES = 12
-
 # (slot_idx, valid_global): a single-tile partial (740), a 3-tile window (2600), a full-tile window
-# with row_start=0 (4512), and a non-zero slot. valid_global = actual_end.
+# with row_start=0 (4512), and a non-zero slot.
 _EQUIV_CASES = [(0, 740), (0, 2600), (0, 4512), (1, 2600)]
 _EQUIV_IDS = [f"slot{s}_v{v}" for (s, v) in _EQUIV_CASES]
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
+def _make_scalar_tensor(mesh_device, value):
+    """A 1-element uint32 tensor [1,1,1,1], ROW_MAJOR, DRAM, replicated across the mesh -- the
+    per-element view the tensor-path overload reads element 0 from."""
+    t = torch.tensor([[[[value]]]], dtype=torch.int32)  # ttnn maps int32->uint32 storage
+    return ttnn.from_torch(
+        t,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize("slot_idx,valid_global", _EQUIV_CASES, ids=_EQUIV_IDS)
 @pytest.mark.timeout(0)
-def test_zero_padded_kv_cache_metadata_matches_scalar(mesh_device, slot_idx, valid_global):
-    """The metadata path and the scalar path must produce bit-identical caches.
+def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid_global):
+    """The per-element-tensor path and the scalar path must produce bit-identical caches.
 
-    Drives the metadata path from a REAL H2D service (not a hand-built tensor): push the runner's
-    canonical [slot_id, actual_start, actual_end] payload through ttnn.H2DStreamService +
-    inbound_socket_service_sync, hand the resulting device metadata tensor to the op (it reads slot_idx
-    = index 0 and valid_global = actual_end = index 2 on-device), and compare the zeroed cache against
-    the same call done via the original scalar signature, per device, bit-exact."""
+    Builds two 1-element uint32 replicated-DRAM tensors (slot_idx, valid_global), hands them to the
+    tensor-path overload (the reader/writer read element 0 of each on-device), and compares the zeroed
+    cache against the same call done via the original scalar signature, per device, bit-exact."""
     mesh_shape = list(mesh_device.shape)
     sp_axis = 0
     sp = mesh_shape[sp_axis]
@@ -233,8 +229,6 @@ def test_zero_padded_kv_cache_metadata_matches_scalar(mesh_device, slot_idx, val
     seq_len_cache = 5120
     seq_len_local = seq_len_cache // sp
     num_users, num_layers = 2, 1
-    isl_per_chip = chunk_size_global // sp
-    per_chip_bytes = isl_per_chip * 4  # uint32
 
     def _make_seeded_cache():
         c = init_kvpe_cache(
@@ -252,60 +246,31 @@ def test_zero_padded_kv_cache_metadata_matches_scalar(mesh_device, slot_idx, val
             ttnn.fill_cache(c, tt_ones, b, update_idx=0)
         return c
 
-    # Real H2D service (same construction as the runner / test_h2d_socket_sync).
-    global_spec = ttnn.TensorSpec(
-        shape=ttnn.Shape([sp, 1, isl_per_chip]),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        buffer_type=ttnn.BufferType.DRAM,
-    )
-    mapper = ttnn.create_mesh_mapper(
-        mesh_device, ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
-    )
-    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-    service = ttnn.H2DStreamService(
-        mesh_device=mesh_device,
-        global_spec=global_spec,
-        fifo_size_bytes=8 * per_chip_bytes,
-        scratch_cb_size_bytes=per_chip_bytes,
-        mapper=mapper,
-        worker_cores=worker_cores,
-        metadata_size_bytes=_H2D_METADATA_SIZE_BYTES,
-    )
-
     mesh_device.enable_program_cache()
-    try:
-        cache_scalar = _make_seeded_cache()
-        cache_meta = _make_seeded_cache()
-        ttnn.synchronize_device(mesh_device)
+    cache_scalar = _make_seeded_cache()
+    cache_tensor = _make_seeded_cache()
+    ttnn.synchronize_device(mesh_device)
 
-        # Metadata from the real H2D service: [slot_id, actual_start(unused here), actual_end=valid_global].
-        dummy_tokens = torch.zeros(sp, 1, isl_per_chip, dtype=torch.int32).contiguous().numpy()
-        meta = struct.pack("<III", slot_idx, 0, valid_global)
-        service.forward_to_tensor_bytes(dummy_tokens, metadata=meta)
-        tt_tokens, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-            service, metadata_size_bytes=_H2D_METADATA_SIZE_BYTES
-        )
-        ttnn.deallocate(tt_tokens)
+    # 1-element uint32 tensors: slot_idx and valid_global, each read element 0 on-device.
+    tt_slot_idx = _make_scalar_tensor(mesh_device, slot_idx)
+    tt_valid_global = _make_scalar_tensor(mesh_device, valid_global)
 
-        # Scalar path and metadata path on identical seeded caches.
-        ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-            cache_scalar, slot_idx, 0, num_layers, valid_global, chunk_size_global, sp_axis, 128
-        )
-        ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-            cache_meta, tt_meta, 0, num_layers, chunk_size_global, sp_axis, 128
-        )
-        ttnn.synchronize_device(mesh_device)
+    # Scalar path and per-element-tensor path on identical seeded caches.
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache_scalar, slot_idx, 0, num_layers, valid_global, chunk_size_global, sp_axis, 128
+    )
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache_tensor, tt_slot_idx, tt_valid_global, 0, num_layers, chunk_size_global, sp_axis, 128
+    )
+    ttnn.synchronize_device(mesh_device)
 
-        scalar_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_scalar)]
-        meta_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_meta)]
-        for di, (a, b) in enumerate(zip(meta_devs, scalar_devs)):
-            assert torch.equal(a, b), (
-                f"slot {slot_idx} v {valid_global} device {di}: metadata-path cache differs from scalar-path "
-                f"(max abs diff {(a - b).abs().max().item()})"
-            )
-        logger.success(f"slot={slot_idx} valid_global={valid_global}: metadata path == scalar path (bit-exact)")
-        ttnn.deallocate(tt_meta)
-    finally:
-        service.barrier()
-        del service
+    scalar_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_scalar)]
+    tensor_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_tensor)]
+    for di, (a, b) in enumerate(zip(tensor_devs, scalar_devs)):
+        assert torch.equal(a, b), (
+            f"slot {slot_idx} v {valid_global} device {di}: tensor-path cache differs from scalar-path "
+            f"(max abs diff {(a - b).abs().max().item()})"
+        )
+    logger.success(f"slot={slot_idx} valid_global={valid_global}: tensor path == scalar path (bit-exact)")
+    ttnn.deallocate(tt_slot_idx)
+    ttnn.deallocate(tt_valid_global)

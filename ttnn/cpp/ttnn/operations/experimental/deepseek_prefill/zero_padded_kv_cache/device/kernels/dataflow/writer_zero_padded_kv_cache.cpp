@@ -16,7 +16,8 @@
 // The compute kernel pushes Wt out tiles UNCONDITIONALLY (the CB protocol is balanced without a
 // reader->compute handoff), so this writer always pops them; it just discards the result on a chip
 // with no partial tile. The per-call slot_idx / valid_global come from common args (scalar path) or
-// are NoC-read from the `metadata` tensor (metadata path), selected by the HasMeta compile flag.
+// are NoC-read each from its own 1-element uint32 tensor (tensor path: slot_idx tensor at common arg
+// 10, valid_global tensor at common arg 11), selected by the HasMeta compile flag.
 template <bool HasMeta>
 static void run_writer() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(0);
@@ -32,17 +33,23 @@ static void run_writer() {
 
     ZeroPadChipWork w;
     if constexpr (HasMeta) {
+        // NoC-read slot_idx and valid_global, each element 0 of its own 1-element uint32 tensor:
+        // slot_idx tensor address = common arg 10, valid_global tensor address = common arg 11. One
+        // accessor (kMetaArgsOffset) is reused for both reads (identical layout).
         constexpr uint32_t kMetaArgsOffset = HasMeta ? cache_args.next_compile_time_args_offset() : 0;
         constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
-        const uint32_t metadata_addr = get_common_arg_val<uint32_t>(10);
+        const uint32_t slot_idx_addr = get_common_arg_val<uint32_t>(10);
+        const uint32_t valid_global_addr = get_common_arg_val<uint32_t>(11);
         CircularBuffer cb_meta(meta_cb);
-        const auto s_meta = TensorAccessor(meta_args, metadata_addr);
         cb_meta.reserve_back(1);
-        noc.async_read(s_meta, cb_meta, 12, {.page_id = 0}, {.offset_bytes = 0});
+        const auto s_slot = TensorAccessor(meta_args, slot_idx_addr);
+        noc.async_read(s_slot, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        CoreLocalMem<volatile uint32_t> meta(cb_meta.get_write_ptr());
-        const uint32_t slot = meta[0];
-        const uint32_t valid_global = meta[2];
+        const uint32_t slot = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
+        const auto s_valid = TensorAccessor(meta_args, valid_global_addr);
+        noc.async_read(s_valid, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        const uint32_t valid_global = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         cb_meta.push_back(1);
         w = zero_pad_compute_chip_work(slot, valid_global);
     } else {
