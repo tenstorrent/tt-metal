@@ -43,6 +43,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t chunk_M_tiles,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt);
+    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
+    uint32_t fused_m_tiles = 0);
 
 }  // namespace ttnn::prim

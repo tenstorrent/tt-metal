@@ -42,10 +42,22 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // Fused-extract mode. When > 0, `x` is NOT a pre-extracted per-expert
+    // tensor but the whole shared dispatched buffer; the reader offsets its x
+    // tile reads by this expert's region offset (start[global_id]/TILE, read
+    // device-side from `expert_region_offsets`) — folding what ttnn::extract
+    // used to do into the FFN reader. `fused_m_tiles` is the per-expert
+    // allocated tile-row count (= max_dispatched_tokens_per_expert / TILE) and
+    // replaces x.padded_shape()[-2]/TILE as M_tiles_full for all chunk/loop
+    // math. 0 = legacy mode (x is the pre-extracted per-expert tensor, reads
+    // start at row 0). Requires expert_region_offsets + optional_output set
+    // (always paired with direct-write).
+    uint32_t fused_m_tiles = 0;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "fused_m_tiles");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, fused_m_tiles); }
 };
 
 // Tensors fed into the op.

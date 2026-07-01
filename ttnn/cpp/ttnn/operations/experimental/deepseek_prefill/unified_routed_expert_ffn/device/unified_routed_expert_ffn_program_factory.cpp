@@ -47,6 +47,11 @@ constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
 // page in direct-write mode. Allocated unconditionally (negligible L1) so
 // the CB-index layout is stable across both write modes.
 constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
+// Reader-only scratch for the device-side `start` page in fused-extract mode.
+// Separate from the writer's CB_START_SCRATCH so reader (BRISC) and writer
+// (NCRISC) each fetch their own copy without a cross-RISC race. Allocated
+// unconditionally for CB-index-layout stability (negligible L1).
+constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -59,7 +64,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const auto& gate_shape = t.gate_proj.padded_shape();
     const auto& down_shape = t.down_proj.padded_shape();
 
-    const uint32_t M_tiles_full = x_shape[-2] / TILE;
+    // Fused-extract mode: x is the whole shared dispatched buffer, so its
+    // row count is NOT the per-expert M. Use op.fused_m_tiles (= per-expert
+    // max_dispatched_tokens / TILE) as M_tiles_full for all chunk/loop math;
+    // the reader offsets its x reads by the expert's region offset. Legacy
+    // mode (fused_m_tiles == 0): x is the pre-extracted per-expert tensor and
+    // M_tiles_full comes from its shape.
+    const bool fused_extract = op.fused_m_tiles > 0;
+    const uint32_t M_tiles_full = fused_extract ? op.fused_m_tiles : (x_shape[-2] / TILE);
     const uint32_t K_gate_tiles = x_shape[-1] / TILE;            // = N_gate K = emb / TILE
     const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;    // = hidden / TILE
     const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
@@ -469,6 +481,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             .set_page_size(CB_START_SCRATCH, start_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_cb_cfg);
 
+    // Reader's own copy of the `start` scratch (fused-extract mode). Same
+    // sizing as the writer's CB_START_SCRATCH.
+    tt::tt_metal::CircularBufferConfig start_reader_cb_cfg =
+        tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH_READER, tt::DataFormat::UInt32}})
+            .set_page_size(CB_START_SCRATCH_READER, start_scratch_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_reader_cb_cfg);
+
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
     // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
@@ -506,6 +525,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         static_cast<uint32_t>(reader_reads_up),
         // reader_mcasts_up — 1 in LEGACY and UP_SPLIT (reader NoC-0 mcasts up).
         static_cast<uint32_t>(reader_mcasts_up),
+        // fused_extract — 1 => reader offsets x reads by start[global_id]/TILE
+        // (reads region from the shared dispatched buffer; folds ttnn::extract).
+        static_cast<uint32_t>(fused_extract),
+        // CB_START_SCRATCH_READER — reader's scratch for the device-side `start`
+        // page (fused-extract mode only).
+        CB_START_SCRATCH_READER,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -513,6 +538,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
+    // `start` (expert_region_offsets in fused/direct mode; else x_buffer as a
+    // harmless stand-in for CT-arg layout stability). Read only when
+    // fused_extract. Mirrors the writer's start accessor.
+    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -770,6 +799,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
+        // `start` (expert_region_offsets) base address, appended last so it
+        // sits at a fixed trailing index the reader resolves from GRID_X_NOC.
+        // Read only in fused-extract mode.
+        reader_args.push_back(start_buffer->address());
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
@@ -829,6 +862,9 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
+        // `start` base address is the last reader runtime arg (appended after
+        // the M-row NoC coord table in create()).
+        reader_args[reader_args.size() - 1] = start_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;

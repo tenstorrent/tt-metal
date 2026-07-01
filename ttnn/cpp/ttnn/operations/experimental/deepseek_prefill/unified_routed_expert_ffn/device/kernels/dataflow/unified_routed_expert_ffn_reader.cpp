@@ -118,6 +118,12 @@ void kernel_main() {
     // NoC 1 into cb_in1_up); both 0 = UP_WRITER_MCAST, reader skips up.
     constexpr uint32_t reader_reads_up = get_compile_time_arg_val(23);
     constexpr uint32_t reader_mcasts_up = get_compile_time_arg_val(24);
+    // fused_extract: 1 => x is the whole shared dispatched buffer and this
+    // expert's rows begin at start[global_id]/TILE tile-rows; the reader adds
+    // that offset to every x tile-row index (folding ttnn::extract). 0 =>
+    // legacy (x is the pre-extracted per-expert tensor, rows start at 0).
+    constexpr uint32_t fused_extract = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(26);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -128,7 +134,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 25;
+    constexpr uint32_t x_accessor_offset = 27;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -151,6 +157,15 @@ void kernel_main() {
     constexpr uint32_t idx_accessor_offset = counts_args.next_compile_time_args_offset();
     constexpr auto idx_args = TensorAccessorArgs<idx_accessor_offset>();
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
+
+    // `start` (expert_region_offsets) accessor — last in the CT accessor
+    // stream, matching the host append order. The base address is the last
+    // reader runtime arg (after the M-row NoC coord table). Used only when
+    // fused_extract; constructed unconditionally for CT-arg-layout stability.
+    const uint32_t start_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC);
+    constexpr uint32_t start_accessor_offset = idx_args.next_compile_time_args_offset();
+    constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
+    const auto start_acc = TensorAccessor(start_args, start_addr);
 
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
     // `noc_read` forces NoC 0 for DRAM weight/page reads — the kernel issues
@@ -204,6 +219,24 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
+
+    // Fused-extract: this expert's tokens begin at start[global_id] (token row)
+    // within the shared dispatched buffer. Read the `start` page device-side
+    // and convert to tile rows; the in0 reader adds this to every x tile-row
+    // index. Mirrors the writer's direct-write offset so input slice and output
+    // slice line up on the same buffer region. 0 in legacy mode.
+    uint32_t region_offset_tiles = 0;
+    if constexpr (fused_extract != 0) {
+        CircularBuffer cb_start_scratch_obj(cb_start_scratch);
+        cb_start_scratch_obj.reserve_back(1);
+        const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+        const uint32_t start_page_size = start_acc.get_aligned_page_size();
+        noc_read.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
+        noc_read.async_read_barrier();
+        cb_start_scratch_obj.push_back(1);
+        const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
+        region_offset_tiles = start_ptr[global_expert_id] / 32;
+    }
     // count_value is in TOKEN rows. Convert to tile rows (ceil) then to chunks.
     // For count=0 the loop is empty (no chunks processed). For count > 0 we
     // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
@@ -342,9 +375,14 @@ void kernel_main() {
                     // 0 * up = 0, 0 @ W_down = 0 (safe and free of NaN).
                     const bool row_valid = row < count_tiles;
                     if (row_valid) {
+                        // Fused-extract: x is the shared dispatched buffer, so
+                        // this expert's row `row` lives at absolute tile-row
+                        // (region_offset_tiles + row). region_offset_tiles is 0
+                        // in legacy mode (x already pre-extracted, rows at 0).
+                        const uint32_t abs_row = region_offset_tiles + row;
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t col = kb * in0_block_w_gu + k;
-                            const uint32_t tile_idx = row * K_gate_tiles + col;
+                            const uint32_t tile_idx = abs_row * K_gate_tiles + col;
                             noc_read.async_read(
                                 x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
                             l1_x += x_tile_bytes;
