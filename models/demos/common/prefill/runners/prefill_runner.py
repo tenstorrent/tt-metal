@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Disaggregated prefill runner — one entry point, two run modes that share the same N-rank pipeline.
+"""Disaggregated prefill runner — a single producer-driven serving loop over an N-rank pipeline.
 
 Model-agnostic: the model is selected by PREFILL_MODEL and driven through a PrefillModelAdapter
 (see ../adapter.py and ADDING_A_PREFILL_MODEL.md). This driver wires rank topology, input,
@@ -188,11 +188,6 @@ def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]
         ranges.append((start, count))
         start += count
     return ranges
-
-
-# ---------------------------------------------------------------------------
-# Input
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -491,9 +486,8 @@ def main() -> None:
 
 def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     """Production serving: token chunks + PrefillMetadata arrive over the H2D socket from an external
-    producer (prefill_h2d_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
-    mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
-    and that it runs forever.
+    producer (prefill_h2d_producer.py / the scheduler); unbounded (runs to SIGTERM). rank 0 reads its
+    input from the H2D socket, downstream ranks over D2D (num_ranks 1..N).
 
     Migration (KV-chunk-table publish) + per-layer LayerAck are wired for the single-rank case only;
     they are disabled for num_ranks>1 (pipelined migration is future work). Shutdown for num_ranks>1 is
@@ -532,7 +526,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             f"drive it with prefill_h2d_producer.py / the scheduler."
         )
 
-    # D2D pipeline transport for num_ranks>1 (same as standalone).
+    # D2D pipeline transport for num_ranks>1.
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
