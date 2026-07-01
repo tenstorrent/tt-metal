@@ -1774,6 +1774,27 @@ TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_MaxRu
     }
 }
 
+// Unique RTAs whose per-core payload exceeds one 4096B dispatch page (> 1024 words) are dispatched via
+// CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST instead of the page-limited packed-write path. Uses the full
+// worker grid (> 35 cores) to also exercise the multi-command chunk boundary
+// (CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS = 35).
+TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsLargeUnicast) {
+    for (const auto& device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set(cr);
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        // 1100 words * 4 = 4400 B > 4096 B page. COMPUTE unique-arg L1 slot has 1280 words of headroom
+        // before the common-arg region (see get_args_addr), so 1100 unique + 0 common fits.
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device,
+            dummy_program_config,
+            1100,
+            0,
+            {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0}));
+    }
+}
+
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via BRISC.
 TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
     CoreRange cr0({1, 1}, {2, 2});

@@ -599,6 +599,118 @@ void generate_runtime_args_cmds(
     }
 }
 
+// Emit unique runtime args for a kernel group using CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST instead of
+// CQ_DISPATCH_CMD_WRITE_PACKED. Unlike the packed path, the large-unicast dispatch handler wraps CB pages
+// per sub-command, so a single core's RTA payload is no longer limited to one dispatch page. Used when a
+// kernel group's per-core payload exceeds that page (see assemble_runtime_args_commands). The command
+// layout mirrors BatchedTransferGenerator: one sub-command (core) per unicast destination, up to
+// CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS per command, with each core's payload laid out
+// exactly as the packed path lays out its per-core data region so the RTA-update pointers stay valid.
+void generate_runtime_args_cmds_large_unicast(
+    std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
+    std::vector<ProgramCommandSequence::RtaUpdate>& rta_updates,
+    uint32_t l1_arg_base_addr,
+    const std::vector<CQDispatchWritePackedUnicastSubCmd>& sub_cmds,
+    const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>& rt_data_and_sizes,
+    uint32_t rta_payload_sizeB,
+    std::vector<std::vector<
+        std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>>>&
+        rt_args_data,
+    uint32_t write_offset_index) {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    // Device reads rta_payload_sizeB bytes per sub-command, then pads the read pointer to `alignment`, so
+    // consecutive per-core payloads in the command stream are separated by this aligned size.
+    const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
+    const uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+
+    const uint32_t num_cores = sub_cmds.size();
+    uint32_t offset_idx = 0;
+    while (offset_idx < num_cores) {
+        const uint32_t num_in_chunk =
+            std::min<uint32_t>(num_cores - offset_idx, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+
+        std::vector<CQDispatchWritePackedLargeUnicastSubCmd> large_sub_cmds(num_in_chunk);
+        // Per-core payload backing storage. Must outlive the add_dispatch call (memcpy'd into the command).
+        std::vector<std::vector<uint8_t>> core_payloads(num_in_chunk);
+        std::vector<tt::stl::Span<const uint8_t>> data_collection(num_in_chunk);
+
+        for (uint32_t k = 0; k < num_in_chunk; ++k) {
+            const uint32_t i = offset_idx + k;
+            large_sub_cmds[k] = CQDispatchWritePackedLargeUnicastSubCmd{
+                .noc_xy_addr = sub_cmds[i].noc_xy_addr, .addr = l1_arg_base_addr, .length = rta_payload_sizeB};
+
+            auto& buf = core_payloads[k];
+            buf.assign(aligned_core_payload, 0);
+            // Watcher only: pre-fill unused arg slots with 0xBEEF0000 | rand16 so they are obviously unset
+            // on device (mirrors the packed path). With watcher off the buffer stays zero.
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+                thread_local static std::mt19937 gen(std::random_device{}());
+                std::uniform_int_distribution<int> dist(0, 65535);
+                auto* words = reinterpret_cast<uint32_t*>(buf.data());
+                for (uint32_t w = 0; w < aligned_core_payload / sizeof(uint32_t); ++w) {
+                    words[w] = WATCHER_RTA_UNSET_PATTERN | static_cast<uint16_t>(dist(gen));
+                }
+            }
+            // Lay out each kernel's [count | args] data at the same per-kernel stride the packed path uses.
+            uint32_t offset = 0;
+            for (const auto& data : rt_data_and_sizes[i]) {
+                if (std::get<0>(data)) {
+                    std::memcpy(buf.data() + offset, std::get<0>(data), std::get<1>(data));
+                }
+                offset += std::get<2>(data);
+            }
+            data_collection[k] = tt::stl::Span<const uint8_t>(buf.data(), buf.size());
+        }
+
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_write_packed_large_unicast(num_in_chunk, num_in_chunk * aligned_core_payload);
+        auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
+
+        std::vector<uint8_t*> data_collection_location;
+        command_obj.add_dispatch_write_packed_large_unicast(
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
+            l1_alignment,
+            num_in_chunk,
+            large_sub_cmds,
+            data_collection,
+            &data_collection_location,
+            0,
+            write_offset_index);
+        TT_ASSERT(command_obj.size_bytes() == command_obj.write_offset_bytes());
+
+        // Repoint each kernel's RuntimeArgsData into the command stream (or schedule an rta_update copy),
+        // exactly as the packed path and BatchedTransferGenerator do.
+        for (uint32_t k = 0; k < num_in_chunk; ++k) {
+            const uint32_t i = offset_idx + k;
+            uint8_t* base = data_collection_location[k];
+            uint32_t offset = 0;
+            for (uint32_t j = 0; j < rt_args_data[i].size(); ++j) {
+                auto& data = rt_args_data[i][j];
+                uint32_t* data_in_sequence = reinterpret_cast<uint32_t*>(base + offset) + count_word_offset;
+                if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
+                    data.first.get().rt_args_data = data_in_sequence;
+                } else {
+                    rta_updates.emplace_back(
+                        data.first.get().rt_args_data,
+                        data_in_sequence,
+                        data.first.get().rt_args_count * sizeof(uint32_t));
+                }
+                offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
+            }
+        }
+        offset_idx += num_in_chunk;
+    }
+}
+
+// A kernel group's unique RTAs must go through CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST when their
+// per-core payload exceeds one dispatch page: the CQ_DISPATCH_CMD_WRITE_PACKED device handler asserts each
+// per-core write fits a single dispatch page (its `size` field is uint16_t and it does not wrap CB pages).
+bool unique_rta_requires_large_unicast(uint32_t total_rta_size) {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t dispatch_page_size = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+    return tt::align(total_rta_size, l1_alignment) > dispatch_page_size;
+}
+
 struct Transfer {
     uint32_t start;
     tt::stl::Span<const uint8_t> data;
@@ -657,14 +769,18 @@ BatchedTransfers assemble_runtime_args_commands(
         for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
             if (kg->total_rta_size != 0) {
                 uint32_t num_sub_cmds = kg->core_ranges.num_cores();
-                uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
-                uint32_t max_packed_cmds =
-                    calculator.get_max_write_packed_sub_cmds<decltype(unique_sub_cmds)::value_type>(
-                        max_runtime_args_len,
-                        constants.max_prefetch_command_size,
-                        constants.packed_write_max_unicast_sub_cmds,
-                        false);
-                command_count += div_up(num_sub_cmds, max_packed_cmds);
+                if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
+                    command_count += div_up(num_sub_cmds, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+                } else {
+                    uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
+                    uint32_t max_packed_cmds =
+                        calculator.get_max_write_packed_sub_cmds<decltype(unique_sub_cmds)::value_type>(
+                            max_runtime_args_len,
+                            constants.max_prefetch_command_size,
+                            constants.packed_write_max_unicast_sub_cmds,
+                            false);
+                    command_count += div_up(num_sub_cmds, max_packed_cmds);
+                }
             }
         }
     }
@@ -792,17 +908,31 @@ BatchedTransfers assemble_runtime_args_commands(
                     }
                 }
                 uint32_t rta_offset = program.get_program_config(index).rta_offset;
-                generate_runtime_args_cmds(
-                    program_command_sequence.runtime_args_command_sequences,
-                    program_command_sequence.rta_updates,
-                    rta_offset,
-                    unique_sub_cmds,
-                    unique_rt_data_and_sizes,
-                    kg->total_rta_size / sizeof(uint32_t),
-                    unique_rt_args_data,
-                    constants,
-                    false,
-                    get_dispatch_write_offset(programmable_core_type));
+                if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
+                    // Per-core payload exceeds one dispatch page; the packed-write handler cannot span
+                    // pages, so send these unique RTAs via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST.
+                    generate_runtime_args_cmds_large_unicast(
+                        program_command_sequence.runtime_args_command_sequences,
+                        program_command_sequence.rta_updates,
+                        rta_offset,
+                        unique_sub_cmds,
+                        unique_rt_data_and_sizes,
+                        kg->total_rta_size,
+                        unique_rt_args_data,
+                        get_dispatch_write_offset(programmable_core_type));
+                } else {
+                    generate_runtime_args_cmds(
+                        program_command_sequence.runtime_args_command_sequences,
+                        program_command_sequence.rta_updates,
+                        rta_offset,
+                        unique_sub_cmds,
+                        unique_rt_data_and_sizes,
+                        kg->total_rta_size / sizeof(uint32_t),
+                        unique_rt_args_data,
+                        constants,
+                        false,
+                        get_dispatch_write_offset(programmable_core_type));
+                }
                 for (auto& data_per_kernel : unique_rt_data_and_sizes) {
                     for (auto& data_and_sizes : data_per_kernel) {
                         RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
