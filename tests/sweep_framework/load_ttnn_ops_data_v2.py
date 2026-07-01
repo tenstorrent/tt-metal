@@ -139,6 +139,159 @@ if not NEON_URL:
 JSON_PATH = "model_tracer/traced_operations/ttnn_operations_master.json"
 
 
+# ---------------------------------------------------------------------------
+# Read/reconstruct backend selection.
+#
+# WRITES (load, set-model-name, delete-trace) always target Neon/Postgres.
+# READ + reconstruct commands can target Snowflake (default) or Neon:
+#   TTNN_OPS_READ_BACKEND = "snowflake" (default) | "neon"
+#
+# Snowflake data lives in <SNOWFLAKE_DATABASE>.<SCHEMA> (e.g. SELF_SERVE.TTNN_OPS_V6).
+# Snowflake auth prefers a service-account RSA keypair (for CI); falls back to SSO.
+#   SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER            (required)
+#   SNOWFLAKE_PRIVATE_KEY or SNOWFLAKE_PRIVATE_KEY_PATH  (+ optional _PASSPHRASE)
+#   SNOWFLAKE_ROLE (default SELF_SERVE), SNOWFLAKE_WAREHOUSE (default PUBLIC),
+#   SNOWFLAKE_DATABASE (default SELF_SERVE)
+# ---------------------------------------------------------------------------
+READ_BACKEND = os.environ.get("TTNN_OPS_READ_BACKEND", "snowflake").lower()
+SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE", "SELF_SERVE")
+
+
+def _read_is_snowflake():
+    return READ_BACKEND == "snowflake"
+
+
+def _load_private_key():
+    """Load an RSA private key (PEM in env or file) into DER/PKCS8 bytes, or None."""
+    key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH")
+    key_pem = os.environ.get("SNOWFLAKE_PRIVATE_KEY")
+    if not key_path and not key_pem:
+        return None
+    from cryptography.hazmat.primitives import serialization
+
+    raw = open(key_path, "rb").read() if key_path else key_pem.encode()
+    passphrase = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
+    return serialization.load_pem_private_key(raw, password=passphrase.encode() if passphrase else None).private_bytes(
+        serialization.Encoding.DER,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+
+
+def _get_read_connection():
+    """Connection for read/reconstruct queries (Snowflake by default, Neon optional)."""
+    if not _read_is_snowflake():
+        return psycopg2.connect(NEON_URL)
+
+    import snowflake.connector
+
+    params = dict(
+        account=os.environ["SNOWFLAKE_ACCOUNT"],
+        user=os.environ["SNOWFLAKE_USER"],
+        role=os.environ.get("SNOWFLAKE_ROLE", "SELF_SERVE"),
+        warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "PUBLIC"),
+        database=SNOWFLAKE_DATABASE,
+    )
+    pkey = _load_private_key()
+    if pkey is not None:
+        params["private_key"] = pkey
+    else:
+        params["authenticator"] = "externalbrowser"
+        params["client_store_temporary_credential"] = True
+    return snowflake.connector.connect(**params)
+
+
+def _schema_prefix(schema):
+    """Qualified table-name prefix for the active read backend."""
+    if _read_is_snowflake():
+        return f"{SNOWFLAKE_DATABASE}.{schema.upper()}"
+    return schema
+
+
+def _agg_ordered(col):
+    """DISTINCT array-aggregate of `col`, ordered by `col` (dialect-specific)."""
+    if _read_is_snowflake():
+        return f"ARRAY_AGG(DISTINCT {col}) WITHIN GROUP (ORDER BY {col})"
+    return f"ARRAY_AGG(DISTINCT {col} ORDER BY {col})"
+
+
+def _agg_distinct_nonnull(col):
+    """DISTINCT array-aggregate of `col` with NULLs removed.
+
+    Postgres uses ARRAY_REMOVE; Snowflake has none, so NULLs are dropped in
+    Python (see _clean_str_list) after normalizing the returned array.
+    """
+    if _read_is_snowflake():
+        return f"ARRAY_AGG(DISTINCT {col}) WITHIN GROUP (ORDER BY {col})"
+    return f"ARRAY_REMOVE(ARRAY_AGG(DISTINCT {col} ORDER BY {col}), NULL)"
+
+
+def _string_agg(col, sep):
+    """Comma-style aggregate of `col` ordered by `col` (dialect-specific)."""
+    if _read_is_snowflake():
+        return f"LISTAGG({col}, '{sep}') WITHIN GROUP (ORDER BY {col})"
+    return f"STRING_AGG({col}, '{sep}' ORDER BY {col})"
+
+
+def _norm_array(value):
+    """Normalize an ARRAY/VARIANT column to a Python object across backends.
+
+    Snowflake returns ARRAY/VARIANT as a JSON string; psycopg2 returns a Python
+    list already. None stays None.
+    """
+    if value is None or not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _clean_str_list(value):
+    """Normalize an aggregated array and drop NULL/None entries."""
+    return [v for v in (_norm_array(value) or []) if v is not None]
+
+
+def _as_int(value):
+    """Coerce a numeric aggregate (Snowflake may return Decimal) to int for JSON."""
+    return int(value) if value is not None else value
+
+
+def _fetch_sources_by_op(cur, S, op_id, extra_where="", extra_params=None):
+    """Bulk-fetch execution sources for ALL configs of an operation in ONE query.
+
+    Avoids the per-config N+1 pattern, which is fine on Postgres but pathologically
+    slow against Snowflake (per-query warehouse/network latency).
+
+    Returns {configuration_id: [(source_file, hf_model, exec_count,
+                                 trace_run_ids, pytest_args_seen), ...]}.
+    """
+    cur.execute(
+        f"""
+        SELECT
+            trcm.configuration_id,
+            m.source_file,
+            m.hf_model_identifier,
+            SUM(trcm.execution_count) AS execution_count,
+            {_agg_ordered('trcm.trace_run_id')} AS trace_run_ids,
+            {_agg_distinct_nonnull('tr.pytest_args')} AS pytest_args_seen
+        FROM {S}.trace_run_configuration_model trcm
+        JOIN {S}.ttnn_configuration c ON c.ttnn_configuration_id = trcm.configuration_id
+        JOIN {S}.ttnn_model m ON m.ttnn_model_id = trcm.model_id
+        JOIN {S}.trace_run tr ON tr.trace_run_id = trcm.trace_run_id
+        WHERE c.operation_id = %s
+        {extra_where}
+        GROUP BY trcm.configuration_id, m.source_file, m.hf_model_identifier
+        ORDER BY trcm.configuration_id, m.source_file, m.hf_model_identifier
+        """,
+        [op_id] + (extra_params or []),
+    )
+    by_config = {}
+    for cid, source_file, hf_model, exec_count, trace_run_ids, pytest_args_seen in cur.fetchall():
+        by_config.setdefault(cid, []).append((source_file, hf_model, exec_count, trace_run_ids, pytest_args_seen))
+    return by_config
+
+
 def parse_source(source_str):
     """Parse a single source string into (source_file, hf_model_identifier)."""
     if not source_str:
@@ -1184,8 +1337,9 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
     filter_desc = f", model_filter={model_filter}" if model_filter else ""
     _validate_schema(schema)
     print(f"Reconstructing JSON from database (schema: {schema}{filter_desc})...")
-    conn = psycopg2.connect(NEON_URL)
+    conn = _get_read_connection()
     cur = conn.cursor()
+    S = _schema_prefix(schema)
 
     if model_filter:
         # Only fetch operations that have at least one config linked to a matching model
@@ -1194,10 +1348,10 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
         cur.execute(
             f"""
             SELECT DISTINCT o.ttnn_operation_id, o.operation_name
-            FROM {schema}.ttnn_operation o
-            JOIN {schema}.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
-            JOIN {schema}.ttnn_configuration_model cm ON cm.configuration_id = c.ttnn_configuration_id
-            JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
+            FROM {S}.ttnn_operation o
+            JOIN {S}.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
+            JOIN {S}.ttnn_configuration_model cm ON cm.configuration_id = c.ttnn_configuration_id
+            JOIN {S}.ttnn_model m ON m.ttnn_model_id = cm.model_id
             WHERE {like_clauses}
             ORDER BY o.operation_name
         """,
@@ -1207,7 +1361,7 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
         cur.execute(
             f"""
             SELECT ttnn_operation_id, operation_name
-            FROM {schema}.ttnn_operation
+            FROM {S}.ttnn_operation
             ORDER BY operation_name
         """
         )
@@ -1223,12 +1377,20 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
         like_clauses = " OR ".join(["m2.source_file ILIKE %s"] * len(model_filter))
         model_filter_clause = f"""
             AND EXISTS (
-                SELECT 1 FROM {schema}.ttnn_configuration_model cm2
-                JOIN {schema}.ttnn_model m2 ON m2.ttnn_model_id = cm2.model_id
+                SELECT 1 FROM {S}.ttnn_configuration_model cm2
+                JOIN {S}.ttnn_model m2 ON m2.ttnn_model_id = cm2.model_id
                 WHERE cm2.configuration_id = c.ttnn_configuration_id
                 AND ({like_clauses})
             )"""
         model_filter_params = [f"%{pattern}%" for pattern in model_filter]
+
+    # Source-side model filter (applied when bulk-fetching per-op execution sources).
+    source_filter_clause = ""
+    source_filter_params = []
+    if model_filter:
+        like_clauses = " OR ".join(["m.source_file ILIKE %s"] * len(model_filter))
+        source_filter_clause = f" AND ({like_clauses})"
+        source_filter_params = [f"%{pattern}%" for pattern in model_filter]
 
     for op_id, op_name in operations:
         cur.execute(
@@ -1244,9 +1406,9 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
                 h.card_count,
                 mc.mesh_shape,
                 mc.device_count
-            FROM {schema}.ttnn_configuration c
-            LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-            LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+            FROM {S}.ttnn_configuration c
+            LEFT JOIN {S}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+            LEFT JOIN {S}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
             WHERE c.operation_id = %s
             {model_filter_clause}
             ORDER BY c.config_hash
@@ -1257,6 +1419,9 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
 
         if not configs:
             continue
+
+        # Bulk-fetch sources for all configs of this op in one query (avoids N+1).
+        sources_by_cfg = _fetch_sources_by_op(cur, S, op_id, source_filter_clause, source_filter_params)
 
         configurations = []
 
@@ -1274,33 +1439,9 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
                 device_count,
             ) = config_row
 
-            # Get sources linked to this config (filtered by model_filter if set)
-            source_filter_clause = ""
-            source_filter_params = []
-            if model_filter:
-                like_clauses = " OR ".join(["m.source_file ILIKE %s"] * len(model_filter))
-                source_filter_clause = f" AND ({like_clauses})"
-                source_filter_params = [f"%{pattern}%" for pattern in model_filter]
+            mesh_shape = _norm_array(mesh_shape)
 
-            cur.execute(
-                f"""
-                SELECT
-                    m.source_file,
-                    m.hf_model_identifier,
-                    SUM(trcm.execution_count) AS execution_count,
-                    ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids,
-                    ARRAY_REMOVE(ARRAY_AGG(DISTINCT tr.pytest_args), NULL) AS pytest_args_seen
-                FROM {schema}.trace_run_configuration_model trcm
-                JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trcm.model_id
-                JOIN {schema}.trace_run tr ON tr.trace_run_id = trcm.trace_run_id
-                WHERE trcm.configuration_id = %s
-                {source_filter_clause}
-                GROUP BY m.source_file, m.hf_model_identifier
-                ORDER BY m.source_file, m.hf_model_identifier
-            """,
-                [config_id] + source_filter_params,
-            )
-            source_rows = cur.fetchall()
+            source_rows = sources_by_cfg.get(config_id, [])
 
             # Use full_config_json as the base config (preserves all original fields)
             # psycopg2 may return JSONB as a string in some environments
@@ -1328,13 +1469,13 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
                 execution = {
                     "source": source_str,
                     "machine_info": {},
-                    "count": exec_count,
-                    "trace_run_ids": list(trace_run_ids or []),
+                    "count": _as_int(exec_count),
+                    "trace_run_ids": list(_norm_array(trace_run_ids) or []),
                     # Aggregated view: a (config, model) pair may have been
                     # produced under several pytest_args variants. Surface
                     # them all for inspection. For a lossless single-trace
                     # round-trip use reconstruct_from_trace_run instead.
-                    "pytest_args_seen": list(pytest_args_seen or []),
+                    "pytest_args_seen": _clean_str_list(pytest_args_seen),
                 }
 
                 if board_type:
@@ -1392,8 +1533,9 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
     _validate_schema(schema)
     filter_desc = f", models={sorted(model_names)}" if model_names is not None else ""
     print(f"Reconstructing JSON from trace_run {trace_run_id} (schema: {schema}{filter_desc})...")
-    conn = psycopg2.connect(NEON_URL)
+    conn = _get_read_connection()
     cur = conn.cursor()
+    S = _schema_prefix(schema)
 
     # Fetch trace_run metadata (v5: hardware via FK, no model_id)
     cur.execute(
@@ -1403,8 +1545,8 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             h.board_type, h.device_series, h.card_count,
             tr.tt_metal_sha, tr.traced_at, tr.config_count, tr.notes,
             tr.pytest_args, tr.tt_kmd, tr.tt_smi, tr.tt_firmware
-        FROM {schema}.trace_run tr
-        JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
+        FROM {S}.trace_run tr
+        JOIN {S}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
         WHERE tr.trace_run_id = %s
         """,
         (trace_run_id,),
@@ -1434,8 +1576,8 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
     cur.execute(
         f"""
         SELECT m.ttnn_model_id, m.source_file, m.hf_model_identifier, m.model_name
-        FROM {schema}.trace_run_model trm
-        JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trm.model_id
+        FROM {S}.trace_run_model trm
+        JOIN {S}.ttnn_model m ON m.ttnn_model_id = trm.model_id
         WHERE trm.trace_run_id = %s
         ORDER BY m.ttnn_model_id
         """,
@@ -1457,6 +1599,9 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
     # Fetch all configurations with their per-config hardware and model sources.
     # Hardware comes from each config's own hardware_id FK (not the trace_run's),
     # so configs with different hardware within the same trace are reconstructed correctly.
+    # (IN (...) instead of = ANY(%s): works on both Postgres and Snowflake.)
+    _model_ids = list(trace_model_ids)
+    _model_in = ", ".join(["%s"] * len(_model_ids)) or "NULL"
     cur.execute(
         f"""
         SELECT
@@ -1472,22 +1617,22 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             trcm.execution_count,
             m.source_file,
             m.hf_model_identifier
-        FROM {schema}.trace_run_configuration_model trcm
-        JOIN {schema}.ttnn_configuration c
+        FROM {S}.trace_run_configuration_model trcm
+        JOIN {S}.ttnn_configuration c
             ON c.ttnn_configuration_id = trcm.configuration_id
-        JOIN {schema}.ttnn_operation o
+        JOIN {S}.ttnn_operation o
             ON o.ttnn_operation_id = c.operation_id
-        LEFT JOIN {schema}.ttnn_hardware h
+        LEFT JOIN {S}.ttnn_hardware h
             ON h.ttnn_hardware_id = c.hardware_id
-        LEFT JOIN {schema}.ttnn_mesh_config mc
+        LEFT JOIN {S}.ttnn_mesh_config mc
             ON mc.ttnn_mesh_config_id = c.mesh_config_id
-        JOIN {schema}.ttnn_model m
+        JOIN {S}.ttnn_model m
             ON m.ttnn_model_id = trcm.model_id
-           AND m.ttnn_model_id = ANY(%s)
+           AND m.ttnn_model_id IN ({_model_in})
         WHERE trcm.trace_run_id = %s
         ORDER BY o.operation_name, c.config_hash, m.source_file, m.hf_model_identifier
         """,
-        (list(trace_model_ids), trace_run_id),
+        _model_ids + [trace_run_id],
     )
     rows = cur.fetchall()
     conn.close()
@@ -1518,6 +1663,8 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                 full_config_json = {}
         if not full_config_json:
             full_config_json = {}
+
+        mesh_shape = _norm_array(mesh_shape)
 
         exec_machine_info = {}
         if cfg_board_type:
@@ -1553,7 +1700,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             {
                 "source": source,
                 "machine_info": exec_machine_info,
-                "count": execution_count,
+                "count": _as_int(execution_count),
                 "trace_run_ids": [trace_run_id],
                 "pytest_args": trace_pytest_args,
             }
@@ -1611,8 +1758,9 @@ def list_variants(model_pattern, schema=DEFAULT_SCHEMA):
     if "%" not in model_pattern:
         model_pattern = f"%{model_pattern}%"
 
-    conn = psycopg2.connect(NEON_URL)
+    conn = _get_read_connection()
     cur = conn.cursor()
+    S = _schema_prefix(schema)
     cur.execute(
         f"""
         SELECT
@@ -1629,10 +1777,10 @@ def list_variants(model_pattern, schema=DEFAULT_SCHEMA):
             tr.trace_run_id,
             tr.traced_at,
             tr.config_count
-        FROM {schema}.trace_run tr
-        JOIN {schema}.trace_run_model trm ON trm.trace_run_id = tr.trace_run_id
-        JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trm.model_id
-        JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
+        FROM {S}.trace_run tr
+        JOIN {S}.trace_run_model trm ON trm.trace_run_id = tr.trace_run_id
+        JOIN {S}.ttnn_model m ON m.ttnn_model_id = trm.model_id
+        JOIN {S}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
         WHERE m.source_file ILIKE %s
         ORDER BY m.source_file, tr.pytest_args NULLS FIRST, h.device_series, tr.traced_at DESC
         """,
@@ -1672,8 +1820,9 @@ def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
         schema: Database schema to query (default: DEFAULT_SCHEMA).
     """
     _validate_schema(schema)
-    conn = psycopg2.connect(NEON_URL)
+    conn = _get_read_connection()
     cur = conn.cursor()
+    S = _schema_prefix(schema)
 
     query = f"""
         SELECT
@@ -1687,12 +1836,11 @@ def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
             tr.tt_kmd,
             tr.tt_smi,
             tr.tt_firmware,
-            STRING_AGG(COALESCE(m.model_name, m.source_file), ', '
-                       ORDER BY COALESCE(m.model_name, m.source_file)) AS models
-        FROM {schema}.trace_run tr
-        JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
-        LEFT JOIN {schema}.trace_run_model trm ON trm.trace_run_id = tr.trace_run_id
-        LEFT JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trm.model_id
+            {_string_agg("COALESCE(m.model_name, m.source_file)", ", ")} AS models
+        FROM {S}.trace_run tr
+        JOIN {S}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
+        LEFT JOIN {S}.trace_run_model trm ON trm.trace_run_id = tr.trace_run_id
+        LEFT JOIN {S}.ttnn_model m ON m.ttnn_model_id = trm.model_id
     """
     params = []
 
@@ -1701,7 +1849,11 @@ def list_trace_runs(model_filter=None, schema=DEFAULT_SCHEMA):
         query += f" WHERE ({like_clauses})"
         params = [f"%{p}%" for p in model_filter]
 
-    query += " GROUP BY tr.trace_run_id, h.device_series, h.card_count ORDER BY tr.traced_at DESC"
+    query += (
+        " GROUP BY tr.trace_run_id, h.device_series, h.card_count, tr.tt_metal_sha,"
+        " tr.traced_at, tr.config_count, tr.notes, tr.tt_kmd, tr.tt_smi, tr.tt_firmware"
+        " ORDER BY tr.traced_at DESC"
+    )
     cur.execute(query, params)
     rows = cur.fetchall()
     conn.close()
@@ -2017,12 +2169,13 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
     """Reconstruct JSON for a single operation (faster for testing)."""
     _validate_schema(schema)
     print(f"Reconstructing {operation_name} from database (schema: {schema})...")
-    conn = psycopg2.connect(NEON_URL)
+    conn = _get_read_connection()
     cur = conn.cursor()
+    S = _schema_prefix(schema)
 
     # Get operation ID
     cur.execute(
-        f"SELECT ttnn_operation_id FROM {schema}.ttnn_operation WHERE operation_name = %s",
+        f"SELECT ttnn_operation_id FROM {S}.ttnn_operation WHERE operation_name = %s",
         (operation_name,),
     )
     row = cur.fetchone()
@@ -2045,15 +2198,18 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
             h.card_count,
             mc.mesh_shape,
             mc.device_count
-        FROM {schema}.ttnn_configuration c
-        LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-        LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+        FROM {S}.ttnn_configuration c
+        LEFT JOIN {S}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+        LEFT JOIN {S}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
         WHERE c.operation_id = %s
         ORDER BY c.config_hash
     """,
         (op_id,),
     )
     configs = cur.fetchall()
+
+    # Bulk-fetch sources for all configs of this op in one query (avoids N+1).
+    sources_by_cfg = _fetch_sources_by_op(cur, S, op_id)
 
     configurations = []
 
@@ -2069,25 +2225,9 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
             device_count,
         ) = config_row
 
-        # Get sources
-        cur.execute(
-            f"""
-            SELECT
-                m.source_file,
-                m.hf_model_identifier,
-                SUM(trcm.execution_count) AS execution_count,
-                ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids,
-                ARRAY_REMOVE(ARRAY_AGG(DISTINCT tr.pytest_args), NULL) AS pytest_args_seen
-            FROM {schema}.trace_run_configuration_model trcm
-            JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trcm.model_id
-            JOIN {schema}.trace_run tr ON tr.trace_run_id = trcm.trace_run_id
-            WHERE trcm.configuration_id = %s
-            GROUP BY m.source_file, m.hf_model_identifier
-            ORDER BY m.source_file, m.hf_model_identifier
-        """,
-            (config_id,),
-        )
-        source_rows = cur.fetchall()
+        mesh_shape = _norm_array(mesh_shape)
+
+        source_rows = sources_by_cfg.get(config_id, [])
 
         # psycopg2 may return JSONB as a string in some environments
         if isinstance(full_config_json, str):
@@ -2112,9 +2252,9 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
             execution = {
                 "source": source_str,
                 "machine_info": {},
-                "count": exec_count,
-                "trace_run_ids": list(trace_run_ids or []),
-                "pytest_args_seen": list(pytest_args_seen or []),
+                "count": _as_int(exec_count),
+                "trace_run_ids": list(_norm_array(trace_run_ids) or []),
+                "pytest_args_seen": _clean_str_list(pytest_args_seen),
             }
             if board_type:
                 execution["machine_info"]["board_type"] = board_type
