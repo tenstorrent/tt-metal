@@ -811,7 +811,7 @@ def test_binary_relational_uint32_edge_cases(ttnn_op, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        (torch.Size([1, 1, 64, 128])),
+        (torch.Size([1, 1, 256, 256])),
     ],
 )
 @pytest.mark.parametrize(
@@ -860,11 +860,11 @@ def test_binary_remainder_uint32_full_range(shape, low_a, high_a, low_b, high_b,
 
 def test_binary_remainder_uint32_edge_cases(device):
     torch_input_tensor_a = torch.tensor(
-        [0, 1, 100, 2147483647, 2147483648, 4294967295, 4294967295, 3000000000, 2147483648, 0, 12345, 4294967294],
+        [0, 1, 28, 100, 2147483647, 2147483648, 4294967295, 4294967295, 3000000000, 2147483648, 0, 12345, 4294967294],
         dtype=torch.uint32,
     )
     torch_input_tensor_b = torch.tensor(
-        [1, 1, 7, 2147483647, 2147483648, 4294967295, 1, 7, 3000000001, 5, 4294967295, 2],
+        [1, 1, 14, 7, 2147483647, 2147483648, 4294967295, 1, 7, 3000000001, 5, 4294967295, 2],
         dtype=torch.uint32,
     )
 
