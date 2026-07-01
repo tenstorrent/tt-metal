@@ -151,14 +151,14 @@ def test_rope_1d_config_with_options():
     assert config.datatype == ttnn.bfloat8_b
 
 
-def test_rope_1d_from_model_args_rejects_galaxy():
+def test_rope_1d_from_model_args_rejects_galaxy(expect_error):
     """Test that from_model_args raises for Galaxy devices."""
     from unittest.mock import MagicMock
 
     args = MagicMock()
     args.is_galaxy = True
 
-    with pytest.raises(ValueError, match="Galaxy"):
+    with expect_error(ValueError, "Galaxy"):
         RotarySetup1D.from_model_args(device=MagicMock(), args=args)
 
 
@@ -209,11 +209,11 @@ def _list_init_test_cases() -> list[pytest.param]:
         pytest.param((1, 8), 1, 128, 8192, 500000.0, "llama3", True, id="1x8-b1-hd128-llama3-fused"),
         # T3K Qwen2.5-72B: no scaling, theta=1000000
         pytest.param((1, 8), 1, 128, 8192, 1000000.0, "none", True, id="1x8-b1-hd128-none-fused"),
-        # NOTE: Phi-4 (head_dim=128, no scaling, theta=250000) adds no new RoPE mechanism vs the
-        # existing hd128 / "none" rows; its decode path is validated end-to-end (M5 token-accuracy,
-        # 97-99% top-1 vs the TTTv1 reference) and via the attention module test's real rope. A
-        # dedicated row was omitted because the harness's "none"-scaling decode reference path
-        # (non-doubled table) is incompatible with RotarySetup1D decode regardless of model.
+        # Phi-4 (head_dim=128, no scaling, theta=250000) uses the exact same decode code path as the
+        # Mistral (1x1) and Qwen2.5-72B (1x8) "none"/hd128 rows above; theta is the only differing
+        # value and it does not change the code path, so no dedicated row is added here. Phi-4's RoPE
+        # is exercised end-to-end (real rope, not this reference harness) by the attention-1d module
+        # test (models/common/tests/modules/attention/test_attention_1d.py, the "*-Phi-4" cases).
 
         # === Slow tests (remaining from CSV) ===
         # (1,1) batch=32
@@ -708,7 +708,7 @@ def test_rope_1d_prefill_forward_vs_reference(
     ids=["1x1"],
     indirect=True,
 )
-def test_prefill_forward_bounds_check(ttnn_mesh_device: ttnn.MeshDevice):
+def test_prefill_forward_bounds_check(ttnn_mesh_device: ttnn.MeshDevice, expect_error):
     """Test that prefill_forward raises when the requested range exceeds the table."""
     cos_torch, sin_torch = _rope_cos_sin(head_dim=128, max_seq_len=256, theta=500000.0)
     cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device)
@@ -721,10 +721,10 @@ def test_prefill_forward_bounds_check(ttnn_mesh_device: ttnn.MeshDevice):
     assert len(cos_sin) == 2
 
     # Should fail: exceeds table
-    with pytest.raises(AssertionError, match="exceeds cos/sin table length"):
+    with expect_error(AssertionError, "exceeds cos/sin table length"):
         rope.prefill_forward(start_pos=0, seq_len=257)
 
-    with pytest.raises(AssertionError, match="exceeds cos/sin table length"):
+    with expect_error(AssertionError, "exceeds cos/sin table length"):
         rope.prefill_forward(start_pos=200, seq_len=128)
 
 
