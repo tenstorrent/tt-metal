@@ -503,13 +503,23 @@ def rms_norm_test_main(
 # relative-Frobenius <= ~0.035 and per-element relative error <= ~0.035; the tolerances sit a margin
 # above that. The geometries are chosen so a padded-width normalization gives a >= 13% scale error
 # (w96/c2 -> sqrt(128/96) = 1.155, w224/c3 -> sqrt(288/224) = 1.134), several times the tolerance.
-_LOGICAL_WIDTH_NORM_FROBENIUS = 0.06  # relative Frobenius; == |scale - 1| for a pure-scale error
-_LOGICAL_WIDTH_NORM_RTOL = 0.05
-_LOGICAL_WIDTH_NORM_ATOL = 0.05  # floor for near-zero normalized outputs (relative tol meaningless there)
+# Per-dtype numeric budget for the logical-width masking check, given as assert_numeric_metrics kwargs.
+# This test detects a padded-vs-logical normalization: a near-pure scale error of magnitude
+# |sqrt(padded / logical) - 1|, which is at least ~0.13 for the geometries covered here. Every budget
+# below stays well under that (so the scale error is still caught) while leaving room for each format's
+# own quantization noise: fp32 tightest, bfloat8_b loosest. atol is the floor for near-zero normalized
+# outputs, where relative tolerance is meaningless.
+_LOGICAL_WIDTH_NORM_BUDGET = {
+    ttnn.float32: dict(frobenius_threshold=0.02, rtol=0.02, atol=0.02),
+    ttnn.bfloat16: dict(frobenius_threshold=0.06, rtol=0.05, atol=0.05),
+    ttnn.bfloat8_b: dict(frobenius_threshold=0.10, rtol=0.08, atol=0.08),
+}
 _LOGICAL_WIDTH_NORM_PAD_POISON = 1000.0  # poison the implicit tile padding so any leak is caught
 
 
-def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w, eps=1e-5, use_welford=False):
+def run_sharded_norm_logical_width_multicore(
+    device, is_rmsnorm, w, num_cores_w, dtype=ttnn.bfloat16, eps=1e-5, use_welford=False
+):
     """Verify a width-sharded layer/RMS norm normalizes over the LOGICAL width when the width is split
     across cores so the final core owns fewer real tiles (and, for a non-tile-aligned width, a partially
     valid final tile plus pure-padding tiles).
@@ -520,7 +530,8 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
     Dividing by the padded count (num_blocks * block_w) instead causes the output to be too large by
     a factor of ~sqrt(padded/logical), which is a near-pure scale. The check therefore gates on the
     relative-Frobenius and allclose metrics (both scale-sensitive) and DISABLES PCC, which is
-    scale-invariant and so blind to this class of error. Tolerances are the bf16 budget defined above.
+    scale-invariant and so blind to this class of error. Tolerances come from the per-dtype budget
+    defined above.
 
     use_welford applies to LayerNorm only, since RMSNorm does not support Welford.
     """
@@ -531,12 +542,7 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
     assert (num_cores_w - 1) * shard_wt < kt, "geometry must leave the last core at least one real tile"
 
     torch.manual_seed(0)
-    x = torch.randn(1, 1, TILE_HEIGHT, w, dtype=torch.bfloat16)  # bf16-quantize once; identical to ref
-    xf = x.float()
-    if is_rmsnorm:
-        ref = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)
-    else:
-        ref = (xf - xf.mean(-1, keepdim=True)) * torch.rsqrt(xf.var(-1, unbiased=False, keepdim=True) + eps)
+    x = torch.randn(1, 1, TILE_HEIGHT, w)  # fp32 base; quantized to `dtype` on device below
 
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))})
     sharded_cfg = ttnn.create_sharded_memory_config(
@@ -545,9 +551,20 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    tt_x = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    tt_x = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
     tt_x = ttnn.to_memory_config(tt_x, memory_config=sharded_cfg)
     tt_x = ttnn.fill_implicit_tile_padding(tt_x, _LOGICAL_WIDTH_NORM_PAD_POISON)
+
+    # Reference is computed from exactly the values the op consumes: read the sharded, padding-poisoned
+    # input back and take the logical width. For a lossy format (bfloat8_b) the block-shared exponent
+    # means the padding value can perturb the boundary tile, so deriving the reference from the actual
+    # input keeps the comparison fair; any residual error then reflects a masking failure rather than
+    # input quantization.
+    xf = ttnn.to_torch(ttnn.to_memory_config(tt_x, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
+    if is_rmsnorm:
+        ref = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)
+    else:
+        ref = (xf - xf.mean(-1, keepdim=True)) * torch.rsqrt(xf.var(-1, unbiased=False, keepdim=True) + eps)
 
     # gamma = 1, beta = 0 isolate the normalization (the affine is trivially correct and would only
     # hide a scale error behind PCC). gamma padded width must equal the input padded width (= w).
@@ -589,8 +606,6 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
     assert_numeric_metrics(
         ref,
         out,
-        rtol=_LOGICAL_WIDTH_NORM_RTOL,
-        atol=_LOGICAL_WIDTH_NORM_ATOL,
-        frobenius_threshold=_LOGICAL_WIDTH_NORM_FROBENIUS,
+        **_LOGICAL_WIDTH_NORM_BUDGET[dtype],
         check_pcc=False,  # PCC is scale-invariant; a padded-width normalization is a (near-)pure scale
     )

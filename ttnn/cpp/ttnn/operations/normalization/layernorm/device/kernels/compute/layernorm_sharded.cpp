@@ -356,9 +356,8 @@ void kernel_main() {
     // (the raw input, or the fused residual sum a + b). Squaring it leaves the padding columns holding
     // (pad_value)^2; zero them in place before the reduce so they do not enter the mean of squares.
     // The writer-generated mask (cb_col_mask_packed) carries each block's own validity (full, partial,
-    // or all-padding tiles), in the same data format as the squared tiles it multiplies, so both
-    // operands of the FPU multiply match (the same alignment the variance multiply relies on). It was waited on
-    // once near the top of the kernel and is read by tile index here (never popped).
+    // or all-padding tiles). It was waited on once near the top of the kernel and is read by tile index
+    // here (never popped).
     reconfig_data_format(cb_xmm2_id, cb_col_mask_packed_id);
     mul_tiles_init(cb_xmm2_id, cb_col_mask_packed_id);
     for (uint32_t t = 0; t < num_tiles_per_block; t++) {

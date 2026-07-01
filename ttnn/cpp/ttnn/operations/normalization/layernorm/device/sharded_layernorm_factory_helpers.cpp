@@ -1152,11 +1152,11 @@ void add_cb_descriptors(
                 cb_config.single_tile_size));
         }
         if (cb_config.do_col_mask) {
-            // CB 19: writer-generated column mask, block_wt tiles (one tile-row), in the compute data
-            // format. The writer fills it per core via generate_mask_w<T> from the core's width
-            // position (full / partial / all-padding per tile); compute waits on it and reads by tile
-            // index, so no host buffer is needed. The format-aware generate_mask_w<T> produces the
-            // correct faced/FP32 datum layout, matching the compute-produced tiles in the FPU multiply.
+            // CB 19: writer-generated column mask, block_wt tiles (one tile-row), created in this CB's
+            // data format (cb_data_format). The writer fills it per core via generate_mask_w<T> from the
+            // core's width position (full / partial / all-padding per tile); compute waits on it and reads
+            // by tile index, so no host buffer is needed. generate_mask_w<T>'s datum type must match this
+            // CB's data format so the unpacker reads the mask's 1.0 / 0.0 values correctly.
             program_descriptor.cbs.push_back(make_cb_descriptor(
                 cb_config.col_mask_gen_CB_size_bytes,
                 core_ranges.all_cores,
