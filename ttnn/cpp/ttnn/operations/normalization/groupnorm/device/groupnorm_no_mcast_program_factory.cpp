@@ -449,6 +449,28 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         xmm_CB_size_group_2 = single_tile_size * 3;
     }
 
+    // Default CB sizes above assume one out-block at a time; that is not enough for welford+ROW_MAJOR
+    // because the full batch must be tilized once and kept for both passes (c_0/c_29), while output
+    // CBs (c_16/c_30) can stay per out-block.
+    uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
+    uint32_t rm_untilize_CB_size_group_2 = in_CB_size_group_2;
+    if (use_welford && (tilize_in || untilize_out)) {
+        const uint32_t welford_batch_tiles_g1 = block_ht_group_1 * per_core_Nt;
+        const uint32_t welford_batch_tiles_g2 = block_ht_group_2 * per_core_Nt;
+        const uint32_t welford_outblk_tiles_g1 = (block_ht_group_1 / num_out_blocks) * per_core_Nt;
+        const uint32_t welford_outblk_tiles_g2 = (block_ht_group_2 / num_out_blocks) * per_core_Nt;
+        in0_CB_size_group_1 = welford_batch_tiles_g1 * in_single_tile_size;
+        in_CB_size_group_1 = welford_batch_tiles_g1 * in_single_tile_size;
+        out_CB_size_group_1 = welford_outblk_tiles_g1 * out_single_tile_size;
+        rm_untilize_CB_size_group_1 = welford_outblk_tiles_g1 * in_single_tile_size;
+        if (!equal_batches_per_core) {
+            in0_CB_size_group_2 = welford_batch_tiles_g2 * in_single_tile_size;
+            in_CB_size_group_2 = welford_batch_tiles_g2 * in_single_tile_size;
+            out_CB_size_group_2 = welford_outblk_tiles_g2 * out_single_tile_size;
+            rm_untilize_CB_size_group_2 = welford_outblk_tiles_g2 * in_single_tile_size;
+        }
+    }
+
     // Application Setup
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
@@ -1025,7 +1047,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     if (untilize_out) {
         constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_1,
+            .total_size = rm_untilize_CB_size_group_1,
             .core_ranges = all_cores_group_1,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -1034,7 +1056,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }}},
         });
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_2,
+            .total_size = rm_untilize_CB_size_group_2,
             .core_ranges = all_cores_group_2,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -1043,25 +1065,27 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }}},
         });
 
-        constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_1,
-            .core_ranges = all_cores_group_1,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
-                .data_format = in_data_format,
-                .page_size = in_single_tile_size,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_2,
-            .core_ranges = all_cores_group_2,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
-                .data_format = in_data_format,
-                .page_size = in_single_tile_size,
-            }}},
-        });
+        if (!use_welford) {
+            constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_CB_size_group_1,
+                .core_ranges = all_cores_group_1,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_CB_size_group_2,
+                .core_ranges = all_cores_group_2,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+        }
     }
 
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;

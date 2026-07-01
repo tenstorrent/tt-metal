@@ -225,6 +225,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    TT_FATAL(
+        !(use_welford && (tilize_in || untilize_out)),
+        "group_norm: ROW_MAJOR interleaved input/output with use_welford=true is not supported on the "
+        "multicast path yet. Use use_welford=false, TILE layout, or a core grid where batch >= num_virtual_rows.");
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
