@@ -470,16 +470,13 @@ exact mismatched values within a single test run — no rebuild required.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">sanity-tests.yaml</span></code> — broad sanity suite (fast dispatch, ops, TTNN, profiler)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">sanity-tests-debug.yaml</span></code> — nightly debug run (also the scheduled nightly LLK assert run)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">blackhole-post-commit.yaml</span></code> — Blackhole-specific test matrix (ops, TTNN, UMD, multi-card)</p></li>
 </ul>
-<p>Other workflows also accept this parameter (e.g. <code class="docutils literal notranslate"><span class="pre">ttnn-post-commit.yaml</span></code>, <code class="docutils literal notranslate"><span class="pre">ops-post-commit.yaml</span></code>, <code class="docutils literal notranslate"><span class="pre">tt-metal-l2-nightly.yaml</span></code>, and others), but the three above are the most useful entry points for validating new asserts.</p>
+<p>Other workflows also accept this parameter (e.g. <code class="docutils literal notranslate"><span class="pre">ttnn-post-commit.yaml</span></code>, <code class="docutils literal notranslate"><span class="pre">ops-post-commit.yaml</span></code>, <code class="docutils literal notranslate"><span class="pre">tt-metal-l2-nightly.yaml</span></code>, and others), but the two above are the most useful entry points for validating new asserts.</p>
 <p><strong>Nightly Runs with LLK Asserts</strong></p>
-<p>The <code class="docutils literal notranslate"><span class="pre">sanity-tests-debug.yaml</span></code> workflow runs automatically every night <strong>at 2:00 AM UTC</strong> with LLK asserts enabled. It spawns four test jobs — Wormhole and Blackhole on both Ubuntu 22.04 and Ubuntu 24.04:</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">sanity-tests-debug.yaml</span></code> workflow runs automatically every night <strong>at 2:00 AM UTC</strong> with LLK asserts enabled. It spawns Wormhole test jobs on both Ubuntu 22.04 and Ubuntu 24.04:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">wormhole-nightly-debug-ubuntu-22</span></code> — runs <code class="docutils literal notranslate"><span class="pre">sanity-tests.yaml</span></code> with <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts:</span> <span class="pre">true</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">blackhole-nightly-debug-ubuntu-22</span></code> — runs <code class="docutils literal notranslate"><span class="pre">blackhole-post-commit.yaml</span></code> with <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts:</span> <span class="pre">true</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">wormhole-nightly-debug-ubuntu-24</span></code> — runs <code class="docutils literal notranslate"><span class="pre">sanity-tests.yaml</span></code> with <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts:</span> <span class="pre">true</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">blackhole-nightly-debug-ubuntu-24</span></code> — runs <code class="docutils literal notranslate"><span class="pre">blackhole-post-commit.yaml</span></code> with <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts:</span> <span class="pre">true</span></code></p></li>
 </ul>
 <p>The same workflow can also be triggered on demand via <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> with the <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts</span></code> checkbox.</p>
 </section>
@@ -490,10 +487,9 @@ exact mismatched values within a single test run — no rebuild required.</p>
 <ol class="arabic">
 <li>
 <p><strong>Run CI with LLK asserts enabled</strong></p>
-<p>Trigger either (or both) of these workflows manually via <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> with the <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts</span></code> checkbox enabled:</p>
+<p>Trigger this workflow manually via <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> with the <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts</span></code> checkbox enabled:</p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/sanity-tests.yaml">Sanity tests</a> — exercises a broad set of configurations including fast dispatch, models, ops, TTNN, and profiler regression.</p></li>
-<li><p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/blackhole-post-commit.yaml">Blackhole post-commit</a> — validates Blackhole-specific code paths (models, ops, TTNN, UMD, multi-card).</p></li>
 </ul>
 </li>
 <li>

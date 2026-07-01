@@ -174,11 +174,12 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel15left_shift_tileE8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a4e4d7b31ed72b7330a963fb63a587f38"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">left_shift_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15left_shift_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10DataFormatEN7ckernel15left_shift_tileEv8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">DataFormat</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">data_format</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a82d84b21aaf505b109cc5ffd824ddf7a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">left_shift_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10DataFormatEN7ckernel15left_shift_tileEv8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise left_shift computation on input x by y bits , where x is each element of a tile in DST register at index tile_index. The input must be of int data type only. The value is provided as const param0 The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise left_shift computation on input x by param0 bits, where x is each element of a tile in DST register at index idst. The input must be of integer data type: Int32, UInt32, or UInt16. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>A shift amount outside [0, 31] produces 0 for every element.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -201,7 +202,7 @@
 </tr>
 <tr class="row-odd">
 <td><p>param0  </p></td>
-<td><p>The value the output is if the input is greater than 0  </p></td>
+<td><p>The number of bits to shift the input by  </p></td>
 <td><p>uint32_t  </p></td>
 <td><p></p></td>
 <td><p>True  </p></td>
