@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
@@ -54,8 +56,46 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
 
-        ttsl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
+
+        // Program-cache attributes. Runtime scalar/tolerance values are excluded; they are patched as runtime args.
+        static constexpr auto attribute_names = std::make_tuple(
+            "binary_op_type",
+            "lhs_activations",
+            "rhs_activations",
+            "post_activations",
+            "memory_config",
+            "dtype",
+            "compute_kernel_config",
+            "sub_core_grids",
+            "subtile_broadcast_type",
+            "is_sfpu",
+            "is_quant_op",
+            "is_where_op",
+            "input_layout_a",
+            "input_layout_b",
+            "output_layout",
+            "equal_nan");
+
+        auto attribute_values() const {
+            return std::make_tuple(
+                binary_op_type,
+                lhs_activations,
+                rhs_activations,
+                (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+                memory_config,
+                get_dtype(),
+                compute_kernel_config,
+                sub_core_grids,
+                subtile_broadcast_type,
+                is_sfpu,
+                is_quant_op,
+                is_where_op,
+                input_layout_a,
+                input_layout_b,
+                output_layout,
+                binary_op_type == BinaryOpType::ISCLOSE ? equal_nan : false);
+        }
     };
 
     struct tensor_args_t {
@@ -76,7 +116,6 @@ struct BinaryNgDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
