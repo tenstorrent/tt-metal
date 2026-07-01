@@ -591,7 +591,6 @@ def main() -> None:
     # The engine owns the KV cache: allocate it once (the adapter defines the layout), pass it into
     # every runtime call, and let it free with the mesh at shutdown.
     kv_cache = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    runtime.compile(kv_cache)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         _serve_standalone(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
@@ -608,14 +607,16 @@ def _serve_standalone(
 ) -> None:
     """Bring-up / benchmark path: golden-trace input on rank 0, D2D-socket transport between ranks,
     per-rank KV PCC. Self-contained (no external producer); covers num_ranks 1..N."""
-    # Warm-up sync — the ONLY barrier. Every rank finishes compile before any chunk enters the
-    # pipeline, so a downstream rank isn't still warming up while an upstream one races ahead. The
-    # per-chunk loop takes no barrier. Trade-off: a rank that dies during compile hangs the others here.
+    # Setup sync — the ONLY barrier. Every rank finishes model build before any chunk enters the
+    # pipeline, so a downstream rank isn't still building while an upstream one races ahead. The
+    # per-chunk loop takes no barrier. (The first chunk compiles lazily as it flows — the input driver
+    # sends it as a throwaway warm-up; no explicit compile step here.) Trade-off: a rank that dies
+    # during build hangs the others here.
     ttnn.distributed_context_barrier()
 
-    # D2D transport: with >1 rank, every rank stands up its pipeline endpoints (revert the custom
-    # sub-device as above). The post-compile barrier guarantees all ranks reach the chained create
-    # rendezvous. A single rank owns the whole model — no transport.
+    # D2D transport: with >1 rank, every rank stands up its pipeline endpoints. The setup barrier
+    # above guarantees all ranks reach the chained create rendezvous. A single rank owns the whole
+    # model — no transport.
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
@@ -656,11 +657,12 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             "is not implemented); run single-rank or unset PREFILL_ENABLE_MIGRATION."
         )
 
-    ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
+    ttnn.distributed_context_barrier()  # setup sync: all ranks finish model build before chunks flow
 
-    # H2D input service lives on the first rank only (downstream ranks read from D2D). compile() leaves
-    # a custom sub-device manager loaded; the service's init program validates its cores against the
-    # default whole-chip sub-device, so revert first.
+    # H2D input service lives on the first rank only (downstream ranks read from D2D). The service's
+    # init program validates its cores against the default whole-chip sub-device, so make sure the
+    # default manager is loaded first (a per-chunk MoE sub-device swap could otherwise leave a custom
+    # one active).
     h2d_service = None
     if is_first_rank:
         mesh_device.clear_loaded_sub_device_manager()
