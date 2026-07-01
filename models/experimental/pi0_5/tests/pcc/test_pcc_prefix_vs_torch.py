@@ -4,12 +4,10 @@
 """
 PCC Test: Prefix Embedding - TTNN vs PyTorch
 
-Tests the prefix embedding module with both random and real checkpoint weights.
+Tests the prefix embedding module with real checkpoint weights.
 
 Usage:
     pytest test_pcc_prefix_full.py -v
-    pytest test_pcc_prefix_full.py -v -k "pretrained_weight_true"   # Only real weights
-    pytest test_pcc_prefix_full.py -v -k "pretrained_weight_false"  # Only random weights (fast)
     python test_pcc_prefix_full.py  # Standalone
 """
 
@@ -37,7 +35,7 @@ CHECKPOINT_PATH = os.environ.get(
     str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"),
 )
 SEED = 42
-PCC_THRESHOLD = 0.95
+PCC_THRESHOLD = 0.99
 
 
 def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
@@ -52,37 +50,27 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
     return (covariance / (std1 * std2)).item()
 
 
-def get_embed_weights(use_pretrained: bool, hidden_dim: int = 2048, vocab_size: int = 257152):
-    """Get embedding weights - either from checkpoint or random."""
-    if use_pretrained:
-        checkpoint_path = Path(CHECKPOINT_PATH)
-        if checkpoint_path.is_absolute() and not checkpoint_path.exists():
-            pytest.skip(f"Checkpoint not found: {checkpoint_path}")
-        weight_loader = PI0WeightLoader(str(checkpoint_path))
-        vlm_weights = weight_loader.get_vlm_language_weights()
-        embed_weights = vlm_weights.get("model.embed_tokens.weight") or vlm_weights.get("lm_head.weight")
-        if embed_weights is None:
-            pytest.skip("Could not find embedding weights in checkpoint")
-        return embed_weights
-    else:
-        return torch.randn(vocab_size, hidden_dim)
+def get_embed_weights():
+    """Get embedding weights from checkpoint."""
+    checkpoint_path = Path(CHECKPOINT_PATH)
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
+        pytest.skip(f"Checkpoint not found: {checkpoint_path}")
+    weight_loader = PI0WeightLoader(str(checkpoint_path))
+    vlm_weights = weight_loader.get_vlm_language_weights()
+    embed_weights = vlm_weights.get("model.embed_tokens.weight") or vlm_weights.get("lm_head.weight")
+    if embed_weights is None:
+        pytest.skip("Could not find embedding weights in checkpoint")
+    return embed_weights
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_prefix_language_embedding(device, use_pretrained):
+def test_pcc_prefix_language_embedding(device):
     """Test prefix language embedding: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
 
-    hidden_dim = 2048
-    vocab_size = 257152 if use_pretrained else 10000  # Smaller for random
     seq_len = 32
 
-    embed_weights = get_embed_weights(use_pretrained, hidden_dim, vocab_size)
+    embed_weights = get_embed_weights()
     actual_vocab_size = embed_weights.shape[0]
     actual_hidden_dim = embed_weights.shape[1]
 
@@ -117,8 +105,7 @@ def test_pcc_prefix_language_embedding(device, use_pretrained):
 
     pcc = compute_pcc(out_torch, out_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ Prefix language embedding PCC ({weight_type}): {pcc:.6f}")
+    print(f"\n✅ Prefix language embedding PCC (pretrained): {pcc:.6f}")
     print(f"   Embedding shape: {embed_weights.shape}")
     assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 

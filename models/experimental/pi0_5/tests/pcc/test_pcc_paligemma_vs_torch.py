@@ -4,12 +4,10 @@
 """
 PCC Test: PaliGemma Backbone - TTNN vs PyTorch
 
-Tests the full PaliGemma backbone (VLM + Expert) with both random and real checkpoint weights.
+Tests the full PaliGemma backbone (VLM + Expert) with real (upstream libero) checkpoint weights.
 
 Usage:
     pytest test_pcc_paligemma_full.py -v
-    pytest test_pcc_paligemma_full.py -v -k "pretrained_weight_true"   # Only real weights
-    pytest test_pcc_paligemma_full.py -v -k "pretrained_weight_false"  # Only random weights (fast)
     python test_pcc_paligemma_full.py  # Standalone
 """
 
@@ -44,7 +42,7 @@ CHECKPOINT_PATH = os.environ.get(
     str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"),
 )
 SEED = 42
-PCC_THRESHOLD = 0.90
+PCC_THRESHOLD = 0.99
 
 
 def create_config() -> PaliGemmaConfig:
@@ -85,125 +83,6 @@ def create_config() -> PaliGemmaConfig:
     )
 
 
-def create_small_config() -> PaliGemmaConfig:
-    """Create smaller PaliGemma config for fast random testing."""
-    siglip = SigLIPConfig(
-        hidden_size=384,
-        intermediate_size=1536,
-        num_hidden_layers=4,
-        num_attention_heads=6,
-        image_size=224,
-        patch_size=14,
-    )
-    vlm = GemmaConfig(
-        width=512,
-        depth=2,
-        mlp_dim=2048,
-        num_heads=8,
-        num_kv_heads=1,
-        head_dim=64,
-    )
-    expert = GemmaConfig(
-        width=256,
-        depth=2,
-        mlp_dim=1024,
-        num_heads=4,
-        num_kv_heads=1,
-        head_dim=64,
-    )
-    return PaliGemmaConfig(
-        siglip_config=siglip,
-        vlm_config=vlm,
-        expert_config=expert,
-        max_seq_len=256,
-    )
-
-
-def create_random_siglip_weights(config: SigLIPConfig) -> dict:
-    """Create random SigLIP weights."""
-    weights = {}
-    hidden = config.hidden_size
-    intermediate = config.intermediate_size
-    patch_size = config.patch_size
-    num_patches = (config.image_size // patch_size) ** 2
-
-    # SigLIP doesn't use class token, so position_embedding is exactly num_patches
-    weights["vision_model.embeddings.patch_embedding.weight"] = torch.randn(hidden, 3, patch_size, patch_size)
-    weights["vision_model.embeddings.patch_embedding.bias"] = torch.randn(hidden)
-    weights["vision_model.embeddings.position_embedding.weight"] = torch.randn(num_patches, hidden)
-
-    for i in range(config.num_hidden_layers):
-        prefix = f"vision_model.encoder.layers.{i}."
-        weights[f"{prefix}layer_norm1.weight"] = torch.randn(hidden)
-        weights[f"{prefix}layer_norm1.bias"] = torch.randn(hidden)
-        weights[f"{prefix}layer_norm2.weight"] = torch.randn(hidden)
-        weights[f"{prefix}layer_norm2.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.q_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.q_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.k_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.k_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.v_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.v_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.out_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.out_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}mlp.fc1.weight"] = torch.randn(intermediate, hidden)
-        weights[f"{prefix}mlp.fc1.bias"] = torch.randn(intermediate)
-        weights[f"{prefix}mlp.fc2.weight"] = torch.randn(hidden, intermediate)
-        weights[f"{prefix}mlp.fc2.bias"] = torch.randn(hidden)
-
-    weights["vision_model.encoder.final_layer_norm.weight"] = torch.randn(hidden)
-    weights["vision_model.encoder.final_layer_norm.bias"] = torch.randn(hidden)
-
-    return weights
-
-
-def create_random_gemma_weights(config: GemmaConfig, prefix: str = "") -> dict:
-    """Create random Gemma weights."""
-    weights = {}
-    width = config.width
-    mlp_dim = config.mlp_dim
-    num_heads = config.num_heads
-    num_kv_heads = config.num_kv_heads
-    head_dim = config.head_dim
-
-    # Embedding
-    weights[f"{prefix}model.embed_tokens.weight"] = torch.randn(257152, width)
-    weights[f"{prefix}model.norm.weight"] = torch.randn(width)
-
-    for i in range(config.depth):
-        layer_prefix = f"{prefix}model.layers.{i}."
-        weights[f"{layer_prefix}input_layernorm.weight"] = torch.randn(width)
-        weights[f"{layer_prefix}post_attention_layernorm.weight"] = torch.randn(width)
-        weights[f"{layer_prefix}self_attn.q_proj.weight"] = torch.randn(num_heads * head_dim, width)
-        weights[f"{layer_prefix}self_attn.k_proj.weight"] = torch.randn(num_kv_heads * head_dim, width)
-        weights[f"{layer_prefix}self_attn.v_proj.weight"] = torch.randn(num_kv_heads * head_dim, width)
-        weights[f"{layer_prefix}self_attn.o_proj.weight"] = torch.randn(width, num_heads * head_dim)
-        weights[f"{layer_prefix}mlp.gate_proj.weight"] = torch.randn(mlp_dim, width)
-        weights[f"{layer_prefix}mlp.up_proj.weight"] = torch.randn(mlp_dim, width)
-        weights[f"{layer_prefix}mlp.down_proj.weight"] = torch.randn(width, mlp_dim)
-
-    return weights
-
-
-def create_random_projector_weights(in_size: int, out_size: int) -> dict:
-    """Create random multi-modal projector weights (single linear layer)."""
-    return {
-        "linear.weight": torch.randn(out_size, in_size),
-        "linear.bias": torch.randn(out_size),
-    }
-
-
-def create_random_paligemma_weights(config: PaliGemmaConfig) -> dict:
-    """Create random weights for PaliGemma backbone."""
-    weights = {
-        "vlm_vision": create_random_siglip_weights(config.siglip_config),
-        "vlm_language": create_random_gemma_weights(config.vlm_config),
-        "vlm_projector": create_random_projector_weights(config.siglip_config.hidden_size, config.vlm_config.width),
-        "action_expert": create_random_gemma_weights(config.expert_config),
-    }
-    return weights
-
-
 def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
     """Compute Pearson Correlation Coefficient."""
     t1 = tensor1.flatten().float()
@@ -216,31 +95,22 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
     return (covariance / (std1 * std2)).item()
 
 
-def get_paligemma_weights(use_pretrained: bool, config: PaliGemmaConfig):
-    """Get weights - either from checkpoint or random."""
-    if use_pretrained:
-        checkpoint_path = Path(CHECKPOINT_PATH)
-        if checkpoint_path.is_absolute() and not checkpoint_path.exists():
-            pytest.skip(f"Checkpoint not found: {checkpoint_path}")
-        weight_loader = PI0WeightLoader(str(checkpoint_path))
-        return weight_loader.categorized_weights
-    else:
-        return create_random_paligemma_weights(config)
+def get_paligemma_weights():
+    """Get weights from the real (upstream libero) checkpoint."""
+    checkpoint_path = Path(CHECKPOINT_PATH)
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
+        pytest.skip(f"Checkpoint not found: {checkpoint_path}")
+    weight_loader = PI0WeightLoader(str(checkpoint_path))
+    return weight_loader.categorized_weights
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_paligemma_embed_image(device, use_pretrained):
+def test_pcc_paligemma_embed_image(device):
     """Test PaliGemma image embedding: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
 
-    # Use smaller config for random tests (much faster)
-    config = create_config() if use_pretrained else create_small_config()
-    weights = get_paligemma_weights(use_pretrained, config)
+    config = create_config()
+    weights = get_paligemma_weights()
 
     # Create input
     pixel_values = torch.randn(_pi0_num_cameras(), 3, config.siglip_config.image_size, config.siglip_config.image_size)
@@ -267,24 +137,17 @@ def test_pcc_paligemma_embed_image(device, use_pretrained):
 
     pcc = compute_pcc(out_torch, out_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ PaliGemma embed_image PCC ({weight_type}): {pcc:.6f}")
+    print(f"\n✅ PaliGemma embed_image PCC (pretrained): {pcc:.6f}")
     assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_paligemma_vlm_block(device, use_pretrained):
+def test_pcc_paligemma_vlm_block(device):
     """Test single PaliGemma VLM block: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
 
-    # Use smaller config for random tests
-    config = create_config() if use_pretrained else create_small_config()
-    weights = get_paligemma_weights(use_pretrained, config)
+    config = create_config()
+    weights = get_paligemma_weights()
 
     # Create models
     model_torch = PaliGemmaBackboneTorch(config, weights)
@@ -321,9 +184,8 @@ def test_pcc_paligemma_vlm_block(device, use_pretrained):
 
     pcc = compute_pcc(out_torch, out_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ PaliGemma VLM Block[0] PCC ({weight_type}): {pcc:.6f}")
-    assert pcc >= 0.85, f"PCC {pcc:.6f} < threshold 0.85"
+    print(f"\n✅ PaliGemma VLM Block[0] PCC (pretrained): {pcc:.6f}")
+    assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
 def main():

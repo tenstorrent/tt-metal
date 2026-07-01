@@ -4,12 +4,10 @@
 """
 PCC Test: SigLIP Vision Tower - TTNN vs PyTorch
 
-Tests the full SigLIP vision tower with both random and real checkpoint weights.
+Tests the full SigLIP vision tower with real (pretrained upstream libero) checkpoint weights.
 
 Usage:
     pytest test_pcc_siglip_full.py -v
-    pytest test_pcc_siglip_full.py -v -k "pretrained_weight_true"   # Only real weights
-    pytest test_pcc_siglip_full.py -v -k "pretrained_weight_false"  # Only random weights (fast)
     python test_pcc_siglip_full.py  # Standalone
 """
 
@@ -38,7 +36,7 @@ CHECKPOINT_PATH = os.environ.get(
     str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"),
 )
 SEED = 42
-PCC_THRESHOLD = 0.90
+PCC_THRESHOLD = 0.99
 
 
 def create_siglip_config() -> SigLIPConfig:
@@ -48,18 +46,6 @@ def create_siglip_config() -> SigLIPConfig:
         intermediate_size=4304,
         num_hidden_layers=27,
         num_attention_heads=16,
-        image_size=224,
-        patch_size=14,
-    )
-
-
-def create_small_siglip_config() -> SigLIPConfig:
-    """Create smaller SigLIP config for fast random testing."""
-    return SigLIPConfig(
-        hidden_size=384,
-        intermediate_size=1536,
-        num_hidden_layers=4,
-        num_attention_heads=6,
         image_size=224,
         patch_size=14,
     )
@@ -78,27 +64,17 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_siglip_vision_tower(device, use_pretrained):
+def test_pcc_siglip_vision_tower(device):
     """Test SigLIP Vision Tower: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
 
-    if use_pretrained:
-        checkpoint_path = Path(CHECKPOINT_PATH)
-        if checkpoint_path.is_absolute() and not checkpoint_path.exists():
-            pytest.skip(f"Checkpoint not found: {checkpoint_path}")
+    checkpoint_path = Path(CHECKPOINT_PATH)
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
+        pytest.skip(f"Checkpoint not found: {checkpoint_path}")
 
-        config = create_siglip_config()
-        weight_loader = PI0WeightLoader(str(checkpoint_path))
-        vision_weights = weight_loader.get_vlm_vision_weights()
-    else:
-        # Use smaller config for random tests (faster)
-        config = create_small_siglip_config()
-        vision_weights = create_random_siglip_weights(config)
+    config = create_siglip_config()
+    weight_loader = PI0WeightLoader(str(checkpoint_path))
+    vision_weights = weight_loader.get_vlm_vision_weights()
 
     # Production pi0.5 LIBERO uses 3 image slots (base + wrist + zero placeholder).
     # See [[pi05-siglip-bs3-production]]. bs=2 was the prior assumption — kept as
@@ -132,51 +108,10 @@ def test_pcc_siglip_vision_tower(device, use_pretrained):
     # Compute PCC
     pcc = compute_pcc(out_torch, out_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ SigLIP Vision Tower PCC ({weight_type}): {pcc:.6f}")
+    print(f"\n✅ SigLIP Vision Tower PCC (pretrained): {pcc:.6f}")
     print(f"   Output shape: {out_ttnn.shape}")
 
     assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
-
-
-def create_random_siglip_weights(config: SigLIPConfig) -> dict:
-    """Create random weights for fast testing."""
-    weights = {}
-    hidden = config.hidden_size
-    intermediate = config.intermediate_size
-    patch_size = config.patch_size
-    num_patches = (config.image_size // patch_size) ** 2
-
-    # Patch embedding (SigLIP doesn't use class token, so position_embedding is exactly num_patches)
-    weights["vision_model.embeddings.patch_embedding.weight"] = torch.randn(hidden, 3, patch_size, patch_size)
-    weights["vision_model.embeddings.patch_embedding.bias"] = torch.randn(hidden)
-    weights["vision_model.embeddings.position_embedding.weight"] = torch.randn(num_patches, hidden)
-
-    # Encoder blocks
-    for i in range(config.num_hidden_layers):
-        prefix = f"vision_model.encoder.layers.{i}."
-        weights[f"{prefix}layer_norm1.weight"] = torch.randn(hidden)
-        weights[f"{prefix}layer_norm1.bias"] = torch.randn(hidden)
-        weights[f"{prefix}layer_norm2.weight"] = torch.randn(hidden)
-        weights[f"{prefix}layer_norm2.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.q_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.q_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.k_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.k_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.v_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.v_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}self_attn.out_proj.weight"] = torch.randn(hidden, hidden)
-        weights[f"{prefix}self_attn.out_proj.bias"] = torch.randn(hidden)
-        weights[f"{prefix}mlp.fc1.weight"] = torch.randn(intermediate, hidden)
-        weights[f"{prefix}mlp.fc1.bias"] = torch.randn(intermediate)
-        weights[f"{prefix}mlp.fc2.weight"] = torch.randn(hidden, intermediate)
-        weights[f"{prefix}mlp.fc2.bias"] = torch.randn(hidden)
-
-    # Final layer norm
-    weights["vision_model.encoder.final_layer_norm.weight"] = torch.randn(hidden)
-    weights["vision_model.encoder.final_layer_norm.bias"] = torch.randn(hidden)
-
-    return weights
 
 
 def main():

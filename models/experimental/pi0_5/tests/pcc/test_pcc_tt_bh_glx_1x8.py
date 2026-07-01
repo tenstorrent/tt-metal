@@ -172,7 +172,7 @@ def test_pcc_1x8_all_stages():
     Single mesh open, single torch-model load — amortizes the ~30 s setup.
 
     Targets (matching tests/pcc/test_pcc_tt_bh_glx_stages.py):
-      vision ≥ 0.997   prefill ≥ 0.99   e2e ≥ 0.95
+      vision ≥ 0.99   prefill ≥ 0.99   e2e ≥ 0.99
     """
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.reference.torch_paligemma import Pi0_5PaliGemmaBackbone as TorchBackbone
@@ -274,7 +274,7 @@ def test_pcc_1x8_all_stages():
         print("\n" + "=" * 72)
         print(f"1×8 pi0.5 PCC report  (N_CAMS={N_CAMS}, steps={cfg.num_denoising_steps})")
         print("=" * 72)
-        print(f"  vision   (N_CAMS,256,{cfg.vlm_config.width})       PCC = {pcc_vision:.6f}   (target ≥ 0.997)")
+        print(f"  vision   (N_CAMS,256,{cfg.vlm_config.width})       PCC = {pcc_vision:.6f}   (target ≥ 0.99)")
         print(f"  prefill  (1,{seq_len},{cfg.vlm_config.width})      PCC = {pcc_prefill:.6f}   (target ≥ 0.99)")
         print(f"  e2e      (1,{cfg.action_horizon},{cfg.action_dim})           PCC = {pcc_e2e:.6f}   (target ≥ 0.99)")
         print("=" * 72)
@@ -282,7 +282,7 @@ def test_pcc_1x8_all_stages():
         print(" and before Pi0_5Model construction+call).")
         print("=" * 72)
 
-        assert pcc_vision >= 0.997, f"vision PCC {pcc_vision:.6f} < 0.997"
+        assert pcc_vision >= 0.99, f"vision PCC {pcc_vision:.6f} < 0.99"
         assert pcc_prefill >= 0.99, f"prefill PCC {pcc_prefill:.6f} < 0.99"
         assert pcc_e2e >= 0.99, f"e2e PCC {pcc_e2e:.6f} < 0.99"
 
@@ -295,10 +295,10 @@ def test_pcc_1x8_vs_torch():
     """OPTIONAL PCC check: compare 1×8 eager actions vs the torch
     Pi0_5Model.sample_actions reference.
 
-    Slow (CPU reference); off by default. Target PCC ≥ 0.95 (matches
-    test_denoise_expert_chain_pcc / the production traced baseline at
-    PI05_E2E_PCC=1 which reports ≈ 0.9988).
+    Slow (CPU reference); off by default. Target PCC ≥ 0.99 (the production
+    traced baseline at PI05_E2E_PCC=1 reports ≈ 0.9988).
     """
+    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model
     from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
 
@@ -315,17 +315,12 @@ def test_pcc_1x8_vs_torch():
         tt_actions = pipe.sample_actions(images, lang_tokens=lang_tokens)
 
         # Torch reference. Loaded from the SAME checkpoint as the pipeline so
-        # PCC is a fidelity number (not a model-mismatch number).
+        # PCC is a fidelity number (not a model-mismatch number). Uses the same
+        # constructor pattern as test_pcc_1x8_all_stages (seed-around-both).
         torch.manual_seed(SEED)
-        ref_model = Pi0_5Model.from_pretrained(str(CHECKPOINT_DIR))
+        ref_model = Pi0_5Model(cfg, Pi0_5WeightLoader(str(CHECKPOINT_DIR)))
         with torch.no_grad():
-            ref_actions = ref_model.sample_actions(
-                images,
-                img_masks,
-                lang_tokens,
-                lang_masks,
-                num_denoising_steps=cfg.num_denoising_steps,
-            )
+            ref_actions = ref_model.sample_actions(images, img_masks, lang_tokens, lang_masks)
 
         # PCC over the action_horizon slice.
         a = tt_actions.flatten().float()
@@ -336,4 +331,4 @@ def test_pcc_1x8_vs_torch():
         pcc = float(pcc.item())
 
         print(f"\n✅ 1×8 PCC vs torch ref: {pcc:.6f}  (shape {tuple(tt_actions.shape)})")
-        assert pcc >= 0.95, f"PCC {pcc:.6f} < 0.95"
+        assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"

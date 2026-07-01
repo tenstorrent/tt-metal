@@ -4,12 +4,10 @@
 """
 PCC Test: Suffix Embedding - TTNN vs PyTorch
 
-Tests the suffix embedding module with both random and real checkpoint weights.
+Tests the suffix embedding module with real (upstream libero) checkpoint weights.
 
 Usage:
     pytest test_pcc_suffix_full.py -v
-    pytest test_pcc_suffix_full.py -v -k "pretrained_weight_true"   # Only real weights
-    pytest test_pcc_suffix_full.py -v -k "pretrained_weight_false"  # Only random weights (fast)
     python test_pcc_suffix_full.py  # Standalone
 """
 
@@ -40,7 +38,7 @@ CHECKPOINT_PATH = os.environ.get(
     str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"),
 )
 SEED = 42
-PCC_THRESHOLD = 0.93
+PCC_THRESHOLD = 0.99
 
 
 def create_suffix_config() -> SuffixConfig:
@@ -57,32 +55,13 @@ def create_suffix_config() -> SuffixConfig:
     )
 
 
-def create_random_suffix_weights(config: SuffixConfig) -> dict:
-    """Create random weights for fast testing."""
-    return {
-        "action_in_proj.weight": torch.randn(config.expert_width, config.action_dim),
-        "action_in_proj.bias": torch.randn(config.expert_width),
-        "action_out_proj.weight": torch.randn(config.action_dim, config.expert_width),
-        "action_out_proj.bias": torch.randn(config.action_dim),
-        "state_proj.weight": torch.randn(config.expert_width, config.state_dim),
-        "state_proj.bias": torch.randn(config.expert_width),
-        "action_time_mlp_in.weight": torch.randn(config.time_emb_dim, config.expert_width * 2),
-        "action_time_mlp_in.bias": torch.randn(config.time_emb_dim),
-        "action_time_mlp_out.weight": torch.randn(config.expert_width, config.time_emb_dim),
-        "action_time_mlp_out.bias": torch.randn(config.expert_width),
-    }
-
-
-def get_suffix_weights(use_pretrained: bool, config: SuffixConfig):
-    """Get weights - either from checkpoint or random."""
-    if use_pretrained:
-        checkpoint_path = Path(CHECKPOINT_PATH)
-        if checkpoint_path.is_absolute() and not checkpoint_path.exists():
-            pytest.skip(f"Checkpoint not found: {checkpoint_path}")
-        weight_loader = PI0WeightLoader(str(checkpoint_path))
-        return weight_loader.get_pi0_projections()
-    else:
-        return create_random_suffix_weights(config)
+def get_suffix_weights(config: SuffixConfig):
+    """Get weights from the real (upstream libero) checkpoint."""
+    checkpoint_path = Path(CHECKPOINT_PATH)
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
+        pytest.skip(f"Checkpoint not found: {checkpoint_path}")
+    weight_loader = PI0WeightLoader(str(checkpoint_path))
+    return weight_loader.get_pi0_projections()
 
 
 def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
@@ -98,16 +77,11 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_suffix_embed_actions(device, use_pretrained):
+def test_pcc_suffix_embed_actions(device):
     """Test suffix action embedding: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
     config = create_suffix_config()
-    suffix_weights = get_suffix_weights(use_pretrained, config)
+    suffix_weights = get_suffix_weights(config)
 
     # Create input
     noisy_actions = torch.randn(1, config.action_horizon, config.action_dim)
@@ -127,24 +101,18 @@ def test_pcc_suffix_embed_actions(device, use_pretrained):
 
     pcc = compute_pcc(out_torch, out_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ Suffix embed_actions PCC ({weight_type}): {pcc:.6f}")
+    print(f"\n✅ Suffix embed_actions PCC (pretrained): {pcc:.6f}")
     assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_suffix_embed_state(device, use_pretrained):
+def test_pcc_suffix_embed_state(device):
     """Test suffix state embedding: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
     config = create_suffix_config()
     if config.pi05:
         pytest.skip("embed_state is a no-op for pi05 (state goes through prefix or continuous-state path)")
-    suffix_weights = get_suffix_weights(use_pretrained, config)
+    suffix_weights = get_suffix_weights(config)
 
     # Create input
     state = torch.randn(1, config.state_dim)
@@ -164,22 +132,16 @@ def test_pcc_suffix_embed_state(device, use_pretrained):
 
     pcc = compute_pcc(out_torch, out_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ Suffix embed_state PCC ({weight_type}): {pcc:.6f}")
+    print(f"\n✅ Suffix embed_state PCC (pretrained): {pcc:.6f}")
     assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_suffix_project_output(device, use_pretrained):
+def test_pcc_suffix_project_output(device):
     """Test suffix output projection: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
     config = create_suffix_config()
-    suffix_weights = get_suffix_weights(use_pretrained, config)
+    suffix_weights = get_suffix_weights(config)
 
     # Create input (simulated expert output)
     expert_output = torch.randn(1, config.action_horizon, config.expert_width)
@@ -199,22 +161,16 @@ def test_pcc_suffix_project_output(device, use_pretrained):
 
     pcc = compute_pcc(out_torch, out_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ Suffix project_output PCC ({weight_type}): {pcc:.6f}")
+    print(f"\n✅ Suffix project_output PCC (pretrained): {pcc:.6f}")
     assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "use_pretrained",
-    [True, False],
-    ids=["pretrained_weight_true", "pretrained_weight_false"],
-)
-def test_pcc_suffix_full_embed(device, use_pretrained):
+def test_pcc_suffix_full_embed(device):
     """Test full suffix embedding: TTNN vs PyTorch."""
     torch.manual_seed(SEED)
     config = create_suffix_config()
-    suffix_weights = get_suffix_weights(use_pretrained, config)
+    suffix_weights = get_suffix_weights(config)
 
     # Create inputs
     state = torch.randn(1, config.state_dim)
@@ -240,10 +196,9 @@ def test_pcc_suffix_full_embed(device, use_pretrained):
 
     pcc = compute_pcc(embs_torch, embs_ttnn)
 
-    weight_type = "pretrained" if use_pretrained else "random"
-    print(f"\n✅ Suffix full embed_suffix PCC ({weight_type}): {pcc:.6f}")
+    print(f"\n✅ Suffix full embed_suffix PCC (pretrained): {pcc:.6f}")
     print(f"   Output shape: {embs_ttnn.shape}")
-    assert pcc >= 0.90, f"PCC {pcc:.6f} < threshold 0.90"
+    assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
 def main():

@@ -45,7 +45,7 @@ CHECKPOINT_PATH = os.environ.get(
 )
 BATCH_SIZE = 1
 SEED = 42
-PCC_THRESHOLD = 0.93
+PCC_THRESHOLD = 0.99
 
 
 def create_pi05_config() -> PI0ModelConfig:
