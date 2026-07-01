@@ -178,9 +178,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     if (float32_dtype) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw{
+        .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
     if (fp32_dest_acc_en) {
-        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        compute_hw.gen2_config->unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,

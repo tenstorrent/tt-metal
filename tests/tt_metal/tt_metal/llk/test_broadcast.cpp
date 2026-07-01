@@ -387,7 +387,10 @@ void run_single_core_broadcast(
              }},
         .hw_config =
             experimental::ComputeHardwareConfig{
-                .math_fidelity = test_config.math_fidelity,
+                .gen2_config =
+                    experimental::ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = test_config.math_fidelity,
+                    },
             },
     };
 

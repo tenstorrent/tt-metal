@@ -130,9 +130,10 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ComputeHardwareConfig hw{
+            .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
         if (fp32_dest_acc_en) {
-            hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            hw.gen2_config->unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
         return hw;
     };

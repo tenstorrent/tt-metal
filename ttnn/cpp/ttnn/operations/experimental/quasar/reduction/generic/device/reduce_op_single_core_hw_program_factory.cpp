@@ -194,7 +194,11 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-        .hw_config = ComputeHardwareConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en},
+        .hw_config =
+            ComputeHardwareConfig{
+                .gen2_config =
+                    ComputeHardwareConfig::Gen2Config{
+                        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en}},
     };
 
     Group<KernelSpec> kernels = {reader, writer, compute};

@@ -740,17 +740,31 @@ std::vector<uint32_t> run_sfpu_pipeline(
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_size", 1u}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
-                .math_approx_mode = test_config.approx_mode,
-                .unpack_to_dest_mode =
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
+                auto unpack_modes =
                     test_config.unpack_to_dest_fp32
                         ? experimental::ComputeHardwareConfig::
                               UnpackToDestModes{{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+                        : experimental::ComputeHardwareConfig::UnpackToDestModes{};
+                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .math_approx_mode = test_config.approx_mode,
+                        .unpack_to_dest_mode = unpack_modes,
+                        .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .math_approx_mode = test_config.approx_mode,
+                        .unpack_to_dest_mode = unpack_modes,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::WorkUnitSpec wu{
@@ -1057,10 +1071,21 @@ bool run_sfpu_binary_two_input_buffer(
         .compile_time_args =
             {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = is_int8_op,
-                .math_approx_mode = test_config.approx_mode,
-            },
+            [&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = is_int8_op,
+                        .math_approx_mode = test_config.approx_mode,
+                    };
+                } else {
+                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                        .fp32_dest_acc_en = is_int8_op,
+                        .math_approx_mode = test_config.approx_mode,
+                    };
+                }
+                return cfg;
+            }(),
     };
 
     experimental::ProgramSpec spec{
@@ -1233,9 +1258,19 @@ bool run_sfpu_ternary_three_input_buffer(
             .compile_time_args =
                 {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
             .hw_config =
-                experimental::ComputeHardwareConfig{
-                    .math_approx_mode = test_config.approx_mode,
-                },
+                [&] {
+                    experimental::ComputeHardwareConfig cfg;
+                    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                        cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                            .math_approx_mode = test_config.approx_mode,
+                        };
+                    } else {
+                        cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                            .math_approx_mode = test_config.approx_mode,
+                        };
+                    }
+                    return cfg;
+                }(),
         };
 
         experimental::ProgramSpec spec{

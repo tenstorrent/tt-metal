@@ -126,7 +126,10 @@ static vector<uint32_t> run_mxint_typecast(
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
             experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .gen2_config =
+                    experimental::ComputeHardwareConfig::Gen2Config{
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                    },
             },
     };
 
