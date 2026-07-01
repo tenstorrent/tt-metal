@@ -60,6 +60,8 @@ class TtCombineModule(LightweightModule):
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
+        subdevice_id=None,
+        global_semaphore=None,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -77,6 +79,12 @@ class TtCombineModule(LightweightModule):
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
             fp8_output: Emit the combined output in fp8_e4m3. Requires Blackhole hardware.
+            subdevice_id: Optional SubDeviceId confining the combine op's core allocation,
+                used to overlap combine with the routed expert on disjoint cores. Defaults to None
+                (full grid).
+            global_semaphore: Optional routed-expert global semaphore for overlapping the routed
+                expert with the combine. Propagated to the combine op, where the reader_untilize
+                kernel waits on it before processing each expert. Defaults to None.
         """
         if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -93,6 +101,8 @@ class TtCombineModule(LightweightModule):
         self.memory_config = memory_config
         self.init_zeros = init_zeros
         self.fp8_output = fp8_output
+        self.subdevice_id = subdevice_id
+        self.global_semaphore = global_semaphore
 
     def forward(
         self,
@@ -154,7 +164,9 @@ class TtCombineModule(LightweightModule):
             topology=self.topology,
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
+            subdevice_id=self.subdevice_id,
             use_fp8_combine=self.fp8_output,
+            global_semaphore=self.global_semaphore,
         )
 
         return output

@@ -238,7 +238,6 @@ class TtSharedExpert(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         subdevice_id: Optional[ttnn.SubDeviceId] = None,
-        subdevice_cores: Optional[ttnn.CoreRangeSet] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -267,7 +266,6 @@ class TtSharedExpert(LightweightModule):
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
         self.subdevice_id = subdevice_id
-        self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
         # Hold the reduce-scatter INPUT alive until the next forward so it is not freed while the
         # async reduce_scatter is still reading it and reused by the concurrent dispatch op (the
@@ -460,7 +458,7 @@ class TtSharedExpert(LightweightModule):
         )
 
         # 2) Multiply gate and up projection
-        ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
+        ttnn.multiply_(gate_out, up_out, sub_device_id=self.subdevice_id)
         ttnn.deallocate(up_out)
 
         # 3) Compute down projection

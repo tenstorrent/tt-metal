@@ -9,6 +9,8 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -28,7 +30,7 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
 
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
     const auto hidden_dim = global_tensor.logical_shape()[-1];
-    const auto global_rows = global_tensor.logical_shape()[0];
+    const auto global_rows = global_tensor.logical_shape()[-2];
     const uint32_t tiles_per_row = hidden_dim / tile_width;
     // Total tiles available in global_tensor — passed to the reader so it can
     // assert (at runtime) that start[id] + ceil_tile(counts[id]) stays within
@@ -72,12 +74,22 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
     // computed inside each kernel from counts[global_expert_id], so no
     // host-side knowledge of the slice size is needed. When num_tile_rows <
     // num_cores, tail cores compute my_rows == 0 and exit immediately.
-    const auto grid = global_tensor.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores = grid.x * grid.y;
+    // When a sub-device is provided, confine the op to that sub-device's worker cores
+    // (used to overlap the routed expert with the combine). Otherwise use the full compute
+    // grid. The kernels split work purely by flat core_id / num_cores, so any core set works.
     constexpr bool row_wise = true;
-    const auto cores = tt::tt_metal::grid_to_cores(num_cores, grid.x, grid.y, row_wise);
-    const CoreRange core_range{{0, 0}, {grid.x - 1, grid.y - 1}};
-    const CoreRangeSet core_range_set{core_range};
+    std::vector<CoreCoord> cores;
+    CoreRangeSet core_range_set;
+    if (operation_attributes.subdevice_id.has_value()) {
+        core_range_set = global_tensor.device()->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, *operation_attributes.subdevice_id);
+        cores = tt::tt_metal::corerange_to_cores(core_range_set, std::nullopt, row_wise);
+    } else {
+        const auto grid = global_tensor.device()->compute_with_storage_grid_size();
+        cores = tt::tt_metal::grid_to_cores(grid.x * grid.y, grid.x, grid.y, row_wise);
+        core_range_set = CoreRangeSet{CoreRange{{0, 0}, {grid.x - 1, grid.y - 1}}};
+    }
+    const uint32_t num_cores = static_cast<uint32_t>(cores.size());
 
     constexpr uint32_t cb_tile = tt::CBIndex::c_0;
     constexpr uint32_t cb_start_scratch = tt::CBIndex::c_1;

@@ -18,6 +18,7 @@ from typing import Optional
 import torch
 from loguru import logger
 from tracy import signpost
+from ttnn._ttnn.global_semaphore import global_semaphore as GlobalSemaphore
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -201,6 +202,7 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        subdevice_id=None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -223,6 +225,9 @@ class TtRoutedExpert(LightweightModule):
                           Produced by sharding ExpertMapping.create_global_expert_idx_table via
                           get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
                           global ids. Required.
+            subdevice_id: Optional SubDeviceId confining the routed expert's core allocation,
+                          used to overlap the routed expert with the combine on disjoint cores.
+                          Defaults to None (full grid).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -237,6 +242,7 @@ class TtRoutedExpert(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self.global_expert_idx_table = global_expert_idx_table
+        self.subdevice_id = subdevice_id
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -305,6 +311,19 @@ class TtRoutedExpert(LightweightModule):
         assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
 
+        # Due to determinism issue: pre-allocate ONE long-lived buffer that the unified MoE op
+        # reuses as the per-expert extract output. Holding it on the module keeps the extracted-tokens
+        # DRAM allocation alive and stable across forward() call.
+        #
+        # Note: This should not be needed once the routed expert kernel is fully unified (Issue #41106)
+        self.extracted_tokens = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self.max_tokens, self.emb_dim]),
+            self.activations_dtype,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     @staticmethod
     def shard_expert_token_counts(
         mesh_device: ttnn.MeshDevice,
@@ -372,6 +391,7 @@ class TtRoutedExpert(LightweightModule):
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
+        global_semaphore: GlobalSemaphore | None = None,
     ) -> ttnn.Tensor:
         """
         On Blackhole, delegates the per-local-expert work to the
@@ -382,12 +402,18 @@ class TtRoutedExpert(LightweightModule):
 
         Args:
             dispatched_buffer: Dispatched tokens
-                shape: (max_dispatch_buffer_token_size, emb_dim)
+                shape: (max_dispatch_buffer_token_size, emb_dim), optionally with leading
+                singleton dims, e.g. (1, 1, max_dispatch_buffer_token_size, emb_dim). The
+                extract/insert ops treat it as effectively 2D and preserve its rank, so the
+                returned expert_outputs has the same rank as the input.
             expert_token_counts: Token counts per expert per chip
                 Shape per device: (1, num_routed_experts).
             expert_region_offsets: Expert region start offsets per expert
                 (shared across source devices in a dispatch group). Produced by
                 offset_cumsum. Shape per device: (1, num_routed_experts).
+            global_semaphore: Optional global semaphore used to overlap the routed expert with
+                the combine: each per-expert FFN increments it once its output is written, and
+                the combine waits on it before consuming that expert's region.
 
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
@@ -411,6 +437,9 @@ class TtRoutedExpert(LightweightModule):
                 self.down_projs,
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
+                global_semaphore=global_semaphore,
+                subdevice_id=self.subdevice_id,
+                extracted_tokens=self.extracted_tokens,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

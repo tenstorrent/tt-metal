@@ -32,6 +32,7 @@ TestVariant = PrefillModelAdapter
 TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 # Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
@@ -45,6 +46,7 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
         },
         1,
         ttnn.Topology.Linear,
@@ -57,6 +59,7 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
         },
         1,
         ttnn.Topology.Linear,
@@ -69,6 +72,7 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
         },
         2,
         ttnn.Topology.Linear,

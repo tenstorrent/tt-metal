@@ -8,6 +8,9 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -47,6 +50,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //      writer places this expert's output directly into `output` (the shared
 //      buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert
 //      step (no temp-buffer DRAM round-trip). Requires `output` to be set.
+//   subdevice_id: optional sub-device to confine the op to. When set, the
+//      GRID_X x GRID_Y compute block is placed at that sub-device's worker-core
+//      origin.
+//   global_semaphore: optional GlobalSemaphore the op increments on-device once
+//      this expert's output is fully written. A per-program leader core waits
+//      for every other core's writer to finish, then multicast-increments the
+//      semaphore on each of its cores.
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -57,7 +67,9 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t local_expert_id,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt,
-    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt);
+    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling
@@ -79,7 +91,16 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    // Required caller-owned buffer reused as the per-expert extract output and fed straight into
+    // the Unified Routed Expert op. Must be (1, .., max_dispatched_tokens_per_expert, emb),
+    // dispatched_buffer dtype, TILE, DRAM interleaved.
+    const ttnn::Tensor& extracted_tokens,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    // Global semaphore used to overlap the routed expert with the combine: each per-expert FFN
+    // increments it once its output is written, and the combine waits on it before consuming
+    // that expert's region.
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

@@ -14,7 +14,7 @@ This is observational/diagnostic — no PCC threshold assertions.
 
 import matplotlib
 
-from models.common.utility_functions import hf_cache_layer_kv
+from models.common.utility_functions import hf_cache_layer_kv, is_blackhole
 
 matplotlib.use("Agg")
 
@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
@@ -81,7 +82,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
     [
         pytest.param(
             (1, 1),
-            {},
+            {"l1_small_size": MOE_L1_SMALL_REGION_SIZE},
             1,
             ttnn.Topology.Linear,
             id="mesh-1x1",
@@ -91,6 +92,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             1,
             ttnn.Topology.Linear,
@@ -102,6 +104,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,  # num_links = 2
             ttnn.Topology.Linear,
@@ -113,6 +116,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -125,6 +129,8 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [True], ids=["overlap_shared"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [True], ids=["overlap_routed"])
 @pytest.mark.timeout(0)
 def test_prefill_block_loop(
     mesh_device,
@@ -139,7 +145,13 @@ def test_prefill_block_loop(
     hf_config,
     state_dict,
     tokenizer,
+    overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
 ):
+    # The routed-expert / combine overlap is only supported on Blackhole (TtMoe asserts this).
+    if overlap_routed_expert_with_combine and not is_blackhole():
+        pytest.skip("overlap_routed_expert_with_combine=True is only supported on Blackhole")
+
     # Perf runs (skip_reference=True) measure once; PCC/divergence runs loop for 30 iters
     num_iters = 1 if skip_reference else 30
     # --- Validate fixtures ---
@@ -436,6 +448,8 @@ def test_prefill_block_loop(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
