@@ -765,6 +765,101 @@ def link_trace_run_configuration_model(cur, trace_run_id, config_id, model_id, e
         )
 
 
+def _alloc_ids_bulk(cur, schema, table, count):
+    """Allocate `count` ids from the Snowflake sequence backing `table` in ONE round-trip.
+
+    Uses TABLE(GENERATOR(ROWCOUNT => count)) to pull `count` NEXTVALs at once,
+    avoiding the per-id round-trip of _next_id. Returns a list of ints (may be
+    non-contiguous, but always unique and monotonic). Returns [] for count <= 0.
+    """
+    if count <= 0:
+        return []
+    seq = _seq_name(schema, table)
+    # NEXTVAL inside a GENERATOR row set yields `count` fresh sequence values.
+    cur.execute(f"SELECT {seq}.NEXTVAL FROM TABLE(GENERATOR(ROWCOUNT => {int(count)}))")
+    return [int(r[0]) for r in cur.fetchall()]
+
+
+# Row batch size for multi-row INSERT/MERGE. full_config_json can be large text,
+# so keep this modest to stay well under Snowflake's bind-parameter limits.
+_CONFIG_INSERT_BATCH = 500
+_LINK_MERGE_BATCH = 1000
+
+
+def _bulk_insert_configurations(cur, schema, new_config_rows):
+    """Bulk multi-row INSERT of brand-new ttnn_configuration rows.
+
+    new_config_rows: list of
+        (config_id, operation_id, hardware_id, mesh_config_id, config_hash,
+         full_config_json, status)
+    tuples. Timestamps default to CURRENT_TIMESTAMP(). Inserts in batches of
+    _CONFIG_INSERT_BATCH rows per statement.
+    """
+    if not new_config_rows:
+        return
+    S = _schema_prefix(schema)
+    cols = (
+        "ttnn_configuration_id, operation_id, hardware_id, mesh_config_id, "
+        "config_hash, full_config_json, status, first_seen_ts, last_seen_ts"
+    )
+    # 7 bound values per row + literal CURRENT_TIMESTAMP() for the two ts cols.
+    row_tmpl = "(%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"
+    for start in range(0, len(new_config_rows), _CONFIG_INSERT_BATCH):
+        chunk = new_config_rows[start : start + _CONFIG_INSERT_BATCH]
+        values_clause = ", ".join([row_tmpl] * len(chunk))
+        params = []
+        for cfg_id, op_id, hw_id, mesh_id, cfg_hash, full_json, status in chunk:
+            params.extend([cfg_id, op_id, hw_id, mesh_id, cfg_hash, full_json, status])
+        cur.execute(
+            f"INSERT INTO {S}.ttnn_configuration ({cols}) VALUES {values_clause}",
+            params,
+        )
+
+
+def _bulk_merge_trace_links(cur, schema, link_rows):
+    """Bulk MERGE trace_run_configuration_model rows (additive execution_count).
+
+    link_rows: list of (trace_run_id, configuration_id, model_id, execution_count).
+    Duplicates on (trace_run_id, configuration_id, model_id) must already be
+    pre-aggregated by the caller (summed execution_count) so each source key is
+    unique within a MERGE batch (Snowflake errors if a MERGE target row matches
+    multiple source rows). MERGE handles both fresh (INSERT) and incremental
+    (additive UPDATE) loads correctly. Batched by _LINK_MERGE_BATCH.
+    """
+    if not link_rows:
+        return
+    S = _schema_prefix(schema)
+    for start in range(0, len(link_rows), _LINK_MERGE_BATCH):
+        chunk = link_rows[start : start + _LINK_MERGE_BATCH]
+        values_clause = ", ".join(["(%s, %s, %s, %s)"] * len(chunk))
+        params = []
+        for tr_id, cfg_id, model_id, exec_count in chunk:
+            params.extend([tr_id, cfg_id, model_id, exec_count])
+        cur.execute(
+            f"""
+            MERGE INTO {S}.trace_run_configuration_model t
+            USING (
+                SELECT column1 AS trace_run_id,
+                       column2 AS configuration_id,
+                       column3 AS model_id,
+                       column4 AS execution_count
+                FROM VALUES {values_clause}
+            ) s
+            ON (t.trace_run_id = s.trace_run_id
+                AND t.configuration_id = s.configuration_id
+                AND t.model_id = s.model_id)
+            WHEN MATCHED THEN UPDATE SET
+                execution_count = t.execution_count + s.execution_count,
+                last_seen_ts = CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN INSERT
+                (trace_run_id, configuration_id, model_id, execution_count, first_seen_ts, last_seen_ts)
+                VALUES (s.trace_run_id, s.configuration_id, s.model_id, s.execution_count,
+                        CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+            """,
+            params,
+        )
+
+
 def refresh_trace_aggregates(cur, trace_run_ids, configuration_ids, schema=DEFAULT_SCHEMA):
     """Refresh derived aggregate tables from canonical trace_run_configuration_model rows."""
     _validate_schema(schema)
@@ -891,7 +986,6 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
     model_cache = {}
     hardware_cache = {}
     mesh_config_cache = {}
-    config_cache = {}  # config_hash -> config_id
     trace_run_cache = {}  # trace_uid -> trace_run_id
     print("  Populating trace_run_configuration_model + derived aggregate tables")
 
@@ -927,6 +1021,29 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
     trace_run_ids_touched = set()
     configuration_ids_touched = set()
     trace_config_pairs = set()
+
+    # --- Batching state (collected in Python, flushed with bulk SQL below) ---
+    #
+    # We keep the cheap/bounded dimension lookups (operation, model, hardware,
+    # mesh, trace_run) row-by-row (Python-cached), but defer the two high-volume
+    # writes -- ttnn_configuration inserts and trace_run_configuration_model
+    # links -- into batched statements.
+    #
+    # existing_config_ids: config_hash -> ttnn_configuration_id already in the DB.
+    #   Fetched once up front; on a fresh/empty schema this is empty.
+    cur.execute(f"SELECT config_hash, ttnn_configuration_id FROM {S}.ttnn_configuration")
+    existing_config_ids = {row[0]: int(row[1]) for row in cur.fetchall()}
+
+    # pending_new_configs: config_hash -> (operation_id, hardware_id, mesh_config_id,
+    #   full_config_json_text, status). First occurrence of a hash wins (matches
+    #   the old "SELECT-then-insert once, UPDATE last_seen on repeats" semantics).
+    pending_new_configs = {}
+    pending_new_order = []  # config_hashes in first-seen order (stable id assignment)
+    # link_agg: (trace_uid_marker) not used; links keyed by (trace_run_id,
+    #   config_hash, model_id) -> summed execution_count. config_hash is resolved
+    #   to configuration_id after ids are assigned. Pre-aggregating here makes the
+    #   MERGE source unique per key.
+    link_agg = {}
 
     for op_name, op_data in operations.items():
         # Insert operation
@@ -1049,41 +1166,23 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                         cur, mesh_config_cache, mesh_shape, device_count, schema=schema
                     )
 
-                # Check if we've already created this config
-                if config_hash in config_cache:
-                    config_id = config_cache[config_hash]
-                    cur.execute(
-                        f"UPDATE {S}.ttnn_configuration SET last_seen_ts = CURRENT_TIMESTAMP() WHERE ttnn_configuration_id = %s",
-                        (config_id,),
+                # Resolve/queue the configuration. Dedup by config_hash: reuse a
+                # DB-existing id, else queue a brand-new one (first occurrence
+                # captures operation/hardware/mesh/full_config_json). The old code
+                # bumped last_seen_ts on repeats; on a fresh insert last_seen_ts is
+                # already CURRENT_TIMESTAMP(), so the repeat-UPDATE is a semantic
+                # no-op we drop.
+                config_id = existing_config_ids.get(config_hash)
+                if config_id is None and config_hash not in pending_new_configs:
+                    pending_new_configs[config_hash] = (
+                        op_id,
+                        hardware_id,
+                        mesh_config_id,
+                        json.dumps(config),
+                        "observed",
                     )
-                else:
-                    # No ON CONFLICT/RETURNING: SELECT-then-insert on config_hash.
-                    cur.execute(
-                        f"SELECT ttnn_configuration_id FROM {S}.ttnn_configuration WHERE config_hash = %s",
-                        (config_hash,),
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        config_id = row[0]
-                        cur.execute(
-                            f"UPDATE {S}.ttnn_configuration SET last_seen_ts = CURRENT_TIMESTAMP() WHERE ttnn_configuration_id = %s",
-                            (config_id,),
-                        )
-                    else:
-                        config_id = _next_id(cur, schema, "ttnn_configuration")
-                        cur.execute(
-                            f"""
-                            INSERT INTO {S}.ttnn_configuration
-                            (ttnn_configuration_id, operation_id, hardware_id, mesh_config_id, config_hash,
-                             full_config_json, status, first_seen_ts, last_seen_ts)
-                            VALUES (%s, %s, %s, %s, %s, %s, 'observed', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
-                            """,
-                            (config_id, op_id, hardware_id, mesh_config_id, config_hash, json.dumps(config)),
-                        )
-                        new_configs += 1
-                    config_cache[config_hash] = config_id
-
-                configuration_ids_touched.add(config_id)
+                    pending_new_order.append(config_hash)
+                    new_configs += 1
 
                 # Link this execution canonically via trace + config + model
                 if model_id is not None:
@@ -1106,15 +1205,34 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                             **trace_run_kwargs,
                         )
                         trace_run_ids_touched.add(trace_run_id)
-                        trace_config_pairs.add((trace_run_id, config_id))
-                        link_trace_run_configuration_model(
-                            cur, trace_run_id, config_id, model_id, execution_count, schema=schema
-                        )
+                        # Aggregate additively per (trace_run, config_hash, model);
+                        # config_hash is resolved to configuration_id after ids are
+                        # assigned below.
+                        link_key = (trace_run_id, config_hash, model_id)
+                        link_agg[link_key] = link_agg.get(link_key, 0) + execution_count
                         total_model_links += 1
 
-        if not dry_run:
-            conn.commit()
         print(f"  Loaded {op_name}: {len(op_data.get('configurations', []))} JSON configs")
+
+    # --- Bulk flush: allocate ids for new configs, insert, then MERGE links ---
+    # 1) Allocate ids for all new configs in ONE round-trip and bulk-insert them.
+    new_ids = _alloc_ids_bulk(cur, schema, "ttnn_configuration", len(pending_new_order))
+    config_id_by_hash = dict(existing_config_ids)
+    new_config_rows = []
+    for cfg_hash, cfg_id in zip(pending_new_order, new_ids):
+        op_id_v, hw_id_v, mesh_id_v, full_json_v, status_v = pending_new_configs[cfg_hash]
+        config_id_by_hash[cfg_hash] = cfg_id
+        new_config_rows.append((cfg_id, op_id_v, hw_id_v, mesh_id_v, cfg_hash, full_json_v, status_v))
+    _bulk_insert_configurations(cur, schema, new_config_rows)
+
+    # 2) Resolve link config_hashes -> configuration_ids and MERGE in batches.
+    link_rows = []
+    for (trace_run_id, cfg_hash, model_id), exec_count in link_agg.items():
+        cfg_id = config_id_by_hash[cfg_hash]
+        configuration_ids_touched.add(cfg_id)
+        trace_config_pairs.add((trace_run_id, cfg_id))
+        link_rows.append((trace_run_id, cfg_id, model_id, exec_count))
+    _bulk_merge_trace_links(cur, schema, link_rows)
 
     if trace_run_ids_touched or configuration_ids_touched:
         refresh_trace_aggregates(cur, trace_run_ids_touched, configuration_ids_touched, schema=schema)
