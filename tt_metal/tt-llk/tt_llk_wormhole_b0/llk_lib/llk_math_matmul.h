@@ -922,7 +922,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                         }
                         else
                         {
-                            // Move to the next srcB bank
+                            // Move to the next srcA bank
                             TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
                         }
                     }
