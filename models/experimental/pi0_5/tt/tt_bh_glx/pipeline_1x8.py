@@ -22,7 +22,7 @@ Stages:
        latency = 1-chip; chip 0's copy is the output. 5-step Euler loop
        unrolled into the trace.
 
-Trace machinery mirrors Pi0_5GLXPipeline.sample_actions_traced
+Trace machinery: capture full sample_actions on the parent mesh, replay via
 (pipeline.py:568): pre-allocate persistent input buffers (pixel_values_buf,
 lang_tokens_buf, x_t_fp32), eager warmup to JIT kernels, then a single
 begin/end_trace_capture on the parent mesh. Replay = copy_host_to_device_tensor
@@ -62,7 +62,7 @@ from models.experimental.pi0_5.tt.ttnn_pi0_5_model import (
 )
 
 from .expert_slice import ExpertChunkSlice
-from .pipeline import _DenoiseHead, _PrefillHead
+from .heads import _DenoiseHead, _PrefillHead
 from .stage_prefill_tp4 import StagePrefillTP4
 from .suffix_slice import SuffixSlice
 from .vision_slice import SigLIPCameraSlice
@@ -261,7 +261,7 @@ class Pi0_5GLX1x8Pipeline:
         """Reshape (n_real, 256, vlm_w) → (1, n_real·256, vlm_w); concat with
         lang embedding → (1, prefix_len, vlm_w). All replicated on the mesh.
 
-        Same logic as Pi0_5GLXPipeline._build_prefix (pipeline.py:393) but on
+        Builds the replicated [image ; lang] prefix on-device, but on
         the multi-chip parent mesh — every chip computes the same reshape +
         concat on its replicated copy.
         """
