@@ -118,6 +118,11 @@ pi0_5/
 │       ├── stage_prefill_tp8.py, *_slice.py, mesh_setup.py
 ├── libero_sim/               # LIBERO simulator rollout (see libero_sim/README.md)
 │   └── libero_rollout.py     #   checkpoint → policy → success rate / videos
+├── demo/                     # real-robot deployment (see demo/README.md)
+│   ├── policy.py             #   build_policy() + headless Pi0_5LiberoAdapter re-export
+│   ├── robot_runtime.py      #   RobotInterface / run_realrobot / MockRobot
+│   ├── demo_realrobot.py     #   in-process CLI demo (log-only; --enable-motion)
+│   └── policy_server.py      #   remote policy server (HTTP/JSON)
 ├── tests/
 │   ├── pcc/                  # Reference-vs-spec correctness
 │   └── perf/                 # Latency / throughput on Blackhole
@@ -292,6 +297,32 @@ Measured on the 1×8 mesh (trace+2CQ):
 | libero_10 | 94/100 |
 | **GRAND TOTAL** | **386/400 (96.5%)** |
 
+
+---
+
+## Real-robot demo
+
+Drive a real robot with the same TT policy — the LIBERO simulator swapped for live
+cameras + a real arm. The policy (`Pi0_5LiberoAdapter.predict_chunk`) runs unchanged;
+only the obs source + action sink change. See [`demo/README.md`](demo/README.md).
+
+```bash
+# No-hardware smoke on the 1×8 mesh (MockRobot, log-only)
+export PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
+export PI0_TOKENIZER_PATH=/home/tt-admin/pi05_cache/tokenizer/paligemma_tokenizer.model
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
+python_env/bin/python models/experimental/pi0_5/demo/demo_realrobot.py \
+  --checkpoint $PI05_CHECKPOINT_DIR --backend ttnn_1x8 --task "pick up the black bowl" --steps 40
+```
+
+- `demo/policy.py` — `build_policy()` (opens device/mesh, loads checkpoint) + headless
+  `Pi0_5LiberoAdapter` re-export (no LIBERO/MuJoCo needed).
+- `demo/robot_runtime.py` — `RobotInterface` (the hardware seam) + `run_realrobot` loop + `MockRobot`.
+- `demo/demo_realrobot.py` — in-process CLI (log-only by default; `--enable-motion` to move the arm).
+- `demo/policy_server.py` — remote policy server (HTTP/JSON) for a robot on a separate machine.
+
+To run on hardware: implement `RobotInterface` for your cameras + arm and swap it for
+`MockRobot` (see the Next steps in `demo/README.md`).
 
 ---
 
