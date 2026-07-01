@@ -1067,9 +1067,9 @@ void run_sequential_dfbs_program(
         const bool disable_isync = !configs[i].enable_producer_implicit_sync;
         if (disable_isync) {
             std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+                .gen2_config->disable_dfb_implicit_sync_for.push_back(dfb_name);
             std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+                .gen2_config->disable_dfb_implicit_sync_for.push_back(dfb_name);
         }
         tensor_parameters.push_back(experimental::TensorParameter{
             .unique_id = in_tensor_name,

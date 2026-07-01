@@ -828,7 +828,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
 // DFB implicit-sync opt-out (Gen2)
 // ----------------------------------------------------------------------------
 // Implicit sync is ON by default for any DFB side that has a DM endpoint. A DM kernel can
-// opt out per-DFB (disable_implicit_sync_for) or for all the DFBs it binds at once
+// opt out per-DFB (disable_dfb_implicit_sync_for) or for all the DFBs it binds at once
 // (disable_dfb_implicit_sync_for_all). These tests pin the per-kernel "all" hammer.
 
 TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisablesProducerSide) {
@@ -918,7 +918,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
     // Both express the same per-side decision (disable), so they agree and the side lowers off.
     std::get<DataMovementHardwareConfig>(producer1.hw_config).gen2_config->disable_dfb_implicit_sync_for_all = true;
     std::get<DataMovementHardwareConfig>(producer2.hw_config)
-        .gen2_config->disable_implicit_sync_for.push_back(DFBSpecName{"dfb"});
+        .gen2_config->disable_dfb_implicit_sync_for.push_back(DFBSpecName{"dfb"});
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1005,7 +1005,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
     // Gen2 config is fully optional even on Quasar: absence is treated as "use defaults"
-    // (empty disable_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
+    // (empty disable_dfb_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
     // permitted at the spec layer (whether such a kernel actually does anything useful on
     // Gen2 hardware is a separate question, outside the validator's scope).
     NodeCoord node{0, 0};
