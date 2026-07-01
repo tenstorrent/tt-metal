@@ -24,3 +24,23 @@ def test_column_fracture_matches_dense(m, k, n):
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_sweep_degrees_returns_a_legal_fastest():
+    ttnn = pytest.importorskip("ttnn")
+    from cc_optimize.tp_fracture import sweep_degrees
+
+    if not hasattr(ttnn, "open_mesh_device"):
+        pytest.skip("ttnn mesh API unavailable")
+    try:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
+    except Exception as exc:
+        pytest.skip(f"no multi-chip mesh available: {exc}")
+    try:
+        r = sweep_degrees(mesh, m=32, k=8192, n=8192)
+        assert r["best_tp"] in r["timings_ms"]
+        assert r["timings_ms"][r["best_tp"]] == min(r["timings_ms"].values())
+    finally:
+        ttnn.close_mesh_device(mesh)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
