@@ -425,8 +425,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
     if (do_col_mask) {
         // The writer generates the CB 19 mask on-device with generate_mask_w<T>; compute applies it at
-        // every masking site. Pass the logical width and compute data format (fp32 vs bf16) the writer
-        // needs to size and type the generated tiles.
+        // every masking site. Pass the logical width and the data format the mask tiles must match (that
+        // of the tiles the mask multiplies) so the writer can size and type the generated tiles.
         kernel_config.compute_defines.emplace_back("DO_COL_MASK", "1");
         kernel_config.writer_defines.emplace_back("DO_COL_MASK", "1");
         kernel_config.logical_K = logical_K;

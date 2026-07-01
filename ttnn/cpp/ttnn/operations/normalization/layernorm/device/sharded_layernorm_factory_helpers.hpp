@@ -312,7 +312,7 @@ struct KernelConfig {
     // the final tile so they do not enter E[x] or the variance.
     bool do_col_mask = false;
     // Non-distributed stage generates the CB 19 mask on-device in the writer; these feed that
-    // generation: the logical (un-padded) width and whether the compute data format is fp32 (vs bf16).
+    // generation: the logical (un-padded) width and the data format the generated mask tiles must match.
     uint32_t logical_K = 0;
     bool mask_fp32 = false;
 };
