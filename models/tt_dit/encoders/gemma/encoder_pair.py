@@ -25,6 +25,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor
+from ...utils.tracing import traced_function
 from .embeddings_connector import EmbeddingsConnector
 from .feature_extractor import GemmaFeatureExtractor
 from .model_gemma import GemmaConfig, GemmaEncoder
@@ -103,12 +104,10 @@ def _connector_state_dict(ckpt, axis: str, num_blocks: int) -> dict:
 
 
 class GemmaTokenizerEncoderPair:
-    """Tokenizer + on-device Gemma encoder + embeddings connectors for LTX-2.
+    """Tokenizer + on-device Gemma-3 encoder + embeddings connectors for LTX-2.
 
-    ``encode(prompts)`` returns ``[(video_embeds, audio_embeds), ...]``. Gemma weights come
-    from ``gemma_path`` safetensors; connector/feature-extractor weights come from the LTX
-    ``checkpoint_name``. The prompt-embedding disk cache lives in the pipeline, not here —
-    this class is pure load + compute.
+    ``encode(prompts)`` returns ``[(video_embeds, audio_embeds), ...]``. Gemma weights load from
+    ``gemma_path``; connector/feature-extractor weights from the LTX ``checkpoint_name``.
     """
 
     def __init__(
@@ -150,6 +149,11 @@ class GemmaTokenizerEncoderPair:
         self.audio_connector = None
         self._coresident_peers: list = []
         self._cached_trans_mat = None
+        # Trace the whole-encode graph only when the encoder stays resident. Under dynamic_load it
+        # is evicted after each encode, so every encode would be a fresh (cold) capture — slower
+        # than untraced — and the trace never amortizes. Resident (e.g. 4x8) captures once and
+        # replays warm.
+        self._encoder_trace = not dynamic_load
 
     # Dims the pipeline warmup needs before the encoder is built.
     @property
@@ -184,8 +188,7 @@ class GemmaTokenizerEncoderPair:
         return self.gemma_encoder is not None and self.gemma_encoder.is_loaded()
 
     def ensure_loaded(self, connector_state: dict | Callable[[], dict] | None = None) -> None:
-        """Build the modules once and (re)load their weights if a prior DiT/VAE load evicted
-        them (the common case under dynamic_load)."""
+        """Build/reload the encoder + connector weights (evicted by dynamic_load)."""
         if self.is_loaded():
             return
         self.load_gemma_encoder()
@@ -254,6 +257,8 @@ class GemmaTokenizerEncoderPair:
                 video_dim=self._video_dim,
                 audio_dim=self._audio_dim if self.mode == "av" else None,
                 mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
             )
             self._register_exclusions(self.feature_extractor)
         cache_module.load_model(
@@ -294,17 +299,37 @@ class GemmaTokenizerEncoderPair:
             subfolder=f"{axis}_connector",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            dtype="float32",
             get_torch_state_dict=lambda: _connector_state_dict(ckpt(), axis, num_blocks),
         )
         logger.info(f"Loaded {axis} embeddings connector ({num_blocks} blocks, dim={output_dim})")
         return connector
 
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=True)
+    def _encode_device(self, tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask):
+        """Whole-encode device graph (gemma → feature extractor → connectors), captured as one
+        ttnn trace and replayed per prompt. Per-prompt masks/indices are device inputs (built in
+        encode); rope/trans_mat/registers are captured constants (prep_run allocates them before
+        capture). Returns DEVICE (video, audio) embeds — tokenizer + final to_torch stay in encode."""
+        trans_mat = self._prepare_trans_mat()
+        all_hidden = self.gemma_encoder(tt_ids, tt_attn_mask=tt_gemma_mask)
+        # FeatureExtractorV2 consumes [embed, L0..L46, final_norm]; the encoder emits
+        # [embed, L0..L47, final_norm], so drop index -2.
+        hs_list = list(all_hidden[:-2]) + [all_hidden[-1]]
+        video_feats, audio_feats = self.feature_extractor(hs_list, fe_mask)
+        video = self.video_connector(video_feats, src_idx, keep_mask, trans_mat=trans_mat)
+        audio = (
+            self.audio_connector(audio_feats, src_idx, keep_mask, trans_mat=trans_mat)
+            if self.audio_connector is not None
+            else None
+        )
+        return video, audio
+
     def encode(self, prompts: list[str]) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
-        """Tokenize → Gemma encoder → feature extractor → connectors, one
+        """Tokenize → traced whole-encode device graph → host embeds, one
         ``(video_embeds, audio_embeds)`` per prompt. Pure compute; the disk cache lives in the
         pipeline."""
         assert self.gemma_encoder is not None, "Call ensure_loaded() first"
-        trans_mat = self._prepare_trans_mat()
 
         results = []
         for prompt in prompts:
@@ -314,21 +339,19 @@ class GemmaTokenizerEncoderPair:
             tt_ids = ttnn.from_torch(
                 tokens.input_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
-            all_hidden_states = self.gemma_encoder(tt_ids, attention_mask=tokens.attention_mask)
+            seq = tt_ids.shape[-1]
+            # Per-prompt device inputs, built on host and copied into the trace on replay.
+            tt_gemma_mask = self.gemma_encoder.build_attn_mask(tokens.attention_mask, seq)
+            fe_mask = self.feature_extractor.build_mask(tokens.attention_mask)
+            # src_idx/keep_mask are dim-independent → shared by both connectors (build once).
+            src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
 
-            # The 49 states FeatureExtractorV2 consumes match HF output_hidden_states:
-            # [embed, L0..L46, final_norm] — the last entry is post-final-norm, not the raw last
-            # layer. The encoder emits [embed, L0..L47, final_norm], so drop index -2.
-            hs_list = list(all_hidden_states[:-2]) + [all_hidden_states[-1]]
-            video_feats, audio_feats = self.feature_extractor(hs_list, tokens.attention_mask)
-            for hs in all_hidden_states:
-                ttnn.deallocate(hs)
-
-            video_embeds = self.video_connector(video_feats, tokens.attention_mask, trans_mat=trans_mat)
+            video_dev, audio_dev = self._encode_device(
+                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace
+            )
+            video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (
-                self.audio_connector(audio_feats, tokens.attention_mask, trans_mat=trans_mat)
-                if self.audio_connector is not None
-                else None
+                ttnn.to_torch(ttnn.get_device_tensors(audio_dev)[0]).float() if audio_dev is not None else None
             )
             results.append((video_embeds, audio_embeds))
         return results

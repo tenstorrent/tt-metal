@@ -162,6 +162,7 @@ def _encode_prompts_reference(
     ("mesh_device", "device_params"),
     [
         pytest.param((1, 1), {"l1_small_size": 8192}, id="1x1"),
+        pytest.param((1, 8), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="1x8"),
         pytest.param((2, 4), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2x4"),
         pytest.param((4, 8), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="4x8"),
     ],
@@ -175,8 +176,11 @@ def test_gemma_encoder(*, mesh_device):
     if not ckpt:
         pytest.skip("LTX checkpoint not found")
 
-    # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load.
-    pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
+    # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load. dynamic_load=False
+    # keeps the encoder resident so the whole-encode trace (default when resident) is exercised.
+    pipe = LTXPipeline.create_pipeline(
+        mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av", dynamic_load=False
+    )
 
     # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
     # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
@@ -211,7 +215,6 @@ def test_gemma_encoder(*, mesh_device):
     # compare directly — no alignment needed.
     logger.info(f"VIDEO  ref={tuple(v_ref.shape)} dev={tuple(v_dev.shape)}")
     assert_quality(v_ref, v_dev, pcc=0.9995)
-    # Audio rides ~0.9982 — the looser bound reflects the longer connector chain it passes
-    # through, not a regression. Tighten if the audio path is later hardened.
+    # fp32 connector weights (HiFi4) match the host reference, so audio holds ~0.9999 like video.
     logger.info(f"AUDIO  ref={tuple(a_ref.shape)} dev={tuple(a_dev.shape)}")
-    assert_quality(a_ref, a_dev, pcc=0.998)
+    assert_quality(a_ref, a_dev, pcc=0.9995)
