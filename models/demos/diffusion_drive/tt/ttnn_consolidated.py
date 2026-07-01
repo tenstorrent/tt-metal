@@ -142,7 +142,7 @@ class TtnnPerceptionForward:
         cb_tok = ttnn.reshape(_to_rm(cb_up), (B, Hb * Wb, D))  # (B, HW, D)
         bu_tok = ttnn.reshape(_to_dev_rm(bev_upscale, d), (B, Hb * Wb, Cu))  # (B, HW, Cu)
         tok = _clean_tile(ttnn.concat([cb_tok, bu_tok], dim=2))  # (B, HW, D+Cu)
-        y = ttnn.relu(ttnn.linear(tok, self._bp_lw, bias=self._bp_lb))
+        y = ttnn.linear(tok, self._bp_lw, bias=self._bp_lb, activation="relu")  # fused ReLU (bev_proj)
         cbf = ttnn.layer_norm(y, weight=self._bp_g, bias=self._bp_beta, epsilon=self._bp_eps)  # (B, HW, D)
         cbf_nhwc = ttnn.reshape(_to_rm(cbf), (B, Hb, Wb, D))
         cross_bev_feature = ttnn.to_torch(cbf_nhwc).reshape(B, Hb, Wb, D).permute(0, 3, 1, 2).float()
