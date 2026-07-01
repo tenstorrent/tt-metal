@@ -90,6 +90,16 @@ uint32_t derive_worker_cap(
     // even a single row doesn't fit.
     const uint32_t whole_rows = (grid_size.x > 0) ? (budget / grid_size.x) * grid_size.x : 0u;
     uint32_t cap = whole_rows > 0u ? whole_rows : budget;
+    // DEV worker-count sweep knob: WAN_RMSNORM_WORKER_CAP overrides the grid-derived cap
+    // (still validity-clamped below, and it bypasses the arch knee). Used to re-sweep the
+    // per-shape optimum before finalizing the heuristic.
+    const char* worker_cap_env = std::getenv("WAN_RMSNORM_WORKER_CAP");
+    if (worker_cap_env != nullptr) {
+        const int forced = std::atoi(worker_cap_env);
+        if (forced > 0) {
+            cap = static_cast<uint32_t>(forced);
+        }
+    }
     // Validity clamp: a forwarder coalesces at most sticks_per_packet 128 B sticks
     // into one fabric packet, so workers_per_forwarder (= ceil(cap/num_forwarders))
     // must not exceed it. Bound cap by sticks_per_packet * num_forwarders. On BH the
@@ -115,7 +125,8 @@ uint32_t derive_worker_cap(
     //     remainder-balance one.)
     // WH's grid-derived budget (64) is already its optimum, so no BH-style knee there.
     // Tuned to the DiT (Wan/LTX/FLUX) shape suite; 48 is the conservative fallback.
-    if (arch == tt::ARCH::BLACKHOLE) {
+    // The WAN_RMSNORM_WORKER_CAP override bypasses this knee so it can sweep BH freely.
+    if (arch == tt::ARCH::BLACKHOLE && worker_cap_env == nullptr) {
         constexpr uint32_t kBhContentionKnee = 48u;
         constexpr uint32_t kBhRoundBoundCap = 64u;
         constexpr uint32_t kBhRing4RowThreshold = 448u;  // between Wan sp8 (296, want 64) and sp4 (592, want 48)
