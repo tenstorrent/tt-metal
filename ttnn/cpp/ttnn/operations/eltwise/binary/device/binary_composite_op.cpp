@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -547,12 +549,15 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
 // leading dims: a:[..., N], b:[..., M] -> [..., N, M], equivalent to
 // a.unsqueeze(-1) * b.unsqueeze(-2).
 //
-// Float-family dtypes (BFLOAT16, BFLOAT8_B, FLOAT32) route through ttnn::matmul:
-// the unsqueeze pair shapes inputs to [..., N, 1] and [..., 1, M], for which the
-// matmul kernel's tile-level outer-product engine is the natural fast path
-// (Kt=1, one matmul_block call per output sub-block, no K-loop reduction).
-// Integer dtypes (INT32, UINT32) stay on the broadcast-multiply path since
-// matmul does not support integer accumulation.
+// Dispatch:
+//  - INT32/UINT32: broadcast-multiply (matmul does not support integer accum).
+//  - FLOAT32: broadcast-multiply (matmul's fp32 path is dominated by SFPU
+//    time here and loses to the eltwise path across all measured batches).
+//  - BFLOAT16/BFLOAT8_B: matmul when the effective batch is 1 (both inputs
+//    have no leading dims beyond the vector), otherwise broadcast-multiply.
+//    Rationale: the [N,1]x[1,M] tile-outer-product path is the fastest kernel
+//    at batch=1, but the K=1 padding tax dominates once the workload scales
+//    across cores, at which point broadcast-multiply wins by ~5-16x.
 //
 // Height-sharded inputs flow through unchanged: the shard is along the
 // preserved dim, so unsqueeze's reshape and the downstream op both accept
@@ -604,12 +609,24 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
     const DataType dt = input_a.dtype();
     const bool is_integer = (dt == DataType::INT32 || dt == DataType::UINT32);
-    if (is_integer) {
-        // ttnn::matmul does not support integer dtypes; keep INT32/UINT32 on
-        // the broadcast-multiply path.
-        return ttnn::multiply(a_unsq, b_unsq, std::nullopt, output_mem_config);
+    const bool is_fp32 = (dt == DataType::FLOAT32);
+    // Effective batch is the product of leading dims (everything except the
+    // vector dim); a scalar leading shape means batch=1. Uses logical shape so
+    // padded tile geometry doesn't leak into the dispatch decision.
+    auto leading_volume = [](const Tensor& t) -> uint64_t {
+        const auto& shape = t.logical_shape();
+        uint64_t v = 1;
+        for (int i = 0; i + 1 < static_cast<int>(shape.rank()); ++i) {
+            v *= static_cast<uint64_t>(shape[i]);
+        }
+        return v;
+    };
+    const uint64_t batch = std::max<uint64_t>(leading_volume(input_a), leading_volume(input_b));
+    const bool use_matmul = !is_integer && !is_fp32 && batch == 1;
+    if (use_matmul) {
+        return ttnn::matmul(a_unsq, b_unsq, /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
     }
-    return ttnn::matmul(a_unsq, b_unsq, /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
+    return ttnn::multiply(a_unsq, b_unsq, std::nullopt, output_mem_config);
 }
 
 Tensor polyval(
