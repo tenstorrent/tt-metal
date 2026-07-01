@@ -51,6 +51,13 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     std::uint32_t config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
                                 (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
+    // Cross-thread note: ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 also carries fields the UNPACK thread programs
+    // (SrcA/SrcBUnsigned and rounding mode in configure_unpack_AB, which takes mutex::REG_RMW). The math thread
+    // does NOT take that mutex here. This is safe because cfg_reg_rmw_tensix lowers to per-byte RMWCIB, and each
+    // RMWCIB is a HW-atomic masked read-modify-write of one config byte (see WormholeB0/TensixTile/
+    // TensixCoprocessor/RMWCIB.md), so disjoint-mask writes from different threads cannot lose each other's bits.
+    // Logical ordering between unpack-programmed and math-programmed fields relies on the unpack->math dataflow
+    // semaphore (and sequenced init), not on holding mutex::REG_RMW. Do not assume mutual exclusion with unpack here.
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
@@ -210,6 +217,10 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
 {
     llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
 
+    // Cross-thread note: the RMWs below target ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, a config word the UNPACK thread
+    // also programs (see _llk_math_hw_configure_ for the full rationale). The math thread intentionally does NOT
+    // take mutex::REG_RMW: per-byte RMWCIB is HW-atomic with masking, so disjoint-mask cross-thread writes are
+    // safe, and logical ordering relies on the unpack->math dataflow semaphore.
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
