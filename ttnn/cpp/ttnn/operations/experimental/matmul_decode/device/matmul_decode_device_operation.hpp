@@ -15,6 +15,15 @@
 
 namespace ttnn::operations::experimental::matmul_decode {
 
+// Role of each reader core in the two-hub gather/broadcast scheme (both program
+// factories). Passed to the reader kernel as a runtime arg; the explicit values
+// are the wire contract shared with the reader_*_width_sharded.cpp kernels.
+enum class HubRole : uint32_t {
+    Plain = 0,  // plain core (pure receiver and/or sender)
+    Hub0 = 1,   // hub 0: start corner, broadcasts on NOC0
+    Hub1 = 2,   // hub 1: end corner, broadcasts on NOC1
+};
+
 // -----------------------------------------------------------------------------
 // MatmulDecodeDeviceOperation
 //
