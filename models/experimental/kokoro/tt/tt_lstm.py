@@ -430,6 +430,7 @@ def tt_bilstm_nlc(
     fold_gates_bias: bool = False,
     recurrent_program_config=None,
     fuse_cell_math: bool = False,
+    out_memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
     """
     1-layer BiLSTM over sequence for NLC ``[B, L, in]``.
@@ -709,7 +710,7 @@ def tt_bilstm_nlc(
         ttnn.deallocate(hs_b_rev)
         ttnn.deallocate(anti_tt)
         # Return in the caller's memory_config (preserve the DRAM contract; assembly stayed L1).
-        out = ttnn.concat([hs_f, hs_b], dim=2, memory_config=memory_config)
+        out = ttnn.concat([hs_f, hs_b], dim=2, memory_config=out_memory_config or memory_config)
         for _w in l1_weights:  # free the transient L1 weight copies (no persistent L1 footprint)
             ttnn.deallocate(_w)
         return out
@@ -792,4 +793,4 @@ def tt_bilstm_nlc(
 
     hs_f = _stack_time(outs_f)
     hs_b = _stack_time(outs_b)
-    return ttnn.concat([hs_f, hs_b], dim=2)
+    return ttnn.concat([hs_f, hs_b], dim=2, memory_config=out_memory_config or ttnn.DRAM_MEMORY_CONFIG)

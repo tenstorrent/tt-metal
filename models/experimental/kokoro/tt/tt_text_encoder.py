@@ -127,8 +127,14 @@ def preprocess_tt_text_encoder(
     # Footprint is small and interleaved (w_h_block [2H,8H] 2 MiB + 2× w_x [H,4H] 1 MiB = ~4 MiB
     # spread across L1 banks, ~31 KiB/core), and during the forward they were already L1-resident
     # (transiently) so the forward's peak L1 is unchanged — only the post-forward residency differs.
+    # Also stage the gate bias to L1: the fused path reshapes ``p.b`` into the gate-precompute epilogue
+    # every forward (two ReshapeView ops reading the bias); an L1-resident bias makes those L1->L1
+    # instead of DRAM->L1. The bias is tiny ([1,1,1,4H], ~2 KiB) so the residency cost is negligible.
     w_x_l1 = lambda p: TTLSTMParams(
-        w_x=ttnn.to_memory_config(p.w_x, ttnn.L1_MEMORY_CONFIG), w_h=p.w_h, b=p.b, hidden_size=p.hidden_size
+        w_x=ttnn.to_memory_config(p.w_x, ttnn.L1_MEMORY_CONFIG),
+        w_h=p.w_h,
+        b=ttnn.to_memory_config(p.b, ttnn.L1_MEMORY_CONFIG),
+        hidden_size=p.hidden_size,
     )
     fwd, rev = w_x_l1(fwd), w_x_l1(rev)
     lstm_w_h_block = ttnn.to_memory_config(lstm_w_h_block, ttnn.L1_MEMORY_CONFIG)
@@ -302,8 +308,10 @@ class TTTextEncoderConvLNBlock:
             # Hand the sharded LeakyReLU output straight to the next conv (no mask, not the last stage).
             if keep_sharded and mask_keep is None:
                 return x
-            # Otherwise re-interleave to DRAM for the reshape→LSTM (last stage) or the mask multiply.
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Otherwise re-interleave to L1 (preferred over DRAM) for the reshape→LSTM (last stage) or
+            # the mask multiply — keeps the [1,1,B*T,C] handoff (~0.1 MiB) L1-resident so the downstream
+            # reshape reads L1 in place instead of a DRAM round-trip.
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             x = _maybe_interleaved(x)
             x = ttnn.layer_norm(
@@ -459,8 +467,12 @@ class TTTextEncoder:
         for i, blk in enumerate(self._cnn_blocks):
             x = blk.forward(x, mask_keep, batch=B, seq=T, keep_sharded=(i != last))
 
-        # Single un-flatten [1, 1, B*T, C] -> [B, T, C] for the per-batch BiLSTM recurrence.
-        x = ttnn.reshape(x, [B, T, x.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Single un-flatten [1, 1, B*T, C] -> [B, T, C] for the per-batch BiLSTM recurrence. Write it
+        # to L1: the fused BiLSTM stages x_nlc to L1 anyway (for the gate-precompute in0 + reverse-input
+        # reorder), so an L1 reshape output is consumed in place — its ``_stage_l1`` sees an already-L1
+        # tensor and skips the per-forward DRAM->L1 copy (one fewer CopyDeviceOperation). The [B,T,C]
+        # tensor is small (~0.2 MiB) so it doesn't pressure the fused loop's L1 budget.
+        x = ttnn.reshape(x, [B, T, x.shape[-1]], memory_config=ttnn.L1_MEMORY_CONFIG)
         if mask_keep is not None:
             # Post-LSTM masking needs the per-batch [B, T, 1] shape; reshape the flattened mask once
             # (padded path only — None in the common full-length case).
@@ -485,12 +497,19 @@ class TTTextEncoder:
             # BinaryNg/step). TextEncoder-only — the shared F0-feeding prosody/duration BiLSTMs
             # reject the MAC accumulation-rounding change (see _lstm_step_fused).
             fuse_cell_math=True,
+            # Return the BiLSTM output in L1 (preferred over DRAM): it feeds the final [B,T,C]->[B,C,T]
+            # transpose (and the padded-path mask multiply) in place instead of a DRAM round-trip.
+            out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         if mask_keep is not None:
             x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(mask_keep)
 
-        return ttnn.permute(x, (0, 2, 1))
+        # Return [B, C, T] in L1 (L1 preferred over DRAM throughout): the final transpose reads the
+        # DRAM LSTM output and writes L1 (1.5->1.4µs). The result is small (~0.1 MiB) so it does not
+        # meaningfully pressure the decoder's L1 budget. The two big transposes (the gx permutes) are
+        # already L1.
+        return ttnn.permute(x, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
 
     __call__ = forward
