@@ -5,8 +5,8 @@
 from typing import List
 
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.llk_params import MathOperation
@@ -31,7 +31,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
@@ -45,7 +45,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -55,7 +55,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return "_llk_math_eltwise_binary_uninit_custom_();\n"

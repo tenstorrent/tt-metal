@@ -257,8 +257,16 @@ def run_throughput_experts_component(
     )
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
+    # transformers 5.x GptOssExperts.forward indexes `hidden_states[token_idx]` over a flattened
+    # [num_tokens, hidden] token axis and `routing_weights[token_idx, top_k_pos]` over a by-position
+    # [num_tokens, top_k] layout. Passing the unflattened 4-D `hidden_states` ([1,1,num_tokens,hidden])
+    # or the dense [num_tokens, num_experts] `routing_weights` raises
+    # "IndexError: index N out of bounds for dimension 0 with size 1" at modeling_gpt_oss.py. Flatten the
+    # hidden states and pass the by-position weights (`topk_weights_dense`), matching run_experts_component.
     reference_output = reference_experts(
-        hidden_states, router_indices=router_indices.squeeze(), routing_weights=routing_weights.squeeze()
+        hidden_states.reshape(-1, hidden_size),
+        router_indices=router_indices.squeeze(),
+        routing_weights=topk_weights_dense,
     )
 
     # Convert to TTNN tensors
@@ -353,15 +361,12 @@ def run_fused_throughput_experts_component(
     indices_list = []
     scores_list = []
 
-    routing_weights = torch.zeros(num_tokens, config.num_local_experts, dtype=torch.float32)
-
-    for tok_idx in range(num_tokens):
+    for _ in range(num_tokens):
         selected = torch.randperm(total_experts)[:num_experts_per_tok].sort().values
         indices_list.append(selected.to(torch.int64))
         scores = torch.rand(num_experts_per_tok, dtype=torch.float32) + 1e-5
         scores = scores / scores.sum()
         scores_list.append(scores)
-        routing_weights[tok_idx, selected] = scores
     indices_torch = torch.stack(indices_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
     scores_torch = torch.stack(scores_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
 
@@ -373,10 +378,15 @@ def run_fused_throughput_experts_component(
     with torch.no_grad():
         reference_experts.gate_up_proj_bias.zero_()
         reference_experts.down_proj_bias.zero_()
+        # transformers 5.x GptOssExperts.forward indexes hidden_states[token_idx] over a flattened
+        # [num_tokens, hidden] axis and routing_weights[token_idx, top_k_pos] over a by-position
+        # [num_tokens, top_k] layout. Pass the flattened hidden states and the by-position scores
+        # (aligned to indices_torch) instead of the 4-D tensor + dense [num_tokens, num_experts] weights,
+        # which raised "IndexError: index N out of bounds for dimension 0 with size 1" at modeling_gpt_oss.py.
         reference_output = reference_experts(
-            hidden_states_torch.reshape(1, 1, num_tokens, hidden_size),
+            hidden_states_torch.reshape(-1, hidden_size),
             router_indices=indices_torch.squeeze(),
-            routing_weights=routing_weights,
+            routing_weights=scores_torch.reshape(num_tokens, num_experts_per_tok),
         )
 
     # Upload to device: shard tokens (dim 0) across mesh rows, replicate across cols

@@ -172,7 +172,7 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::Float32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp32, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp32, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::Float32 && OUT == DataFormat::Int32)
     {
@@ -224,12 +224,12 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::UInt32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::Int32)
     {
         // Calls same kernel as the UInt32 case.
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::UInt32 && OUT == DataFormat::UInt16)
     {
@@ -318,11 +318,11 @@ void call_unary_sfpu_operation_init()
 {
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_inverse_hyperbolic<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_inverse_hyperbolic<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::atanh)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_atanh<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_atanh<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::cosine)
     {
@@ -432,11 +432,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::acosh)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_acosh, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_acosh, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::asinh)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_asinh, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_asinh, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::atanh)
     {

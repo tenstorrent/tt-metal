@@ -62,7 +62,7 @@ jobs:
           workflow_ids: |
             [
               ".github/workflows/sanity-tests.yaml",
-              ".github/workflows/blackhole-post-commit.yaml",
+              ".github/workflows/blackhole-sanity-tests.yaml",
               ".github/workflows/blackhole-e2e-tests.yaml",
               ".github/workflows/blackhole-demo-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
