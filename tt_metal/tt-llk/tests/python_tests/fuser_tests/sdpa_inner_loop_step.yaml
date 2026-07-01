@@ -83,12 +83,12 @@ operations:
         operation: "SubBcastColCustom"
         unpacker: "SubBcastColCustomUnpacker"
         math_fidelity: "LoFi"
+    block_size: [32, 64]
+    pack:
       - type: "UnarySfpu"
         operation: "Exp"
         approximation_mode: true
         iterations: 32
-    block_size: [32, 64]
-    pack:
       - output: "sub_exp_out"
         packer: "Packer"
         pack_relu: "ZERO_RELU"

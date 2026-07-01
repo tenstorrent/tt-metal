@@ -1052,10 +1052,18 @@ targets:
               # gross regressions without flaking on the swing.
               prefill_time_to_first_token: 351
               prefill_time_to_first_token_tolerance: 0.4
-              # decode raised 19.9 -> 23.8: 4/4 recent scheduled runs measured
-              # 23.1-24.4 t/s/u on wh_llmbox_perf (consistently above old target).
-              decode_t/s/u: 23.8
-              decode_t/s: 23.8
+              # decode_t/s/u is run-to-run unstable (observed 14.4-21.1 across runs,
+              # see #48510). The earlier 23.8 target was set pre-#48037; the on-device
+              # gibberish fix (#48037) traded decode throughput for correctness
+              # (per-step decode-input re-staging + eager, un-traced sampling), so
+              # sustained perf now centers ~18. This is a Tier 3 model (minimum
+              # coverage, not perf-optimized), so center on the post-fix mean with a
+              # wide 0.2 tolerance ([14.4, 21.6]) to gate gross regressions without
+              # flaking on the swing.
+              decode_t/s/u: 18.0
+              decode_t_s_u_tolerance: 0.2
+              decode_t/s: 18.0
+              decode_t_s_tolerance: 0.2
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models

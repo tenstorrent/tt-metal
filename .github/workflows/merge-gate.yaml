@@ -323,7 +323,7 @@ jobs:
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      test-category: smoke
+      test-category: merge_gate
 
   models-smoke-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
@@ -341,7 +341,6 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      test-category: smoke
 
   tt-train-smoke-tests:
     needs: [build, find-changes]
@@ -355,7 +354,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
-      test-category: smoke
+      test-category: merge_gate
       enabled-skus: "wh_n150_civ2"
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
@@ -371,7 +370,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      test-category: smoke
+      test-category: merge_gate
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
@@ -398,13 +397,13 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:
-      test-category: smoke
+      test-category: merge_gate
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
 
-  # Merge-gate LLK gtest matrix (tests/pipeline_reorg/llk_smoke_merge_gate_tests.yaml).
+  # Merge-gate LLK gtest matrix (tests/pipeline_reorg/llk_merge_gate_tests.yaml).
   # SKU coverage is narrowed below based on find-changes outputs. L2 nightly uses
   # tests/pipeline_reorg/llk_unit_tests.yaml.
   llk-unit-tests:
@@ -423,7 +422,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/llk-unit-tests-impl.yaml
     with:
-      test-category: smoke
+      test-category: merge_gate
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       # Prio runner pool is reserved for merge-queue traffic; any other trigger

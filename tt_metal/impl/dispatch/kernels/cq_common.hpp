@@ -8,6 +8,7 @@
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "cq_commands.hpp"
 #include "cq_helpers.hpp"
 #include "telemetry.hpp"
 

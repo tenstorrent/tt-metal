@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_set>
 
 #include <tt-metalium/device.hpp>
@@ -254,6 +255,10 @@ private:
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
+    // Cached assignment is NOC-specific (DRAM endpoints differ per NOC) and compute-grid-specific
+    // (dispatch axis / harvesting change logical worker bounds).
+    std::optional<std::uint8_t> optimal_dram_bank_to_logical_worker_assignment_noc_;
+    std::optional<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_grid_size_;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;

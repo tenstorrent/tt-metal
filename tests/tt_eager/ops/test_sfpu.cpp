@@ -162,7 +162,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_eager/kernels/dataflow/writer_unary_8bank.cpp"
-                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
