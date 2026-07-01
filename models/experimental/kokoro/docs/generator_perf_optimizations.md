@@ -169,6 +169,39 @@ phase fallback is NOT a warm bottleneck** (ON vs OFF warm are identical), so **#
 - **Persistent program cache** (`enable_model_cache`, currently off) — skips the ~708 ms cold compile
   on repeat process runs. PCC-neutral, cheap; helps only across runs, not a single cold invocation.
 
+## Metal-trace feasibility (scoped)
+
+**Full-model metal trace is NOT feasible without a major refactor.** Metal trace requires a static
+device graph (fixed shapes, no host-in-the-loop). The Kokoro pipeline violates this at its core:
+
+1. **Duration readback mid-forward** — `pred_dur = ttnn.to_torch(dur_clipped_tt)` (tt_kmodel.py:434):
+   predicted durations are read to CPU to compute `T_aligned = sum(pred_dur)`. This host round-trip
+   is on the critical path and can't be captured in a device trace.
+2. **Dynamic alignment matrix** — `aln_cpu = _build_alignment(pred_dur)` then
+   `aln_tt = ttnn.from_torch(...)` (tt_kmodel.py:438-440): shape `[1, T_tokens, T_aligned]` depends on
+   both phoneme count and the duration sum. Every downstream shape (`en_nlc`, `F0`, `N`, `asr_nlc`,
+   the whole decoder/generator) is `T_aligned`-dependent.
+3. **Per-chunk generator re-preprocess** — `_get_decoder(T_aligned)` →
+   `preprocess_tt_generator(time_len_x=T_aligned*2)` (tt_kmodel.py:530, tt_decoder.py:170) re-uploads
+   the generator's m_source/STFT weights per unique `T_aligned`. The `_get_decoder` cache only hits on
+   *repeated* lengths, and `T_aligned` (sum of durations) is essentially unique per chunk — so most
+   chunks pay the full weight-upload + ~708 ms compile again.
+
+**Demo reality check (measured):** a single cold chunk (119 phonemes → 7.78 s audio) took
+**infer_s = 215.8 s, RTF 27.75**. That is overwhelmingly the *cold* path — full-model first-run compile
+plus the per-chunk generator/STFT preprocess for a ~186 k-sample output — **not** the 181 ms warm
+dispatch. So trace (which only accelerates the warm/replay path) would barely help the demo even if it
+were feasible. The demo is **cold-/preprocess-bound**, and metal trace targets the wrong cost.
+
+**The real wall-clock lever is therefore NOT trace — it's cutting the per-chunk re-preprocess/compile:**
+- **Bucket `T_aligned`** (round up to a fixed grid, e.g. next multiple of 64/128, and mask/trim) so the
+  `_get_decoder` cache hits across chunks → most chunks skip re-preprocess and recompile. PCC-neutral
+  (padding + trim). Biggest expected demo win.
+- **`enable_model_cache`** — persist compiled programs across process runs.
+- *(Option C — trace only the post-duration generator, per bucket — is possible but marginal: the
+  generator warm forward is host-bound at 181 ms and re-preprocess dominates; it would still require
+  bucketing, so bucketing alone captures most of the benefit with far less complexity.)*
+
 ### 9. Drop `use_torch_phase_fallback` (device-side SineGen) — wall-clock, not device-kernel
 The CPU phase fallback forces device→host→device round-trips (the ~13.8 ms op-to-op gap in this
 run). The memory note says the device SineGen cumsum path landed; if it holds the `sine_merge > 0.98`
