@@ -135,6 +135,10 @@ class Qwen36Model:
         )
 
         self.vocab_size = args.vocab_size
+        # When True, _forward_decode returns the PRE-gather vocab-sharded logits ([1,1,vocab/nd],
+        # distinct per device) instead of the full replicated logits — the caller does per-shard
+        # argmax+max + host combine (on-device greedy sampling). Default off; the demo sets it.
+        self._ondev_argmax = False
         self._paged_kv_caches = None
         # Positions WITHIN self.layers of the full-attention layers (NOT checkpoint indices): these
         # index self.layers and the per-attention-layer KV caches. Derived from each built layer's
@@ -490,7 +494,12 @@ class Qwen36Model:
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tensor)
 
         x = self.norm(x, mode=Mode.DECODE)
-        logits = self._lm_head(x)
+        if self._ondev_argmax:
+            # Return the PRE-gather vocab-sharded logits so the caller can argmax each 62080-wide
+            # shard (cheap) + combine — skips the full-vocab all-gather AND the 248320-wide readback.
+            logits = ttnn.linear(x, self.lm_head_weight)
+        else:
+            logits = self._lm_head(x)
         ttnn.deallocate(x)
 
         return logits
@@ -509,7 +518,12 @@ class Qwen36Model:
             else:
                 x = layer.forward(x, mode="decode")
         x = self.norm(x, mode=Mode.DECODE)
-        logits = self._lm_head(x)
+        if self._ondev_argmax:
+            # PRE-gather vocab-sharded logits [1,1,vocab/nd] (distinct per device) for on-device
+            # greedy: caller argmaxes each shard + combines, skipping the all-gather + big readback.
+            logits = ttnn.linear(x, self.lm_head_weight)
+        else:
+            logits = self._lm_head(x)
         ttnn.deallocate(x)
         return logits
 
@@ -1884,8 +1898,12 @@ class Qwen36Model:
         """
         assert not (is_tokens or is_log_probs), "on-device sampling/log-probs unsupported (host sampling only)"
         if self.num_devices > 1:
-            # TP: logits are replicated (full vocab on every device); gather and take one replica.
-            full = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
+            # TP: logits are replicated (full vocab on every device). Read ONE replica (device 0)
+            # instead of ConcatMeshToTensor, which reads all 4 device copies (~4x the 248320-wide
+            # readback + host float-convert) only to discard 3/4. Same data → numerically identical;
+            # decode host readback (_read) was ~15ms/tok = 25% of the decode step (see text_demo
+            # [DECODE SPLIT]). get_device_tensors(...)[0] is the standard single-shard read.
+            full = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
             return full.reshape(-1, self.args.vocab_size)[: B * S].view(B, S, -1)
         out = ttnn.to_torch(tt_out).float()
         return out[:B, :S, : self.args.vocab_size].view(B, S, -1)
