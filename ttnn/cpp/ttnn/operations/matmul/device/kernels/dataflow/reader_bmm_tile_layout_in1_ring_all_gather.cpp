@@ -142,42 +142,48 @@ void kernel_main() {
         // (aligned to the GCB ring) is consumed strictly front-to-back. Drive it as a normal local
         // CB — once the prefetcher lands a block, hand it to compute via the standard
         // reserve_back/push_back credit on cb_in1 itself, and compute reads it with
-        // wait_front/pop_front instead of manual rd_ptr math. cb_sync still carries the
-        // compute->reader "done" signal, which gates freeing the GCB slot back to the prefetcher,
-        // so the GCB only needs to hold a small live window instead of the whole tensor. (in1 is
-        // never DRAM-resident on the GCB path, so this fully replaces the batched
-        // wait_front(num_blocks) gate below.)
-        // Lookahead-1 software pipeline. Push order mirrors the DRAM path's reserve -> fill ->
-        // push (reserve the in1 CB slot, wait for the prefetcher to fill it in the GCB, then push
-        // the credit to compute). The key is that each block is staged to compute *before* we wait
-        // for compute to finish the previous one, so compute always has the next block ready and
-        // never stalls on the reader's per-block coordination (remote_cb_pop_front + reserve +
-        // remote_cb_wait_front). The ack — which frees the consumed block's GCB slot back to the
-        // prefetcher — trails the push by one block. This keeps two blocks in flight, so it needs
-        // the GCB to hold >= 2 blocks/receiver (enforced host-side) and cb_sync sized for 2
-        // outstanding credits.
-        // remote_cb_wait_front(n) is cumulative from the remote rd_ptr, which only advances on
-        // remote_cb_pop_front. With lookahead 1 the ack trails the push by exactly one block, so
-        // the rd_ptr sits one block behind `pushed`: wait for 1 page on the first block and 2
-        // thereafter (the one being staged plus the one still in flight). Two blocks in flight
-        // means the GCB must hold >= 2 (host-checked, see kStreamingInFlightBlocks in the factory).
+        // wait_front/pop_front instead of manual rd_ptr math. So the GCB only needs to hold a small
+        // live window instead of the whole tensor. (in1 is never DRAM-resident on the GCB path, so
+        // this fully replaces the batched wait_front(num_blocks) gate below.)
+        //
+        // Lookahead-1 software pipeline. Push order mirrors the DRAM path's reserve -> fill -> push
+        // (reserve the in1 CB slot, wait for the prefetcher to fill it in the GCB, then push the
+        // credit to compute). Each block is staged to compute *before* we wait for compute to finish
+        // the previous one, so compute always has the next block ready. remote_cb_wait_front(n) is
+        // cumulative from the remote rd_ptr, which only advances on remote_cb_pop_front; with
+        // lookahead 1 the rd_ptr sits one block behind `pushed`, so wait for 1 page on the first
+        // block and 2 thereafter. Two blocks in flight means the GCB must hold >= 2 (host-checked,
+        // see kStreamingInFlightBlocks in the factory).
+        //
+        // Freeing the block's GCB slot back to the prefetcher must not race the compute unpacker:
+        // if the slot is freed before the unpacker HW has finished reading it from L1, the
+        // prefetcher can overwrite the block mid-read. We therefore gate remote_cb_pop_front on the
+        // in1 CB's own consumer ack, which llk_pop_tiles publishes only after STALLWAIT(UNPACK) —
+        // i.e. after the unpacker has physically drained the block (engine-accurate, unlike a plain
+        // done-semaphore that only tracks the RISC issuing the reads). The in1 CB is the GCB ring:
+        // it holds `in1_fifo_tiles / in1_block_num_tiles` blocks, so right after pushing block
+        // `pushed`, "block pushed-1 fully drained" == at most one block still unacked == all but one
+        // block reservable at the back.
+        const uint32_t in1_fifo_tiles = get_local_cb_interface(cb_id_in1).fifo_num_pages;
         for (uint32_t pushed = 0; pushed < num_blocks; ++pushed) {
             // Stage block `pushed` to compute (it may still be working on block `pushed - 1`).
             cb_in1.reserve_back(in1_block_num_tiles);
             experimental::remote_cb_wait_front(remote_cb_id, pushed == 0 ? 1u : 2u);
             cb_in1.push_back(in1_block_num_tiles);
-            // Retire block `pushed - 1` once compute has consumed it, freeing its GCB slot.
+            // Retire block `pushed - 1` once the unpacker has drained it, freeing its GCB slot.
             if (pushed >= 1) {
-                cb_sync.wait_front(1);
+                while (!cb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
+                    invalidate_l1_cache();
+                }
                 experimental::remote_cb_pop_front(remote_cb_id, 1);
-                cb_sync.pop_front(1);
             }
         }
         if (num_blocks > 0) {
-            // Epilogue: retire the last block.
-            cb_sync.wait_front(1);
+            // Epilogue: retire the last block once compute has drained everything (all reservable).
+            while (!cb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
+                invalidate_l1_cache();
+            }
             experimental::remote_cb_pop_front(remote_cb_id, 1);
-            cb_sync.pop_front(1);
         }
         if constexpr (needs_signaler) {
             if (b == 0) {

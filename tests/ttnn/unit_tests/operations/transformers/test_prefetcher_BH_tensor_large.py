@@ -936,12 +936,7 @@ def test_tensor_prefetcher_streaming_matmul(
 
     out_torch = ttnn.to_torch(tt_out)
     expected = pt_act.float() @ pt_weight.float()
-    # bf8 threshold is a loose sanity gate: the matmul kernel's cross-core accumulation is
-    # run-to-run non-deterministic and, in bf8, some (shape, window) combos hover near 0.99
-    # (observed ~0.988 on ring32 win4). The validator test byte-gates *exact* prefetcher delivery
-    # for both shard distributions; here we only need to catch a gross wiring/permutation bug,
-    # which tanks PCC far below 0.98.
-    pcc_threshold = 0.999 if dtype == ttnn.bfloat16 else 0.98
+    pcc_threshold = 0.999 if dtype == ttnn.bfloat16 else 0.99
     passing, output_str = comp_pcc(expected, out_torch, pcc_threshold)
     logger.info(f"[{name} win={window_blocks} {distribution_strategy}] {output_str}")
     assert passing, f"[{name} win={window_blocks} {distribution_strategy}] PCC check failed: {output_str}"

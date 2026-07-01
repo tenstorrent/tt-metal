@@ -492,11 +492,13 @@ void kernel_main() {
 #endif
 #ifdef STREAMING_IN1
             // Streaming: pop the consumed block off the GCB-aligned in1 CB with the standard API
-            // (advances rd_ptr to the next FIFO block and wraps at the fifo limit), then signal the
-            // reader so it can free this block's slot back to the prefetcher.
+            // (advances rd_ptr to the next FIFO block and wraps at the fifo limit). No explicit
+            // reader signal: llk_pop_tiles publishes this CB's consumer ack only after
+            // STALLWAIT(UNPACK), i.e. after the unpacker HW has drained the block, so the reader
+            // frees the GCB slot by polling that engine-accurate ack (pages_reservable_at_back). A
+            // hand-rolled done-semaphore isn't tied to the unpacker drain, so it is neither needed
+            // nor safe as the recycle gate.
             in1_cb.pop_front(in1_block_num_tiles);
-            sync_buf.reserve_back(1);
-            sync_buf.push_back(1);
 #endif
         }
 
