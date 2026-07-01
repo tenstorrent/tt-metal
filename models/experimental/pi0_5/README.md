@@ -280,26 +280,18 @@ Key flags: `--backend {ttnn | ttnn_1x8 | pytorch}` · `--steps-sweep 5` (our pat
 `--replan-steps 5` · `--num-episodes` · `--suites` · `--task-range` · `--max-steps`
 (per-suite defaults: spatial=220, object=280, goal=300, libero_10=520).
 
-### Per-chunk latency (N=5)
+### LIBERO success rate (upstream pi05_libero, 100 episodes/suite × 4 suites, N=5)
 
-Untraced rollout ≈ **250 ms/chunk** (host↔device transfer bound); the **trace + 2CQ**
-path is **~42 ms single-chip / ~31 ms on 1×8** (see [Perf tests](#perf-tests-blackhole)).
-Task success is in the [400-episode/suite sweep](#libero-success-rate-upstream-pi05_libero-400-episodes-per-n-replan5) below.
+Measured on the 1×8 mesh (trace+2CQ):
 
-### LIBERO success rate (upstream pi05_libero, 100 episodes/suite × 4 suites, N=5, replan=5)
-
- (400 episodes total per row):
-
-| Stage | N=5 |
+| suite | success |
 |---|---|
-| Pre-bf8 baseline | 394/400 (98.5%) |
-| `8ef91d7fe60` + `c0876acc212` (all weights + outputs bf8) | 387/400 (96.75%) |
-| `df531eeb9d6` (weights+biases bf8, session outputs reverted) | 387/400 (96.75%) |
-| current (re-validated on the 1×8 mesh, trace+2CQ) | 386/400 (96.5%) |
+| libero_spatial | 99/100 |
+| libero_object | 98/100 |
+| libero_goal | 95/100 |
+| libero_10 | 94/100 |
+| **GRAND TOTAL** | **386/400 (96.5%)** |
 
-Current per-suite (N=5, replan=5): spatial 99/100 · object 98/100 · goal 95/100 ·
-libero_10 94/100. `libero_10` is the recurring loss (long-horizon tasks 8–9 hit the
-520-step cap).
 
 ---
 
