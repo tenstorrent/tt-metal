@@ -295,19 +295,21 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelSelfLoopFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelSelfLoopOnGen2Fails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // A data-movement kernel may NOT self-loop a DFB (bind it as both PRODUCER and CONSUMER). A DFB
-    // synchronizes a producer and a consumer on DISTINCT cores via per-side credit masks, and a
-    // single DM kernel's producer and consumer masks are identical — the DFB backend would reject it
-    // with an opaque "producer_risc_mask and consumer_risc_mask must not overlap". Caught up front at
-    // validation with an actionable message instead. The legal alternatives are a private L1 scratch
-    // buffer, a LocalTensorAccessor tensor view, or a two-kernel cross-bind. (Compute self-loops stay
-    // legal — see SelfLoopWithSharedLocalAccessorNameSucceeds.)
+    // On Gen2, a data-movement kernel may NOT self-loop a DFB (bind it as both PRODUCER and CONSUMER).
+    // The DFB's tile-counter credit machinery synchronizes a producer and a consumer on DISTINCT RISCs
+    // via per-side masks, and a single DM kernel's producer and consumer masks are identical — the DFB
+    // backend would reject it with an opaque "producer_risc_mask and consumer_risc_mask must not
+    // overlap". Caught up front at validation with an actionable message instead. The legal Gen2
+    // alternatives are a private L1 scratch buffer, a LocalTensorAccessor tensor view, or a two-kernel
+    // cross-bind. (On Gen1 a DM self-loop IS legal — a DFB lowers to a plain circular buffer there; see
+    // DMKernelSelfLoopOnGen1Succeeds. Compute self-loops stay legal on both gens — see
+    // DFBSelfLoopOnComputeKernelSucceeds.)
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
@@ -319,8 +321,9 @@ TEST_F(ProgramSpecTestQuasar, DMKernelSelfLoopFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("self-looped by data-movement kernel 'kernel'")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("self-looped by data-movement kernel 'kernel'"),
+            ::testing::HasSubstr("not supported for data-movement kernels on Gen2 architectures"))));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
@@ -792,9 +795,9 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     // The sets are not equal — the self-loop multi-binding rule rejects this mix.
     //
     // All three kernels are COMPUTE so the self-loop participant (self_loop_1) is a legal compute
-    // self-loop — a DM self-loop would be rejected earlier (see DMKernelSelfLoopFails), masking the
-    // rule under test. With compute kernels the per-role kind-uniformity check passes and the
-    // self-loop set-equality refinement check is reached.
+    // self-loop — a DM self-loop would be rejected earlier on Gen2 (see DMKernelSelfLoopOnGen2Fails),
+    // masking the rule under test. With compute kernels the per-role kind-uniformity check passes and
+    // the self-loop set-equality refinement check is reached.
     auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
     auto extra_producer = MakeMinimalComputeKernel("extra_producer");
     auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
@@ -820,12 +823,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
             ::testing::HasSubstr("DFB 'dfb' is self-looped (some kernel appears as both producer and consumer), but "
                                  "the set of producer KernelSpecs differs from the set of consumer KernelSpecs")));
 }
-
-// NOTE: A "scope-disagreement" test case is not currently expressible: the only valid scope
-// value today is INTRA (INTER is rejected upstream as not-yet-supported), so two
-// self-loop participants can't meaningfully disagree on scope. When INTER support lands,
-// add a positive scope-disagreement test that exercises the
-// "must agree on DFBSelfLoopScope" TT_FATAL.
 
 // ----------------------------------------------------------------------------
 // DFB implicit-sync opt-out (Gen2)
@@ -1844,117 +1841,6 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBConsumerOnNodeWithoutProducerFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("This node has a consumer but no producer")));
 }
 
-// ----------------------------------------------------------------------------
-// KernelSpec::dfb_self_loop_connectivities validation tests
-// ----------------------------------------------------------------------------
-// This advanced option only applies to compute kernels that self-loop a DFB (bind it
-// as both producer and consumer). All misapplications must fail loudly so authors
-// never silently get the wrong scope. INTER is recognized but not yet implemented.
-
-TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_inter";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTER}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("INTER scope is not yet supported by the runtime")));
-}
-
-TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_on_dm";
-
-    auto producer = MakeMinimalDMKernel("producer");
-    // Misapplied: self-loop scope entries are valid only on compute kernels.
-    producer.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
-    auto consumer = MakeMinimalDMKernel("consumer");
-
-    auto dfb = MakeMinimalDFB("dfb");
-    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a compute kernel")));
-}
-
-TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_unknown_dfb";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    // Misapplied: there is no DFB named "ghost" in the spec.
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"ghost"}, DFBSelfLoopConnectivity::INTRA}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("entry referencing unknown DFB 'ghost'")));
-}
-
-TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_not_self_looped";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    // Misapplied: the kernel only produces; it does not self-loop the DFB.
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
-    auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    dm_consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute, dm_consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute", "dm_consumer"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not self-loop this DFB")));
-}
-
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
@@ -1970,15 +1856,14 @@ TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
-    // The 99.5% case: a compute kernel that self-loops a DFB and does NOT explicitly declare a
-    // dfb_self_loop_connectivities entry. The implementation must default to INTRA so the
-    // lower-layer DFB layer (which requires an explicit scope for Tensix-to-Tensix DFBs) accepts
-    // the program.
+TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelSucceeds) {
+    // A compute kernel that self-loops a DFB (binds it as both producer and consumer) is legal: it
+    // lowers to the intra-Tensix packer->unpacker flow (TensixScope::INTRA), which the Metal 2.0
+    // layer applies automatically. There is no user-facing self-loop scope option.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "self_loop_implicit_intra";
+    spec.name = "compute_self_loop";
 
     auto compute = MakeMinimalComputeKernel("compute");
 
@@ -1986,32 +1871,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
     // enable_{producer,consumer}_implicit_sync=false at the lower DFB layer automatically.
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
-    // Identical to the implicit case, but with an explicit INTRA entry on the kernel. The
-    // explicit declaration is redundant with the default but must be accepted (and produce
-    // the same program) so that authors can write self-documenting specs.
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_explicit_intra";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
@@ -2917,6 +2776,29 @@ TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DMKernelSelfLoopOnGen1Succeeds) {
+    // On Gen1 (WH/BH) a DFB lowers to a plain circular buffer, so a single DM kernel may bind it as
+    // both PRODUCER and CONSUMER (self-loop) — the classic scratch pattern of one DM engine filling
+    // and draining an L1 FIFO. There is no tile-counter credit machinery requiring disjoint
+    // producer/consumer masks, so the spec validator accepts it. (On Gen2 the same spec is rejected —
+    // see DMKernelSelfLoopOnGen2Fails.)
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "dm_self_loop";
+
+    auto kernel = MakeMinimalGen1DMKernel("kernel", DataMovementProcessor::RISCV_0);
+    auto dfb = MakeMinimalDFB("dfb");
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }

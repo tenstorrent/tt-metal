@@ -66,8 +66,7 @@ void kernel_main() {
         cb_in_2,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        block_w * tt::constants::TILE_WIDTH,
-        /*compute_uses_reduce_tile=*/true>();
+        block_w * tt::constants::TILE_WIDTH>();
 
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c_bits = get_arg_val<uint32_t>(arg_idx++);
