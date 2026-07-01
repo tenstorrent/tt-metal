@@ -353,6 +353,44 @@ def _lstm_step_fused(
     return h_new, c_new
 
 
+def _gatex_program_config(*, batch: int, seq_len: int, four_hidden: int, in_dim: int, device):
+    """Tuned 2D mcast config for the gate-precompute matmul ``[B, L, in] @ [in, 4H]``.
+
+    The sweep (``perf/test_gatex_matmul_sweep.py``) found ``gy=total_m, gx=8, per_core_M=1,
+    per_core_N=4, out_subblock=1x4, in0_block_w=8`` fastest for B=2/L=48/H=256: **7.97µs vs the
+    default's 17.3µs (-54%)**. Two knobs drove it beyond the first-pass 11.6µs: (1) spreading the
+    fuse-batched ``B*ceil(L/32)`` M-tiles ONE-PER-ROW (``gy=total_m, per_core_M=1``, 32 cores) beats
+    packing 2/row on 16 cores; (2) a wide ``out_subblock_w=4`` (vs 1x1) packs 4 output tiles per
+    compute call. ``gx=8`` splits the 4H output into 8 col-groups (``per_core_N=4`` at H=256),
+    ``in0_block_w=8`` is two K-steps. Numerics are config-invariant (out_subblock/grid only reschedule
+    tiles; the 1x4 subblock = 4 DST tiles fits the fp32_dest_acc cap, so it is bit-identical to 1x1).
+    Guarded to shapes that map cleanly (H%64==0 so 4H-tiles divide 8; K%8==0; a small fuse-batched M
+    that fits the core grid one-per-row) — else ``None`` (default), so odd lengths and the F0-sensitive
+    prosody/duration BiLSTMs (which don't wire a gate-precompute config) are untouched."""
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        return None
+    n_tiles = four_hidden // 32
+    k_tiles = in_dim // 32
+    total_m = batch * math.ceil(seq_len / _TILE)  # fuse_batch folds B into the M dim
+    if four_hidden % 32 or in_dim % 32 or n_tiles % 8 or k_tiles % 8:
+        return None
+    if not (1 <= total_m <= 8):  # gy=total_m one M-tile/row; bound to the core grid + L1 footprint
+        return None
+    per_core_n = n_tiles // 8
+    # out_subblock_w: largest divisor of per_core_N that is <= 4 (the fp32_dest_acc DST cap); h=1 (pm=1).
+    sub_w = next(d for d in (4, 2, 1) if per_core_n % d == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, total_m),  # gx=8, gy=total_m
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=sub_w,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+
 def _length_valid_mask_b1(
     *,
     batch: int,
@@ -445,12 +483,14 @@ def tt_bilstm_nlc(
     # rows are independent). Permute to ``[L, B, 4H]`` so the per-timestep extraction is a
     # cheap leading-dim slice — this removes the per-step untilize+slice+tilize churn that
     # dominated the loop (slicing a single timestep out of the TILE-laid [B,L,C] sequence).
-    def _precompute_gates_x_of(p: TTLSTMParams, x_in: ttnn.Tensor) -> ttnn.Tensor:
+    def _precompute_gates_x_of(p: TTLSTMParams, x_in: ttnn.Tensor, program_config=None) -> ttnn.Tensor:
         # Fold the gate bias into the matmul epilogue here (once for the whole sequence)
         # instead of adding it per timestep — saves one elementwise add per step. The
         # stored bias is [1,1,1,4H] (rank 4); reshape to [1,1,4H] so the linear output
         # stays rank-3 [B,L,4H] for the permute below.
         # L1 in0 + DRAM out is valid (sweep: matmul reads L1 activations); gx buffer stays DRAM.
+        # ``program_config`` (fused path only) is the tuned 2D mcast config for the [B,L,in]@[in,4H]
+        # gate precompute — 11.6µs vs 17.3µs default (see _gatex_program_config / the matmul sweep).
         bias = ttnn.reshape(p.b, [1, 1, H4], memory_config=gx_mc)
         gx = ttnn.linear(
             x_in,
@@ -458,6 +498,7 @@ def tt_bilstm_nlc(
             bias=bias,
             memory_config=gx_mc,
             compute_kernel_config=compute_kernel_config,
+            program_config=program_config,
         )  # [B, L, 4H]
         gx_t = ttnn.permute(gx, (1, 0, 2), memory_config=gx_mc)  # [L, B, 4H]
         ttnn.deallocate(gx)
@@ -583,8 +624,12 @@ def tt_bilstm_nlc(
         x_rev = ttnn.matmul(anti_tt, x_nlc, memory_config=gx_mc, compute_kernel_config=compute_kernel_config)
         # anti_tt is kept alive — reused to re-order the reverse-pass outputs back into natural time.
 
-        gx_f = _precompute_gates_x(fwd)  # [L, B, 4H] from natural-order x
-        gx_r = _precompute_gates_x_of(rev, x_rev)  # [L, B, 4H] from reversed x (= reverse-pass order)
+        # Tuned 2D mcast config for the two [B,L,in]@[in,4H] gate-precompute matmuls (fused path only).
+        gatex_pc = _gatex_program_config(
+            batch=B, seq_len=L, four_hidden=H4, in_dim=int(x_nlc.shape[-1]), device=x_nlc.device()
+        )
+        gx_f = _precompute_gates_x_of(fwd, x_nlc, program_config=gatex_pc)  # [L, B, 4H] natural-order x
+        gx_r = _precompute_gates_x_of(rev, x_rev, program_config=gatex_pc)  # [L, B, 4H] reversed-x order
         ttnn.deallocate(x_rev)
 
         # Interleave into gate-major direction-minor order [i_f i_r f_f f_r g_f g_r o_f o_r] to

@@ -154,12 +154,13 @@ def _mask_keep_flat(text_mask: torch.Tensor, *, device: ttnn.Device) -> ttnn.Ten
 def _fused_recurrent_program_config(hidden_size: int, device: ttnn.Device):
     """Tuned program config for the per-step fused recurrent matmul ``[B, 2H] @ [2H, 8H]``.
 
-    The matmul sweep (``perf/test_matmul_text_encoder_perf_sweep.py``) found a 1D mcast config
-    (8x8 grid, ``in0_block_w=4``, ``per_core_M=per_core_N=1``) is the fastest PCC-passing option for
-    the H=256 shape that keeps ``in0``/out interleaved — ~8 µs vs ~11 µs for the default config, with
-    PCC unchanged (the matmul is bit-exact across layouts; only the tiling/mcast schedule changes).
-    Interleaved in0 is required: a sharded-in0 winner would need an InterleavedToSharded per step
-    inside the host-driven loop, a net regression on this dispatch-bound model.
+    The matmul sweep (``perf/test_recurrent_matmul_sweep.py``) found a 1D mcast config
+    (8x8 grid, ``in0_block_w=8``, ``per_core_M=per_core_N=1``, width-sharded output) is the fastest
+    option for the H=256 shape: 3.73 µs vs ~10 µs for the default config and 5.52 µs for the old
+    ``in0_block_w=4``, with PCC unchanged (the matmul is bit-exact across layouts; only the
+    tiling/mcast schedule changes). Interleaved in0 is required: a sharded-in0 winner would need an
+    InterleavedToSharded per step inside the host-driven loop, a net regression on this
+    dispatch-bound model.
 
     ``per_core_M=1`` holds for any ``B<=32`` (Mt=1). Returns ``None`` (use the default config) unless
     the shape matches the swept/validated H (``8H`` tiles == 64, evenly mapped onto an 8x8 grid), so
@@ -173,7 +174,10 @@ def _fused_recurrent_program_config(hidden_size: int, device: ttnn.Device):
         return None
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),  # 64 cores -> one 8H tile each
-        in0_block_w=4,
+        # in0_block_w=8 (half of Kt=16, two K-steps) is the sweep winner for [32,512]@[512,2048] at
+        # LoFi width-sharded output: 3.73µs vs the old ibw=4's 5.52µs (-32%), ibw=16 (single K-step)
+        # ties at 3.77µs and ibw=2 blows up to 9.5µs. See perf/test_recurrent_matmul_sweep.py.
+        in0_block_w=8,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=1,
@@ -345,12 +349,17 @@ class TTTextEncoder:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        # EXPERIMENT: LoFi for the BiLSTM matmuls (bf16 weights) — PCC measurement only.
+        # LoFi + bf16 dest-acc for the BiLSTM matmuls (bf16 weights). The recurrent-matmul sweep found
+        # fp32_dest_acc_en=False shaves the per-step [B,2H]@[2H,8H] matmul 3.74->3.68µs and the
+        # gate-precompute 7.97->7.86µs (reorders unchanged); the DST accumulates in bf16 instead of
+        # fp32. It's a real precision drop but the tolerant ASR TextEncoder absorbs it (full-seq PCC
+        # 0.99930 unchanged to 4 decimals). TextEncoder-only config — the F0-sensitive prosody/duration
+        # BiLSTMs keep their own fp32-acc config, so this never touches the F0 path.
         self.lstm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
         )
         self._cnn_blocks = tuple(
             TTTextEncoderConvLNBlock(
