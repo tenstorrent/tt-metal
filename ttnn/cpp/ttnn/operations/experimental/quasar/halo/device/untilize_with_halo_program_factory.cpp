@@ -407,7 +407,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .source = std::filesystem::path(kReaderKernelPath),
             .hw_config =
                 DataMovementHardwareConfig{
-                    .role = DataMovementRoleHint::UNSPECIFIED,
                     .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
                 },
         };

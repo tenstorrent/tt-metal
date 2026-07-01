@@ -98,11 +98,9 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config;
-        // the role hint is set UNSPECIFIED when an explicit Gen1Config is provided.
+        // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
         .hw_config =
             m2::DataMovementHardwareConfig{
-                .role = m2::DataMovementRoleHint::UNSPECIFIED,
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}},
