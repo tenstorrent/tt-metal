@@ -1,0 +1,40 @@
+{
+  "component": "mamba_r_m_s_norm_gated",
+  "submodule_path": "backbone.layers.0.mixer.norm",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          25,
+          4096
+        ],
+        "dtype": "torch.float32"
+      },
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          25,
+          4096
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      25,
+      4096
+    ],
+    "dtype": "torch.float32"
+  }
+}

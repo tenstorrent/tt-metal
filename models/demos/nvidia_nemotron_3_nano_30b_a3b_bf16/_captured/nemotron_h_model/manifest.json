@@ -1,0 +1,61 @@
+{
+  "component": "nemotron_h_model",
+  "submodule_path": "backbone",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "none"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {
+      "cache_params": {
+        "kind": "none"
+      },
+      "inputs_embeds": {
+        "kind": "none"
+      },
+      "output_attentions": {
+        "kind": "scalar",
+        "type": "bool",
+        "repr": "False"
+      },
+      "output_hidden_states": {
+        "kind": "scalar",
+        "type": "bool",
+        "repr": "False"
+      },
+      "return_dict": {
+        "kind": "scalar",
+        "type": "bool",
+        "repr": "True"
+      },
+      "use_cache": {
+        "kind": "none"
+      },
+      "cache_position": {
+        "kind": "none"
+      },
+      "attention_mask": {
+        "kind": "none"
+      }
+    }
+  },
+  "output": {
+    "kind": "dict",
+    "items": {
+      "last_hidden_state": {
+        "kind": "tensor",
+        "shape": [
+          1,
+          25,
+          2688
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    }
+  }
+}

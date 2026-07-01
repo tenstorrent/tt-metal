@@ -1,0 +1,29 @@
+{
+  "component": "re_l_u_squared_activation",
+  "submodule_path": "backbone.layers.1.mixer.experts.0.act_fn",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          1856
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      1856
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}

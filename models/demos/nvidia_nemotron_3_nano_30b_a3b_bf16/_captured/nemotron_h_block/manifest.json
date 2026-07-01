@@ -1,0 +1,45 @@
+{
+  "component": "nemotron_h_block",
+  "submodule_path": "backbone.layers.0",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          25,
+          2688
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {
+      "cache_params": {
+        "kind": "none"
+      },
+      "cache_position": {
+        "kind": "tensor",
+        "shape": [
+          1
+        ],
+        "dtype": "torch.int64"
+      },
+      "attention_mask": {
+        "kind": "none"
+      }
+    }
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      25,
+      2688
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}

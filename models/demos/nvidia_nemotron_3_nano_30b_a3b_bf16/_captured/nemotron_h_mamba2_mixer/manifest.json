@@ -1,0 +1,42 @@
+{
+  "component": "nemotron_h_mamba2_mixer",
+  "submodule_path": "backbone.layers.0.mixer",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          25,
+          2688
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {
+      "cache_params": {
+        "kind": "none"
+      },
+      "cache_position": {
+        "kind": "tensor",
+        "shape": [
+          1
+        ],
+        "dtype": "torch.int64"
+      }
+    }
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      25,
+      2688
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "component": "nemotron_h_topk_router",
+  "submodule_path": "backbone.layers.1.mixer.gate",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          25,
+          2688
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          25,
+          6
+        ],
+        "dtype": "torch.int64"
+      },
+      {
+        "kind": "tensor",
+        "shape": [
+          25,
+          6
+        ],
+        "dtype": "torch.float32"
+      }
+    ]
+  }
+}

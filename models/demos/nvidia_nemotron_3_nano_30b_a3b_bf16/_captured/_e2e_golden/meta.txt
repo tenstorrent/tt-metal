@@ -1,0 +1,4 @@
+prompt='The capital of France is'
+N=5
+new_ids=[6993, 2613, 3501, 7185, 34315]
+decoded=' Paris." No extra punct'
