@@ -54,6 +54,10 @@ class EncoderConvInTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        pixel_t: int = PIXEL_T,
+        pixel_h: int = PIXEL_H,
+        pixel_w: int = PIXEL_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -64,9 +68,9 @@ class EncoderConvInTTNN(Module):
             in_channels=aligned_channels(IN_CHANNELS),
             out_channels=BLOCK_OUT_CHANNELS[0],
             kernel_size=(3, 3, 3),
-            t=PIXEL_T,
-            h=PIXEL_H,
-            w=PIXEL_W,
+            t=pixel_t,
+            h=pixel_h,
+            w=pixel_w,
         )
         self.conv = HunyuanSymmetricConv3d(
             IN_CHANNELS,
@@ -76,9 +80,9 @@ class EncoderConvInTTNN(Module):
             padding=1,
             mesh_device=mesh_device,
             dtype=dtype,
-            t=PIXEL_T,
-            h=PIXEL_H,
-            w=PIXEL_W,
+            t=pixel_t,
+            h=pixel_h,
+            w=pixel_w,
         )
         init_encoder_conv_in_weights(self)
 
@@ -207,12 +211,19 @@ class EncoderDownTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        pixel_t: int = PIXEL_T,
+        pixel_h: int = PIXEL_H,
+        pixel_w: int = PIXEL_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.down_blocks = ModuleList(
-            [DownBlockTTNN(spec, mesh_device, dtype=dtype) for spec in encoder_down_level_specs()]
+            [
+                DownBlockTTNN(spec, mesh_device, dtype=dtype)
+                for spec in encoder_down_level_specs(pixel_t, pixel_h, pixel_w)
+            ]
         )
         init_encoder_down_weights(self)
 
@@ -230,14 +241,18 @@ class EncoderMidBlockTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        pixel_t: int = PIXEL_T,
+        pixel_h: int = PIXEL_H,
+        pixel_w: int = PIXEL_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
-        head_t, head_h, head_w, head_c = encoder_head_shape()
+        head_t, head_h, head_w, head_c = encoder_head_shape(pixel_t, pixel_h, pixel_w)
 
         self.block_1 = ResnetBlockTTNN(head_c, head_c, mesh_device, dtype=dtype, t=head_t, h=head_h, w=head_w)
-        self.attn_1 = AttnBlockTTNN(head_c, mesh_device, dtype=dtype)
+        self.attn_1 = AttnBlockTTNN(head_c, mesh_device, dtype=dtype, t=head_t, h=head_h, w=head_w)
         self.block_2 = ResnetBlockTTNN(head_c, head_c, mesh_device, dtype=dtype, t=head_t, h=head_h, w=head_w)
         init_encoder_mid_weights(self)
 
@@ -254,11 +269,15 @@ class EncoderHeadTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        pixel_t: int = PIXEL_T,
+        pixel_h: int = PIXEL_H,
+        pixel_w: int = PIXEL_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
-        head_t, head_h, head_w, head_c = encoder_head_shape()
+        head_t, head_h, head_w, head_c = encoder_head_shape(pixel_t, pixel_h, pixel_w)
         self.out_channels = OUT_PARAM_CHANNELS
         self.group_size = head_c // OUT_PARAM_CHANNELS
 
@@ -305,14 +324,22 @@ class VAEEncoderTTNN(Module):
         self,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        pixel_t: int = PIXEL_T,
+        pixel_h: int = PIXEL_H,
+        pixel_w: int = PIXEL_W,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
-        self.conv_in = EncoderConvInTTNN(mesh_device, dtype=dtype)
-        self.down = EncoderDownTTNN(mesh_device, dtype=dtype)
-        self.mid = EncoderMidBlockTTNN(mesh_device, dtype=dtype)
-        self.head = EncoderHeadTTNN(mesh_device, dtype=dtype)
+        self.pixel_t = pixel_t
+        self.pixel_h = pixel_h
+        self.pixel_w = pixel_w
+        enc_kw = dict(pixel_t=pixel_t, pixel_h=pixel_h, pixel_w=pixel_w)
+        self.conv_in = EncoderConvInTTNN(mesh_device, dtype=dtype, **enc_kw)
+        self.down = EncoderDownTTNN(mesh_device, dtype=dtype, **enc_kw)
+        self.mid = EncoderMidBlockTTNN(mesh_device, dtype=dtype, **enc_kw)
+        self.head = EncoderHeadTTNN(mesh_device, dtype=dtype, **enc_kw)
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         """BTHWC device tensor in -> BTHWC device tensor out."""

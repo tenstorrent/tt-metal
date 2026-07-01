@@ -165,6 +165,18 @@ def _tensor_scalar(value: Any) -> int:
     return int(value)
 
 
+def _spatial_shapes_tensor(spatial_shapes: Any) -> torch.Tensor:
+    """Normalize SigLIP2 ``spatial_shapes`` to a 1-D ``[token_h, token_w]`` tensor."""
+    if isinstance(spatial_shapes, torch.Tensor):
+        out = spatial_shapes
+        if out.ndim == 2 and out.shape[0] == 1:
+            out = out.squeeze(0)
+        return out.to(dtype=torch.long)
+    if isinstance(spatial_shapes, (tuple, list)):
+        return torch.tensor(spatial_shapes, dtype=torch.long)
+    raise TypeError(f"unexpected spatial_shapes type: {type(spatial_shapes)}")
+
+
 def _extract_processor_field(value: Any) -> Any:
     """Unwrap Siglip2 processor outputs (Fast uses batched tensors; slow uses per-image lists)."""
     if isinstance(value, list):
@@ -313,7 +325,7 @@ class HunyuanImage3ImageProcessor:
             )
             tensor.section_type = "cond_vae_image"
         elif image_type == "siglip2":
-            spatial_shapes = kwargs["spatial_shapes"]
+            spatial_shapes = _spatial_shapes_tensor(kwargs["spatial_shapes"])
             pixel_attention_mask = kwargs["pixel_attention_mask"]
             token_h = _tensor_scalar(spatial_shapes[0])
             token_w = _tensor_scalar(spatial_shapes[1])

@@ -15,7 +15,7 @@ import sys
 
 import torch
 
-ROOT = "/home/iguser/Christy/tt-metal"
+ROOT = "/home/iguser/ign-tt/tt-metal"
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 

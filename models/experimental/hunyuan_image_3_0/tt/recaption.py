@@ -37,8 +37,9 @@ def run_recaption_on_device(
     tok: HunyuanTokenizer,
     bot_task: str,
     processor,
-    wte_weight: torch.Tensor,
+    wte_tt=None,
     *,
+    wte_weight: torch.Tensor | None = None,
     image_size: str | int = 1024,
     config: SamplingConfig | None = None,
     generator: torch.Generator | None = None,
@@ -51,6 +52,8 @@ def run_recaption_on_device(
     the LM head receives ln_f-normalized hidden states. For I2I, pass a bundle from
     ``prepare_recaption_ar_bundle`` (with ``inputs_embeds`` and ``full_attn_slices``).
     """
+    if wte_tt is None and wte_weight is None:
+        raise ValueError("run_recaption_on_device requires wte_tt or wte_weight")
     params = build_recaption_stage_params(
         tok,
         bot_task,
@@ -77,6 +80,7 @@ def run_recaption_on_device(
             model,
             lm_head,
             device,
+            wte_tt=wte_tt,
             wte_weight=wte_weight,
             prefix_embeds=bundle.inputs_embeds[:1],
             image_infos=image_infos,
