@@ -1083,19 +1083,24 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 // as one region reading another's word.
 //
 // A BRISC producer binds 2 named CRTAs + 1 tensor + 1 scratchpad + 2 common varargs (plus a DFB it
-// produces into). It reads one value from each section and stages all six into a DFB entry; an NCRISC
-// consumer drains the entry to DRAM for host inspection. The named/vararg values are distinct sentinels
-// (exact-checked); the tensor base and scratchpad base are real addresses (checked nonzero and mutually
-// distinct from every sentinel and each other — a mis-offset read of an address region would return a
-// sentinel or the other base).
+// produces into). The tensor uses dynamic_tensor_shape, which on an interleaved ROW-MAJOR tensor WIDENS
+// its binding CRTA section from 1 word (base address) to 2 (base + aligned_page_size). That multi-word
+// binding is the crux: every downstream section (scratchpad, varargs) must shift by the binding's true
+// WIDTH, not by binding COUNT — the `.size()` trap where an offset bug hides and only bites once a
+// relaxation makes a binding wider than one word. The producer reads one value from each section and
+// stages seven into a DFB entry (w0=named0, w1=named1, w2=tensor base, w3=scratch base, w4=vararg0,
+// w5=vararg1, w6=page size); an NCRISC consumer drains it to DRAM. The named/vararg sentinels and the
+// page size are exact-checked; the tensor base and scratchpad base are real addresses (checked nonzero
+// and mutually distinct from every sentinel and each other — a mis-offset read of an address region
+// surfaces as a known value or the other base).
 //
 // Two phases:
 //   SET    — SetProgramRunArgs installs all four sections; verify every region reads its own value
-//            (the full-assembly offset math for all four sections).
+//            (the full-assembly offset math for all four sections, binding two words wide).
 //   UPDATE — UpdateProgramRunArgs patches the named CRTAs + common varargs to NEW sentinels; verify the
 //            new values land AND the tensor-binding + scratchpad slots are untouched. The vararg base
-//            here is named + tensor-binding + scratchpad section words — the exact A1 sum, now with all
-//            three preceding sections non-empty (River's original had named=0, binding=0).
+//            here is named + tensor-binding(2 words) + scratchpad section words — the A1 sum, now with a
+//            MULTI-WORD binding in the middle (River's original had named=0, binding=0).
 TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     auto mesh_device = devices_.at(0);
     IDevice* device = mesh_device->get_devices()[0];
@@ -1103,6 +1108,9 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     constexpr uint32_t entry_size = 1024;  // bytes per DFB entry
     constexpr uint32_t num_entries = 4;    // DFB depth
     constexpr uint32_t kScratchpadBytes = 64;
+    // io tensor is Shape{1,512} bf16 ROW_MAJOR → page = last dim (512) * 2 B = 1024 B (already aligned),
+    // delivered as the binding's second CRTA word under dynamic_tensor_shape.
+    constexpr uint32_t kExpectedPageSize = 512 * sizeof(uint16_t);
 
     const NodeCoord node{0, 0};
 
@@ -1132,8 +1140,10 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     ProgramSpec spec;
     spec.name = "crta_all_four_sections";
 
-    // Producer (BRISC): read one value from each CRTA section, stage all six into the DFB entry:
-    //   w[0]=named0  w[1]=named1  w[2]=tensor base  w[3]=scratch base  w[4]=vararg0  w[5]=vararg1
+    // Producer (BRISC): read one value from each CRTA section, stage seven into the DFB entry:
+    //   w[0]=named0 w[1]=named1 w[2]=tensor base w[3]=scratch base w[4]=vararg0 w[5]=vararg1 w[6]=page size
+    // The page size is the binding's SECOND CRTA word (dynamic_tensor_shape); reading it exercises the
+    // extra binding word directly, and its presence shifts the scratchpad + vararg offsets.
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
@@ -1143,6 +1153,7 @@ void kernel_main() {
     const uint32_t named1 = get_arg(args::named1);
     TensorAccessor acc(tensor::io);
     const uint32_t tensor_base = acc.get_bank_base_address();
+    const uint32_t page_size = acc.get_aligned_page_size();  // binding's 2nd CRTA word (dynamic_tensor_shape)
     Scratchpad<uint32_t> pad(scratch::pad);
     const uint32_t scratch_base = pad.get_base_address();
     const uint32_t vararg0 = get_common_vararg(0);
@@ -1151,6 +1162,7 @@ void kernel_main() {
     buf.reserve_back(1);
     volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();
     w[0] = named0; w[1] = named1; w[2] = tensor_base; w[3] = scratch_base; w[4] = vararg0; w[5] = vararg1;
+    w[6] = page_size;
     buf.push_back(1);
 }
 )"};
@@ -1186,12 +1198,13 @@ void kernel_main() {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
-    // enqueue_invariant so the UPDATE phase may omit it (retaining its bound tensor) — this also
-    // exercises the "invariant tensor retained across partial update" path.
+    // enqueue_invariant so the UPDATE phase may omit it (retaining its bound tensor) — exercises the
+    // "invariant tensor retained across partial update" path. dynamic_tensor_shape widens the binding to
+    // two CRTA words (base + aligned_page_size) — the multi-word binding this test exists to stress.
     spec.tensor_parameters = {TensorParameter{
         .unique_id = TensorParamName{"io"},
         .spec = tensor_spec,
-        .advanced_options = TensorParameterAdvancedOptions{.enqueue_invariant = true}}};
+        .advanced_options = TensorParameterAdvancedOptions{.enqueue_invariant = true, .dynamic_tensor_shape = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
@@ -1204,13 +1217,13 @@ void kernel_main() {
         };
     };
 
-    // Blocking launch, then read back the six staged words.
+    // Blocking launch, then read back the seven staged words.
     auto launch_and_read = [&]() {
         detail::LaunchProgram(device, program);
         std::vector<uint32_t> out;
         detail::ReadFromBuffer(output_buffer, out);
-        EXPECT_GE(out.size(), 6u);
-        out.resize(6);
+        EXPECT_GE(out.size(), 7u);
+        out.resize(7);
         return out;
     };
 
@@ -1232,7 +1245,10 @@ void kernel_main() {
     const uint32_t scratch_base = s[3];
     EXPECT_EQ(s[0], kNamed0Set) << "named CRTA 0 read the wrong offset";
     EXPECT_EQ(s[1], kNamed1Set) << "named CRTA 1 read the wrong offset";
-    EXPECT_EQ(s[4], kVararg0Set) << "common vararg 0 read the wrong offset (named+binding+scratchpad sum?)";
+    // The binding's 2nd word: a wrong value here means the extra binding CRTA word was not delivered.
+    EXPECT_EQ(s[6], kExpectedPageSize) << "tensor binding's aligned_page_size (2nd binding word) is wrong";
+    EXPECT_EQ(s[4], kVararg0Set)
+        << "common vararg 0 read the wrong offset — vararg base must be named + binding(2 words) + scratchpad";
     EXPECT_EQ(s[5], kVararg1Set) << "common vararg 1 read the wrong offset";
     // The two address regions must be real and distinct from every sentinel and each other — a mis-offset
     // read of either would surface here as a known sentinel or as the other base.
@@ -1261,10 +1277,11 @@ void kernel_main() {
     EXPECT_EQ(u[1], kNamed1Upd) << "partial update: named CRTA 1 landed at the wrong offset";
     EXPECT_EQ(u[4], kVararg0Upd)
         << "partial update: vararg 0 landed at the wrong offset — the vararg base must be "
-           "named + tensor-binding + scratchpad section words (the A1 sum, all three non-empty here).";
+           "named + tensor-binding(2 words) + scratchpad section words (the A1 sum with a multi-word binding).";
     EXPECT_EQ(u[5], kVararg1Upd) << "partial update: vararg 1 landed at the wrong offset";
-    // Not touched by this update — must survive it (the A1 clobber guard, generalized).
-    EXPECT_EQ(u[2], tensor_base) << "tensor-binding slot was clobbered by the named/vararg partial update";
+    // Not touched by this update — the invariant tensor's binding (both words) and the scratchpad must survive.
+    EXPECT_EQ(u[2], tensor_base) << "tensor-binding base slot was clobbered by the named/vararg partial update";
+    EXPECT_EQ(u[6], kExpectedPageSize) << "tensor-binding page-size slot was clobbered by the partial update";
     EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";
 }
 
