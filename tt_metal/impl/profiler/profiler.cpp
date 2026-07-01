@@ -2587,13 +2587,25 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
     if (MetalContext::instance(context_id).rtoptions().get_profiler_noc_events_enabled()) {
         log_warning(
             tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
-        FabricRoutingLookup routing_lookup;
-        std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> noc_trace_data =
-            convertNocTracePacketsToJson(
-                device_markers_per_core_risc_map, device_id, routing_lookup, freq_scale, shift);
+        // A dropped-marker overflow leaves the noc-event stream truncated mid-sequence: the fabric
+        // coalescer then decodes stale bytes as event types/coordinates and TT_FATALs. The bytes are
+        // undercounted anyway, so skip noc-trace JSON for this device rather than abort the whole run.
+        if (this->had_dropped_markers.load(std::memory_order_relaxed)) {
+            log_warning(
+                tt::LogMetal,
+                "[profiler noc tracing] Device {} dropped profiler markers (buffer overflow); skipping noc-trace "
+                "JSON for this device -- the noc-event stream is truncated and its bandwidth would be undercounted. "
+                "Scope the capture smaller or drain mid-run to get noc traces.",
+                device_id);
+        } else {
+            FabricRoutingLookup routing_lookup;
+            std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> noc_trace_data =
+                convertNocTracePacketsToJson(
+                    device_markers_per_core_risc_map, device_id, routing_lookup, freq_scale, shift);
 
-        if (!noc_trace_data.empty()) {
-            dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);
+            if (!noc_trace_data.empty()) {
+                dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);
+            }
         }
     }
 #endif
