@@ -324,6 +324,63 @@ def test_generate_reports_writes_ccl_fabric_bw_column(tmp_path):
         assert float(row["CCL FABRIC BW UTIL (%)"]) == pytest.approx(43.0, abs=1.0)
 
 
+def test_enrich_ops_from_perf_csv_raises_when_op_missing(expect_error):
+    """A stale/partial cpp_device_perf_report.csv -- a host op absent from the perf CSV -- must raise
+    PerfCsvIncomplete (not assert-crash) so append_device_data can fall back to the complete legacy
+    path. This is the exact failure a stale report left in .logs by an earlier run produces."""
+    host_ops_by_device = {0: [{"global_call_count": 1, "metal_trace_id": None}]}
+    device_perf_by_device = {0: {(999, None, None): {"CORE COUNT": 8}}}  # knows op 999, not op 1
+    with expect_error(process_ops_logs.PerfCsvIncomplete, "not present in"):
+        process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, None)
+
+    # A whole device missing from the perf CSV is likewise incomplete, not fatal.
+    with expect_error(process_ops_logs.PerfCsvIncomplete, "missing from"):
+        process_ops_logs._enrich_ops_from_perf_csv({1: [{"global_call_count": 1}]}, {0: {}}, None)
+
+
+def test_enrich_ops_from_perf_csv_enriches_when_complete():
+    """When the perf CSV covers every host op, the fast path enriches in place and attaches the
+    C++ perf row -- no exception, no fallback."""
+    host_ops_by_device = {0: [{"global_call_count": 5, "metal_trace_id": None}]}
+    device_perf_by_device = {0: {(5, None, None): {"CORE COUNT": 42, "METAL TRACE ID": None}}}
+    out = process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, None)
+    op = out[0][0]
+    assert op["core_usage"]["count"] == 42
+    assert op["_device_perf_row"]["CORE COUNT"] == 42
+
+
+def test_append_device_data_falls_back_to_legacy_on_stale_perf_csv(monkeypatch, tmp_path):
+    """End-to-end routing: a stale/partial perf CSV present in .logs must not abort the report --
+    append_device_data catches PerfCsvIncomplete and re-runs the complete legacy device-log path
+    exactly once, on a freshly re-derived host op set."""
+    (tmp_path / process_ops_logs.PROFILER_CPP_DEVICE_PERF_REPORT).write_text("")  # exists -> fast path chosen
+    ops = {1: {"global_call_count": 1, "device_id": 0, "metal_trace_id": None}}
+
+    # Perf CSV parses to a report that does not contain op 1 -> fast path raises PerfCsvIncomplete.
+    monkeypatch.setattr(process_ops_logs, "load_device_perf_report", lambda _p: {0: {(999, None, None): {}}})
+
+    legacy_calls = {"n": 0}
+
+    def _fake_legacy(host_ops_by_device, log_folder, device_analysis_types, trace_replays):
+        legacy_calls["n"] += 1
+        return host_ops_by_device
+
+    monkeypatch.setattr(process_ops_logs, "_enrich_ops_from_device_logs", _fake_legacy)
+    monkeypatch.setattr(process_ops_logs, "build_sub_device_id_lookup_from_device_csv", lambda _p: {})
+    monkeypatch.setattr(process_ops_logs, "attach_sub_device_ids_to_ops", lambda *_a, **_k: None)
+    monkeypatch.setattr(process_ops_logs, "_build_trace_ops_mapping", lambda *_a, **_k: {})
+
+    host_ops_by_device, _ = process_ops_logs.append_device_data(
+        ops=ops,
+        traceReplays={},
+        logFolder=tmp_path,
+        analyze_noc_traces=False,
+        device_analysis_types=[],
+    )
+    assert legacy_calls["n"] == 1  # fell back to legacy exactly once
+    assert 0 in host_ops_by_device  # produced ops via legacy, no crash
+
+
 def test_generate_reports_writes_noc_counter_bytes_column(tmp_path):
     log_folder = tmp_path / "logs"
     report_folder = tmp_path / "reports"
