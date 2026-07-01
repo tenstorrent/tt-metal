@@ -19,6 +19,14 @@
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
+// binop_with_unary.h references the ambient compute-kernel macro DST_ACCUM_MODE in
+// calculate_binop_with_scalar()'s RSUB path. Define it only for this include and undef
+// immediately, so it does not collide with the `bool DST_ACCUM_MODE` template parameter
+// used by the dispatch helpers below. Only calculate_add_int32/calculate_sub_int32 (which
+// do not use the macro) are dispatched from here.
+#define DST_ACCUM_MODE 0
+#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
+#undef DST_ACCUM_MODE
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
@@ -674,8 +682,30 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, float), dst_index, vector_mode, 5.0f /* threshold */);
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            // int32 relu_min: threshold passed as raw 2's-complement int bits.
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (sfpi::vInt, APPROX_MODE, ITERATIONS, std::uint32_t), dst_index, vector_mode, 5u /* threshold */);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, float), dst_index, vector_mode, 5.0f /* threshold */);
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::lrelu)
+    {
+        // Leaky ReLU: negative inputs scaled by `slope` (fp32 bits). 0x3dcccccd = 0.1f.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_lrelu_, (APPROX_MODE), dst_index, vector_mode, ITERATIONS, 0x3dcccccdu /* slope = 0.1f */);
+    }
+    else if constexpr (OPERATION == SfpuType::add_int32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_add_int32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 5u /* scalar */);
+    }
+    else if constexpr (OPERATION == SfpuType::sub_int32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sub_int32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 5u /* scalar */);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {

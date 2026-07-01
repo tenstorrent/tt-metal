@@ -238,3 +238,88 @@ def test_perf_sfpu_reduce_row_max(
     )
 
     configuration.run(perf_report)
+
+
+# =============================================================================
+# PR #48696 (WH SFPU medium cleanup) — MATH_ISOLATE probes for the kernels this
+# PR rewrote raw TT/TTI -> sfpi. These reuse the shared eltwise_unary_sfpu_perf.cpp
+# dispatch (call_unary_sfpu_operation) rather than a bespoke source: the scalar
+# ops bake their constant in sfpu_operations.h exactly like `threshold`/`relu_min`.
+#   lrelu       -> tt-llk _calculate_lrelu_            (float)
+#   relu_min    -> tt-llk _relu_min_ (vFloat / vInt)   (float + int32 branches)
+#   add_int32   -> metal calculate_add_int32           (int32)
+#   sub_int32   -> metal calculate_sub_int32           (int32)
+# addcmul is intentionally excluded here: it is ternary (3 dest tiles + scalar) and
+# does not fit the unary dispatch signature, so it needs a dedicated source (like
+# swiglu/where) to be measured on-device.
+# =============================================================================
+
+_PR48696_FLOAT_OPS = [
+    MathOperation.Lrelu,
+    MathOperation.ReluMin,
+]
+
+_PR48696_INT_OPS = [
+    MathOperation.AddInt32,
+    MathOperation.SubInt32,
+    MathOperation.ReluMin,
+]
+
+
+def _run_math_isolate(formats, mathop, input_dimensions):
+    tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+    )
+    unpack_to_dest = formats.input_format.is_32_bit()
+
+    return PerfConfig(
+        "sources/eltwise_unary_sfpu_perf.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(ApproximationMode.No),
+            ITERATIONS(32),
+            FAST_MODE(FastMode.No),
+            STABLE_SORT(StableSort.No),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_count_A),
+            LOOP_FACTOR(16),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count_A,
+            tile_count_B=tile_count_B,
+            tile_count_res=tile_count_A,
+        ),
+        unpack_to_dest=unpack_to_dest,
+        dest_acc=DestAccumulation.No,
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=_PR48696_FLOAT_OPS,
+    input_dimensions=[[128, 64]],
+)
+def test_perf_pr48696_unary_float(perf_report, formats, mathop, input_dimensions):
+    _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    mathop=_PR48696_INT_OPS,
+    input_dimensions=[[128, 64]],
+)
+def test_perf_pr48696_unary_int(perf_report, formats, mathop, input_dimensions):
+    _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)

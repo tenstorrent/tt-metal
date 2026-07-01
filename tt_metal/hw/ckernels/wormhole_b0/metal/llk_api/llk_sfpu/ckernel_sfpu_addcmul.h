@@ -7,8 +7,6 @@
 #include <cstdint>
 #include "llk_defs.h"
 #include "sfpi.h"
-#include "ckernel_sfpu_conversions.h"
-#include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu {
 
@@ -24,23 +22,31 @@ inline void calculate_addcmul(
         "Unsupported data format for calculate_addcmul(). Only Float32, Float16_b (BFloat16), and Bfp8_b (BFloat8B) "
         "are allowed.");
 
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    constexpr InstrModLoadStore mod0 =
+        (data_format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
+    // size of each tile in Dest is 64 rows
+    constexpr std::uint32_t dst_tile_size = 64;
     // addcmul = input_a + ((value * input_b) * input_c)
-    const sfpi::vFloat value_float = Converter::as_float(value);
-
+    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, value >> 16);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
-        sfpi::vFloat result = in0 + (value_float * in1) * in2;
+        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_3, dst_index_in2 * dst_tile_size);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG5, 0);
+        TTI_SFPNOP;
         if constexpr (!is_fp32_dest_acc_en) {
-            // Round-to-nearest-even fp32->bf16, matching the previous
-            // TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN) implementation.
-            result = float32_to_bf16_rne(result);
+            TTI_SFP_STOCH_RND(
+                /*rnd_mode*/ sfpi::SFPSTOCHRND_RND_EVEN,
+                /* imm8_math*/ 0,
+                /*lreg_src_b*/ 0,
+                /*lreg_src_c*/ p_sfpu::LREG5,
+                /*lreg_dest*/ p_sfpu::LREG5,
+                /*instr_mod1*/ sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        TT_SFPSTORE(p_sfpu::LREG5, mod0, ADDR_MOD_3, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }
