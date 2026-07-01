@@ -102,6 +102,60 @@ sfpi_inline void calculate_remainder_int32_body(
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = r;
 }
 
+// Unsigned (uint32) remainder = a - floor(a / b) * b
+// compute_unsigned_remainder_int32() is exact only when both operands are in [0, 2^31)
+// (abs() is a no-op there), so we range-reduce into that regime:
+// * b >= 2^31: a < 2^32 <= 2*b, so a % b = a (a < b) or a - b. Both upper-half values
+//              compare correctly with a signed compare, so no helper call is needed.
+// * b <  2^31: halve a to clear the problematic top bit. With t = a >> 1 (logical) and
+//              a = 2*t + (a & 1), a % b = (2*(t % b) + (a & 1)) % b. t < 2^31 for every
+//              uint32 a, so the single helper call always sees operands in [0, 2^31) and the
+//              same path handles a < 2^31 and a >= 2^31 (one heavy divide instead of two).
+sfpi_inline void calculate_remainder_uint32_body(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+
+    // Load raw 32-bit patterns (interpreted as unsigned)
+    sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+    // Call the helper once at top level (mirrors int32, nesting it inside predication crashes
+    // the SFPI rvtt_live pass). t = (uint32)a >> 1 is always < 2^31 (vUInt shift is logical), so
+    // the helper always sees valid [0, 2^31) operands. When b < 2^31 we use its result:
+    // a % b = (2*rt + (a & 1)) % b. When b >= 2^31 the helper's result is discarded and the
+    // v_if(b < 0) branch below uses a / a - b directly. But we still pay the call because SFPI
+    // predication requires both branches to be materialized. The single helper call thus covers
+    // a < 2^31 and a >= 2^31 uniformly inside the b < 2^31 branch.
+    sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
+    sfpi::vInt rt = compute_unsigned_remainder_int32(t, b);
+
+    // Reload a from DEST instead of keeping it live across the helper
+    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+
+    // 2*rt + low bit, in [0, 2b); may wrap negative (as signed) when >= 2^31
+    sfpi::vInt val = rt + rt + (a & 1);
+
+    sfpi::vInt r;
+    // Negative b (signed view): b >= 2^31 -> a % b = a (a < b) or a - b.
+    v_if(b < 0) {
+        r = a;  // a < 2^31 <= b, or a >= 2^31 with a < b
+        // a >= 2^31 and a >= b: both in upper half, signed compare matches unsigned order.
+        v_if(a < 0 && a >= b) { r = a - b; }
+        v_endif;
+    }
+    // Positive b: b < 2^31
+    v_else {
+        r = val;
+        v_if(val < 0) { r = val - b; }  // val (unsigned) >= 2^31 > b
+        v_elseif(val >= b) { r = val - b; }
+        v_endif;
+    }
+    v_endif;
+
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = r;
+}
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat in1) {
     // remainder(a, b) = a - floor(a/b) * b
@@ -162,6 +216,15 @@ inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_i
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_remainder_uint32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+#pragma GCC unroll 2
+    for (int d = 0; d < ITERATIONS; d++) {
+        calculate_remainder_uint32_body(dst_index_in0, dst_index_in1, dst_index_out);
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary_remainder(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
@@ -180,6 +243,12 @@ inline void calculate_sfpu_binary_remainder(
 
 template <bool APPROXIMATION_MODE>
 inline void remainder_int32_init() {
+    div_floor_init<APPROXIMATION_MODE>();
+}
+
+template <bool APPROXIMATION_MODE>
+inline void remainder_uint32_init() {
+    // Shares the int32 setup: the unsigned path reuses compute_unsigned_remainder_int32().
     div_floor_init<APPROXIMATION_MODE>();
 }
 
