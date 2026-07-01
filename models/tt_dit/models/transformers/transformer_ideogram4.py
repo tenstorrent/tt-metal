@@ -206,30 +206,53 @@ class Ideogram4TransformerBlock(Module):
             k_chunk_size=self.sdpa_k_chunk_size,
             exp_approx_mode=False,
         )
-        # Real trained weights have a wider dynamic range than random init; over 34 blocks
-        # the default HiFi2 / bf16-accumulate matmuls lose enough precision to drop the
-        # whole-model PCC (~0.956 with real weights). HiFi4 + fp32 accumulation on the
-        # projections, the SwiGLU FFN and SDPA recovers it. Random-init PCC stays high.
-        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=MATH_FIDELITY_HIFI4,
+        # ------------------------------------------------------------------
+        # MIXED math fidelity (mirrors Wan2.2): HiFi2 for the heavy per-token
+        # compute (the four big block matmuls + SDPA), HiFi4 for the
+        # precision-sensitive ops (RMSNorm/QK-norm run HiFi4 internally, AdaLN
+        # modulation matmul, and the once-per-forward model-level projections).
+        #
+        # Rationale: a blanket HiFi4 (the previous state) doubled matmul/SDPA
+        # device time; a blanket HiFi2 dropped whole-model real-weight PCC to
+        # ~0.956. The split keeps HiFi4 where the dynamic range hurts and HiFi2
+        # where the flops dominate, halving matmul/SDPA cost while holding PCC.
+        # ------------------------------------------------------------------
+
+        # HiFi2 + fp32 accumulate for the four big matmuls (QKV, O, FF1, FF2).
+        self.mm_hifi2_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=MATH_FIDELITY_HIFI2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
-        self.matmul_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        # HiFi2 for SDPA. head_dim=256 is precision-heavy, but the fp32_dest_acc
+        # sweep showed fp32_dest_acc={True,False} give the SAME block PCC
+        # (img1024 99.976% / img4096 99.980% either way) and the SAME device
+        # time at 2048px, so we land fp32_dest_acc=False to match Wan. Flip to
+        # True if a future config regresses SDPA correctness.
+        self.sdpa_hifi2_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=MATH_FIDELITY_HIFI2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+        # HiFi4 + fp32 accumulate for the precision-sensitive matmul-class ops
+        # (currently the AdaLN modulation projection). RMSNorm / QK-RMSNorm run
+        # HiFi4 internally (see layers/normalization.py). RoPE is pure
+        # element-wise (mul/neg/concat) and takes no compute-kernel config, so
+        # its precision is unaffected by these settings.
+        self.hifi4_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=MATH_FIDELITY_HIFI4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # Higher fidelity for the small AdaLN projection (matmul-class but stability matters).
-        self.adaln_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY_HIFI4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+
+        # Wiring: the four big matmuls + SDPA -> HiFi2; AdaLN -> HiFi4.
+        self.matmul_compute_kernel_config = self.mm_hifi2_config
+        self.sdpa_compute_kernel_config = self.sdpa_hifi2_config
+        self.adaln_compute_kernel_config = self.hifi4_config
 
     def _merge_qkv_for_tp(self, qkv_weight: torch.Tensor) -> torch.Tensor:
         """Rearrange the fused reference QKV weight so column-fracturing shards heads.
@@ -468,10 +491,19 @@ class _FinalLayer(Module):
         self.norm_final = LayerNorm(hidden_size, norm_eps=1e-6, norm_elementwise_affine=False, mesh_device=mesh_device)
         self.linear = Linear(hidden_size, out_channels, bias=True, mesh_device=mesh_device)
         self.adaln_modulation = Linear(adaln_dim, hidden_size, bias=True, mesh_device=mesh_device)
+        # Once-per-forward final projection + scale/shift: keep HiFi4 for safety
+        # (cheap, and it is the last layer before the velocity output).
+        self.hifi4_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=MATH_FIDELITY_HIFI4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def forward(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
-        scale = self.adaln_modulation(ttnn.silu(c)) + 1.0
-        return self.linear(self.norm_final(x) * scale)
+        scale = self.adaln_modulation(ttnn.silu(c), compute_kernel_config=self.hifi4_config) + 1.0
+        return self.linear(self.norm_final(x) * scale, compute_kernel_config=self.hifi4_config)
 
 
 class Ideogram4Transformer(Module):
@@ -545,6 +577,16 @@ class Ideogram4Transformer(Module):
 
         self.final_layer = _FinalLayer(emb_dim, in_channels, adaln_dim, mesh_device=mesh_device)
 
+        # Once-per-forward patchify / conditioning projections: keep HiFi4 for
+        # safety (cheap; the block matmuls run HiFi2 — see the block class).
+        self.hifi4_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=MATH_FIDELITY_HIFI4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # rotary_emb is a parameter-free buffer module in the reference; drop it (cos/sin
         # are precomputed on host). Everything else maps 1:1 by attribute name.
@@ -599,10 +641,10 @@ class Ideogram4Transformer(Module):
 
         Returns [B, L/sp, in_channels] velocity (only OUTPUT_IMAGE positions are meaningful).
         """
-        x = self.input_proj(x * output_image_mask) * output_image_mask
+        x = self.input_proj(x * output_image_mask, compute_kernel_config=self.hifi4_config) * output_image_mask
 
         llm = self.llm_cond_norm(llm_features * llm_token_mask)
-        llm = self.llm_cond_proj(llm) * llm_token_mask
+        llm = self.llm_cond_proj(llm, compute_kernel_config=self.hifi4_config) * llm_token_mask
 
         h = x + llm
         h = h + self.embed_image_indicator(image_indicator_index)
