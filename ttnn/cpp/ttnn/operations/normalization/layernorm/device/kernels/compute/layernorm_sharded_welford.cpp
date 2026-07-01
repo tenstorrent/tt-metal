@@ -121,10 +121,15 @@ void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(16);
     constexpr uint32_t eps = get_compile_time_arg_val(17);
     constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
-    // Valid (logical) tile count of the final width block; fewer than block_wt when the logical width
-    // does not fill the width blocks evenly (each block spans a whole number of tiles).
-    // For example, w=96 results in 3 tiles, which when sharded on two cores results in two real
-    // tiles on the first core, and one real tile + one padding tile on the second core.
+    // Valid (logical) tile count of the final width block: the number of its tiles that hold any
+    // logical data, the last of which may be only partially valid. Fewer than block_wt when the
+    // logical width does not fill the width blocks evenly (each block spans a whole number of tiles).
+    // A partial boundary tile is counted as a valid tile here; its valid-column count is carried
+    // separately in last_tile_w and combined into last_block_w.
+    // For example, w=96 gives 3 tiles, which sharded on two cores leaves two real tiles on the first
+    // core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles), the second
+    // core owns last_block_wt = 1 tile that is itself partial (last_tile_w = 16 valid columns) plus
+    // one padding tile.
     constexpr uint32_t last_block_wt = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------
@@ -187,11 +192,10 @@ void kernel_main() {
 
     // This core's real (logical) column count. Welford has no per-column mask, so each core must reduce
     // over exactly its logical columns: cores before the last own a full block_w, and the last real
-    // core owns the remaining logical columns -- a whole number of full tiles plus, when the logical
+    // core owns the remaining logical columns; a whole number of full tiles plus, when the logical
     // width is not tile-aligned, a final partial tile. The reduce must stop there rather than at the
     // physical shard end, which carries padding tiles. This is the only per-core quantity that differs
-    // for the partial final shard; it is appended after the all-to-all args (index 4 on all-to-all
-    // workers, index 1 otherwise).
+    // for the partial final shard.
     const uint32_t welford_reduce_w = get_arg_val<uint32_t>(is_allgather_worker ? 4 : 1);
     const uint32_t partial_reduce_W = welford_reduce_w;
 
@@ -338,8 +342,8 @@ void kernel_main() {
         }
         // Do the partial Welford tile, if any. It is the tile immediately after this core's full tiles
         // (index_h_offset + num_full_welford_tiles), i.e. the last real tile of this core's logical
-        // columns -- not the last physical tile of the shard (block_wt - 1), which on the final core is
-        // a pure-padding tile when the width is split across cores.
+        // columns; not necessarily the last physical tile of the shard (block_wt - 1), which on the
+        // final core is a pure-padding tile when the width is split across cores.
         if (partial_welford_tile_w > 0) {
             if constexpr (welford_fp32_alias) {
                 transpose_init(cb_x_welford_id);

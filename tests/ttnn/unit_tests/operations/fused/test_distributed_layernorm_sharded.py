@@ -1,6 +1,16 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+"""Single-device tests for the sharded distributed layer_norm / rms_norm op path.
+
+A "distributed" norm is a three-stage, multi-device flow: each device reduces partial statistics over
+its slice of the width (*_pre_all_gather), an all-gather exchanges those stats so every device holds the
+global set, then each device normalizes (*_post_all_gather). These tests "simulate" that flow on a
+single device: the width slices that would live on separate devices are sharded across cores (or
+processed as chunks) on one device, and the all-gather is stood in for by resharding/concatenating the
+per-slice statistics onto a single core. No real multi-device execution or collective runs — only the
+on-device pre/post all-gather op path is exercised.
+"""
 import ttnn
 import torch
 import pytest
@@ -576,17 +586,15 @@ _NON_TILE_ALIGNED_PAD_VALUE = 1000.0
 
 
 def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_w, eps, num_cores_h=1):
-    """Multi-core (non-1x1 grid) simulated distributed norm over a non-tile-aligned logical width w.
+    """Simulated distributed sharded norm over a width w that is not a multiple of the tile size (32),
+    split across a num_cores_w x num_cores_h grid of cores.
 
-    Splitting the width across cores gives the post-all-gather global-stats multicast real participants,
-    so this path runs instead of hanging like the single-core flow. A sharded tile tensor requires every
-    shard to span whole tiles, so the per-core width cannot itself be non-tile-aligned; instead w is
-    non-tile-aligned while each shard spans whole tiles, leaving only the final core partially valid. Its
-    padding columns are poisoned so that a statistic which folds them in is observably wrong.
+    Each core holds whole tiles, so the columns past w are padding on the final core. That padding is
+    poisoned with _NON_TILE_ALIGNED_PAD_VALUE so any inclusion of padded value into statistics produces
+    a grossly wrong result.
 
-    The width shards are laid out across a num_cores_w x num_cores_h core grid. With num_cores_h > 1 the
-    grid is 2D, which drives the cross-core reduction through its two-stage path (see
-    should_use_two_stage_reduce); num_cores_h == 1 keeps the single-stage reduction.
+    num_cores_h picks the cross-core reduction: 1 is single-stage, >1 forms a 2D grid that uses the
+    two-stage path (see should_use_two_stage_reduce in sharded_layernorm_factory_helpers.cpp).
     """
     tile_width = 32
     num_cores = num_cores_w * num_cores_h
@@ -662,23 +670,18 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
     assert_numeric_metrics(torch_golden, actual, pcc_threshold=0.999, rtol=0.05, atol=0.2, frobenius_threshold=0.05)
 
 
-# The distributed pre-all-gather stats kernel masks each final shard's padding columns before reducing,
-# so a non-tile-aligned width split across cores excludes the padding from the per-shard statistics and
-# the normalized output matches the reference. Covers both norms: RMSNorm masks the squared input,
-# LayerNorm masks both the input (E[x]) and its square.
 @pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
 @pytest.mark.parametrize("w", [120, 240])
 @pytest.mark.parametrize("num_cores_w", [2])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_multi_core_non_tile_aligned_width(device, is_rmsnorm, w, num_cores_w, eps):
+    """Non-tile-aligned width split across a row of cores (num_cores_h=1, single-stage reduction), for
+    both norms. Checks that the padding stays out of the per-shard statistics, so the normalized output
+    matches the reference.
+    """
     _run_simulated_distributed_norm_multi_core(device, is_rmsnorm=is_rmsnorm, w=w, num_cores_w=num_cores_w, eps=eps)
 
 
-# A 2D (num_cores_w x num_cores_h, both > 1) width-shard grid drives the cross-core reduction through
-# its two-stage path (should_use_two_stage_reduce). This exercises the non-tile-aligned scaler
-# (winv = num_blocks / logical_K) and the per-shard padding masking in the two-stage regime, which the
-# 1xN grids above do not reach. w=120/240 keep the shard count dividing the tile-padded width evenly
-# (physical width == padded width).
 @pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
 @pytest.mark.parametrize("w", [120, 240])
 @pytest.mark.parametrize(("num_cores_w", "num_cores_h"), [(2, 2)])
@@ -686,6 +689,11 @@ def test_simulated_distributed_norm_multi_core_non_tile_aligned_width(device, is
 def test_simulated_distributed_norm_two_stage_reduce_non_tile_aligned_width(
     device, is_rmsnorm, w, num_cores_w, num_cores_h, eps
 ):
+    """Non-tile-aligned width split across a 2D core grid (num_cores_w and num_cores_h both > 1), for
+    both norms. The 2D grid drives the cross-core reduction through its two-stage path, which the
+    single-stage row-of-cores variant does not reach; this checks the padding still stays out of the
+    per-shard statistics there, so the output matches the reference.
+    """
     _run_simulated_distributed_norm_multi_core(
         device, is_rmsnorm=is_rmsnorm, w=w, num_cores_w=num_cores_w, eps=eps, num_cores_h=num_cores_h
     )
@@ -696,9 +704,9 @@ def _run_simulated_distributed_norm(device, is_rmsnorm, w, eps):
 
     Computes per-shard statistics (pre-all-gather), reshards them onto a single core to stand in for
     the all-gather on one device, then normalizes (post-all-gather) and compares against the torch
-    golden. The implicit tile padding is poisoned so that, once the path is correct, a statistic that
-    folded the padded columns in would be observably wrong (a no-op for tile-aligned widths, which
-    have no implicit padding).
+    golden. The implicit tile padding is poisoned, so a path that folds the padded columns into the
+    statistics is observably wrong. This helper can also be called for tile-aligned widths, which have
+    no implicit padding, so the poison is a no-op there.
     """
     torch.manual_seed(0)
     h = 32
@@ -796,10 +804,8 @@ def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, 
     Checks the per-shard statistics directly (E[x] and E[x^2]) rather than the full pre + post
     pipeline, so it isolates the pre-all-gather reduction and avoids the unrelated single-core
     post-all-gather hang (see _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG). The statistics must be
-    reduced over the logical width only; the implicit tile padding is poisoned so that any read of the
-    padded columns is observable. Both norms mask the final width tile's padding columns out of the
-    reduction: RMSNorm over its squared input, LayerNorm over both the input (E[x]) and its square
-    (E[x^2]), so the poison is excluded and the statistics match the torch reference.
+    reduced over the logical width only; the implicit tile padding is poisoned so any inclusion of the
+    padded columns is observable.
     """
     torch.manual_seed(0)
     h = 32
@@ -851,9 +857,9 @@ def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, 
     #   - frobenius 0.15: aggregate relative-norm safety net.
     #   - pcc: 0.982 for the near-constant E[x^2] (its low row-to-row variance makes PCC noise-
     #     sensitive, so the floor is loose) and 0.9997 for E[x].
-    # Padding contamination is not subtle: the poisoned columns enter the unmasked mean / mean of
-    # squares and dominate the reduction, landing orders of magnitude beyond these envelopes, so every
-    # metric fails comfortably for the unmasked LayerNorm path.
+    # Padding contamination is not subtle: folding the poisoned columns into the mean / mean of squares
+    # dominates the reduction, landing orders of magnitude beyond these envelopes, so every metric fails
+    # comfortably if the padding is not excluded.
     if is_rmsnorm:
         # Stats layout: E[x^2] in the first column.
         assert_numeric_metrics(
@@ -870,45 +876,44 @@ def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, 
 
 
 # The single-core (1x1 grid) simulated distributed post-all-gather flow hangs waiting on the
-# cb_ex_global multicast. It reproduces for both tile-aligned and non-tile-aligned widths, so it is a
-# pre-existing distributed post-all-gather issue, independent of non-tile-aligned padding handling.
-# run=False keeps the known hang from stalling CI; drop it once the post-all-gather hang is fixed.
+# cb_ex_global multicast. It reproduces for both tile-aligned and non-tile-aligned widths, so the hang
+# is a distributed post-all-gather issue independent of non-tile-aligned padding handling. run=False
+# keeps the hang from stalling CI.
 _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG = (
-    "Single-core simulated distributed post-all-gather hangs on the cb_ex_global multicast "
-    "(pre-existing, reproduces for tile-aligned widths too)."
+    "Single-core simulated distributed post-all-gather hangs on the cb_ex_global multicast. Issue #48661"
 )
 
 
 @pytest.mark.xfail(reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG, run=False)
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-# Tile-aligned widths through the single-core simulated distributed flow. Demonstrates the
-# post-all-gather hang is not specific to non-tile-aligned widths.
 @pytest.mark.parametrize("w", [64, 128])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_tile_aligned_width(device, is_rmsnorm, w, eps):
+    """Tile-aligned single-core widths through the full pipeline. Shows the post-all-gather hang
+    affects tile-aligned widths too, not just non-tile-aligned ones (see
+    _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG).
+    """
     _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
 
 
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-# Widths that are not multiples of the tile width (32). Single core, so the whole logical row plus
-# its tile padding lives in one shard. The statistics must be reduced over the logical width only.
 @pytest.mark.parametrize("w", [40, 72, 200])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width(device, is_rmsnorm, w, eps):
-    # Pre-all-gather-only stats check: the masking that excludes the padding columns is in the
-    # pre-all-gather reduction, and the single-core post-all-gather hangs
-    # (_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG), so assert the per-shard statistics directly to
-    # isolate the pre stage and avoid the hang. Both norms mask the padding: RMSNorm over its squared
-    # input, LayerNorm over both the input (E[x]) and its square (E[x^2]).
+    """Non-tile-aligned single-core widths, for both norms. Checks the pre-all-gather per-shard
+    statistics directly rather than the full pipeline, because the single-core post-all-gather hangs
+    (see _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG).
+    """
     _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, eps)
 
 
 @pytest.mark.xfail(reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG, run=False)
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-# Non-tile-aligned widths through the full single-core pre + post pipeline. The pre-all-gather masking
-# is verified directly by test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width; this
-# covers the end-to-end path, which the single-core post-all-gather hang keeps from running today.
 @pytest.mark.parametrize("w", [40, 72, 200])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_non_tile_aligned_width(device, is_rmsnorm, w, eps):
+    """Non-tile-aligned single-core widths through the full pipeline. Does not run: the single-core
+    post-all-gather hangs (see _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG). The pre-all-gather padding
+    exclusion is verified directly by test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width.
+    """
     _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)

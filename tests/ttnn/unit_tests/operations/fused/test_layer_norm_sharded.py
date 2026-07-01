@@ -488,12 +488,18 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
     )
 
 
-# A width split across cores so the final core owns fewer real tiles: a tile-aligned width whose tiles
-# do not divide evenly (96 over 2, 224 over 3), and a non-tile-aligned width split across cores (72
-# over 2, 200 over 3). The op must normalize over the logical width, not the padded per-core width.
-# Both reductions are covered: the legacy path (per-core column mask) and Welford (per-core logical
-# column count). See the helper for the analytic bf16 tolerance derivation; tolerances are not taken
-# from observed output.
+# Block sharding mandates that every core must get the same-sized tile-aligned shard:
+# shard_w = ceil(w / cores / 32) * 32, so the padded width is cores * shard_w.
+# This means the final core's shard may have padding.
+# Two categories are covered:
+#   - tile-aligned widths whose tiles do not divide evenly across the cores (96 over 2, 224 over 3):
+#     every tile on the final core is either fully valid or fully padding, never partial. E.g. 96 over
+#     2 gives the final core one fully-valid tile and one fully-padding tile.
+#   - non-tile-aligned widths (72 over 2, 200 over 3): the logical columns run out mid-tile, so the
+#     final core holds a partially-valid tile followed by a fully-padding tile. E.g. 72 over 2 gives
+#     the final core one partially-valid tile (8 of its 32 columns valid) and one fully-padding tile.
+# In both, the op must normalize over the logical width, not the padded per-core width. Test covers
+# both the legacy path and Welford.
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize(
     ("w", "num_cores_w"),

@@ -765,9 +765,12 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         // block_wt tiles; the final block owns the remainder. Each block spans a whole number of tiles
         // (block_w columns), so when the logical width does not fill them evenly the final core owns
         // fewer than block_wt tiles, and the cross-core combine must weight it by its true width, not
-        // block_w.
-        // For example, w=96 results in 3 tiles, which when sharded on two cores results in two real
-        // tiles on the first core, and one real tile + one padding tile on the second core.
+        // block_w. A partial boundary tile is counted as a valid tile here; its valid-column count is
+        // carried separately in last_tile_W and combined into last_block_w.
+        // For example, w=96 gives 3 tiles, which sharded on two cores leaves two real tiles on the
+        // first core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles),
+        // the second core owns last_block_wt = 1 tile that is itself partial (last_tile_W = 16 valid
+        // columns) plus one padding tile.
         // last_block_wt is always >= 1 (no unsigned underflow here, nor in the kernel's
         // (last_block_wt - 1) * tile_width): validate_sharded_input requires the trailing width pad to
         // be strictly less than one shard, i.e. (num_blocks - 1) * block_wt < Kt. The padded width Kt
@@ -1330,8 +1333,7 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
             (idx.width_index * ctx.workers.num_rows_per_all_to_all_worker) * ctx.single_tile_size;
     }
 
-    idx.gamma_tile_start_id = idx.width_index * ctx.block_wt;
-    idx.beta_tile_start_id = idx.width_index * ctx.block_wt;
+    idx.width_shard_tile_start_id = idx.width_index * ctx.block_wt;
 
     idx.num_reduce_tiles_per_block_h = ctx.block_wt;
     if (idx.width_index == ctx.last_core_width_index) {
@@ -1568,8 +1570,7 @@ std::vector<uint32_t> build_writer_args(
     args.push_back(ctx.eps_u);
     args.push_back(ctx.gamma_dram_addr);
     args.push_back(ctx.beta_dram_addr);
-    args.push_back(idx.gamma_tile_start_id);
-    args.push_back(idx.beta_tile_start_id);
+    args.push_back(idx.width_shard_tile_start_id);
     args.insert(args.end(), write_back_args.begin(), write_back_args.end());
     return args;
 }

@@ -10,7 +10,8 @@
 #include "reshard_writer.hpp"
 #include "api/tensor/noc_traits.h"
 #ifdef DO_COL_MASK
-#include "ttnn/kernel/dataflow/moreh_common.hpp"  // generate_mask_w<T>
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/debug/assert.h"
 #endif
 
 void kernel_main() {
@@ -31,14 +32,16 @@ void kernel_main() {
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(5);
-    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
+    // This core's first tile index along the width (the normalized dimension): width_index * block_w,
+    // the start of this core's width shard. Used by the gamma read, the beta read, and the column mask,
+    // which all index off this same per-core width offset.
+    const uint32_t width_shard_tile_start_id = get_arg_val<uint32_t>(5);
 
     // Reshard writer
 #ifndef SKIP_WRITE_BACK
-    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(7);
-    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(8);
-    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(6);
+    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(7);
+    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
 #endif
 
     constexpr uint32_t cb_gamma = get_named_compile_time_arg_val("cb_gamma");
@@ -67,17 +70,18 @@ void kernel_main() {
         generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
 #ifdef DO_COL_MASK
-        // Generate this core's column mask on-device: block_w tiles, one per width-tile position, with
-        // the padding columns of the boundary tile (and any all-padding tiles) zeroed. The core's
-        // width position comes from gamma_tile_start_id (= width_index * block_w), so no extra runtime
-        // arg is needed. block_w here is the per-core width in tiles.
+        // Generate this core's column mask on-device: block_w tiles, one per tile across the shard width,
+        // with the padding columns of the boundary tile (and any all-padding tiles) zeroed. The core's
+        // width position comes from width_shard_tile_start_id. block_w here is the per-core width in tiles.
         {
             constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
             constexpr uint32_t logical_K = get_named_compile_time_arg_val("logical_K");
             constexpr uint32_t mask_fp32 = get_named_compile_time_arg_val("mask_fp32");
             constexpr uint32_t tile_w = 32;
             CircularBuffer cb_col_mask_obj(cb_col_mask);
-            const uint32_t core_start_col = (gamma_tile_start_id / block_w) * block_w * tile_w;
+            // A width shard always starts on a block boundary, so this offset is an exact multiple of block_w.
+            ASSERT(width_shard_tile_start_id % block_w == 0);
+            const uint32_t core_start_col = width_shard_tile_start_id * tile_w;
             for (uint32_t wt = 0; wt < block_w; wt++) {
                 const uint32_t tile_start_col = core_start_col + wt * tile_w;
                 uint32_t mask_w;
@@ -112,7 +116,7 @@ void kernel_main() {
 
         cb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
-            uint32_t tile_id = gamma_tile_start_id + w;
+            uint32_t tile_id = width_shard_tile_start_id + w;
             noc.async_read(
                 gamma, cb_gamma_obj, gamma_tile_bytes, {.page_id = tile_id}, {.offset_bytes = w * gamma_tile_bytes});
         }
@@ -126,7 +130,7 @@ void kernel_main() {
 
         cb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
-            uint32_t tile_id = beta_tile_start_id + w;
+            uint32_t tile_id = width_shard_tile_start_id + w;
             noc.async_read(
                 beta, cb_beta_obj, beta_tile_bytes, {.page_id = tile_id}, {.offset_bytes = w * beta_tile_bytes});
         }
