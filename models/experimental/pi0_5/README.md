@@ -1,6 +1,6 @@
 # PI0.5 (`pi0_5`) — Tenstorrent
 
-End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights trace+2CQ perf on a 1×8 Blackhole mesh — measured against the upstream `pi05_libero` checkpoint (10-action chunks, 5 denoise steps, 3 cameras).
+End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights trace+2CQ perf on a 1×8 Blackhole mesh — measured against the upstream `pi05_libero` checkpoint (10-action chunks, 5 denoise steps, 2/3 cameras).
 
 The supported multi-chip path is the **1×8 single-mesh pipeline** (`pipeline_1x8.py`):
 SigLIP DP + prefill TP=8 + replicated denoise on one 1×8 Blackhole mesh.
