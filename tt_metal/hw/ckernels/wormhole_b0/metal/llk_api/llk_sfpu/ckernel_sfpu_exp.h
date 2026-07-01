@@ -296,13 +296,15 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     //
     //   Base body:                                                17
     //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPNOP,
+    //   Base body:                                                16
+    //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPLOADI, SFPSWAP,
     //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
     //     SFPMAD poly1, SFPNOP, SFPMAD poly2,
-    //     SFPLOADI, SFPSETEXP, SFPSTORE. INCRWC
+    //     SFPSETEXP, SFPSTORE. INCRWC
     //   + SCALE_EN ? 1 : 0                  (SFPMULI scale + SFPNOP)
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
     //   + CLAMP_NEGATIVE ? 2 : 0            (SFPSWAP + SFPNOP)
-    constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
+    constexpr unsigned BODY_LEN = 16 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
 
     // Record the loop body into replay buffer slot 0 the first time
     // through. Subsequent iterations replay the recorded sequence, which
@@ -342,12 +344,14 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
         // the LCONST_0 fixed register directly, so we materialize 0.0 in
         // LREG1 first. Mode VEC_MIN_MAX puts max(a, b) into the dest LReg.
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
-    TTI_SFPNOP;
+    
+    // Refresh LREG2 = 255.0f for next iteration's upper-clamp.
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
     // Upper clamp: xlog2 <- min(xlog2, 255). LREG2 holds 255.
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     TTI_SFPNOP;
 
     // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
@@ -368,10 +372,6 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
     TTI_SFPNOP;
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
-
-    // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
-    // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
     // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
     constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
