@@ -9,6 +9,7 @@ LongCatImageTransformer2DModel from diffusers using random inputs.
 
 Run (single-node N300/T3000):
     pytest models/experimental/longcat_image/tests/test_transformer.py -v
+    pytest models/experimental/longcat_image/tests/test_transformer.py::test_transformer_edit -v
 """
 
 import pytest
@@ -25,11 +26,13 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 # ── Checkpoint ────────────────────────────────────────────────────────────────
 # Uses the HuggingFace cache if the model has already been downloaded;
 # falls back to an HF download otherwise.
 MODEL_NAME = "meituan-longcat/LongCat-Image"
+EDIT_MODEL_NAME = "meituan-longcat/LongCat-Image-Edit"
 
 # ── Mesh configurations ───────────────────────────────────────────────────────
 # Each entry: (mesh_shape, sp_axis, tp_axis, num_links)
@@ -125,7 +128,8 @@ def test_transformer_block(
     tt_block.load_torch_state_dict(torch_block.state_dict())
 
     # ── Random inputs ─────────────────────────────────────────────────────────
-    # Block operates at inner_dim (already projected), so inputs are [B, seq, 3072].
+    # Block operates at inner_dim (already projected). PyTorch reference uses full [B, seq, 3072];
+    # TT block expects SP-sharded seq and TP-sharded features: [B, seq/sp, 3072/tp].
     spatial = torch.randn(batch_size, spatial_seq_len, inner_dim, dtype=torch.bfloat16)
     prompt = torch.randn(batch_size, prompt_seq_len, inner_dim, dtype=torch.bfloat16)
     temb = torch.randn(batch_size, inner_dim, dtype=torch.bfloat16)
@@ -143,15 +147,13 @@ def test_transformer_block(
         )
 
     # ── TT forward ────────────────────────────────────────────────────────────
-    # time_embed enters as [B, 1, inner_dim]; block's norm1_linear does Linear(inner_dim → 6*inner_dim).
-    tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
-    tt_prompt = tensor.from_torch(prompt, device=mesh_device)
-    tt_time_embed = tensor.from_torch(temb.unsqueeze(1), device=mesh_device)
-
-    tt_spatial_rope_cos = tensor.from_torch(rope_cos[prompt_seq_len:], device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_spatial_rope_sin = tensor.from_torch(rope_sin[prompt_seq_len:], device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_prompt_rope_cos = tensor.from_torch(rope_cos[:prompt_seq_len], device=mesh_device)
-    tt_prompt_rope_sin = tensor.from_torch(rope_sin[:prompt_seq_len], device=mesh_device)
+    tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
+    tt_prompt = bf16_tensor(prompt, device=mesh_device, mesh_axis=tp_axis, shard_dim=2)
+    tt_time_embed = bf16_tensor(temb.unsqueeze(1), device=mesh_device)
+    tt_spatial_rope_cos = bf16_tensor(rope_cos[prompt_seq_len:], device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
+    tt_spatial_rope_sin = bf16_tensor(rope_sin[prompt_seq_len:], device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
+    tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=mesh_device)
+    tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device)
 
     tt_spatial_out, tt_prompt_out = tt_block.forward(
         spatial=tt_spatial,
@@ -163,8 +165,8 @@ def test_transformer_block(
     )
 
     # ── Compare ───────────────────────────────────────────────────────────────
-    tt_spatial_torch = tensor.to_torch(tt_spatial_out, mesh_axes=[None, sp_axis, None])[:batch_size]
-    tt_prompt_torch = tensor.to_torch(tt_prompt_out, mesh_axes=[None, None, None])[:batch_size]
+    tt_spatial_torch = tensor.to_torch(tt_spatial_out, mesh_axes=[None, sp_axis, tp_axis])[:batch_size]
+    tt_prompt_torch = tensor.to_torch(tt_prompt_out, mesh_axes=[None, None, tp_axis])[:batch_size]
 
     logger.info("=== spatial stream ===")
     assert_quality(torch_spatial_out, tt_spatial_torch, pcc=0.99)
@@ -329,4 +331,130 @@ def test_transformer(
     tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])[:batch_size]
 
     logger.info("=== PCC check (full transformer) ===")
+    assert_quality(torch_output, tt_output_torch, pcc=0.99, relative_rmse=10.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Edit-shaped full transformer test
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links"),
+    TEST_MESH_PARAMS,
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    # Edit fuses noisy + reference latents along the sequence dim (2× image tokens).
+    # 16×48=768 per stream → 1536 fused; per-device 1536/sp must be divisible by 32:
+    #   sp=2 → 768, sp=4 → 384, sp=8 → 192.
+    # prompt_seq_len simulates edit's multimodal encoder output: 2 prefix + N vision + 512 text.
+    ("batch_size", "latent_h", "latent_w", "num_vision_tokens"),
+    [(1, 16, 48, 64)],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31_000_000}],
+    indirect=True,
+)
+def test_transformer_edit(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    batch_size: int,
+    latent_h: int,
+    latent_w: int,
+    num_vision_tokens: int,
+) -> None:
+    """Edit-shaped PCC test: fused noisy+reference spatial stream, multimodal prompt, Edit weights."""
+    torch.manual_seed(0)
+
+    image_seq_len = latent_h * latent_w
+    fused_spatial_seq_len = 2 * image_seq_len
+    prompt_seq_len = 2 + num_vision_tokens + 512
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+    per_device_spatial = fused_spatial_seq_len // sp_factor
+    assert (
+        per_device_spatial % 32 == 0
+    ), f"per-device fused spatial seq {per_device_spatial} must be divisible by TILE_HEIGHT (32)"
+
+    logger.info(f"loading reference model from {EDIT_MODEL_NAME} ...")
+    torch_model = LongCatImageTransformer2DModel.from_pretrained(
+        EDIT_MODEL_NAME, subfolder="transformer", torch_dtype=torch.bfloat16
+    )
+    torch_model.eval()
+
+    in_channels = torch_model.config.in_channels
+    joint_attention_dim = torch_model.config.joint_attention_dim
+
+    logger.info("building TT model ...")
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    checkpoint = LongCatImageCheckpoint(EDIT_MODEL_NAME)
+    tt_model = checkpoint.build(ccl_manager=ccl_manager, parallel_config=parallel_config)
+
+    noisy = torch.randn(batch_size, image_seq_len, in_channels, dtype=torch.bfloat16)
+    reference = torch.randn(batch_size, image_seq_len, in_channels, dtype=torch.bfloat16)
+    spatial = torch.cat([noisy, reference], dim=1)
+    prompt = torch.randn(batch_size, prompt_seq_len, joint_attention_dim, dtype=torch.bfloat16)
+    timestep = torch.full([batch_size], fill_value=500, dtype=torch.float32)
+
+    # Edit RoPE: text modality 0; noisy modality 1; reference modality 2.
+    # Noisy and reference share the same row/col grid; only modality_id differs.
+    pos_start = (prompt_seq_len, prompt_seq_len)
+    txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=prompt_seq_len)
+    noisy_ids = prepare_pos_ids(modality_id=1, type="image", start=pos_start, height=latent_h, width=latent_w)
+    reference_ids = prepare_pos_ids(modality_id=2, type="image", start=pos_start, height=latent_h, width=latent_w)
+    img_ids = torch.cat([noisy_ids, reference_ids], dim=0)
+
+    all_ids = torch.cat([txt_ids, img_ids], dim=0)
+    rope_cos, rope_sin = torch_model.pos_embed.forward(all_ids)
+
+    prompt_rope_cos = rope_cos[:prompt_seq_len]
+    prompt_rope_sin = rope_sin[:prompt_seq_len]
+    spatial_rope_cos = rope_cos[prompt_seq_len:]
+    spatial_rope_sin = rope_sin[prompt_seq_len:]
+
+    logger.info("running torch model ...")
+    with torch.no_grad():
+        torch_output = torch_model.forward(
+            hidden_states=spatial,
+            encoder_hidden_states=prompt,
+            timestep=timestep / 1000,
+            img_ids=img_ids,
+            txt_ids=txt_ids,
+            return_dict=False,
+        )[0][:, :image_seq_len]
+
+    tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
+    tt_prompt = tensor.from_torch(prompt, device=mesh_device)
+    tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
+    tt_spatial_rope_cos = tensor.from_torch(spatial_rope_cos, device=mesh_device, mesh_axes=[sp_axis, None])
+    tt_spatial_rope_sin = tensor.from_torch(spatial_rope_sin, device=mesh_device, mesh_axes=[sp_axis, None])
+    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=mesh_device)
+    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=mesh_device)
+
+    logger.info("running TT model ...")
+    tt_output = tt_model.forward(
+        spatial=tt_spatial,
+        prompt=tt_prompt,
+        timestep=tt_timestep,
+        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        spatial_sequence_length=fused_spatial_seq_len,
+        prompt_sequence_length=prompt_seq_len,
+    )
+
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])[:batch_size]
+    tt_output_torch = tt_output_torch[:, :image_seq_len]
+
+    logger.info("=== PCC check (edit-shaped transformer) ===")
     assert_quality(torch_output, tt_output_torch, pcc=0.99, relative_rmse=10.0)
