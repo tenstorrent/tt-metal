@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -221,8 +222,10 @@ void kernel_main() {
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                DeviceZoneScopedN("AVAILABLE");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+                        DeviceZoneScopedN("DEFER-WRITE");
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
@@ -263,6 +266,7 @@ void kernel_main() {
 
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {
+                    DeviceZoneScopedN("DRAM-Latency");
 #ifdef FUSE_AG
                     if (is_injector_core) {
                         k_block =
@@ -285,6 +289,7 @@ void kernel_main() {
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
                 } else {
+                    DeviceZoneScopedN("RECV-WAIT");
                     // Get from previous device
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
@@ -296,6 +301,7 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                 if (!is_sink_core) {
+                    DeviceZoneScopedN("MCAST-SEND");
                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
@@ -372,6 +378,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+                    DeviceZoneScopedN("OUT-WRITE");
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {

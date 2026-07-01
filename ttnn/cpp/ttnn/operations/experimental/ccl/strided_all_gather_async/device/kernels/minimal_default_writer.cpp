@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/strided_all_gather_common.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -205,6 +206,7 @@ void kernel_main() {
             // Send out local
             uint32_t input_chunk_start_tile = global_tile_index;
             for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
+                DeviceZoneScopedN("AG-LOCAL-SEND");
                 uint32_t actual_chunk_w = device_chunk_widths[my_chip_id][chunk_idx];
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                     input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
@@ -236,6 +238,7 @@ void kernel_main() {
                     num_targets_backward_direction,
                     true && !read_local_slice_from_input);
                 if (fuse_op && direction == 1 && !read_local_slice_from_input) {
+                    DeviceZoneScopedN("AG-MM-SIGNAL");
                     // Synchronize and signal that the local tensor slice is available
                     op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
                 }
@@ -247,6 +250,7 @@ void kernel_main() {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
                 input_chunk_start_tile = global_tile_index;
                 for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
+                    DeviceZoneScopedN("AG-FWD-SEND");
                     uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                     uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                         input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);

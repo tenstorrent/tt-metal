@@ -272,6 +272,8 @@ void matmul_blocks(
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
     const uint32_t subblock_w) {
+    DeviceZoneScopedN("MATMUL_BLOCK");
+
     uint32_t in0_index_offset = 0;
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
