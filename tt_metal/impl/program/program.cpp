@@ -1273,17 +1273,6 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-bool detail::ProgramImpl::has_scratchpads() const {
-    for (const auto& kernels_of_core_type : this->kernels_) {
-        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            if (!kernel->scratchpad_binding_handles().empty()) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 // Scratchpad is a Metal 2.0-only construct.
 void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
     if (this->scratchpads_allocated_) {
@@ -1355,7 +1344,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 //
                 TT_FATAL(
                     !kernel->common_runtime_args().empty(),
-                    "CRTA buffer is not allocated; cannot populate scratchpad addresses for kernel {}."
+                    "CRTA buffer is not allocated; cannot populate scratchpad addresses for kernel {}. "
                     "Ensure that SetProgramRunArgs is called before attempting to enqueue a Program.",
                     kernel->name());
                 TT_FATAL(

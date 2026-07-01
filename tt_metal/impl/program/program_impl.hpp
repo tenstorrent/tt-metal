@@ -228,8 +228,6 @@ public:
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
-    // True if any kernel in this Program binds a scratchpad.
-    bool has_scratchpads() const;
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
