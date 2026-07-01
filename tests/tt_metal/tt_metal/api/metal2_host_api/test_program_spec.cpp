@@ -2854,14 +2854,14 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
-    // On Gen1, a DM kernel that declares neither a role hint nor an explicit Gen1Config must be
-    // rejected: it has no way to resolve its processor/NOC placement.
+    // On Gen1, a DM kernel with no Gen1Config must be rejected: it has no way to resolve its
+    // processor/NOC placement.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config (UNSPECIFIED role, no Gen1Config).
+    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config (no Gen1Config).
     auto kernel = MakeMinimalDMKernel("dm_kernel");
 
     spec.kernels = {kernel};
@@ -2869,7 +2869,7 @@ TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("specifies neither a role hint")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no Gen1 config")));
 }
 
 TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
@@ -2925,27 +2925,6 @@ TEST_F(ProgramSpecTestGen1, TwoReaderRolesOnSameNodeConflict) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
-}
-
-TEST_F(ProgramSpecTestGen1, RoleHintWithExplicitGen1ConfigFails) {
-    // A role hint and an explicit Gen1Config are mutually exclusive: the hint already fills
-    // in the config, so supplying both is contradictory and must be rejected.
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto kernel = MakeMinimalRoleDMKernel("dm_kernel", DataMovementRoleHint::READER);
-    auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-    dm_config.gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1};
-
-    spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("sets both a READER/WRITER role hint and an explicit Gen1 config")));
 }
 
 // WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
