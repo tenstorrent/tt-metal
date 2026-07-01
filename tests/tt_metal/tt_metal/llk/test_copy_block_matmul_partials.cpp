@@ -184,7 +184,7 @@ void run_single_core_copy_block_matmul_partials(
                                         ? experimental::ComputeHardwareConfig::
                                               UnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
                                         : experimental::ComputeHardwareConfig::UnpackToDestModes{};
-                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
                         .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                         .dst_full_sync_en = test_config.dst_full_sync_en,

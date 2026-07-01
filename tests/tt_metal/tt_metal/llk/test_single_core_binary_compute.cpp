@@ -396,7 +396,7 @@ bool single_core_binary(
         .hw_config =
             [&] {
                 experimental::ComputeHardwareConfig cfg;
-                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
                         .math_fidelity = test_config.math_fidelity,
                     };

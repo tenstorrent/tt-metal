@@ -275,7 +275,7 @@ void run_single_core_transpose(
                         ? experimental::ComputeHardwareConfig::
                               UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
                         : experimental::ComputeHardwareConfig::UnpackToDestModes{};
-                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = test_config.dst_full_sync_en,

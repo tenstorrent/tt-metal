@@ -747,7 +747,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
                         ? experimental::ComputeHardwareConfig::
                               UnpackToDestModes{{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
                         : experimental::ComputeHardwareConfig::UnpackToDestModes{};
-                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
                         .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
                         .dst_full_sync_en = test_config.dst_full_sync_en,
@@ -1073,7 +1073,7 @@ bool run_sfpu_binary_two_input_buffer(
         .hw_config =
             [&] {
                 experimental::ComputeHardwareConfig cfg;
-                if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
                         .fp32_dest_acc_en = is_int8_op,
                         .math_approx_mode = test_config.approx_mode,
@@ -1260,7 +1260,7 @@ bool run_sfpu_ternary_three_input_buffer(
             .hw_config =
                 [&] {
                     experimental::ComputeHardwareConfig cfg;
-                    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    if (mesh_device->arch() == tt::ARCH::QUASAR) {
                         cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
                             .math_approx_mode = test_config.approx_mode,
                         };
