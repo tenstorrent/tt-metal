@@ -49,8 +49,6 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
     // pool_type == PoolType::MAX sets the clear value to neginf if the pool-type is MAX and 0 if the pool-type is AVG/SUM
     static constexpr std::uint32_t clear_pool_dep_srca =
         TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, (pool_type == PoolType::MAX) ? p_unpacr_nop::UNP_NEGINFSRC : p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr std::uint32_t clear_pool_dep_srcb =
-        TT_OP_UNPACR_NOP(p_unpacr_nop::UNP1, (pool_type == PoolType::MAX) ? p_unpacr_nop::UNP_NEGINFSRC : p_unpacr_nop::UNP_ZEROSRC);
     static constexpr std::uint32_t clear_zero_srca = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
 
     constexpr std::uint32_t REPLAY_BUF_LEN = 2;
@@ -64,22 +62,12 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
     constexpr std::uint32_t outerloop = 1;
     const std::uint32_t innerloop     = tensor_shape.total_num_faces();
 
-    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX);
-
     // Padding should only be done when using tiny tiles otherwise the entire face overwrites the data read in Math
     if (tensor_shape.face_r_dim < FACE_R_DIM) // Using tiny faces
     {
-        // Swapped REDUCE_ROW: data is in SrcB, pad SrcB; otherwise data is in SrcA, pad SrcA
-        if constexpr (swap_operands)
-        {
-            ckernel_template tmp(outerloop, innerloop, clear_pool_dep_srcb, lltt::replay_insn(0, REPLAY_BUF_LEN));
-            tmp.program();
-        }
-        else
-        {
-            ckernel_template tmp(outerloop, innerloop, clear_pool_dep_srca, lltt::replay_insn(0, REPLAY_BUF_LEN));
-            tmp.program();
-        }
+        // Fill SrcA with pool-type dependent padding value for tiny tiles before unpacking a face
+        ckernel_template tmp(outerloop, innerloop, clear_pool_dep_srca, lltt::replay_insn(0, REPLAY_BUF_LEN));
+        tmp.program();
     }
     else // Using standard faces (face_r_dim = FACE_R_DIM)
     {
@@ -109,38 +97,29 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam enforce_fp32_accumulation: Configure the ALU for FP32 accumulation (MOVB2D hi16/lo16 path).
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
  *
- * @note For SUM/AVG REDUCE_ROW, operands are swapped: scaler→SrcA, data→SrcB.
- * @note For MAX REDUCE_ROW, original layout is kept: data→SrcA (transposed via haloize), scaler→SrcB.
- * @note For REDUCE_COL/REDUCE_SCALAR: Unpacker 0 (SrcA) reads face_r_dim*FACE_R_DIM datums,
- *       Unpacker 1 (SrcB) reads one row (FACE_R_DIM datums).
+ * @note For REDUCE_ROW operations, the face is transposed using haloize mode.
+ * @note Unpacker 0 (SrcA) reads face_r_dim*FACE_R_DIM datums.
+ * @note Unpacker 1 (SrcB) reads one row (FACE_R_DIM datums).
  * @ref _llk_unpack_AB_reduce_ is the matching execute call.
- * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler operand unpack pairing).
+ * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler-operand unpack pairing).
  */
-template <PoolType pool_type, ReduceDim reduce_dim>
+template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape)
 {
     // Validate tensor shape for tile-dependent operations
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    // SUM/AVG REDUCE_ROW swaps operands (scaler→SrcA, data→SrcB), no transpose needed.
-    // MAX REDUCE_ROW keeps original layout (data→SrcA transposed, scaler→SrcB) — GMPOOL only reads SrcA.
-    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>((reduce_dim == ReduceDim::REDUCE_ROW));
+    // Enable transpose (haloize mode) if reducing along rows
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(reduce_dim == ReduceDim::REDUCE_ROW);
 
+    // Sets up Unpacker 0 to read face_r_dim*16 datums into SrcA register
     config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape.face_r_dim);
 
-    // UNP_B reads data faces (face_r_dim rows) in swapped mode, or a single
-    // scaler row in the non-swapped (MAX / COL / SCALAR) mode.
-    if constexpr (swap_operands)
-    {
-        config_unpacker_x_end<p_setadc::UNP_B>(tensor_shape.face_r_dim);
-    }
-    else
-    {
-        config_unpacker_x_end<p_setadc::UNP_B>(1);
-    }
+    // Sets up Unpacker 1 to read one row (16 datums) into SrcB register
+    config_unpacker_x_end<p_setadc::UNP_B>(1);
 
     // Configure unpack MOP
     _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
@@ -178,17 +157,8 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     // Wait for free context
     wait_for_next_context(2);
 
-    // SUM/AVG REDUCE_ROW: swap operands so scaler→SrcA, data→SrcB
-    // MAX REDUCE_ROW: keep original order (data→SrcA, scaler→SrcB)
-    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX);
-    if constexpr (swap_operands)
-    {
-        _llk_unpack_configure_addresses_(address_b, address_a, cfg);
-    }
-    else
-    {
-        _llk_unpack_configure_addresses_(address_a, address_b, cfg);
-    }
+    // Validate and configure addresses
+    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
