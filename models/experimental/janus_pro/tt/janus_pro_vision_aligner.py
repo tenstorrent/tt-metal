@@ -51,7 +51,7 @@ class TtJanusProVisionAligner(LightweightModule):
                 bias_cache = None if args.dummy_weights else weight_cache_path / f"{state_dict_prefix}{name}.bias"
                 bias = ttnn.as_tensor(
                     b,
-                    dtype=ttnn.bfloat16,
+                    dtype=dtype,
                     device=mesh_device,
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=bias_dim)
                     if bias_dim is not None
