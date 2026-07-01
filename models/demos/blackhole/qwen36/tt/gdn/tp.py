@@ -198,7 +198,14 @@ class TPGatedDeltaNet:
         # it False (reassign), so the demo's behavior is unchanged.
         self._stable_state = False
         self.conv_carry = None  # [1, K-1, qkv_dim_tp] cross-chunk prefill conv carry
-        self._zero_conv0 = None  # persistent zero source for conv_states[0] (trace-safe)
+        # Persistent zero-source buffers, allocated in reset_state (always BEFORE any trace is
+        # parked). reset_state_inplace copies from these so it allocates NOTHING — allocating a
+        # device buffer while the chunk-outer prefill trace is parked is unsafe (see
+        # reset_state_inplace). _zero_conv0 doubles as the trace-safe zero source for
+        # conv_states[0] in capture_state.
+        self._zero_conv0 = None  # zero source, shape (1, B, qkv_dim_tp)
+        self._zero_conv_carry = None  # zero source, shape (1, K-1, qkv_dim_tp)
+        self._zero_rec = None  # zero source, shape (B, Nv, Dk, Dv)
 
     def reset_state(self):
         def z(shape):
@@ -229,42 +236,45 @@ class TPGatedDeltaNet:
         # left context); _zero_conv0 is a persistent zero source for conv_states[0] so the
         # capture_state writeback stays trace-safe (no host->device transfer inside a trace).
         self.conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
+        # Persistent zero sources for trace-safe in-place resets (reset_state_inplace copies
+        # from these, never allocating). Created here because reset_state always runs during
+        # warmup/setup, before any trace is parked. All bf16 like the conv/rec buffers; ttnn.copy
+        # converts into the (possibly fp32) rec_state, exactly as the old transient zr did.
         self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
+        self._zero_conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
+        self._zero_rec = z((self.B, self.Nv, self.Dk, self.Dv))
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state IN PLACE (preserves buffer addresses for tracing).
 
         Mirrors qwen35_27b gdn.py reset_state_inplace — used between sequences / trace
-        replays so the captured decode trace's baked addresses stay valid.
+        replays so the captured decode/prefill traces' baked addresses stay valid.
+
+        Allocates NOTHING: every zero is copied from the persistent _zero_* source buffers
+        created in reset_state (which always runs before a trace is parked). This is required
+        for correctness, not just tidiness — once the chunk-outer prefill trace is parked, the
+        per-sequence reset still runs (via _reset_gdn_state_for_new_sequence), and allocating a
+        device buffer while a trace is active is unsafe: the allocator can hand back an address
+        inside the trace's reserved region, which the trace then corrupts on replay. At 256k,
+        where the 4096-block KV cache leaves DRAM nearly full, those transient reset buffers were
+        forced into the trace region and the corruption surfaced as a bus error during the
+        per-chunk replays. (Single-device _reset_dn_state_inplace uses the same copy-from-
+        preallocated-zero pattern, which is why it never hit this.)
         """
         if self.conv_states is None:
             self.reset_state()
             return
-
-        def z(shape):
-            return ttnn.from_torch(
-                torch.zeros(*shape, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            )
-
-        if self.conv_carry is None:
-            # Older state created before the carry buffers existed; allocate them once.
-            self.conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
-            self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
-        zc = z((1, self.B, self.qkv_dim_tp))
+        # reset_state always runs first (it sets conv_states), so the zero sources exist. Assert
+        # rather than lazily allocate — a lazy allocation here would reintroduce the active-trace
+        # allocation this method exists to avoid.
+        assert (
+            self._zero_conv0 is not None and self._zero_conv_carry is not None and self._zero_rec is not None
+        ), "zero sources missing; reset_state must run before reset_state_inplace"
         for cs in self.conv_states:
-            ttnn.copy(zc, cs)
-        ttnn.deallocate(zc)
-        zr = z((self.B, self.Nv, self.Dk, self.Dv))
-        ttnn.copy(zr, self.rec_state)
-        ttnn.deallocate(zr)
+            ttnn.copy(self._zero_conv0, cs)
+        ttnn.copy(self._zero_rec, self.rec_state)
         # Zero the cross-chunk conv carry so each new sequence starts from scratch.
-        zcc = z((1, self.K - 1, self.qkv_dim_tp))
-        ttnn.copy(zcc, self.conv_carry)
-        ttnn.deallocate(zcc)
+        ttnn.copy(self._zero_conv_carry, self.conv_carry)
 
     def _col_proj(self, x, weight, decode_progcfg):
         """Column-parallel qkvz in-projection. DRAM-sharded decode matmul when enabled, else the
