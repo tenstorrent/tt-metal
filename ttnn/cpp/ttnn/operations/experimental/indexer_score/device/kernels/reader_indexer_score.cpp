@@ -49,6 +49,25 @@ constexpr uint32_t fused_stream_k = get_compile_time_arg_val(mc_ct_base + 9);
 constexpr uint32_t synthesize_gate = get_compile_time_arg_val(mc_ct_base + 10);
 constexpr uint32_t gate_scale_bits = get_compile_time_arg_val(mc_ct_base + 11);  // bf16 pair (two per word)
 
+// Slab (per-SP-shard) K layout: the gathered cache stores each SP shard's per-chunk slab back-to-back, so
+// logical token tile L physically lives at invP(L). invP, in tiles, is page = L + c*SLAB_DELTA_T - g*SLAB_K_T,
+// with q = L/SLAB_CHUNK_LOCAL_T (= g*ring + c), g = q/SLAB_RING, c = q%SLAB_RING. The factory bakes the
+// divisors as compile-time defines (SLAB_CHUNK_LOCAL_T / SLAB_RING / SLAB_K_T / SLAB_DELTA_T) only when a slab
+// layout is present (ring_size > 1), so the contiguous path emits no defines and SLAB_KTILE is the identity
+// -> byte-identical reader binary. Reading K in logical order keeps the causal mask + block-max-pool (both
+// keyed on the logical column) unchanged and yields score columns in natural token order.
+#ifdef SLAB_ENABLE
+inline uint32_t slab_logical_to_physical_ktile(uint32_t logical_ktile) {
+    const uint32_t q = logical_ktile / SLAB_CHUNK_LOCAL_T;
+    const uint32_t shard = q / SLAB_RING;
+    const uint32_t c = q - shard * SLAB_RING;
+    return logical_ktile + c * SLAB_DELTA_T - shard * SLAB_K_T;
+}
+#define SLAB_KTILE(L) slab_logical_to_physical_ktile(L)
+#else
+#define SLAB_KTILE(L) (L)
+#endif
+
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
     uint32_t role;            // McastRole: none (DRAM read), sender (read + mcast), receiver (wait for mcast)
@@ -243,12 +262,14 @@ inline void read_k_chunk(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
+                // SLAB_KTILE: identity for contiguous K; invP(logical seq tile) for the per-SP-shard slab layout.
+                const uint32_t seq_tile = SLAB_KTILE(k_tile_start + k_col);
                 for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
                     noc.async_read(
                         k_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         k_tile_bytes,
-                        {.page_id = k_batch_page_offset + (k_tile_start + k_col) * head_dim_tiles + dim_tile},
+                        {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + dim_tile},
                         {});
                     ptr += k_tile_bytes;
                 }
@@ -269,12 +290,13 @@ inline void read_k_chunk_streaming(Noc noc, const KAcc& k_acc, uint32_t k_tile_s
         uint32_t ptr = cb.get_write_ptr();
         for (uint32_t c = cbase; c < c_end; ++c) {
             if (c < k_tiles_in_unit) {
+                const uint32_t seq_tile = SLAB_KTILE(k_tile_start + c);  // identity unless slab layout
                 for (uint32_t d = 0; d < head_dim_tiles; ++d) {
                     noc.async_read(
                         k_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         k_tile_bytes,
-                        {.page_id = (k_tile_start + c) * head_dim_tiles + d},
+                        {.page_id = seq_tile * head_dim_tiles + d},
                         {});
                     ptr += k_tile_bytes;
                 }

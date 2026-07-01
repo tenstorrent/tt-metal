@@ -122,6 +122,15 @@ def _extra_kwargs(program_config, compute_kernel_config):
     return kwargs
 
 
+def _slab_kwargs(slab_sp, sq):
+    """Build the explicit slab op-args from a simulated SP `slab_sp` and the q seq len. The slab layout is
+    PASSED, not derived: slab_sp = the SP the cache was gathered across, slab_chunk_size = slab_sp*sq (the
+    gathered chunk). None -> contiguous (no slab args)."""
+    if slab_sp is None:
+        return {}
+    return {"slab_sp": slab_sp, "slab_chunk_size": slab_sp * sq}
+
+
 def run_dsa(
     q,
     k,
@@ -132,16 +141,19 @@ def run_dsa(
     q_dtype=ttnn.bfloat16,
     k_dtype=ttnn.bfloat16,
     compute_kernel_config=None,
+    proxy_ring_size=None,
 ):
     """Run indexer_score_dsa (relu + learned gates + head-sum) and return the bf16 score as torch.
 
-    q (srcB) and k (srcA) may be bfp8_b; weights stay bf16.
+    q (srcB) and k (srcA) may be bfp8_b; weights stay bf16. proxy_ring_size simulates a ring_size-way slab K
+    layout on one chip (single-chip testing only).
     """
     out = ttnn.experimental.indexer_score_dsa(
         to_device(q, device, dtype=q_dtype),
         to_device(k, device, dtype=k_dtype),
         to_device(w, device),
         chunk_start_idx=chunk_start,
+        **_slab_kwargs(proxy_ring_size, q.shape[-2]),
         **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
@@ -159,10 +171,12 @@ def run_msa(
     q_dtype=ttnn.bfloat16,
     k_dtype=ttnn.bfloat16,
     compute_kernel_config=None,
+    proxy_ring_size=None,
 ):
     """Run indexer_score_msa (raw dot, constant `scale` gate, per-group planes) and return torch.
 
     No weights tensor: M3 has no learned gates, only `scale` (run as a constant gate in-op).
+    proxy_ring_size simulates a ring_size-way slab K layout on one chip (single-chip testing only).
     """
     out = ttnn.experimental.indexer_score_msa(
         to_device(q, device, dtype=q_dtype),
@@ -171,6 +185,7 @@ def run_msa(
         scale=scale,
         num_groups=num_groups,
         block_size=block_size,
+        **_slab_kwargs(proxy_ring_size, q.shape[-2]),
         **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
@@ -1483,3 +1498,129 @@ def test_indexer_score_block_pool_validation(device, expect_error, block_size, k
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk_size, head_group_size=0)
     with expect_error(RuntimeError, match):
         run_msa(q, k, 512, device, num_groups=heads, block_size=block_size, program_config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# Slab (per-SP-shard) K layout. Chunked prefill packs each SP shard's per-chunk slab (slab_chunk_size/slab_sp
+# keys) back-to-back, so the gathered [B,1,T,D] k is in a PERMUTED physical order and the reader reads it back
+# in natural token order (invP per tile) -- scores (and the block-max-pool over token-contiguous blocks) come
+# out correct. The slab layout is PASSED EXPLICITLY (slab_sp = the SP the cache was gathered across,
+# slab_chunk_size = the global chunk), NOT derived. These tests pass slab_sp / slab_chunk_size = ring_size*Sq
+# via _slab_kwargs (proxy_ring_size) to exercise a real SP slab on one chip.
+# ---------------------------------------------------------------------------
+def _slab_positions(ring_size, chunk, t):
+    """P[r] = natural token position physically stored at slab row r. Physical row r (shard c = r//sll, local
+    row lr = r%sll) holds natural token (lr//cl)*chunk + c*cl + (lr%cl), where sll = T/ring_size (per-shard
+    local length), cl = chunk/ring_size (per-shard slab width). This is the layout the in-kernel invP inverts.
+    Canonical (production) version: models/demos/deepseek_v3_d_p/tt/mla/utils.py::blockcyclic_positions; kept
+    local here so this op unit test has no model dependency."""
+    sll, cl = t // ring_size, chunk // ring_size
+    c = torch.arange(ring_size).repeat_interleave(sll)
+    lr = torch.arange(sll).repeat(ring_size)
+    return (lr // cl) * chunk + c * cl + (lr % cl)
+
+
+def _to_slab(k_nat, ring_size, chunk):
+    """Permute a natural-order [1,1,T,D] k into its slab physical layout: k_slab[r] = k_nat[P[r]]."""
+    t = k_nat.shape[2]
+    P = _slab_positions(ring_size, chunk, t)
+    k_slab = k_nat.clone()
+    k_slab[0, 0] = k_nat[0, 0][P]
+    return k_slab
+
+
+# Simulated SP ring sizes; the chunk is derived per test as ring_size * Sq (so it divides T below).
+SLAB_RINGS = [4, 8]
+SLAB_IDS = ["ring4", "ring8"]
+
+
+@pytest.mark.parametrize("ring_size", SLAB_RINGS, ids=SLAB_IDS)
+@pytest.mark.parametrize("chunk_start", [0, 1024], ids=["cs0", "cs1024"])
+def test_indexer_score_dsa_slab(device, ring_size, chunk_start):
+    """DSA over a slab K cache, SINGLE CHIP: physical K is permuted; slab_sp / slab_chunk_size = ring_size*Sq
+    are passed explicitly to describe a real ring_size-way SP slab, so the reader presents K in natural token
+    order and the score matches the contiguous-K reference exactly (same -inf map + PCC >= 0.999)."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 2048
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k_slab = _to_slab(k_nat, ring_size, ring_size * sq)  # slab_chunk_size passed to the op = ring_size*Sq
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    out = run_dsa(q, k_slab, w, chunk_start, device, program_config=cfg, proxy_ring_size=ring_size)
+    ref = indexer_score_dsa_ref(q, k_nat, w, chunk_start)
+    assert_indexer_match(out, ref, sq, t, check_neg=True)
+
+
+@pytest.mark.parametrize("ring_size", SLAB_RINGS, ids=SLAB_IDS)
+@pytest.mark.parametrize("block_size", [0, BLOCK_POOL_BS], ids=["unpooled", "pooled"])
+def test_indexer_score_msa_slab(device, block_size, ring_size):
+    """MSA per-group scoring over a slab K cache, SINGLE CHIP. block_size=0 -> [1,G,Sq,T] planes; >0 ->
+    block-max-pool (the M3 crux: a pooled block is block_size CONTIGUOUS tokens, scattered across the physical
+    buffer, so only reading in natural order pools the right token range). Both match the contiguous-K ref."""
+    heads, dim, sq, t, chunk_start = 4, GLX_DIM, 128, 2048, 512
+    scale = dim**-0.5
+    q, k_nat, _ = make_inputs(heads, dim, sq, t)
+    k_slab = _to_slab(k_nat, ring_size, ring_size * sq)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    out = run_msa(
+        q,
+        k_slab,
+        chunk_start,
+        device,
+        scale=scale,
+        num_groups=heads,
+        block_size=block_size,
+        program_config=cfg,
+        proxy_ring_size=ring_size,
+    )
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k_nat, w_scale, chunk_start, heads, block_size=block_size)
+    if block_size:
+        assert_pooled_match(out, ref, heads, sq, t // block_size, pcc_floor=0.995)
+    else:
+        assert_grouped_match(out, ref, heads, sq, t)
+
+
+def test_indexer_score_slab_remap_matters(device):
+    """The remap is load-bearing: with the proxy the permuted cache reads correctly; WITHOUT it the deduction
+    is the identity (one chip -> ring_size=1), so the permuted cache is read as-is and the scores are wrong (a
+    token permutation). Confirms the slab handling is not a no-op."""
+    ring_size = 8
+    heads, dim, sq, t, chunk_start = 64, GLX_DIM, 64, 2048, 1024
+    q, k_nat, w = make_inputs(heads, dim, sq, t)
+    k_slab = _to_slab(k_nat, ring_size, ring_size * sq)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    ref = indexer_score_dsa_ref(q, k_nat, w, chunk_start)
+    masked = ref == float("-inf")
+    b = ref[~masked].flatten().float()
+
+    good = run_dsa(q, k_slab, w, chunk_start, device, program_config=cfg, proxy_ring_size=ring_size)
+    pcc_good = torch.corrcoef(torch.stack([good[~masked].flatten().float(), b]))[0, 1].item()
+    assert pcc_good >= 0.999, f"slab proxy PCC {pcc_good} < 0.999"
+
+    # No proxy on one chip -> ring_size=1 identity -> permuted cache read as-is. -inf map is positional
+    # (same), but the visible scores are permuted -> far below the floor.
+    bad = run_dsa(q, k_slab, w, chunk_start, device, program_config=cfg)
+    pcc_bad = torch.corrcoef(torch.stack([bad[~masked].flatten().float(), b]))[0, 1].item()
+    assert pcc_bad < 0.99, f"identity read of a permuted cache unexpectedly matched (PCC {pcc_bad})"
+
+
+def test_indexer_score_slab_rejects_bad_chunk(device, expect_error):
+    """A derived chunk (= ring_size*Sq) that does not divide T is rejected loudly so a bad layout can't
+    silently mis-address K. Here ring_size=5, Sq=64 -> chunk=320, which does not divide T=2048."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 2048
+    q, k, w = make_inputs(heads, dim, sq, t)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=256, head_group_size=0)
+    with expect_error(RuntimeError, "must divide T"):
+        run_dsa(q, k, w, 0, device, program_config=cfg, proxy_ring_size=5)
+
+
+def test_indexer_score_rejects_partial_slab_args(device, expect_error):
+    """slab_sp and slab_chunk_size define the cache's slab layout and must be passed TOGETHER -- passing only
+    one is a caller error (the per-shard width chunk/sp is undefined). Host-side guard, so a single chip
+    suffices."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 512
+    q, k, w = make_inputs(heads, dim, sq, t)
+    q_dev, k_dev, w_dev = to_device(q, device), to_device(k, device), to_device(w, device)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    for kwargs in [{"slab_sp": 4}, {"slab_chunk_size": 256}]:
+        with expect_error(RuntimeError, "together"):
+            ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=0, program_config=cfg, **kwargs)

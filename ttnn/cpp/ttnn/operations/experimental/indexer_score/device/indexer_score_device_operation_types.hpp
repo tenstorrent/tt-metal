@@ -27,6 +27,21 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
     return cfg.head_group_size == 0 ? Hi : static_cast<uint32_t>(cfg.head_group_size);
 }
 
+// Slab (per-SP-shard) K cache layout. Chunked prefill stores each of `ring_size` SP shards' per-chunk slab
+// (chunk_size/ring_size keys) back-to-back in its local cache, so after the SP all-gather the [B,1,T,D] k
+// holds keys in a PERMUTED physical order: physical row r holds the natural token at
+// P[r] = (lr/cl)*chunk_size + c*cl + (lr%cl), where c = r/sll, lr = r%sll, sll = T/ring_size,
+// cl = chunk_size/ring_size. The reader reads K back in LOGICAL token order (invP per tile), so the causal
+// mask and block-max-pool -- both keyed on the logical column -- stay byte-identical and the score columns
+// come out in natural token order. PASSED EXPLICITLY by the caller (slab_sp / slab_chunk_size), NOT derived
+// from the mesh: the cache's slab layout (how K was gathered) is independent of how THIS op splits Q -- e.g.
+// a cache gathered with SP=8 (chunk_size/8 per shard) may be scored by an SP=32 indexer with a smaller Sq.
+// Hashed (it shapes the reader binary). ring_size == 1 is the identity, represented as no slab at all.
+struct SlabLayout {
+    uint32_t ring_size;   // SP shard count the cache was gathered across (the cache's SP, NOT this op's SP)
+    uint32_t chunk_size;  // global prefill chunk granularity (elements); per-shard slab = chunk_size/ring_size
+};
+
 struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
     // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
@@ -62,6 +77,12 @@ struct operation_attributes_t {
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
+    // Resolved slab (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its physical
+    // (permuted) tile, presenting K in natural token order. HASHED (ring_size/chunk_size shape the reader
+    // binary via compile-time defines, so the contiguous path stays byte-identical). nullopt == contiguous K
+    // (which is also what ring_size == 1 resolves to, since that is the identity permutation).
+    std::optional<SlabLayout> slab{std::nullopt};
+    bool has_slab() const { return slab.has_value(); }
 };
 
 struct tensor_args_t {

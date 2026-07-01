@@ -53,7 +53,8 @@ struct IndexerScoreDeviceOperation {
         const DeviceComputeKernelConfig& compute_kernel_config,
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
-        std::optional<uint32_t> cluster_axis);
+        std::optional<uint32_t> cluster_axis,
+        std::optional<SlabLayout> slab);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -63,6 +64,12 @@ namespace ttnn::experimental {
 // Two public frontends over one shared device op: the lightning indexer's two flavours differ only in
 // fixed knobs, so each gets its own callable. Both share the program factory + 3 kernels (flavour = compile-
 // time args) and produce a row-major bf16 score. Causality: key t visible to query s iff t <= chunk_start + s.
+//
+// SLAB K LAYOUT: the gathered K cache is a per-SP-shard slab (chunked prefill + SP all-gather), so the reader
+// reads it back in natural token order via an invP remap. The layout is PASSED EXPLICITLY -- slab_sp (the SP
+// the cache was gathered across) and slab_chunk_size (the global chunk granularity) -- because the cache's
+// slab is independent of how THIS op splits Q (e.g. an SP=8 cache scored by an SP=32 indexer). Both unset (or
+// slab_sp==1) = contiguous K (no remap).
 
 // DeepSeek-V3.2 DSA / GLM-5 (ttnn.experimental.indexer_score_dsa):
 //   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
@@ -78,7 +85,9 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> slab_sp = std::nullopt,
+    std::optional<uint32_t> slab_chunk_size = std::nullopt);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
@@ -98,6 +107,8 @@ ttnn::Tensor indexer_score_msa(
     uint32_t block_size = 0,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> slab_sp = std::nullopt,
+    std::optional<uint32_t> slab_chunk_size = std::nullopt);
 
 }  // namespace ttnn::experimental

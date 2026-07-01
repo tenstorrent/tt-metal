@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -351,6 +353,22 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
     reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
 
+    // Slab (per-SP-shard) K: bake invP's divisors as reader defines (only when a slab layout is present, so
+    // the contiguous path emits no defines -> byte-identical reader binary). cl_t = (chunk/ring)/TILE_WIDTH
+    // per-shard slab in tiles; the kernel maps logical tile L -> L + c*SLAB_DELTA_T - shard*SLAB_K_T.
+    // ring_size/chunk/T are all hashed, so SLAB_DELTA_T is a pure compile-time constant (no per-dispatch arg).
+    std::map<std::string, std::string> reader_defines;
+    if (args.has_slab()) {
+        const uint32_t ring = args.slab->ring_size;
+        const uint32_t chunk_tiles = args.slab->chunk_size / tt::constants::TILE_WIDTH;
+        const uint32_t cl_t = chunk_tiles / ring;  // per-shard slab width in tiles
+        reader_defines["SLAB_ENABLE"] = "1";
+        reader_defines["SLAB_RING"] = std::to_string(ring);
+        reader_defines["SLAB_CHUNK_LOCAL_T"] = std::to_string(cl_t);
+        reader_defines["SLAB_K_T"] = std::to_string(cl_t * (ring - 1));
+        reader_defines["SLAB_DELTA_T"] = std::to_string((Tt - chunk_tiles) / ring);
+    }
+
     std::vector<uint32_t> writer_ct = common_ct;
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today
     // row-major page = one output row: T scores, or nblocks block-scores when pooling.
@@ -370,7 +388,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(
-        program, kdir + "reader_indexer_score.cpp", core_ranges, tt::tt_metal::ReaderDataMovementConfig(reader_ct));
+        program,
+        kdir + "reader_indexer_score.cpp",
+        core_ranges,
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct, reader_defines));
     auto writer_id = tt::tt_metal::CreateKernel(
         program, kdir + "writer_indexer_score.cpp", core_ranges, tt::tt_metal::WriterDataMovementConfig(writer_ct));
     auto compute_id = tt::tt_metal::CreateKernel(

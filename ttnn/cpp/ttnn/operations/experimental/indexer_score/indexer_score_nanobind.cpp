@@ -62,6 +62,19 @@ void bind_indexer_score(nb::module_& mod) {
                 chunk_start = chunk_start_idx + r*Sq, where r is its linearized
                 index along this axis (Sq = q seq len). None = linear device order
                 (1 on a single device, so chunk_start_idx is used as-is).
+            slab_sp: optional int. The SP the K cache slab was gathered across --
+                i.e. the cache's OWN sequence-parallel degree, independent of how
+                this op splits Q. The gathered [B,1,T,D] k is then in per-SP-shard
+                slab (block-cyclic) physical order, and the reader reads it back in
+                natural token order (invP per tile) so scores come out token-ordered
+                and the causal mask/pool stay exact. Unset (or 1) = contiguous K (no
+                remap). Pair with slab_chunk_size. NOT derived from the mesh -- the
+                cache's slab is decoupled from this op's parallelization (e.g. an
+                SP=8 cache, slab_sp=8, scored by an SP=32 indexer with a smaller Sq).
+            slab_chunk_size: optional int, REQUIRED with slab_sp. The global prefill
+                chunk granularity in tokens (e.g. 5120); the cache's per-shard slab
+                width is slab_chunk_size / slab_sp. Must be divisible by slab_sp with
+                a tile-aligned per-shard width, divide T, and be >= Sq.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -75,7 +88,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
-        nb::arg("cluster_axis") = std::nullopt);
+        nb::arg("cluster_axis") = std::nullopt,
+        nb::arg("slab_sp") = std::nullopt,
+        nb::arg("slab_chunk_size") = std::nullopt);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -118,6 +133,13 @@ void bind_indexer_score(nb::module_& mod) {
             cluster_axis: mesh axis that is the SP ring. On a mesh, device r uses
                 chunk_start = chunk_start_idx + r*Sq, where r is its linearized
                 index along this axis. None = linear device order.
+            slab_sp / slab_chunk_size: same semantics as indexer_score_dsa. slab_sp
+                = the SP the K cache slab was gathered across (the cache's own SP,
+                decoupled from this op's split) and slab_chunk_size = the global
+                chunk granularity; the reader reads the permuted cache back in
+                natural token order so the per-group scores (and the block-max-pool,
+                which pools token-contiguous blocks) come out correct. Unset =
+                contiguous K.
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
@@ -132,7 +154,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("block_size") = 0,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = std::nullopt,
-        nb::arg("cluster_axis") = std::nullopt);
+        nb::arg("cluster_axis") = std::nullopt,
+        nb::arg("slab_sp") = std::nullopt,
+        nb::arg("slab_chunk_size") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail
