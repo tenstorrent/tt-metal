@@ -1347,6 +1347,19 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(pt_host, self._chunk_full_page_table_buf)
 
         # ---- Replay the captured trace for each full chunk of real tokens. ----
+        # Backpressure (REQUIRED at long context): the replay dispatches `num_full` non-blocking
+        # execute_trace calls. Without a per-chunk sync the host races arbitrarily far ahead of the
+        # device, and at long context (256k = 127 chunks) the un-drained dispatch/completion queue
+        # overruns -> host bus error at the next synchronize_device. The faster each chunk replays,
+        # the worse the overrun (the fused GDN/attn speedups bloated the host/device gap enough to
+        # trigger it; the slower pre-fusion code was self-throttled by command-queue backpressure).
+        # synchronize_device after each chunk bounds the in-flight depth to one chunk regardless of
+        # context length. The cost is small: each chunk's device compute (SDPA over the whole prior
+        # context) dominates the host-side prep, so little host/device overlap is lost. This matches
+        # every other traced replay loop in the codebase — the EAGER path
+        # (_prefill_chunked_eager_tp), the decode loop, and gpt_oss/gemma4 all drain (sync or host
+        # readback) once per replay iteration.
+        _log_every = max(1, num_full // 4)
         for c in range(num_full):
             cs = c * chunk_size
             tok_host = ttnn.from_torch(
@@ -1389,7 +1402,12 @@ class Qwen36Model:
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
 
-        ttnn.synchronize_device(self.device)
+            # Drain after every chunk so the host stays in lockstep with the device (see the
+            # backpressure note above). Bounds the in-flight depth to one chunk regardless of
+            # context length.
+            ttnn.synchronize_device(self.device)
+            if (c + 1) % _log_every == 0:
+                logger.info(f"[TP chunk-replay] {c + 1}/{num_full} chunks")
 
         # ---- Final partial chunk via the masked fixed-bucket path (rounds the tail to a warmed
         #      bucket + masks the GDN; chunk_start = cs skips the state reset so the carried

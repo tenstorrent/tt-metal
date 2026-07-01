@@ -601,14 +601,17 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     profiler.start("inference_decode")
     while len(generated) < max_generated_tokens:
         _update(nxt, pos)
+        # Time the full decode step: forward pass + sampling (_read -> _pick). Sampling is
+        # counted so decode tok/s matches how the tt_transformers reference demo
+        # (simple_text_demo.py) measures it — it times decode_forward + sample_host together.
         t_step = time.time()
         if eager:
             tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         else:
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
-        decode_times.append(time.time() - t_step)
         nxt = _read(tt_logits)
+        decode_times.append(time.time() - t_step)
         generated.append(nxt)
         pos += 1
     if trace_id is not None:
@@ -699,6 +702,9 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
 
     signpost("inference_decode")
     for i in range(max_generated_tokens - 1):
+        # Time the full decode step: forward pass + sampling (token selection). Sampling is
+        # counted so decode tok/s matches how the tt_transformers reference demo
+        # (simple_text_demo.py) measures it — it times decode_forward + sample_host together.
         t_step = time.time()
         out = gen.decode_forward(
             torch.tensor([[next_token]], dtype=torch.long),
@@ -708,11 +714,11 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
             enable_trace=True,
             read_from_device=True,
         )
+        dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
+        next_token = int(dl.argmax())
         decode_times.append(time.time() - t_step)
 
-        dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
         assert not torch.isnan(dl).any(), f"NaN in traced decode at step {i}"
-        next_token = int(dl.argmax())
         generated.append(next_token)
         current_pos += 1
 
@@ -757,6 +763,9 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
 
     signpost("inference_decode")
     for i in range(max_generated_tokens - 1):
+        # Time the full decode step: forward pass + sampling (token selection). Sampling is
+        # counted so decode tok/s matches how the tt_transformers reference demo
+        # (simple_text_demo.py) measures it — it times decode_forward + sample_host together.
         t_step = time.time()
         out = gen.decode_forward(
             torch.tensor([[next_token]], dtype=torch.long),
@@ -766,12 +775,11 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
             enable_trace=False,
             read_from_device=True,
         )
+        dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
+        next_token = int(dl.argmax())
         decode_times.append(time.time() - t_step)
 
-        dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
         assert not torch.isnan(dl).any(), f"NaN in paged decode logits at step {i}"
-        next_token = int(dl.argmax())
-
         if next_token == tokenizer.eos_token_id:
             break
         generated.append(next_token)
