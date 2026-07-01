@@ -96,15 +96,85 @@ tt::tt_metal::Tensor sample(
     ttnn::Tensor out = t;
 
     if (temperature > 0.0F) {
-        auto rand = ttnn::rand(
-            /* size */ out.logical_shape(),
-            /* device */ *device,
-            /* dtype */ out.dtype(),
-            /* layout */ out.layout(),
-            /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-            /* from */ 0.00001F,
-            /* to */ 0.99F,
-            /* seed */ seed);
+        namespace distributed = tt::tt_metal::distributed;
+
+        // NOTE on seed==0: we deliberately pass it through to ttnn::rand verbatim to honor that
+        // op's documented contract (seed==0 => host time-based entropy, non-reproducible). The
+        // tradeoff: ttnn::rand applies the per-device seed offset (see below) ONLY on the seed!=0
+        // path, so with seed==0 each device's noise comes from an independent host-entropy draw --
+        // neither reproducible nor *guaranteed* distinct across devices (divergence then depends on
+        // host RNG ordering, not on the sharded mesh index). Callers that need reproducible,
+        // guaranteed-per-device-distinct sampling (e.g. GRPO training) MUST pass a nonzero seed.
+
+        // The logits tensor `t` is the per-device LOCAL tensor, so out.logical_shape() is the
+        // local shape [B_local, 1, new_tokens, padded_V]. On a multi-device (DDP) mesh this tensor
+        // is effectively replicated, and ttnn::rand with no mesh_mapper produces IDENTICAL RNG on
+        // every device (same seed + same per-core offset), giving identical Gumbel noise and thus
+        // identical argmax samples. To make each device draw DISTINCT but reproducible noise, we
+        // pass a MeshMapperConfig with a Shard placement on the data-parallel mesh axis. ttnn::rand
+        // then sets a per-device seed offset = (sharded linear mesh index) * num_cores, so each
+        // device gets a disjoint LFSR stream that is deterministic given `seed`.
+        const auto mesh_shape = ttml::autograd::ctx().get_mesh_shape();
+        const auto local_shape = out.logical_shape();
+
+        // Identify the non-trivial (data-parallel) mesh axis: the first dim with size > 1.
+        std::optional<size_t> shard_axis;
+        for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+            if (mesh_shape[i] > 1U) {
+                shard_axis = i;
+                break;
+            }
+        }
+
+        ttnn::Tensor rand;
+        if (shard_axis.has_value()) {
+            // compute_shard_shape() inside ttnn::rand DIVIDES shape[shard_dim] by the mesh axis
+            // size, and TT_FATALs if it is not divisible. To keep the PER-DEVICE rand shape exactly
+            // equal to the local logits shape (required for the elementwise ttnn::add below), we
+            // pass a GLOBAL shape whose tensor batch dim (dim 0, the data-parallel dim) is the local
+            // batch multiplied by the mesh axis size. After division it returns to the local size,
+            // so divisibility always holds even when B_local == 1.
+            constexpr int kShardTensorDim = 0;  // batch dim is the data-parallel dim
+            const uint32_t mesh_axis_size = mesh_shape[*shard_axis];
+
+            ttnn::Shape::Container global_dims(local_shape.view().begin(), local_shape.view().end());
+            global_dims[kShardTensorDim] *= mesh_axis_size;
+            const ttnn::Shape global_shape(std::move(global_dims));
+
+            // placements size must match mesh dims: Shard the data-parallel axis, Replicate the rest.
+            distributed::MeshMapperConfig mapper;
+            mapper.placements.reserve(mesh_shape.dims());
+            for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+                if (i == *shard_axis) {
+                    mapper.placements.push_back(distributed::MeshMapperConfig::Shard{kShardTensorDim});
+                } else {
+                    mapper.placements.push_back(distributed::MeshMapperConfig::Replicate{});
+                }
+            }
+
+            rand = ttnn::rand(
+                /* size */ global_shape,
+                /* device */ *device,
+                /* dtype */ out.dtype(),
+                /* layout */ out.layout(),
+                /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
+                /* from */ 0.00001F,
+                /* to */ 0.99F,
+                /* seed */ seed,
+                /* mesh_mapper */ mapper);
+        } else {
+            // Single-device (or all-unit) mesh: no data-parallel axis, distinct per-device noise is
+            // not needed. Draw directly on the local shape with no mapper.
+            rand = ttnn::rand(
+                /* size */ local_shape,
+                /* device */ *device,
+                /* dtype */ out.dtype(),
+                /* layout */ out.layout(),
+                /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
+                /* from */ 0.00001F,
+                /* to */ 0.99F,
+                /* seed */ seed);
+        }
 
         // Gumbel sampling trick: -log(-log(U)), where U ~ Uniform(0, 1)
         // See: https://en.wikipedia.org/wiki/Gumbel_distribution#Random_variate_generation
