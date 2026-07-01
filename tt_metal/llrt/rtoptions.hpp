@@ -849,6 +849,8 @@ public:
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
+    bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
+
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
     std::optional<tt_metal::KernelBuildOptLevel> get_fabric_kernel_opt_level() const { return fabric_kernel_opt_level; }
