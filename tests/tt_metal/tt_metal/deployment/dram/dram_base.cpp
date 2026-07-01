@@ -305,7 +305,9 @@ static inline double dram_result_read_error_pct(const DramBaseResult* result) {
     return 100.0 * result->suspected_read_failures / result->words_checked;
 }
 
-static inline uint64_t read_arc_global_tick(tt::tt_metal::IDevice* device) { return device->get_arc_timer_heartbeat(); }
+static inline uint64_t read_arc_global_tick(tt::tt_metal::IDevice* device) {
+    return MetalContext::instance().get_cluster().get_arc_timer_heartbeat(device->id());
+}
 
 static inline const char* dram_watchdog_reason_name(uint32_t reason) {
     switch (reason) {
