@@ -303,8 +303,7 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     // !use_mux (is_tp_1) reduces locally with no fabric.
     s.use_mux = !s.is_tp_1;
     // The forwarder round == one tile-row; sticks are coalesced across the
-    // forwarder's worker group, so chunk/window are not row-batching knobs here.
-    s.chunk_size_rows = 1u;
+    // forwarder's worker group, so the window is not a row-batching knob here.
     s.window_size = 1u;
     if (s.use_mux) {
         // num_forwarders = min(num_links, num_workers): one coalescing forwarder
@@ -505,24 +504,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         return e - s;
     };
 
-    // chunk_size_rows: aim for ≥2 chunks per worker so the double-buffered
-    // input_cb can overlap chunk N+1's reader fill + chunk N+1's AG with chunk
-    // N's compute and chunk N's output drain. When the worker has ≥2 rows, pick
-    // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
-    // 1 row, chunk=1 (no overlap possible at all).
-    // Chunk cap = 1. A fuller sweep (rope + non-rope, real 38/152-tile-row sizes,
-    // chunk 1-4 at W up to 64) showed chunk=1 is best or tied EVERYWHERE: fabric/AG
-    // is only ~2us exposed so bigger chunks buy no amortization, and chunk>1 is ~10%
-    // SLOWER on the large (152-row) shapes (the prefetch-overlap win never
-    // materialized). So pin chunk=1.
-    constexpr uint32_t kMaxChunkSizeRows = 1u;
-    // L1 budget cap (matches compute_sizing): chunk * num_tile_cols ≤ 128
-    // keeps input_cb under ~512 KB per worker.
-    const uint32_t chunk_h_cap = std::max(1u, 128u / std::max(1u, num_tile_cols));
-    uint32_t chunk_size_rows =
-        std::min<uint32_t>(std::min<uint32_t>(std::max(1u, num_tile_rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
-    // num_chunks_per_device is computed below, AFTER the per-head-RoPE /
-    // streaming chunk clamp, so the packed-page AG count matches the final chunk.
+    // The compute kernel processes one tile-row at a time (a sweep over chunk 1-4 showed
+    // chunk=1 best-or-tied everywhere: fabric/AG is only ~2us exposed so bigger chunks buy
+    // no amortization, and chunk>1 was ~10% slower on the large shapes). So chunk is fixed
+    // at 1 and is no longer a compute-kernel arg; kept as a local for the CB/AG-page sizing
+    // below (which is trivially per-row). num_chunks_per_device (below) = the AG page count.
+    const uint32_t chunk_size_rows = 1u;
 
     // ------------------------------------------------------------------------
     // Compute kernel config + dtype/format setup
@@ -655,22 +642,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // so the caller's stats buffer (window/pages) matches. feat-2048 per-head RoPE
     // still can't fit even one row -> clean compile-time CB-alloc OOM (needs
     // cos/sin streaming, a separate change), NOT a hang.
-    // Per-head RoPE forces chunk_size_rows=1 (the chunk>=2 per-head path deadlocked
-    // under the watcher; chunk=1 is the safe + optimal layout anyway). Streaming
-    // low-L1 also requires chunk=1.
-    if (per_head_rope || streaming_low_l1) {
-        chunk_size_rows = 1u;
-    }
     // Forwarder AG: DRAM pages per device = num_forwarders * max_rounds (one page
     // per forwarder per row-round). Page idx = my_device*num_chunks_per_device +
     // forwarder*max_rounds + round.
     const uint32_t num_chunks_per_device = use_mux ? (num_forwarders * max_rounds) : 0u;
-    // The streamed compute path handles only the whole-row reduce with one row
-    // resident at a time (chunk_size_rows==1, enforced by the clamp above).
-    TT_FATAL(
-        !streaming_low_l1 || chunk_size_rows == 1,
-        "wan_fused_distributed_rmsnorm streaming low-L1 path requires chunk_size_rows==1 (got {})",
-        chunk_size_rows);
     TT_FATAL(
         !streaming_low_l1 || (num_tile_cols % block_size == 0),
         "wan_fused_distributed_rmsnorm streaming low-L1 path requires num_tile_cols ({}) divisible by block_size "
@@ -985,7 +960,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,
-        chunk_size_rows,
         static_cast<uint32_t>(per_head_rope),
         rope_seqlen_tiles,
         bias_cb_id,
@@ -1002,7 +976,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // the AG (ring>1) block-major path — fixes the deadlock without delaying the AG).
         static_cast<uint32_t>(
             (block_major_post && streaming_low_l1) ? (is_tp_1 ? 1u /*DEFER_ALL*/ : 2u /*SPLIT*/) : 0u /*INPUT_FIRST*/),
-        // CT 18/19: recip LUT (LayerNorm). use_recip gates a one-time DRAM read of the
+        // CT 17/18: recip LUT (LayerNorm). use_recip gates a one-time DRAM read of the
         // reciprocals tensor into recip_lut_cb at the top of the reader; compute then
         // reads the CB as the Welford reciprocal_lut. recip accessor is appended last.
         static_cast<uint32_t>(use_recip_lut),
@@ -1187,7 +1161,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         num_tile_cols,
         block_size,
         /*stats_tiles_cols=*/args.ring_size,
-        chunk_size_rows,
         /*use_legacy_rsqrt=*/0u,
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
@@ -1218,12 +1191,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
         static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
         static_cast<uint32_t>(args.norm_type),    // 0=RMS (sum-of-squares), 1=Welford LayerNorm (mean/variance)
-        // CT 39/40: recip LUT (LayerNorm). When use_recip the LN kernel reads recip_lut_cb
+        // CT 38/39: recip LUT (LayerNorm). When use_recip the LN kernel reads recip_lut_cb
         // as a std::array<uint32_t, reduce_width> and passes it to welford_update/finalize
         // (array load vs soft-float 1/(N+1)); else it uses the runtime-division fallback.
         recip_lut_cb_id,
         static_cast<uint32_t>(use_recip_lut),
-        // CT 41: zeroed welford-state CB (LayerNorm warm-row accumulator reset, ISSUE 3A).
+        // CT 40: zeroed welford-state CB (LayerNorm warm-row accumulator reset).
         welford_zero_cb_id,
     };
 

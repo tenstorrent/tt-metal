@@ -61,60 +61,60 @@ void kernel_main() {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(15);
     constexpr uint32_t block_size = get_compile_time_arg_val(16);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(17);
-    constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(18);
-    constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(19);
-    constexpr uint32_t has_weight = get_compile_time_arg_val(20);
-    constexpr uint32_t fuse_rope = get_compile_time_arg_val(21);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t chunk_size_rows = 1u;  // chunk size is always 1 (no CT arg)
+    constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(18);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(19);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(20);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(21);
     // When is_tp_1 is true, the compute kernel skips stats_local_cb entirely
     // and pushes per-row stats directly into stats_gathered_cb. This makes
     // TP=1 (single-device) operation self-contained — no forwarder needed.
-    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(23);
+    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(22);
     // Packed-page all-gather (the forwarder AG path). When enabled the pre phase
     // transposes the per-row stat tile (real data in col 0 → row 0) so the worker
     // can extract two contiguous 64-byte spans per tile and the forwarder packs
     // `window_size` of them into a single fabric packet. The post phase then
     // transposes the row-0 gathered tiles back to col 0 before the
     // existing reduce<AVG,REDUCE_ROW> chain runs.
-    constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(24);
-    constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(25);
-    constexpr uint32_t packed_ag_enabled = get_compile_time_arg_val(26);
+    constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(23);
+    constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(24);
+    constexpr uint32_t packed_ag_enabled = get_compile_time_arg_val(25);
     // Per-head RoPE: reader pushes num_tile_cols (num_heads * head_dim_tiles)
     // cos/sin tiles per row (one per col). The post phase reads them by
     // absolute index (col_tile + i) — no wrap-cycling. Broadcast RoPE
     // (per_head_rope=0) pushes only head_dim_tiles and wraps.
-    constexpr uint32_t per_head_rope = get_compile_time_arg_val(27);
+    constexpr uint32_t per_head_rope = get_compile_time_arg_val(26);
     // Optional row-broadcast bias: tilized [1, H] tensor added after weight
     // multiply (sub-phase 2.5). Mirrors weight handling.
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(28);
-    constexpr uint32_t has_bias = get_compile_time_arg_val(29);
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(27);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(28);
     // Per-head normalization (FLUX.2): reduce over head_dim per head instead
     // of the full row. Forces is_tp_1 path (skip AG entirely); pre phase
     // produces num_heads_per_device stat tiles per row, post phase computes
     // an rsqrt per head and applies it to that head's columns.
-    constexpr uint32_t per_head_norm = get_compile_time_arg_val(30);
-    constexpr uint32_t num_heads_per_device = get_compile_time_arg_val(31);
+    constexpr uint32_t per_head_norm = get_compile_time_arg_val(29);
+    constexpr uint32_t num_heads_per_device = get_compile_time_arg_val(30);
     // Per-token weight / bias: [N, H] (vs broadcast [1, H]). Reader pushes
     // per-row tiles. Compute uses mul_tiles / add_tiles (no _bcast_rows) and
     // pops the row's weight/bias tiles at end of each row in the chunk.
-    constexpr uint32_t per_token_weight = get_compile_time_arg_val(32);
-    constexpr uint32_t per_token_bias = get_compile_time_arg_val(33);
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(31);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(32);
     // Bit-packed fp32 epsilon for the fused +eps SFPU scalar-add in the reduce
     // post-op (replaces the prior bf16 epsilon_cb add_tiles path; fp32 is at
     // least as precise).
-    constexpr uint32_t eps_bits = get_compile_time_arg_val(34);
+    constexpr uint32_t eps_bits = get_compile_time_arg_val(33);
     // Streaming low-L1: input_cb is block-sized, so PRE reads input block by
     // block (popping each) and POST sub-phase 1 (x*1/rms) re-reads a second
     // streamed pass from the reader (also popping each block). Only the whole-
     // row reduce path is supported (per_head_norm stays resident). The math /
     // accumulation order is identical to the resident path, so the result is
     // bit-exact; only the input_cb residency window changes.
-    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(35);
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(34);
     // Block-major POST: fuse the matmul rotate + RoPE finalize into one per-block
     // loop so rotated_input_cb is block-local (host shrinks it when the whole-row
     // resident POST would overflow L1 at wide per-head shards). Adds per-block
     // reconfigs (slower) but fits L1; only set for the OOMing config.
-    constexpr uint32_t fuse_mm_rope = get_compile_time_arg_val(36);
+    constexpr uint32_t fuse_mm_rope = get_compile_time_arg_val(35);
     // Full block-major POST: fuse ALL post sub-phases (x*1/rms, weight, bias,
     // matmul-rotate, RoPE) into ONE per-block loop so intermediate_cb /
     // rotated_input_cb / output_cb are block-local (O(block_size)). Engaged by the
@@ -122,12 +122,12 @@ void kernel_main() {
     // shards: TP=1 WAN/FLUX/LTX-video, TP=2 FLUX). Implies streaming_low_l1 and
     // per_head_norm==0. Bit-exact with the resident path (same math + order, fp32
     // intermediates), trading per-block reconfigs for a bounded L1 footprint.
-    constexpr uint32_t block_major_post = get_compile_time_arg_val(37);
+    constexpr uint32_t block_major_post = get_compile_time_arg_val(36);
     // Normalization variant: 0 = RMSNorm (PRE sum-of-squares, POST x*rsqrt(E[x^2]+eps)),
     // 1 = Welford LayerNorm (PRE per-shard Welford (mean, M2), POST merge +
     // (x-mean)*rsqrt(var+eps)). Wired in Phase 1; the LayerNorm code paths land in
     // later phases. Until then only RMS is exercised, so this stays inert.
-    constexpr uint32_t norm_type = get_compile_time_arg_val(38);
+    constexpr uint32_t norm_type = get_compile_time_arg_val(37);
     static_assert(norm_type == 0u, "Welford LayerNorm (norm_type=1) is not yet implemented in the compute kernel");
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;

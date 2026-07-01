@@ -61,29 +61,29 @@ void kernel_main() {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(15);
     constexpr uint32_t block_size = get_compile_time_arg_val(16);
     constexpr uint32_t ring_size = get_compile_time_arg_val(17);  // stats_tiles_cols (== TP shards)
-    constexpr uint32_t has_weight = get_compile_time_arg_val(20);
-    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(23);
-    constexpr uint32_t stats_local_cb = get_compile_time_arg_val(24);     // local partial (mean, var) row 0
-    constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(25);  // ring partials [mean_d, var_d] row 0
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(28);
-    constexpr uint32_t has_bias = get_compile_time_arg_val(29);
-    constexpr uint32_t per_token_weight = get_compile_time_arg_val(32);
-    constexpr uint32_t per_token_bias = get_compile_time_arg_val(33);
-    constexpr uint32_t eps_bits = get_compile_time_arg_val(34);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(19);
+    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(22);
+    constexpr uint32_t stats_local_cb = get_compile_time_arg_val(23);     // local partial (mean, var) row 0
+    constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(24);  // ring partials [mean_d, var_d] row 0
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(27);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(28);
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(31);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(32);
+    constexpr uint32_t eps_bits = get_compile_time_arg_val(33);
     // Wide-shard layout: streaming_low_l1 streams the input (Welford PRE consumes
     // the reader's 1st pass block-by-block; POST consumes the 2nd pass).
     // block_major_post fuses (x-mean)*1/std*w+b per block so intermediate/output
     // CBs stay O(block_size). For wide LayerNorm the factory sets both together.
-    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(35);
-    constexpr uint32_t block_major_post = get_compile_time_arg_val(37);
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(34);
+    constexpr uint32_t block_major_post = get_compile_time_arg_val(36);
     // Reciprocal LUT (CT 39/40): when use_recip_lut, recip_lut_cb holds reduce_width fp32
     // reciprocals [1/1..1/reduce_width] (reader filled it once from DRAM). The Welford LLK
     // does an array load instead of a soft-float 1/(N+1) per sample. Absent -> runtime div.
-    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(39);
-    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(40);
+    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(38);
+    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(39);
     // Zeroed welford-state CB (2 tiles: mean=0, M2=0). Captured once below while the SFPU is clean,
     // reloaded per row to reset the welford accumulator; see the cold-start capture.
-    constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(41);
+    constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(40);
 
     // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
     constexpr uint32_t tile_width = 32u;

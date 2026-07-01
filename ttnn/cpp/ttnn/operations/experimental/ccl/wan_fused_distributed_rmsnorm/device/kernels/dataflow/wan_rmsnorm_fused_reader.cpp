@@ -35,22 +35,22 @@ void kernel_main() {
     constexpr uint32_t has_weight = get_compile_time_arg_val(6);
     constexpr uint32_t fuse_rope = get_compile_time_arg_val(7);
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(9);
-    constexpr uint32_t per_head_rope = get_compile_time_arg_val(10);
-    constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(11);
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(12);
-    constexpr uint32_t has_bias = get_compile_time_arg_val(13);
+    constexpr uint32_t chunk_size_rows = 1u;  // chunk size is always 1 (no CT arg)
+    constexpr uint32_t per_head_rope = get_compile_time_arg_val(9);
+    constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(11);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(12);
     // Per-token weight/bias: shape [N, H] (vs broadcast [1, H]). Read pattern
     // is per-row (after each row's input is pushed) using noc_async_read_tile
     // for full 4 KB/tile (vs face_row_bytes for the broadcast case). Compute
     // uses mul_tiles / add_tiles directly (no _bcast_rows).
-    constexpr uint32_t per_token_weight = get_compile_time_arg_val(14);
-    constexpr uint32_t per_token_bias = get_compile_time_arg_val(15);
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(13);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(14);
     // Streaming low-L1: input_cb is block-sized, so the row is read in two
     // passes (PRE sum-of-squares, then a POST re-read for x*(1/rms)) in
     // block_size-tile pushes that compute pops as it consumes. The resident
     // fast path reads the whole row once. See program_factory.
-    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(16);
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(15);
     // input_schedule: WHERE the streaming input passes are read relative to the
     // resident weight/bias/cos pushes. The block-major POST consumes weight/bias/cos
     // mid-(POST pass), so they must be pushed BEFORE the POST pass — but PRE needs the
@@ -65,7 +65,7 @@ void kernel_main() {
     //   2 SPLIT: read the PRE pass at the top (stats produced ASAP -> ring gather starts),
     //     push side inputs, then read the POST pass (weight now resident). The AG
     //     (ring>1) block-major path: avoids the deadlock without delaying the gather.
-    constexpr uint32_t input_schedule = get_compile_time_arg_val(17);
+    constexpr uint32_t input_schedule = get_compile_time_arg_val(16);
     constexpr uint32_t SCHED_INPUT_FIRST = 0u;
     constexpr uint32_t SCHED_DEFER_ALL = 1u;
     constexpr uint32_t SCHED_SPLIT = 2u;
@@ -73,11 +73,11 @@ void kernel_main() {
     // tensor once into recip_lut_cb at the top so compute reads it as the LLK's
     // reciprocal_lut (array load vs soft-float 1/(N+1) per sample). recip accessor is the
     // last TensorAccessorArgs; recip DRAM addr is reader RT arg 7.
-    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(18);
-    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(19);
+    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(17);
+    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(18);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
-    constexpr auto input_args = TensorAccessorArgs<20>();
+    constexpr auto input_args = TensorAccessorArgs<19>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
