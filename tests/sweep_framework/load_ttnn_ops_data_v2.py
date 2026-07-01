@@ -476,6 +476,20 @@ def parse_placement(placement_str):
     return "replicate", None
 
 
+_BASE_OP_PREFIX_RE = re.compile(r"^(ttnn::experimental::|ttnn::transformer::|experimental::|ttnn::)")
+
+
+def _base_operation_name(operation_name):
+    """Compute base_operation_name.
+
+    Postgres stored this as a GENERATED ALWAYS column; Snowflake has no generated
+    columns, so the loader computes and inserts it (same regex as the schema).
+    """
+    if operation_name is None:
+        return None
+    return _BASE_OP_PREFIX_RE.sub("", operation_name)
+
+
 def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_count, schema=DEFAULT_SCHEMA):
     """Get or create a hardware entry, return (hardware_id, hw_key)."""
     _validate_schema(schema)
@@ -927,9 +941,10 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
             else:
                 new_op_id = _next_id(cur, schema, "ttnn_operation")
                 cur.execute(
-                    f"INSERT INTO {S}.ttnn_operation (ttnn_operation_id, operation_name, create_ts) "
-                    f"VALUES (%s, %s, CURRENT_TIMESTAMP())",
-                    (new_op_id, op_name),
+                    f"INSERT INTO {S}.ttnn_operation "
+                    f"(ttnn_operation_id, operation_name, base_operation_name, create_ts) "
+                    f"VALUES (%s, %s, %s, CURRENT_TIMESTAMP())",
+                    (new_op_id, op_name, _base_operation_name(op_name)),
                 )
                 operation_cache[op_name] = new_op_id
 
