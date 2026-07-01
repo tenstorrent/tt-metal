@@ -267,16 +267,15 @@ class Ideogram4TransformerBlock(Module):
         self.adaln_compute_kernel_config = self.hifi4_config
 
     def _get_ring_sdpa_program_config(self, local_seq_len):
-        """Resolution-adaptive ring-SDPA program config (HiFi2-tuned q_chunk).
+        """Ring-SDPA program config (fixed q_chunk=128).
 
-        A standalone HiFi2 SDPA micro-sweep on the (12,9) ring worker grid found
-        q_chunk=256 wins ~1.3x at long local seq (4352 @ 2048px: 1737->1345us)
-        but underfills the 108-core grid at short seq (512/1280), so pick q_chunk
-        by local_seq_len; k_chunk=256 is optimal at all resolutions.
+        NOTE: a standalone *plain*-SDPA micro-sweep suggested q_chunk=256 was ~1.3x
+        faster at long local seq (4352 @ 2048px). That does NOT hold for the production
+        ring_joint SDPA: its extra joint/CCL circular buffers push q_chunk=256 past L1
+        ("CBs grow to 1712656 B > 1572864 B max L1") and it fails at true 2048px. So we
+        keep the proven q_chunk=128 at every resolution (k_chunk=256, head_dim cap).
         """
-        qc = (
-            self._ring_sdpa_qc_large if local_seq_len >= self._ring_sdpa_large_seq_threshold else self.sdpa_q_chunk_size
-        )
+        qc = self.sdpa_q_chunk_size
         pc = self._ring_sdpa_pc_cache.get(qc)
         if pc is None:
             pc = ttnn.SDPAProgramConfig(
