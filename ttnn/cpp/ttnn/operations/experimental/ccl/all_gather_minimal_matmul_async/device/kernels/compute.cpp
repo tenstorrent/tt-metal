@@ -286,9 +286,10 @@ void add_bias_and_addcmul_block(
 //     packs each subblock at absolute row positions inside the row group;
 //   packer_l1_acc + pack_last_to_interm → llk_pack_reconfig_l1_acc(0 → 1) per K-block
 //     so block 0 writes fresh and blocks 1..N-1 accumulate into the same L1 cells;
-//   caller_owns_pack_target=true → helper skips its own reserve_back/push_back/drain
-//     so the caller's outer cb_reserve_back / cb_push_back around the helper call
-//     is the single producer/consumer counter advance.
+//   (TileRowMajor + packer_l1_acc + Interm) → the helper packs in place: it does ONE
+//     internal reserve_back before the K-loop and ONE push_back after (plus the final
+//     pack_reconfig_l1_acc(0)), skipping its own per-block reserve/push/drain. The caller
+//     therefore does no reserve/push of its own around the helper call.
 // in0_policy controls the outer-loop in0 reuse: when reusing across the next
 // n_block_iter we keep in0 fronted on the last K-block (WaitAndRetainOnLastBlock);
 // on the final n iter we pop it to free the slot (WaitAndPopPerKBlock). The
@@ -376,10 +377,9 @@ void kernel_main() {
                 K_block_tiles /*kt_dim*/);
             reconfig_data_format(in1_cb_id, in0_cb_id);
             pack_reconfig_data_format(intermediate_cb_id);
-            // Single outer reserve over the entire K-loop accumulation. The helper
-            // packs all K-blocks into this region with L1_ACC accumulating; no
-            // per-block reserve/push/drain (caller_owns_pack_target=true).
-            intermediate_cb.reserve_back(out_block_num_tiles);
+            // The (TileRowMajor + packer_l1_acc + Interm) matmul_block config packs in place: the
+            // helper does its own single reserve_back/push_back over the whole output block and
+            // manages the per-K-block L1_ACC accumulation, so the caller does no reserve/push here.
 
             const uint32_t in0_subblocks = current_M_block_tiles / current_subblock_h;
             const uint32_t in1_subblocks = current_N_block_tiles / current_subblock_w;
@@ -416,8 +416,7 @@ void kernel_main() {
                     /*untilize_block_ct_dim=*/0,
                     NoKBlockInnerDimFn,
                     NoIn0Source,
-                    NoIn1BaseOffset,
-                    /*caller_owns_pack_target=*/true>(
+                    NoIn1BaseOffset>(
                     in0_cb,
                     in1_cb,
                     intermediate_cb,
@@ -448,8 +447,7 @@ void kernel_main() {
                     /*untilize_block_ct_dim=*/0,
                     NoKBlockInnerDimFn,
                     NoIn0Source,
-                    NoIn1BaseOffset,
-                    /*caller_owns_pack_target=*/true>(
+                    NoIn1BaseOffset>(
                     in0_cb,
                     in1_cb,
                     intermediate_cb,
@@ -465,8 +463,8 @@ void kernel_main() {
                     NoIn1BaseOffset{});
             }
 
-            intermediate_cb.push_back(out_block_num_tiles);
-            PACK((llk_pack_reconfig_l1_acc(0)));
+            // The helper did the single push_back + pack_reconfig_l1_acc(0) for the accumulated
+            // output block itself (TileRowMajor + packer_l1_acc + Interm), so the caller does neither.
 
             out_cb.reserve_back(out_block_num_tiles);
 #ifndef FUSE_TERNARY

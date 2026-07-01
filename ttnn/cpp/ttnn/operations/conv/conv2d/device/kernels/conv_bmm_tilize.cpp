@@ -378,45 +378,37 @@ void kernel_main() {
 #else
     constexpr bool tile_pack_row_major = false;
 #endif
-    // CONV_CALLER_OWNS_PACK_TARGET (the deep-K packer_l1_acc INTERM-target class — replaces the deleted
-    // pin): switch the matmul interm pack onto the caller_owns_pack_target contract — the caller does ONE
-    // reserve_back before the matmul and ONE push_back after, and the helper skips its own per-block
-    // reserve/push/drain. Under this flag the TileRowMajor layout is also used WITH fuse_bias (see
-    // conv_output_layout below): the bias-add reads the dedicated partials and writes a DISTINCT output
-    // buffer. With untilize_out that distinct buffer is the dedicated UNTILIZE_STAGING CB (NOT an alias
-    // onto matmul_partials_cb — see bias_out_cb_id below), so the TileRowMajor reserve-before-pop runs
-    // against a fresh CB with free slack for ANY dtype. This is what lets fp32+bias+untilize use
-    // caller_owns: the former alias had no fp32 slack (4B/elem, full out_block filled the one-block
-    // partials CB → reserve_back deadlocked), so it was forced off caller_owns to SBM. Un-aliasing
-    // removed that exclusion; ALL pin-class combos — fp32/bf16 bias+untilize, fuse_bias TILE-output
-    // (bias→distinct out_cb), and untilize-only — now keep caller_owns.
-#ifdef CONV_CALLER_OWNS_PACK_TARGET
-    constexpr bool caller_owns_pack_target = true;
-#else
-    constexpr bool caller_owns_pack_target = false;
-#endif
-    // Production TRM degrades to SubblockMajor when fuse_bias (TRM+bias deadlocks the helper-owned shared
-    // partials CB). The caller_owns path lifts that degrade: partials is dedicated and the caller owns the
-    // single reserve/push, and the bias-add writes a DISTINCT output buffer (out_cb for TILE output, the
-    // UNTILIZE_STAGING CB for untilize_out), so TileRowMajor + bias is safe for every dtype.
-    constexpr auto conv_output_layout = (tile_pack_row_major && (caller_owns_pack_target || !fuse_bias))
-                                            ? compute_kernel_lib::OutputCBLayout::TileRowMajor
-                                            : compute_kernel_lib::OutputCBLayout::SubblockMajor;
+    // conv_output_layout: TileRowMajor whenever the factory emits CONV_TILE_PACK_ROW_MAJOR, else
+    // SubblockMajor. The factory sets tile_pack_row_major in exactly two disjoint classes, both of which
+    // want TileRowMajor:
+    //   • the no-bias TRM-relaxed path (fuse_bias == false): a relaxed/taller subblock made legal by TRM;
+    //   • the deep-K packer_l1_acc INTERM-target class (fuse_bias || untilize_out): the former "pin" /
+    //     caller_owns class. The matmul packs the last K-block to the DEDICATED matmul_partials_cb
+    //     (LastBlockTarget::Interm) and the bias-add / untilize phase reads it and writes a DISTINCT output
+    //     buffer (out_cb for TILE output; the dedicated UNTILIZE_STAGING CB for untilize_out — un-aliased
+    //     off partials so the TileRowMajor reserve-before-pop runs against a fresh CB with free slack for
+    //     ANY dtype, which is what lets fp32+bias+untilize use this path). The helper handles the in-place
+    //     single-reserve/push and per-K-block L1_ACC accumulation for (TileRowMajor + packer_l1_acc +
+    //     Interm) internally — no caller-side reserve/push. The factory NEVER emits tile_pack_row_major for
+    //     a fuse_bias conv outside this class, so no defensive degrade-to-SubblockMajor is needed here.
+    constexpr auto conv_output_layout = tile_pack_row_major ? compute_kernel_lib::OutputCBLayout::TileRowMajor
+                                                            : compute_kernel_lib::OutputCBLayout::SubblockMajor;
 
     // One full output block in tiles = per_core_M (act_block_h_ntiles = in0_num_subblocks*out_subblock_h)
-    // × per_core_N (in1_block_w = in1_num_subblocks*out_subblock_w). The caller_owns path reserves/pushes
-    // exactly this many tiles on the dedicated partials CB once per outer iter (= L4a's 4×2 = 8).
-    constexpr uint32_t out_block_num_tiles = (in0_num_subblocks * out_subblock_h) * in1_block_w;
+    // × per_core_N (in1_block_w = in1_num_subblocks*out_subblock_w). The packs-in-place path reserves/
+    // pushes exactly this many tiles on the dedicated partials CB once per outer iter (= L4a's 4×2 = 8);
+    // that reserve/push now lives INSIDE the matmul helper, so this is only referenced from comments here.
+    [[maybe_unused]] constexpr uint32_t out_block_num_tiles = (in0_num_subblocks * out_subblock_h) * in1_block_w;
 
     // ── PIN REMOVED (GH#45995) ────────────────────────────────────────────────────────────────────
     // The former pin_interm_to_captured_base perf feature (reserve the whole out_block ONCE at K-loop
     // entry, pack each K-block's subblock partials to FIXED offsets so L1_ACC integrates per-address,
     // skip the per-K-block interm reserve/push/wait/pop, push once at exit) has been deleted from the
     // matmul helper and all callers. The deep-K packer_l1_acc INTERM-target classes (fuse_bias and
-    // untilize_out) now route through the matmul-helper caller_owns_pack_target + TileRowMajor path
-    // (one caller reserve_back before the K-loop + one push_back after; the helper skips its own
-    // per-block reserve/push/drain), which recovers the EXACT same drain-skip win without the bespoke
-    // pin machinery. The former OUT-target trigger ran the helper's NON-pin FIFO over a dedicated
+    // untilize_out) now route through the matmul-helper's in-place pack path (TileRowMajor + packer_l1_acc
+    // + Interm): the helper does ONE internal reserve_back before the K-loop + ONE push_back after and
+    // skips its own per-block reserve/push/drain, which recovers the EXACT same drain-skip win without the
+    // bespoke pin machinery. The former OUT-target trigger ran the helper's NON-pin FIFO over a dedicated
     // one-block partials region (the FIFO wraps to base every K-block, so L1_ACC still accumulates at a
     // fixed base — see the dedicate-partials note at the top of kernel_main).
 
@@ -499,6 +491,15 @@ void kernel_main() {
         : untilize_out                 ? compute_kernel_lib::LastBlockTarget::Interm
                                        : compute_kernel_lib::LastBlockTarget::Out;
 
+    // The matmul helper packs in place (single internal reserve/push, per-K-block L1_ACC accumulation,
+    // no per-block reserve/push/drain) whenever the config is (TileRowMajor + packer_l1_acc + Interm).
+    // The kernel must match that on its own bookkeeping: skip the per-iter partials rd/wr rewind and the
+    // caller-side reserve/push. This predicate is exactly the former CONV_CALLER_OWNS_PACK_TARGET class
+    // (the factory emits TileRowMajor for the deep-K packer_l1_acc INTERM-target convs — fuse_bias ||
+    // untilize_out — which are the ones that satisfy this).
+    constexpr bool packs_in_place = (conv_output_layout == compute_kernel_lib::OutputCBLayout::TileRowMajor) &&
+                                    packer_l1_acc && (last_block_target == compute_kernel_lib::LastBlockTarget::Interm);
+
     using PreKBlockFn = ConvTilizePreKBlock<
         height_sharded,
         packer_l1_acc,
@@ -551,11 +552,11 @@ void kernel_main() {
             // one-block increments, which — because the region holds exactly one output block —
             // wraps back to this base each K-block (matmul's dedicated-partials reset model).
             //
-            // caller_owns_pack_target: the caller's own reserve_back/push_back (below, around the
-            // matmul call) advance the partials FIFO by exactly one output block per outer iter, and
-            // the bias-add's pop drains it — so the FIFO wraps to its base naturally and this manual
-            // rewind is both unnecessary and would desync the caller-owned wr_ptr from the reserve.
-            if constexpr (!caller_owns_pack_target) {
+            // packs_in_place: the helper's own single reserve_back/push_back advance the partials FIFO by
+            // exactly one output block per outer iter, and the bias-add's pop drains it — so the FIFO wraps
+            // to its base naturally and this manual rewind is both unnecessary and would desync the
+            // helper-owned wr_ptr from its reserve.
+            if constexpr (!packs_in_place) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
                 PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
             }
@@ -602,14 +603,10 @@ void kernel_main() {
             // one-block increments, which wrap back to the per-iter base (reset at the top of this
             // loop) every K-block — so packer_l1_acc accumulates at a fixed address across K-blocks
             // for multi-output-block convs too, matching matmul's dedicated single-block interm0.
-            // caller_owns_pack_target: single outer reserve over the whole output block. The helper
-            // packs all K-blocks into this region with L1_ACC accumulating (it manages the per-K-block
-            // llk_pack_reconfig_l1_acc itself); no per-block reserve/push/drain. Mirrors the CCL
-            // all_gather_minimal_matmul_async compute kernel's caller_owns call (compute.cpp:366-471).
-            if constexpr (caller_owns_pack_target) {
-                PACK((pack_reconfig_data_format(matmul_partials_cb)));
-                cb_matmul_partials.reserve_back(out_block_num_tiles);
-            }
+            // packs_in_place (TileRowMajor + packer_l1_acc + Interm): the helper does its own single
+            // reserve_back over the whole output block before the K-loop + push_back after, manages the
+            // per-K-block llk_pack_reconfig_l1_acc itself, and issues the closing pack_reconfig_l1_acc(0)
+            // — no caller-side reserve/push. Mirrors the CCL all_gather_minimal_matmul_async compute kernel.
             compute_kernel_lib::matmul_block<
                 /*transpose=*/false,
                 packer_l1_acc,
@@ -624,8 +621,7 @@ void kernel_main() {
                 /*untilize_block_ct_dim=*/0,
                 compute_kernel_lib::NoKBlockInnerDimFn,
                 compute_kernel_lib::NoIn0Source,
-                compute_kernel_lib::NoIn1BaseOffset,
-                /*caller_owns_pack_target=*/caller_owns_pack_target>(
+                compute_kernel_lib::NoIn1BaseOffset>(
                 cb_mm_in0,
                 cb_in1,
                 matmul_out_buf,
@@ -639,10 +635,6 @@ void kernel_main() {
                 compute_kernel_lib::NoKBlockInnerDimFn{},
                 compute_kernel_lib::NoIn0Source{},
                 compute_kernel_lib::NoIn1BaseOffset{});
-            if constexpr (caller_owns_pack_target) {
-                cb_matmul_partials.push_back(out_block_num_tiles);
-                PACK((llk_pack_reconfig_l1_acc(0)));
-            }
 
             if constexpr (check_skip_compute) {
                 if (skip_compute) {
