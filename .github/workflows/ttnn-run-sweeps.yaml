@@ -813,6 +813,18 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+      # Reconstruct reads the ttnn-ops dataset from Snowflake (SELF_SERVE.TTNN_OPS_V6)
+      # via the SVC_TTOPS_SWEEPS service account (RSA keypair). Only the private key
+      # is a secret (repo secret SWEEPS_SNOWFLAKE_KEY); the rest is non-sensitive config.
+      TTNN_OPS_READ_BACKEND: snowflake
+      SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
+      SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
+      SNOWFLAKE_ROLE: SELF_SERVE
+      SNOWFLAKE_WAREHOUSE: PUBLIC
+      SNOWFLAKE_DATABASE: SELF_SERVE
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
+      # Unused on the Snowflake read path, but the module requires a DB URL at import:
+      NEON_CONNECTION_STRING: unused
     if: >-
       needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' ||
       needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
@@ -825,11 +837,9 @@ jobs:
         with:
           python-version: "3.10"
       - name: Install dependencies
-        run: pip install psycopg2-binary pyyaml tqdm
+        run: pip install psycopg2-binary pyyaml tqdm snowflake-connector-python cryptography
       - name: Generate JSON for lead_models run
         if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
-        env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           mkdir -p model_tracer/traced_operations
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
@@ -838,8 +848,6 @@ jobs:
             lead_models
       - name: Generate JSON for model_traced run
         if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)'
-        env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           mkdir -p model_tracer/traced_operations
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
