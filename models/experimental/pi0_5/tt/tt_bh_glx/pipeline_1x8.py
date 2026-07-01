@@ -6,7 +6,7 @@
 Three stages share the parent 1×8 mesh and run sequentially. No host-bounce
 between stages and no fabric mesh sockets — all stage-to-stage data movement
 is on-device CCL (ttnn.all_gather inside SigLIP DP, ttnn.all_reduce inside
-StagePrefillTP4 MLP). Submeshes do not share tensor allocations, so keeping
+StagePrefillTP8 MLP). Submeshes do not share tensor allocations, so keeping
 every stage on the same mesh handle is what makes CCL handoff possible.
 
 Stages:
@@ -14,7 +14,7 @@ Stages:
        (8 cameras, one per chip). Each chip runs the full SigLIP encoder
        (SigLIPCameraSlice) at bs=1. ttnn.all_gather(dim=0) replicates the
        (8, 256, 2048) output on every chip; ttnn.slice drops the 5 dummies.
-    1. Prefill TP=8 — StagePrefillTP4 (col/row-parallel MLP, replicated attn,
+    1. Prefill TP=8 — StagePrefillTP8 (col/row-parallel MLP, replicated attn,
        all_reduce per MLP block). Output (final_hidden, KV×18) replicated on
        all 8 chips.
     2. Denoise (replicated) — one ExpertChunkSlice(layer_range=(0, 18)) with
@@ -29,8 +29,8 @@ begin/end_trace_capture on the parent mesh. Replay = copy_host_to_device_tensor
 into the buffers + ttnn.execute_trace + ttnn.to_torch on the output buffer.
 
 Layout assumptions:
-    * Parent mesh: 1×8 (open via mesh_setup.open_prefill_tp4_mesh(tp=8)).
-    * All weights replicated EXCEPT prefill MLP (sharded by StagePrefillTP4).
+    * Parent mesh: 1×8 (open via mesh_setup.open_prefill_tp8_mesh(tp=8)).
+    * All weights replicated EXCEPT prefill MLP (sharded by StagePrefillTP8).
     * num_cameras = 3 (production); padded to 8 for DP.
     * Denoise output replicated → ConcatMeshToTensor + [:1] slice to take chip 0.
 
@@ -63,7 +63,7 @@ from models.experimental.pi0_5.tt.ttnn_pi0_5_model import (
 
 from .expert_slice import ExpertChunkSlice
 from .heads import _DenoiseHead, _PrefillHead
-from .stage_prefill_tp4 import StagePrefillTP4
+from .stage_prefill_tp8 import StagePrefillTP8
 from .suffix_slice import SuffixSlice
 from .vision_slice import SigLIPCameraSlice
 
@@ -113,7 +113,7 @@ class Pi0_5GLX1x8Pipeline:
         # ---- Stage 1: Prefill TP=8 — derives tp=8 from mesh.get_num_devices() ----
         # MLP gate/up/down weights sharded col/row across the mesh; attention
         # replicated. all_reduce(num_links=2) per MLP block sums down-proj partials.
-        self.prefill = StagePrefillTP4(config, weights, mesh)
+        self.prefill = StagePrefillTP8(config, weights, mesh)
 
         # Lang token embedding lookup. _PrefillHead uploads embed_tokens with
         # no mesh_mapper → implicit replicate on every chip.
@@ -1078,8 +1078,8 @@ class Pi0_5GLX1x8Pipeline:
         iters: int,
     ) -> Tuple[torch.Tensor, List[float]]:
         """Run `iters` iterations of trace replay with H2D input upload on CQ1
-        overlapped with compute on CQ0. Mirrors the pattern in
-        test_perf_ttnn_full_e2e_trace_2cq.py.
+        overlapped with compute on CQ0. Exercised by
+        tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py::test_perf_1x8_traced_2cq.
 
         Requires the mesh to have been opened with num_command_queues=2.
         Returns (last_actions, per_iter_wall_clock_ms).

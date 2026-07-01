@@ -1,6 +1,6 @@
 # PI0.5 (`pi0_5`) — Tenstorrent
 
-End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights trace+2CQ perf path at **~31 ms / chunk** on a 1×8 Blackhole mesh (**~42 ms** single-chip) — measured against the upstream `pi05_libero` checkpoint (10-action chunks, 5 denoise steps, 3 cameras).
+End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights trace+2CQ perf on a 1×8 Blackhole mesh — measured against the upstream `pi05_libero` checkpoint (10-action chunks, 5 denoise steps, 3 cameras).
 
 The supported multi-chip path is the **1×8 single-mesh pipeline** (`pipeline_1x8.py`):
 SigLIP DP + prefill TP=8 + replicated denoise on one 1×8 Blackhole mesh.
@@ -89,18 +89,6 @@ SigLIP DP + prefill TP=8 + replicated denoise on one 1×8 Blackhole mesh.
 - **Flow Matching**: same Euler integration as PI0; **10** denoising steps (openpi training default) from N(0,I) → actions. The perf-tuned path uses **5** (validated PCC-equal on LIBERO, ~half the device time).
 - **Dual Experts**: VLM (2B) processes images + language; Expert (300M, adaRMS) processes only the action tokens.
 
-### What differs from PI0
-
-| Component        | PI0                                              | **PI0.5**                                                     |
-| ---------------- | ------------------------------------------------ | ------------------------------------------------------------- |
-| Suffix tokens    | `[state_token, action_0, …, action_{H-1}]`       | `[action_0, …, action_{H-1}]` (state encoded into lang tokens)|
-| Time injection   | concat(action, sincos(t)) → 2-layer MLP, fused   | sincos(t) → MLP → `adarms_cond` (fed to adaRMSNorm)           |
-| Expert RMSNorm   | Plain RMSNorm                                    | adaRMSNorm: `normed * (1+scale) + shift`, with gated residual |
-| `max_token_len`  | 48                                               | 200                                                           |
-| State input      | continuous (state_proj)                          | none by default (`discrete_state_input=False`); optionally 256-bin discretized into the language prompt |
-
-Everything else (SigLIP-27, Gemma-2B VLM, Gemma-300M expert, flow-matching denoising with Euler integration, KV-cache prefill of the prefix) follows the openpi/lerobot reference.
-
 ---
 
 ## Directory layout
@@ -127,10 +115,9 @@ pi0_5/
 │   └── tt_bh_glx/            # 1×8 single-mesh pipeline (see below)
 │       ├── pipeline_1x8.py   #   Pi0_5GLX1x8Pipeline (supported multi-chip path)
 │       ├── heads.py          #   _PrefillHead / _DenoiseHead (shared, standalone)
-│       ├── stage_prefill_tp4.py, *_slice.py, stages.py, mesh_setup.py
+│       ├── stage_prefill_tp8.py, *_slice.py, mesh_setup.py
 ├── libero_sim/               # LIBERO simulator rollout (see libero_sim/README.md)
-│   ├── libero_rollout.py     #   checkpoint → policy → success rate / videos
-│   └── async_rollout.py
+│   └── libero_rollout.py     #   checkpoint → policy → success rate / videos
 ├── tests/
 │   ├── pcc/                  # Reference-vs-spec correctness
 │   └── perf/                 # Latency / throughput on Blackhole
@@ -160,7 +147,7 @@ vary the workload (defaults from `pi05_production.env`):
 source models/experimental/pi0_5/common/pi05_production.env   # perf flags (tests auto-apply too)
 
 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
-  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py
 ```
 
 ### LIBERO sim — task-success rollout
@@ -198,7 +185,8 @@ Compare TTNN vs the PyTorch reference on real upstream weights, gated at **PCC �
 (8 BH chips, 1×8 mesh):
 
 ```bash
-PI05_E2E_PCC=1 python_env/bin/pytest -sq models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_1x8.py
+python_env/bin/pytest -sq models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_1x8.py
+# On by default (runs a slow CPU torch reference); set PI05_E2E_PCC=0 to skip.
 ```
 
 Results (upstream pi05_libero, ≥ 0.99 bar):
@@ -220,18 +208,14 @@ Trace + 2CQ (the canonical "fast" path). Vary the workload with two env vars
 Run (8 BH chips, 1×8 mesh):
 ```bash
 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
-  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py
 ```
 
-Results (trace + 2CQ, N=5 — per-chunk ms · throughput):
+Results (trace + 2CQ, N=5 — per-chunk ms):
 
 | | 2 cameras | 3 cameras |
 |---|---|---|
-| **8 BH chips (1×8)** | 29.0 ms · 345 act/s | 31.2 ms · 320 act/s |
-
-10-action chunks (throughput = 10 / per-chunk). The SigLIP encoder runs in L1
-block-sharded layout (12×8 grid); `PI0_SIGLIP_BS=0` reverts to interleaved-LN with no
-rebuild. Per-stage / CCL breakdown: `test_perf_tt_bh_glx_1x8.py::test_perf_1x8_traced_staged`.
+| **8 BH chips (1×8)** | 29.0 ms | 31.2 ms |
 
 ---
 
@@ -243,10 +227,10 @@ End-to-end benchmark on the four LIBERO suites (`libero_spatial`, `libero_object
 ### One-time setup
 
 ```bash
-export PI05_BASE=$HOME/pi05_cache        # any writable dir
+export PI05_SIM=$HOME/pi05_sim        # any writable dir
 
 # 1. PaliGemma tokenizer (~4 MB, public)
-curl -L -o $PI05_BASE/paligemma_tokenizer.model \
+curl -L -o $PI05_SIM/paligemma_tokenizer.model \
   https://storage.googleapis.com/big_vision/paligemma_tokenizer.model
 
 # 2. Checkpoint: upstream openpi pi05_libero (torch/safetensors). Downloads +
@@ -254,11 +238,11 @@ curl -L -o $PI05_BASE/paligemma_tokenizer.model \
 #    `huggingface-cli login` first. See weights/README.md.
 huggingface-cli login
 python_env/bin/python models/experimental/pi0_5/weights/download_pi05_libero.py \
-  --out $PI05_BASE/pi05_libero_upstream
-export PI05_CHECKPOINT_DIR=$PI05_BASE/pi05_libero_upstream
+  --out $PI05_SIM/pi05_libero_upstream
+export PI05_CHECKPOINT_DIR=$PI05_SIM/pi05_libero_upstream
 
 # 3. LIBERO from source (the PyPI package is broken)
-git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git $PI05_BASE/libero_repo
+git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git $PI05_SIM/libero_repo
 
 # 4. System packages for headless MuJoCo render
 sudo apt install -y libosmesa6 libegl1-mesa xvfb ffmpeg
@@ -267,7 +251,7 @@ sudo apt install -y libosmesa6 libegl1-mesa xvfb ffmpeg
 #    (1.5.x breaks libero 0.1.0's import path); do NOT pin numpy (<2 downgrades ttnn).
 export VIRTUAL_ENV=$PWD/python_env
 uv pip install "robosuite==1.4.0" mujoco bddl easydict cloudpickle gym imageio-ffmpeg
-uv pip install --no-deps -e $PI05_BASE/libero_repo
+uv pip install --no-deps -e $PI05_SIM/libero_repo
 ```
 
 ### Run
@@ -275,9 +259,9 @@ uv pip install --no-deps -e $PI05_BASE/libero_repo
 ```bash
 source models/experimental/pi0_5/common/pi05_production.env      # perf flags + checkpoint path
 
-PI0_TOKENIZER_PATH=$PI05_BASE/paligemma_tokenizer.model \
-LIBERO_REPO_PATH=$PI05_BASE/libero_repo \
-MUJOCO_GL=osmesa TT_METAL_HOME=$PWD PYTHONPATH=$PWD:$PI05_BASE/libero_repo \
+PI0_TOKENIZER_PATH=$PI05_SIM/paligemma_tokenizer.model \
+LIBERO_REPO_PATH=$PI05_SIM/libero_repo \
+MUJOCO_GL=osmesa TT_METAL_HOME=$PWD PYTHONPATH=$PWD:$PI05_SIM/libero_repo \
 python_env/bin/python -u models/experimental/pi0_5/libero_sim/libero_rollout.py \
   --checkpoint $PI05_CHECKPOINT_DIR \
   --suites libero_spatial libero_object libero_goal libero_10 \
@@ -302,22 +286,16 @@ Untraced rollout ≈ **250 ms/chunk** (host↔device transfer bound); the **trac
 path is **~42 ms single-chip / ~31 ms on 1×8** (see [Perf tests](#perf-tests-blackhole)).
 Task success is in the [400-episode/suite sweep](#libero-success-rate-upstream-pi05_libero-400-episodes-per-n-replan5) below.
 
----
+### LIBERO success rate (upstream pi05_libero, 100 episodes/suite × 4 suites, N=5, replan=5)
 
-## Weights
+ (400 episodes total per row):
 
-The expert checkpoint must contain the adaRMS modulation tensors per layer:
+| Stage | N=5 |
+|---|---|
+| Pre-bf8 baseline | 394/400 (98.5%) |
+| `8ef91d7fe60` + `c0876acc212` (all weights + outputs bf8) | 387/400 (96.75%) |
+| `df531eeb9d6` (current — weights+biases bf8, session outputs reverted) | 387/400 (96.75%) |
 
-```
-model.layers.{i}.input_layernorm.dense.weight     # (3 * width, width)
-model.layers.{i}.input_layernorm.dense.bias       # (3 * width,)             optional
-model.layers.{i}.post_attention_layernorm.dense.weight
-model.layers.{i}.post_attention_layernorm.dense.bias
-```
-
-…and the suffix checkpoint must contain `time_mlp_in.{weight,bias}` / `time_mlp_out.{weight,bias}` in addition to `action_in_proj` and `action_out_proj`. `state_proj` and `action_time_mlp_*` from PI0 are **not** used.
-
-If your checkpoint uses different names, add a rename pass in `Pi0_5WeightLoader.state_dict` (already strips lerobot's `model.` prefix automatically).
 
 ---
 
@@ -341,20 +319,6 @@ sharded LN. Live code:
 | Denoise loop | — | x_t `bf16` | intentionally `bf16` (opt-in fp32 via `PI0_DENOISE_FP32=1`) |
 
 > More bf8 is not strictly better — always re-run a LIBERO sweep (not just PCC)
-> before flipping dtypes. See `[[pi0_5 accuracy levers]]`.
-
-### LIBERO success rate (upstream pi05_libero, 400 episodes/suite × 4 suites, N=5, replan=5)
-
-Tracking changes across the bf8 conversion effort (1600 episodes total per row):
-
-| Stage | N=5 |
-|---|---|
-| Pre-bf8 baseline | 394/400 (98.5%) |
-| `8ef91d7fe60` + `c0876acc212` (all weights + outputs bf8) | 387/400 (96.75%) |
-| `df531eeb9d6` (current — weights+biases bf8, session outputs reverted) | 387/400 (96.75%) |
-
-`libero_10` task 8 is the recurring loss (6/10 in the current config) — it has the
-longest horizon and frequently hits the env step cap.
 
 ---
 

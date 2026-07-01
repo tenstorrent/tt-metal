@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""VLM prefill: TP=4 on a 4-chip mesh.
+"""VLM prefill: TP=8 on an 8-chip mesh.
 
-All 18 Gemma-2B blocks run sequentially on the same 4-chip submesh.
+All 18 Gemma-2B blocks run sequentially on the same 8-chip submesh.
 Only the MLP is tensor-parallel; attention and norms run replicated:
 
   gate_proj, up_proj  column-parallel (sharded along mlp_dim output axis)
   down_proj           row-parallel    (sharded along mlp_dim input axis)
   AllReduce after down_proj to sum partial outputs across chips
 
-Attention, norms, and residuals are identical on all 4 chips (replicated weights,
+Attention, norms, and residuals are identical on all 8 chips (replicated weights,
 replicated activations).
 """
 
@@ -39,9 +39,9 @@ from models.experimental.pi0_5.tt.ttnn_gemma import (
     rms_norm_ttnn,
 )
 
-from . import stages
-
-_TP = 4  # tensor-parallel degree
+_TP = 4  # symbol used only in the shape comments below; the real TP degree is
+#          read at runtime from mesh_device.get_num_devices() (8 in production)
+VLM_TOTAL_LAYERS = 18  # VLM Gemma-2B depth (all 18 blocks run on the TP mesh)
 
 
 def _all_reduce_scatter_dim(shape: tuple, tp: int) -> int:
@@ -171,12 +171,12 @@ class _ChunkPcfgs:
 
 
 def _attn_headpar_enabled() -> bool:
-    """PI0_TP4_ATTN_HEADPAR=1: shard attention Q-heads across chips (K/V replicated,
+    """PI0_TP8_ATTN_HEADPAR=1: shard attention Q-heads across chips (K/V replicated,
     row-parallel o_proj + all_reduce) instead of replicating attention on every chip."""
-    return os.environ.get("PI0_TP4_ATTN_HEADPAR", "").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("PI0_TP8_ATTN_HEADPAR", "").lower() in ("1", "true", "yes", "on")
 
 
-def _load_block_weights_tp4(
+def _load_block_weights_tp8(
     weights: Dict[str, torch.Tensor],
     layer_idx: int,
     mesh_device,
@@ -307,7 +307,7 @@ def _load_block_weights_tp4(
 # ─────────────────────────── TP=4 MLP ─────────────────────────────────────────
 
 
-class GemmaMLPTP4:
+class GemmaMLPTP8:
     """GeGLU MLP with TP=4 column+row parallelism and AllReduce.
 
     Each chip holds mlp_dim/_TP columns of gate/up and mlp_dim/_TP rows of down.
@@ -324,7 +324,7 @@ class GemmaMLPTP4:
         # Tensor-parallel degree = mesh device count (4 for 1x4, 8 for 1x8, ...).
         self.tp = mesh_device.get_num_devices()
 
-        # Weights already sharded/replicated during _load_block_weights_tp4
+        # Weights already sharded/replicated during _load_block_weights_tp8
         self.gate_proj = weights["mlp.gate_proj.weight"]  # [hidden, mlp_dim/_TP] per chip
         self.up_proj = weights["mlp.up_proj.weight"]  # [hidden, mlp_dim/_TP] per chip
         self.down_proj = weights["mlp.down_proj.weight"]  # [mlp_dim/_TP, hidden] per chip
@@ -628,14 +628,14 @@ class GemmaMLPTP4:
 # ──────────────────── TP=4 Gemma block ────────────────────────────────────────
 
 
-class _GemmaAttentionTP4(GemmaAttentionTTNN):
+class _GemmaAttentionTP8(GemmaAttentionTTNN):
     """Head-parallel attention: each chip owns num_q_heads//tp Q-heads (K/V replicated).
 
     Thin reuse of GemmaAttentionTTNN: build it with num_heads = num_q_heads//tp so the
     inherited forward (fused-QKV → create_heads → RoPE → SDPA → concat_heads → o_proj)
     runs per-chip on this chip's heads. Expects head-sharded wqkv + row-parallel o_proj in
     `weights`. forward() therefore returns a per-chip PARTIAL [.,seq,hidden]; the caller
-    (_GemmaBlockTP4) all_reduces it. head_dim/scale are unchanged (per-head).
+    (_GemmaBlockTP8) all_reduces it. head_dim/scale are unchanged (per-head).
     """
 
     def __init__(self, config, weights, layer_idx, mesh_device, cos_meta=None, sin_meta=None):
@@ -644,11 +644,11 @@ class _GemmaAttentionTP4(GemmaAttentionTTNN):
         super().__init__(replace(config, num_heads=hpc), weights, layer_idx, mesh_device, cos_meta, sin_meta)
 
 
-class _GemmaBlockTP4:
+class _GemmaBlockTP8:
     """Gemma-2B transformer block with TP=4 MLP on a 4-chip mesh.
 
-    MLP: GemmaMLPTP4 (column/row parallel + AllReduce).
-    Attention: replicated by default; head-parallel + AllReduce when PI0_TP4_ATTN_HEADPAR=1.
+    MLP: GemmaMLPTP8 (column/row parallel + AllReduce).
+    Attention: replicated by default; head-parallel + AllReduce when PI0_TP8_ATTN_HEADPAR=1.
     """
 
     def __init__(
@@ -668,9 +668,9 @@ class _GemmaBlockTP4:
         self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
 
         self._attn_headpar = _attn_headpar_enabled()
-        attn_cls = _GemmaAttentionTP4 if self._attn_headpar else GemmaAttentionTTNN
+        attn_cls = _GemmaAttentionTP8 if self._attn_headpar else GemmaAttentionTTNN
         self.attention = attn_cls(config, weights, layer_idx, mesh_device, cos_meta, sin_meta)
-        self.mlp = GemmaMLPTP4(config, weights, mesh_device)
+        self.mlp = GemmaMLPTP8(config, weights, mesh_device)
 
         self._rms_norm_sharded_pcfg = None
         self._rms_norm_sharded_memcfg = None
@@ -765,14 +765,12 @@ class _GemmaBlockTP4:
 # ────────────────────────── Prefill stage ─────────────────────────────────────
 
 
-class StagePrefillTP4:
+class StagePrefillTP8:
     """TP=4 VLM prefill: 18 Gemma-2B blocks on a 4-chip mesh.
 
     Usage:
-        with open_galaxy_mesh(...) as h:
-            # carve a 1x4 prefill submesh however fits the hardware
-            prefill_mesh = h.parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
-            stage = StagePrefillTP4(config, weights, prefill_mesh)
+        with open_prefill_tp8_mesh(tp=8, l1_small_size=24576) as prefill_mesh:
+            stage = StagePrefillTP8(config, weights, prefill_mesh)
 
         prefix_on_mesh = ttnn.from_torch(
             prefix_embs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
@@ -784,8 +782,8 @@ class StagePrefillTP4:
     """
 
     def __init__(self, config: Pi0_5ModelConfig, weights: Dict[str, dict], mesh_device):
-        if config.vlm_config.depth != stages.VLM_TOTAL_LAYERS:
-            raise RuntimeError(f"VLM depth {config.vlm_config.depth} != expected {stages.VLM_TOTAL_LAYERS}")
+        if config.vlm_config.depth != VLM_TOTAL_LAYERS:
+            raise RuntimeError(f"VLM depth {config.vlm_config.depth} != expected {VLM_TOTAL_LAYERS}")
 
         self.config = config
         self.mesh_device = mesh_device
@@ -800,10 +798,10 @@ class StagePrefillTP4:
         self.cos_meta, self.sin_meta = cos_meta, sin_meta
         self.head_dim = config.vlm_config.head_dim
 
-        self.blocks: List[_GemmaBlockTP4] = []
-        for i in range(stages.VLM_TOTAL_LAYERS):
-            bw = _load_block_weights_tp4(vw, i, mesh_device, config.vlm_config)
-            self.blocks.append(_GemmaBlockTP4(config.vlm_config, bw, i, mesh_device, cos_meta, sin_meta))
+        self.blocks: List[_GemmaBlockTP8] = []
+        for i in range(VLM_TOTAL_LAYERS):
+            bw = _load_block_weights_tp8(vw, i, mesh_device, config.vlm_config)
+            self.blocks.append(_GemmaBlockTP8(config.vlm_config, bw, i, mesh_device, cos_meta, sin_meta))
 
         # Final VLM RMS norm — replicated
         self.vlm_norm = ttnn.from_torch(

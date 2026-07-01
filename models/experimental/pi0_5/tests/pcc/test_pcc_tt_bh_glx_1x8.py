@@ -4,7 +4,7 @@
 """PCC (correctness) tests for the 1×8 single-mesh pipeline (Pi0_5GLX1x8Pipeline).
 
 Compares the TT 1×8 pipeline against the PyTorch reference. The companion timing
-tests live in tests/perf/test_perf_tt_bh_glx_1x8.py.
+tests live in tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py.
 
 What it covers:
     - SigLIP DP (3 cams batch-padded to 8, all_gather, slice)
@@ -12,7 +12,7 @@ What it covers:
     - Prefill TP=8 (sharded MLP + all_reduce per block)
     - Replicated 5-step Euler denoise on all 8 chips
 
-Two tests (both gated behind PI05_E2E_PCC=1 — they run a slow CPU torch ref):
+Two tests (on by default — they run a slow CPU torch ref; set PI05_E2E_PCC=0 to skip):
     test_pcc_1x8_all_stages — per-stage (vision / prefill) + e2e PCC vs torch.
     test_pcc_1x8_vs_torch   — e2e actions vs torch Pi0_5Model.sample_actions.
 
@@ -21,7 +21,7 @@ Run:
     export PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
     export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
     # Inherits production env defaults — set explicit flags before running.
-    PI05_E2E_PCC=1 python_env/bin/pytest -sq \
+    python_env/bin/pytest -sq \
       models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_1x8.py
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ import torch
 # Use setdefault so an explicit shell export still wins.
 for _k, _v in {
     "PI0_TP": "8",  # 8-chip tensor parallel for prefill
-    "PI0_TP4_ATTN_HEADPAR": "1",  # head-parallel attention split
+    "PI0_TP8_ATTN_HEADPAR": "1",  # head-parallel attention split
     "PI0_MLP_BS": "1",  # block-sharded MLP (TP=8 tuned)
     "PI0_MLP_FUSED_RS": "0",  # fused reduce-scatter off (TP=8 uses split RS+AG)
     "TT_VISIBLE_DEVICES": "8,9,10,11,12,13,14,15",  # the second tray on this box
@@ -87,7 +87,7 @@ _PROD_ENV_KEYS = (
     "PI0_VLM_MINIMAL_CFG",
     "PI0_SIGLIP_USE_FOLD",
     "PI0_TP",
-    "PI0_TP4_ATTN_HEADPAR",
+    "PI0_TP8_ATTN_HEADPAR",
     "PI0_MLP_BS",
     "PI0_MLP_FUSED_RS",
     "PI05_NUM_DENOISE_STEPS",
@@ -146,7 +146,7 @@ def _make_pipeline(mesh):
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Standard PCC formula matching tests/pcc/test_pcc_tt_bh_glx_stages.py."""
+    """Standard PCC formula (mean-centered cosine similarity)."""
     t1 = a.flatten().float()
     t2 = b.flatten().float()
     m1, m2 = torch.mean(t1), torch.mean(t2)
@@ -158,8 +158,8 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 @pytest.mark.skipif(
-    os.environ.get("PI05_E2E_PCC", "").lower() not in ("1", "true", "yes", "on"),
-    reason="PCC check off by default; set PI05_E2E_PCC=1 to enable (slow — runs CPU torch ref)",
+    os.environ.get("PI05_E2E_PCC", "1").lower() in ("0", "false", "no", "off"),
+    reason="PCC disabled via PI05_E2E_PCC=0 (on by default; runs a slow CPU torch ref)",
 )
 def test_pcc_1x8_all_stages():
     """Per-stage + end-to-end PCC check on the 1×8 pipeline.
@@ -171,7 +171,7 @@ def test_pcc_1x8_all_stages():
 
     Single mesh open, single torch-model load — amortizes the ~30 s setup.
 
-    Targets (matching tests/pcc/test_pcc_tt_bh_glx_stages.py):
+    Targets:
       vision ≥ 0.99   prefill ≥ 0.99   e2e ≥ 0.99
     """
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
@@ -181,11 +181,11 @@ def test_pcc_1x8_all_stages():
         MultiModalProjector as TorchMMProjector,
         SigLIPVisionTower as TorchSigLIPVisionTower,
     )
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
     _print_prod_env_status()
 
-    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
+    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
         img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(N_CAMS)]
@@ -288,21 +288,21 @@ def test_pcc_1x8_all_stages():
 
 
 @pytest.mark.skipif(
-    os.environ.get("PI05_E2E_PCC", "").lower() not in ("1", "true", "yes", "on"),
-    reason="PCC check off by default; set PI05_E2E_PCC=1 to enable (slow — runs CPU torch ref)",
+    os.environ.get("PI05_E2E_PCC", "1").lower() in ("0", "false", "no", "off"),
+    reason="PCC disabled via PI05_E2E_PCC=0 (on by default; runs a slow CPU torch ref)",
 )
 def test_pcc_1x8_vs_torch():
     """OPTIONAL PCC check: compare 1×8 eager actions vs the torch
     Pi0_5Model.sample_actions reference.
 
-    Slow (CPU reference); off by default. Target PCC ≥ 0.99 (the production
-    traced baseline at PI05_E2E_PCC=1 reports ≈ 0.9988).
+    Slow (CPU reference); on by default (set PI05_E2E_PCC=0 to skip). Target
+    PCC ≥ 0.99 (the production traced baseline reports ≈ 0.9988).
     """
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
-    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
+    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
         img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(N_CAMS)]

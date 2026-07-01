@@ -1262,7 +1262,7 @@ class GemmaMLPTTNN:
             # chunk_size=1024). Required to make chunk_size=1024 fit alongside
             # the matmul kernel's static CB region. PCC risk: bf8 quantization
             # of post-GELU activations compounds across 18 layers — validate via
-            # test_pcc_pi05_model_libero.py before promoting to default.
+            # tests/pcc/test_pcc_tt_bh_glx_1x8.py (e2e PCC) before promoting to default.
             import os as _os_mlp
 
             _mlp_bf8_out = _os_mlp.environ.get("PI0_VLM_MLP_BF8_OUT", "").lower() in ("1", "true", "yes", "on")

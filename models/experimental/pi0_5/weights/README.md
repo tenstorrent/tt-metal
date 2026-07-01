@@ -36,3 +36,22 @@ Resulting layout:
 (`gs://openpi-assets/checkpoints/pi05_libero/`, no config.json), convert it with
 openpi's exporter first, then re-run with `--skip-download` to add
 config.json/norm_stats + verify. See the header of `download_pi05_libero.py`.
+
+## Checkpoint tensor-name contract
+
+For a checkpoint to load in this package, the **expert** must contain the adaRMS
+modulation tensors per layer:
+
+```
+model.layers.{i}.input_layernorm.dense.weight     # (3 * width, width)
+model.layers.{i}.input_layernorm.dense.bias       # (3 * width,)             optional
+model.layers.{i}.post_attention_layernorm.dense.weight
+model.layers.{i}.post_attention_layernorm.dense.bias
+```
+
+…and the **suffix** must contain `time_mlp_in.{weight,bias}` / `time_mlp_out.{weight,bias}`
+in addition to `action_in_proj` and `action_out_proj`. `state_proj` and
+`action_time_mlp_*` from PI0 are **not** used.
+
+If your checkpoint uses different names, add a rename pass in
+`Pi0_5WeightLoader.state_dict` (already strips lerobot's `model.` prefix automatically).

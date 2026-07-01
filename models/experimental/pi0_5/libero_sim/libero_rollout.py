@@ -81,7 +81,7 @@ class Pi0_5LiberoAdapter:
         ),
         backend: str = "pytorch",
         ttnn_device=None,
-        mesh_handles=None,  # ttnn_1x8 backend only — the mesh from open_prefill_tp4_mesh()
+        mesh_handles=None,  # ttnn_1x8 backend only — the mesh from open_prefill_tp8_mesh()
         max_action_dim: int = 32,
         max_state_dim: int = 32,
         chunk_size: int = 50,
@@ -170,8 +170,8 @@ class Pi0_5LiberoAdapter:
         elif backend == "ttnn_1x8":
             # 1×8 mesh pipeline: 8 chips with on-device CCL, num_command_queues=2
             # for H2D overlap, traced + 2CQ replay loop. mesh_handles is the raw
-            # mesh device returned by open_prefill_tp4_mesh(tp=8, num_command_queues=2).
-            assert mesh_handles is not None, "ttnn_1x8 backend requires mesh from open_prefill_tp4_mesh()"
+            # mesh device returned by open_prefill_tp8_mesh(tp=8, num_command_queues=2).
+            assert mesh_handles is not None, "ttnn_1x8 backend requires mesh from open_prefill_tp8_mesh()"
             from models.experimental.pi0_5.tt.tt_bh_glx.pipeline_1x8 import Pi0_5GLX1x8Pipeline
 
             self._ttnn = None
@@ -1054,7 +1054,7 @@ def main():
         )
         print(f"   ttnn device opened in {time.time() - t0:.1f}s (device_id={args.device_id})")
     elif args.backend == "ttnn_1x8":
-        # 1×8-specific env vars that the perf test (test_perf_tt_bh_glx_1x8.py)
+        # 1×8-specific env vars that the perf test (test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py)
         # self-applies at module load. These are NOT in pi05_production.env
         # — they're pipeline_1x8-specific and control how attention/MLP
         # weights shard across the 8-chip mesh. Without these, wqkv loads
@@ -1063,18 +1063,20 @@ def main():
         # explicit shell override.
         for _k, _v in {
             "PI0_TP": "8",
-            "PI0_TP4_ATTN_HEADPAR": "1",
+            "PI0_TP8_ATTN_HEADPAR": "1",
             "PI0_MLP_BS": "1",
             "PI0_MLP_FUSED_RS": "0",
         }.items():
             os.environ.setdefault(_k, _v)
 
-        from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+        from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
-        mesh_ctx = open_prefill_tp4_mesh(
+        mesh_ctx = open_prefill_tp8_mesh(
             tp=8,
             l1_small_size=24576,
-            trace_region_size=128 * 1024 * 1024,
+            # 256 MiB: per-task trace re-capture needs >128 MiB for some tasks
+            # (e.g. libero_object task 7's trace measured ~142 MiB).
+            trace_region_size=256 * 1024 * 1024,
             num_command_queues=2,
         )
         mesh_handles = mesh_ctx.__enter__()

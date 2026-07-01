@@ -6,27 +6,25 @@ success. Backends: `pytorch` (CPU reference), `ttnn` (single Blackhole chip),
 
 Contents:
 - `libero_rollout.py` — the rollout entry point (checkpoint → policy → success rate / videos).
-- `async_rollout.py` — async/pipelined rollout variant.
-- `test_async_rollout_mock.py` — mock-backend unit test for the async driver.
 
 ## Setup (one-time)
 
 ```bash
-export PI05_BASE=$HOME/pi05_cache        # any writable dir
+export PI05_SIM=$HOME/pi05_sim        # any writable dir
 
 # 1. Upstream pi05_libero checkpoint (torch/safetensors) — downloads, fills in
 #    config.json / norm_stats, and verifies it loads. Gated repo: run
 #    `huggingface-cli login` first. See ../weights/README.md.
 python_env/bin/python models/experimental/pi0_5/weights/download_pi05_libero.py \
-  --out $PI05_BASE/pi05_libero_upstream
-export PI05_CHECKPOINT_DIR=$PI05_BASE/pi05_libero_upstream
+  --out $PI05_SIM/pi05_libero_upstream
+export PI05_CHECKPOINT_DIR=$PI05_SIM/pi05_libero_upstream
 
 # 2. PaliGemma tokenizer (~4 MB, public)
-curl -L -o $PI05_BASE/paligemma_tokenizer.model \
+curl -L -o $PI05_SIM/paligemma_tokenizer.model \
   https://storage.googleapis.com/big_vision/paligemma_tokenizer.model
 
 # 3. LIBERO from source (the PyPI package is broken)
-git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git $PI05_BASE/libero_repo
+git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git $PI05_SIM/libero_repo
 
 # 4. System packages for headless MuJoCo render
 sudo apt install -y libosmesa6 libegl1-mesa xvfb ffmpeg
@@ -35,7 +33,7 @@ sudo apt install -y libosmesa6 libegl1-mesa xvfb ffmpeg
 #    (1.5.x breaks libero 0.1.0's import path); do NOT pin numpy (<2 downgrades ttnn).
 export VIRTUAL_ENV=$PWD/python_env
 uv pip install "robosuite==1.4.0" mujoco bddl easydict cloudpickle gym imageio-ffmpeg
-uv pip install --no-deps -e $PI05_BASE/libero_repo
+uv pip install --no-deps -e $PI05_SIM/libero_repo
 ```
 
 ## Run
@@ -43,9 +41,9 @@ uv pip install --no-deps -e $PI05_BASE/libero_repo
 ```bash
 source models/experimental/pi0_5/common/pi05_production.env    # perf flags + checkpoint path
 
-PI0_TOKENIZER_PATH=$PI05_BASE/paligemma_tokenizer.model \
-LIBERO_REPO_PATH=$PI05_BASE/libero_repo \
-MUJOCO_GL=osmesa TT_METAL_HOME=$PWD PYTHONPATH=$PWD:$PI05_BASE/libero_repo \
+PI0_TOKENIZER_PATH=$PI05_SIM/paligemma_tokenizer.model \
+LIBERO_REPO_PATH=$PI05_SIM/libero_repo \
+MUJOCO_GL=osmesa TT_METAL_HOME=$PWD PYTHONPATH=$PWD:$PI05_SIM/libero_repo \
 python_env/bin/python -u models/experimental/pi0_5/libero_sim/libero_rollout.py \
   --checkpoint $PI05_CHECKPOINT_DIR \
   --suites libero_spatial libero_object libero_goal libero_10 \

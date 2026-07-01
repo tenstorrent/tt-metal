@@ -25,7 +25,7 @@ Run:
     export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
     # Inherits production env defaults — set explicit flags before running.
     python_env/bin/pytest -sq \
-      models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
+      models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ import torch
 # Use setdefault so an explicit shell export still wins.
 for _k, _v in {
     "PI0_TP": "8",  # 8-chip tensor parallel for prefill
-    "PI0_TP4_ATTN_HEADPAR": "1",  # head-parallel attention split
+    "PI0_TP8_ATTN_HEADPAR": "1",  # head-parallel attention split
     "PI0_MLP_BS": "1",  # block-sharded MLP (TP=8 tuned)
     "PI0_MLP_FUSED_RS": "0",  # fused reduce-scatter off (TP=8 uses split RS+AG)
     "TT_VISIBLE_DEVICES": "8,9,10,11,12,13,14,15",  # the second tray on this box
@@ -97,7 +97,7 @@ _PROD_ENV_KEYS = (
     "PI0_VLM_MINIMAL_CFG",
     "PI0_SIGLIP_USE_FOLD",
     "PI0_TP",
-    "PI0_TP4_ATTN_HEADPAR",
+    "PI0_TP8_ATTN_HEADPAR",
     "PI0_MLP_BS",
     "PI0_MLP_FUSED_RS",
     "PI05_NUM_DENOISE_STEPS",
@@ -162,12 +162,12 @@ def test_perf_1x8_eager():
     to mirror the single-chip eager test's interface — useful for tracy
     profiling where the canonical inference is the LAST one captured.
     """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
     n_warmup = int(os.environ.get("PI05_E2E_NUM_WARMUP", "0"))
     n_iters = int(os.environ.get("PI05_E2E_NUM_ITERS", "1"))
 
-    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
+    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
 
@@ -217,9 +217,9 @@ def test_perf_1x8_traced():
        captured; their sum is the wall-clock per-call cost. The 28-chip
        baseline reported ≈43 ms total.
     """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
-    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
+    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
 
@@ -304,11 +304,11 @@ def test_perf_1x8_traced_2cq():
     The host-overhead of input_upload should mostly hide behind compute,
     closing toward the trace_exec floor.
     """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
     _print_prod_env_status()
 
-    with open_prefill_tp4_mesh(
+    with open_prefill_tp8_mesh(
         tp=8,
         l1_small_size=24576,
         trace_region_size=128 * 1024 * 1024,
@@ -364,11 +364,11 @@ def test_perf_1x8_traced_1cq_prestaged():
     ~36 ms (= compute 34 + actual DMA ~1.4 + D2H ~1.4), which is within
     ~1 ms of the 2CQ wall-clock.
     """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
     _print_prod_env_status()
 
-    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
+    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
 
@@ -419,12 +419,12 @@ def test_perf_1x8_traced_staged():
     These are TRUE traced per-stage numbers (no eager dispatch overhead),
     unlike the eager-with-sync proportions in test_perf_1x8_traced.
     """
-    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
 
     _print_prod_env_status()
 
     # 3 sub-traces share the trace region — bump from 128 MiB to 256 MiB.
-    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=256 * 1024 * 1024) as mesh:
+    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=256 * 1024 * 1024) as mesh:
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
 
