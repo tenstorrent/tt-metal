@@ -7,10 +7,11 @@ TTTv2 Phi-4 (microsoft/phi-4) demo — accuracy and performance measurement on N
 Uses ``EagerPhi4Executor`` / ``TracedPhi4Executor`` directly (no vLLM adapter).
 
 **Mesh note:** Phi-4 has 40 attention heads and 10 KV heads; both must be divisible by the
-mesh device count. N300 (2 devices) is the primary target and is the **only SKU published in
-PERF.md** (lines 60 / 107). N150 (1 device) is supported for smoke but TTTv1 caps batch at 4
-there, so batch-32 / accuracy throughput is not claimed. T3K (8) is incompatible (10 KV heads
-not divisible by 8).
+mesh device count. N300 (2 devices) is the only supported and gated SKU. N150 (1 device) hits
+a hard L1 OOM at program-build time (distributed-layernorm reader CBs ~1.51 MB > ~1.50 MB L1),
+so it is unsupported as configured. T3K (8) is incompatible (10 KV heads not divisible by 8).
+Perf gates are TTTv1-measured (or faster TTTv2) per SKU + batch; PERF.md is stale and is not
+used as a source (see EXPECTED_METRICS).
 
 Usage::
 
@@ -50,19 +51,29 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # Expected metrics
 # =============================================================================
 
-# Phi-4 IS published in models/tt_transformers/PERF.md (N300 only):
-#   Performance table (line 60): top1=97, top5=100, tok/s/u=37.34, TTFT=123.33 ms
-#   Accuracy    table (line 107): top1=99, top5=100, tok/s/u=20.48, TTFT=146.32 ms
-# PERF.md numbers are per-user, measured at batch-1 (prefill 512, 200 decode iters). tok/s/u and
-# TTFT are therefore asserted only on the batch-1 perf case; batch-32 is informational (aggregate
-# TTFT differs and per-user throughput drifts with the larger workload). Accuracy thresholds are
-# compared against the committed book reference refpt (real-corpus teacher-forced targets).
+# Perf gates are keyed by [profile][SKU][batch]. PERF.md is stale and is intentionally NOT used
+# as a source. Each threshold is the TTTv1 measured metric, or the TTTv2 measured metric where
+# TTTv2 is faster (never below TTTv1). Baselines from the phi-4 PR_REBASE_UPDATE (N300, 2026-06-30,
+# SKU-matched on-host argmax decode):
+#   perf  b1:  TTTv1 16.33 t/s/u / 175.16 ms  → TTTv2 25.1 / 124.1 faster → gate on TTTv2
+#   perf  b32: TTTv1 15.54 t/s/u              → TTTv2 23.6 faster        → gate on TTTv2
+#   acc   b1:  TTTv1 OOMs on N300             → TTTv2 21.2 / 145.0       → gate on TTTv2 only
+#   acc   b32: TTTv1 OOMs on N300             → TTTv2 20.0               → gate on TTTv2 only
+# Decode tok/s/u is per-user (comparable across batch). batch-32 TTFT reflects TTTv2 sequential vs
+# TTTv1 batched prefill (not comparable) → informational, not gated. top1/top5 gate token-accuracy.
+# N150 is L1-OOM and T3K is architecturally excluded, so only N300 is gated.
 EXPECTED_METRICS = {
     "performance": {
-        "N300": {"top1": 97, "top5": 100, "tok_s_u": 37.34, "ttft_ms": 123.33},
+        "N300": {
+            1: {"top1": 97, "top5": 100, "tok_s_u": 25.1, "ttft_ms": 124.1},
+            32: {"tok_s_u": 23.6},
+        },
     },
     "accuracy": {
-        "N300": {"top1": 99, "top5": 100, "tok_s_u": 20.48, "ttft_ms": 146.32},
+        "N300": {
+            1: {"top1": 99, "top5": 100, "tok_s_u": 21.2, "ttft_ms": 145.0},
+            32: {"tok_s_u": 20.0},
+        },
     },
 }
 
@@ -353,7 +364,10 @@ def create_model(
 def test_phi4(test_config, mesh_device, optimizations):
     """Main test entry for TTTv2 Phi-4."""
     device_name = get_device_name(mesh_device)
-    expected = EXPECTED_METRICS.get(optimizations, {}).get(device_name, {})
+    sku_metrics = EXPECTED_METRICS.get(optimizations, {}).get(device_name, {})
+    # Gates are measured on the SKU-matched decode path (on-host argmax on N300 ≤2 dev). The
+    # on-device top-k path is intentionally slower here and only wins at ≥8 dev → informational.
+    sku_matched = os.environ.get("SAMPLING_MODE", "host").lower() == "host"
     model = None
     hf_model = os.environ.get("HF_MODEL", "microsoft/phi-4")
     cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
@@ -365,16 +379,26 @@ def test_phi4(test_config, mesh_device, optimizations):
         model = create_model(mesh_device, optimizations, cache_dir, max_batch_size=max_bs)
 
         if test_config == "token-accuracy":
-            _run_token_accuracy(model, mesh_device, expected, hf_model)
+            _run_token_accuracy(model, mesh_device, sku_metrics.get(1, {}), hf_model)
         elif test_config == "batch-1":
-            # PERF.md per-user numbers are a batch-1 measurement → assert here.
+            # Gate per-user tok/s/u + TTFT against the batch-1 baseline (SKU-matched path only).
             _run_perf_benchmark(
-                model, mesh_device, expected, batch_size=1, case_name=f"{optimizations}/{test_config}", assert_perf=True
+                model,
+                mesh_device,
+                sku_metrics.get(1, {}),
+                batch_size=1,
+                case_name=f"{optimizations}/{test_config}",
+                assert_perf=sku_matched,
             )
         elif test_config == "batch-32":
-            # Informational only (aggregate TTFT / per-user drift not comparable to PERF.md batch-1).
+            # Gate per-user tok/s/u only; batch-32 TTFT is informational (no ttft_ms key in gate).
             _run_perf_benchmark(
-                model, mesh_device, {}, batch_size=32, case_name=f"{optimizations}/{test_config}", assert_perf=False
+                model,
+                mesh_device,
+                sku_metrics.get(32, {}),
+                batch_size=32,
+                case_name=f"{optimizations}/{test_config}",
+                assert_perf=sku_matched,
             )
     finally:
         cleanup_model_case(model, mesh_device)
@@ -484,7 +508,7 @@ def _run_perf_benchmark(
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
         #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
-        #                      the [*,32] tuples; PERF.md-parity recipe, faster than force-argmax)
+        #                      the [*,32] tuples; faster than force-argmax)
         sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
         _on_device_params = {
             "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
