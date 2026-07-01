@@ -7,6 +7,7 @@
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/work_split.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 namespace ttnn::operations::kv_sdpa {
 
@@ -60,8 +61,14 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         }
     }
     const uint32_t k_num_chunks = Kt / Sk_chunk_t;
-    const uint32_t qk_subblock_w = Sk_chunk_t;  // 1 x Sk_chunk_t qk subblock (Sq_chunk_t==1)
-    const uint32_t out_subblock_w = vDHt;       // 1 x vDHt out subblock
+    // Subblock widths must fit the DST register budget (get_dest_reg_count halves it for
+    // fp32_dest_acc, and again without dst_full_sync). Derive them from dst_size like the production
+    // transformer SDPA rather than assuming the full head_dim fits (Sq_chunk_t == 1 here).
+    const auto ckc = ttnn::init_device_compute_kernel_config(
+        device->arch(), attrs.compute_kernel_config, MathFidelity::HiFi2, false, false, false);
+    const uint32_t dst_size = ttnn::get_dest_reg_count(ckc);
+    const uint32_t qk_subblock_w = ttnn::prim::detail::determine_largest_subblock_size(1, Sk_chunk_t, dst_size).second;
+    const uint32_t out_subblock_w = ttnn::prim::detail::determine_largest_subblock_size(1, vDHt, dst_size).second;
 
     const uint32_t Sq_chunk_t = 1;
     const uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -140,8 +147,6 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     writer.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1};
 
     // ---- Compute ----
-    const auto ckc = ttnn::init_device_compute_kernel_config(
-        device->arch(), attrs.compute_kernel_config, MathFidelity::HiFi2, false, false, false);
     KernelDescriptor compute{};
     compute.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/compute/flash_fused.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -155,14 +160,15 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         qk_subblock_w,
         out_subblock_w,
         (uint32_t)use_provided_mask};
-    // Granularity defines compute_common.hpp requires (loop-unroll factors; must divide their counts).
-    // For Sq_chunk_t==1: stats/reduce over 1 -> 1; sub_exp/mul_bcast over Sk_chunk_t; dht over DHt.
+    // Granularity defines are DST-loop unroll factors (compute_common.hpp): each must be <= dst_size
+    // and divide its tile count, or the DST overflows / trailing tiles are dropped. Derive them from
+    // dst_size like the production SDPA (Sq_chunk_t == 1 here, so stats/reduce counts are 1).
     compute.defines = {
-        {"STATS_GRANULARITY", "1"},
-        {"SUB_EXP_GRANULARITY", std::to_string(Sk_chunk_t)},
-        {"MUL_BCAST_GRANULARITY", std::to_string(Sk_chunk_t)},
-        {"DHT_GRANULARITY", std::to_string(DHt)},
-        {"REDUCE_GRANULARITY", "1"},
+        {"STATS_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(1, dst_size))},
+        {"SUB_EXP_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(Sk_chunk_t, dst_size))},
+        {"MUL_BCAST_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(Sk_chunk_t, dst_size))},
+        {"DHT_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(DHt, dst_size))},
+        {"REDUCE_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(1, dst_size / 2))},
         {"EXP_APPROX_MODE", "0"}};
     compute.config = ComputeConfigDescriptor{
         .math_fidelity = ckc.math_fidelity,

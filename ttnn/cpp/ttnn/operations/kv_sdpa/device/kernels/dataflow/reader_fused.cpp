@@ -67,25 +67,27 @@ void kernel_main() {
     for (uint32_t c = 0; c < k_num_chunks; ++c) {
         const uint32_t kt0 = c * Sk_chunk_t;
         cb_reserve_back(cb_k_in, Sk_chunk_t * DHt);
-        uint32_t lk = get_write_ptr(cb_k_in);
+        const uint32_t k_base = get_write_ptr(cb_k_in);
         cb_reserve_back(cb_v_in, Sk_chunk_t * DHt);
         uint32_t lv = get_write_ptr(cb_v_in);
+        // K is written transposed into cb_k_in: tile (seq=kt, dim=d) -> offset (d*Sk_chunk_t + kt),
+        // i.e. a [DHt x Sk_chunk_t] tile grid, as sdpa_standard's QK^T matmul expects (the production
+        // SDPA reader likewise reads K with transpose=true). V stays seq-major [Sk_chunk_t x DHt].
         for (uint32_t kt = 0; kt < Sk_chunk_t; ++kt) {
             const uint32_t g = kt0 + kt;
             if (has_past && g < prefix_Kt) {
                 const uint32_t base = (kv_head * prefix_Kt + g) * DHt;
                 for (uint32_t d = 0; d < DHt; ++d) {
-                    noc_async_read_tile(base + d, pk_acc, lk + d * k_tb);
+                    noc_async_read_tile(base + d, pk_acc, k_base + (d * Sk_chunk_t + kt) * k_tb);
                     noc_async_read_tile(base + d, pv_acc, lv + d * v_tb);
                 }
             } else {
                 const uint32_t base = (kv_head * suffix_Kt + (g - prefix_Kt)) * DHt;
                 for (uint32_t d = 0; d < DHt; ++d) {
-                    noc_async_read_tile(base + d, k_acc, lk + d * k_tb);
+                    noc_async_read_tile(base + d, k_acc, k_base + (d * Sk_chunk_t + kt) * k_tb);
                     noc_async_read_tile(base + d, v_acc, lv + d * v_tb);
                 }
             }
-            lk += DHt * k_tb;
             lv += DHt * v_tb;
         }
         // Provided-mask path: read this chunk's mask tiles into cb_mask_in, aligned to the SAME
