@@ -97,6 +97,23 @@ class TTVibeVoiceOutput:
     decode_wall_s: float = 0.0  # wall time covering the full AR decode loop
 
 
+@dataclass
+class _TracedDecodeSlot:
+    """Per-call-site state for a traced 28-layer LM decode step (positive vs negative
+    CFG).  Each site has its own KV cache, position stream, and persistent input/output
+    buffers, so a single capture per slot replays for the whole generation."""
+
+    label: str
+    tid: object = None
+    emb_in: Optional[ttnn.Tensor] = None
+    cos_in: Optional[ttnn.Tensor] = None
+    sin_in: Optional[ttnn.Tensor] = None
+    pos_in: Optional[ttnn.Tensor] = None
+    logits_out: Optional[ttnn.Tensor] = None
+    hidden_out: Optional[ttnn.Tensor] = None
+    warmup: int = 0
+
+
 def _greedy_argmax(logits: ttnn.Tensor, use_fp32: bool = False) -> int:
     """Greedy argmax on last-position logits."""
     if use_fp32:
@@ -253,23 +270,19 @@ class TTVibeVoiceGenerator:
         self._diff_eps_out: Optional[ttnn.Tensor] = None
         self._diff_eager_steps = 0
 
-        # Optional ttnn trace of the positive 28-layer LM decode step (opt-in via
-        # VV_TRACE_LM=1, set by demo_ttnn.py --trace).  This is the dominant per-token
-        # cost.  It is driven entirely by device tensors (KV write position + SDPA read
-        # bound via cur_pos, RoPE via a host-written row), so one capture replays for the
-        # whole generation (positive KV cache persists — no per-segment reset), and it is
-        # bit-exact vs eager (validated to 64 chunks).  See TTVibeVoiceLM.forward_decode_
-        # traced_embeds.  Only the fused post-diffusion embed step is traced; the rare
-        # token-input steps (_lm_decode_token) stay eager.
+        # Optional ttnn trace of the 28-layer LM decode step (opt-in via VV_TRACE_LM=1, set
+        # by demo_ttnn.py --trace-lm).  The LM forwards are the dominant per-token cost.
+        # Both are driven entirely by device tensors (KV write position + SDPA read bound via
+        # cur_pos, RoPE via a host-written row), so one capture per slot replays for the whole
+        # generation and is bit-exact vs eager (validated to 64 chunks).  Two independent slots:
+        #   pos — the fused post-diffusion embed step; positive KV cache persists (no reset).
+        #   neg — the negative-CFG step; its KV cache is reset IN PLACE per segment (same
+        #         addresses), so its single capture also survives every segment reset.
+        # See TTVibeVoiceLM.forward_decode_traced_embeds.  Rare token-input positive steps
+        # (_lm_decode_token) stay eager.
         self._trace_lm = os.environ.get("VV_TRACE_LM", "0") == "1"
-        self._lm_tid = None
-        self._lm_emb_in: Optional[ttnn.Tensor] = None
-        self._lm_cos_in: Optional[ttnn.Tensor] = None
-        self._lm_sin_in: Optional[ttnn.Tensor] = None
-        self._lm_pos_in: Optional[ttnn.Tensor] = None
-        self._lm_logits_out: Optional[ttnn.Tensor] = None
-        self._lm_hidden_out: Optional[ttnn.Tensor] = None
-        self._lm_warmup = 0
+        self._lm_pos_slot = _TracedDecodeSlot("pos")
+        self._lm_neg_slot = _TracedDecodeSlot("neg")
 
     def _token_label(self, token_id: int) -> str:
         labels = {
@@ -587,6 +600,19 @@ class TTVibeVoiceGenerator:
         self._diff_tid = None
         self._diff_eager_steps = 0
 
+    def _reset_lm_traces(self) -> None:
+        """Release the pos+neg LM decode traces at a segment boundary, BEFORE the streaming
+        caches are freed/reallocated.  Allocating DRAM while a trace is live corrupts it, and
+        the streaming-cache realloc here does exactly that (verified: without this, audio
+        diverges after the first segment reset while a single-segment run is byte-exact).
+        Keeps the persistent I/O buffers; only the capture is dropped, so each slot re-warms
+        + recaptures on the next segment (the KV caches are address-stable across the reset)."""
+        for slot in (self._lm_pos_slot, self._lm_neg_slot):
+            if slot.tid is not None:
+                ttnn.release_trace(self.device, slot.tid)
+            slot.tid = None
+            slot.warmup = 0
+
     def _post_diffusion_embeds(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Diffusion latent → (fused next-step embed, current audio chunk)."""
         if self.ref_inference is not None:
@@ -738,7 +764,7 @@ class TTVibeVoiceGenerator:
         # satisfies this.  The positive cache persists for the whole generation, so a
         # single capture replays for every embed step — no per-segment reset.
         if self._trace_lm and kv_cache.max_seq % 1024 == 0:
-            return self._lm_step_traced(inputs_embeds, start_pos, kv_cache)
+            return self._run_traced_decode(self._lm_pos_slot, inputs_embeds, start_pos, kv_cache)
         logits, last_hidden = self.lm.forward(
             inputs_embeds,
             start_pos=start_pos,
@@ -749,47 +775,47 @@ class TTVibeVoiceGenerator:
 
     _LM_TRACE_WARMUP = 2
 
-    def _set_lm_trace_inputs(self, inputs_embeds: ttnn.Tensor, start_pos: int) -> None:
-        """Copy this step's inputs into the persistent (fixed-address) trace buffers."""
+    def _set_slot_inputs(self, slot: _TracedDecodeSlot, inputs_embeds: ttnn.Tensor, start_pos: int) -> None:
+        """Copy this step's inputs into the slot's persistent (fixed-address) trace buffers."""
         lm = self.lm
         hd = lm.cfg.head_dim
-        if self._lm_emb_in is None:
-            self._lm_emb_in = ttnn.zeros(
+        if slot.emb_in is None:
+            slot.emb_in = ttnn.zeros(
                 list(inputs_embeds.shape),
                 dtype=inputs_embeds.dtype,
                 layout=inputs_embeds.layout,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self._lm_cos_in = ttnn.zeros(
+            slot.cos_in = ttnn.zeros(
                 [1, 1, 1, hd],
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self._lm_sin_in = ttnn.zeros(
+            slot.sin_in = ttnn.zeros(
                 [1, 1, 1, hd],
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self._lm_pos_in = ttnn.zeros(
+            slot.pos_in = ttnn.zeros(
                 [1],
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        ttnn.copy(input_a=inputs_embeds, input_b=self._lm_emb_in)  # device->device, fixed address
+        ttnn.copy(input_a=inputs_embeds, input_b=slot.emb_in)  # device->device, fixed address
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
                 torch.from_numpy(lm._cos_np[start_pos]).reshape(1, 1, 1, hd).to(torch.float32),
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
             ),
-            self._lm_cos_in,
+            slot.cos_in,
         )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
@@ -797,50 +823,46 @@ class TTVibeVoiceGenerator:
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
             ),
-            self._lm_sin_in,
+            slot.sin_in,
         )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
                 torch.tensor([start_pos], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             ),
-            self._lm_pos_in,
+            slot.pos_in,
         )
 
-    def _lm_step_traced(
+    def _run_traced_decode(
         self,
+        slot: _TracedDecodeSlot,
         inputs_embeds: ttnn.Tensor,
         start_pos: int,
         kv_cache: KVCache,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         lm = self.lm
         dev = self.device
-        self._set_lm_trace_inputs(inputs_embeds, start_pos)
+        self._set_slot_inputs(slot, inputs_embeds, start_pos)
 
         def _run():
             return lm.forward_decode_traced_embeds(
-                self._lm_emb_in,
-                self._lm_cos_in,
-                self._lm_sin_in,
-                self._lm_pos_in,
-                kv_cache,
-                return_last_hidden=True,
+                slot.emb_in, slot.cos_in, slot.sin_in, slot.pos_in, kv_cache, return_last_hidden=True
             )
 
-        if self._lm_tid is None:
-            if self._lm_warmup < self._LM_TRACE_WARMUP:
-                self._lm_warmup += 1
+        if slot.tid is None:
+            if slot.warmup < self._LM_TRACE_WARMUP:
+                slot.warmup += 1
                 return _run()  # eager warm-up (compiles programs, writes real KV)
             # Capture once.  Capture records ops without computing, so the KV write at this
             # position is garbage; re-run this step eagerly afterward to fix it before any
             # replay attends over it.  The captured output handles are what replays fill.
-            self._lm_tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            self._lm_logits_out, self._lm_hidden_out = _run()
-            ttnn.end_trace_capture(dev, self._lm_tid, cq_id=0)
-            _vv_debug("lm_step: trace captured")
+            slot.tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            slot.logits_out, slot.hidden_out = _run()
+            ttnn.end_trace_capture(dev, slot.tid, cq_id=0)
+            _vv_debug(f"lm_step[{slot.label}]: trace captured")
             return _run()  # capture-poison fix (returns this step's correct logits/hidden)
 
-        ttnn.execute_trace(dev, self._lm_tid, cq_id=0, blocking=False)
-        return self._lm_logits_out, self._lm_hidden_out
+        ttnn.execute_trace(dev, slot.tid, cq_id=0, blocking=False)
+        return slot.logits_out, slot.hidden_out
 
     def _lm_decode_token(
         self,
@@ -857,6 +879,13 @@ class TTVibeVoiceGenerator:
         if self._ref_lm is not None:
             return self._ref_lm.neg_step_token(token_id)
         neg_ids = torch.tensor([[token_id]], dtype=torch.long)
+        # Trace the neg decode too (opt-in).  The neg cache is reset in place per segment
+        # (stable addresses), so one capture replays across all segments.  Embed the token
+        # eagerly and feed the same traced 28-layer unit; only neg_hidden is used downstream.
+        if self._trace_lm and kv_cache_neg.max_seq % 1024 == 0:
+            neg_embeds = self.lm._embed(neg_ids)  # tiny eager embed → [1,1,1,hidden]
+            _, neg_hidden = self._run_traced_decode(self._lm_neg_slot, neg_embeds, neg_pos, kv_cache_neg)
+            return neg_hidden
         _, neg_hidden = self.lm.decode_step(neg_ids, neg_pos, kv_cache_neg, return_last_hidden=True)
         return neg_hidden
 
@@ -1042,11 +1071,12 @@ class TTVibeVoiceGenerator:
                 _vv_debug("  new speech segment: reset neg-CFG cache + acoustic/semantic streaming caches")
                 neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
                 neg_prev_diffusion_token = None
-                # Release both traces before touching the streaming caches: the caches are
+                # Release all traces before touching the streaming caches: the caches are
                 # freed + reallocated here, and a live trace referencing them (or any DRAM
                 # alloc while a trace is live) would be corrupted.
                 self._reset_postdiff_trace()
                 self._reset_diffusion_trace()
+                self._reset_lm_traces()
                 self.acoustic_tok.reset_decode_cache()
                 self.semantic_tok.reset_cache()
                 if self.ref_inference is not None:
