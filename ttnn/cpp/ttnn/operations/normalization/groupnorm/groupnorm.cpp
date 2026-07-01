@@ -237,6 +237,10 @@ Tensor group_norm(
     const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
+    // Resolved DEST accumulation width. The welford interleaved factories mirror LayerNorm
+    // (cb_data_format = fp32_dest_acc_en ? Float32 : Float16_b): when DEST is fp32 we keep the
+    // stats/intermediate CBs in fp32 rather than round-tripping mean/variance through bf16.
+    const bool fp32_dest_acc_en = get_fp32_dest_acc_en(kernel_config_val);
 
     // Reciprocals must be sharded to L1 via the legacy ShardSpec representation:
     // the program factory reads shard_spec().value().numel() as the compile-time
@@ -382,7 +386,13 @@ Tensor group_norm(
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-        .im_data_format = DataType::BFLOAT16,
+        // Welford keeps stats/intermediates in fp32 when the fp32 intake path is active, i.e.
+        // fp32 input with fp32 DEST (matches welford_unpack_fp32_active in the factories). The
+        // compute kernel's reconfig sequence is tuned for that combo; bf16 input keeps bf16 stats
+        // (baseline) because bf16-input + fp32-stats needs a separate reconfig retune.
+        .im_data_format = (use_welford && fp32_dest_acc_en && input_tensor.dtype() == DataType::FLOAT32)
+                              ? DataType::FLOAT32
+                              : DataType::BFLOAT16,
         .out_data_format = dtype.value_or(input_tensor.dtype()),
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),

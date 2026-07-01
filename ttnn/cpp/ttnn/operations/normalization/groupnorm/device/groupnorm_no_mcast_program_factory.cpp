@@ -79,6 +79,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
+    // When the intermediate/stats CBs are fp32 (welford + fp32 DEST), the reader kernels must
+    // combine mean/variance as fp32 rather than bf16 (see welford_reader_*_gn.cpp).
+    const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format =
         reciprocals.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(reciprocals.value().dtype())
@@ -107,6 +110,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
     uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
+    // eps is always delivered as a bf16 scalar by the writer (generate_bcast_col_scalar packs the
+    // top 16 bits of the fp32 eps). Its CB must therefore stay bf16 even when the stats CBs are
+    // fp32; the compute add_tiles(cb_ex_global, cb_eps) then runs mixed fp32/bf16, as in LayerNorm.
+    const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
+    const uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
 
     IDevice* device = a.device();
 
@@ -396,7 +404,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
     uint32_t in_CB_size_group_2 = 0;
     uint32_t in2_CB_size = single_tile_size;
-    uint32_t in3_CB_size = single_tile_size;
+    uint32_t in3_CB_size = eps_single_tile_size;
     uint32_t gamma_beta_num_cols_tile_per_core = per_core_Nt;
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
@@ -564,6 +572,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
+        {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
     };
 
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args_group_2 = {
@@ -597,6 +606,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
+        {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
     };
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
@@ -1055,8 +1065,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in3_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = eps_cb_data_format,
+            .page_size = eps_single_tile_size,
         }}},
     });
 
