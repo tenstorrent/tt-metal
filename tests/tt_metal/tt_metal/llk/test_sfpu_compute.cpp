@@ -695,7 +695,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
                     experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {IN_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -715,7 +715,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
                     experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec compute_spec{
@@ -891,7 +891,7 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {out_dfb_id}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 }
 
@@ -1025,8 +1025,7 @@ bool run_sfpu_binary_two_input_buffer(
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {IN0_DFB, IN1_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec compute_spec{
@@ -1196,7 +1195,7 @@ bool run_sfpu_ternary_three_input_buffer(
                 experimental::DataMovementHardwareConfig{
                     .gen2_config =
                         experimental::DataMovementHardwareConfig::Gen2Config{
-                            .disable_implicit_sync_for = {IN0_DFB, IN1_DFB, IN2_DFB}}},
+                            .disable_dfb_implicit_sync_for_all = true}},
         };
 
         experimental::KernelSpec compute_spec{
