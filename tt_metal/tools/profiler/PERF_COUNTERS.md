@@ -166,19 +166,23 @@ Caveat still open: a full 928-op block overflows the profiler DRAM marker buffer
 ("buffers were full, markers were dropped") — noc BW is undercounted until the
 capture is scoped (fewer ops / `--dump-device-data-mid-run` to drain mid-run).
 
+## Delivered
+
+- **CCL fabric BW % (Phase 3 gate).** A full-grid gather overflows the noc-trace
+  marker buffer, so its bytes can't be read back from a trace — but they are exact
+  from output shape + `ring_size` + topology. `process_ops_logs.py` computes
+  `CCL FABRIC BW [GB/s]`/`UTIL (%)` analytically from the op record and the real
+  trained per-link speed, needing NO `--collect-noc-traces`. Device-validated on
+  BH 2x4: stage-2 TP all-gather 21 GB/s/link, ~42% of the 400G peak.
+- **Phase 4 zone digest.** `profiler.cpp` aggregates each op's counters into a
+  compact digest on the op FW zone's `meta_data["zone_summary"]` and logs it
+  (`[HW FPU=… MATH=…]`) so it is verifiable from the device log. Surfacing it as a
+  GUI hover label is a one-line read in `TracyTTDevice.hpp::PushStartMarker`; that
+  vendored-fork change is preserved as `tracy-phase4-zone-digest.patch` (the fork
+  remote is not pushable from here, so the submodule pointer stays at upstream to
+  keep the branch buildable). Apply the patch + rebuild Tracy to see the tooltip.
+
 ## Open items (not yet implemented)
 
-- **NoC BW % vs analytical for a CCL op** (Phase 3 full gate) — the noc bytes
-  now capture; the analytical-peak gate on a CCL op is still unwired.
-- **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork change
-  (`tt_metal/third_party/tracy/`). Verified: the `QueueType` enum has no
-  `GpuZoneText`/`GpuValue` (only Begin/End GPU variants), so a true hover-tooltip
-  needs a NEW QueueType + server-side deserialize/render — the heavy two-sided
-  change. Cheaper alternative: `TracyTTDevice.hpp::PushStartMarker` already
-  passes an arbitrary string (`run_id_string`/`marker_name`) as the zone's
-  srcloc name, and the marker already carries `meta_data` with the counters —
-  appending a compact counter summary to that name surfaces counters in the GUI
-  zone label with NO protocol/server change. Either path needs a Tracy rebuild
-  + GUI to validate.
 - **Readback-time** core restriction — deferred; correct per-op-grid selection
   needs op→grid association that only exists in post-process.
