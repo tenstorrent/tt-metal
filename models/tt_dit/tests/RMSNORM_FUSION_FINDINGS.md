@@ -57,18 +57,22 @@ tagged **LayerNorm** (fused Welford LN vs the composite `dit_layernorm` chain):
 
 | representative shape | WH ↑ (proxy) | BH ↑ (target) |
 |---|---:|:--:|
-| flux_tp8_N16384 (TP=8 large) | 2.34× | _TBD_ |
-| self_sp4_N18944 (WAN large) | 1.82× | _TBD_ |
-| LTX v_block_s2 | 2.71× | _TBD_ |
-| flux_tp4_N8192 | 1.63× | _TBD_ |
-| (mid/small) | 1.2–1.6× | _TBD_ |
+| flux_tp8_N16384 (TP=8 large) | 2.34× | 2.00× |
+| self_sp4_N18944 (WAN large) | 1.82× | 1.42× |
+| LTX v_block_s2 | 2.71× | 2.47× |
+| flux_tp4_N8192 | 1.63× | 1.14× |
+| (mid/small) | 1.2–1.6× | 1.1–2.5× |
 | flux_tp8_N16384 **LayerNorm** (TP=8 large) | 1.87× | _TBD_ |
 | flux_tp8_N4096 **LayerNorm** | 1.79× | _TBD_ |
 | flux_tp4_N8192 **LayerNorm** | 1.42× | _TBD_ |
 | (LayerNorm mid/small) | 0.68–1.6× | _TBD_ |
 
+(RMS BH ↑ are from the Blackhole section of `REBENCH_baseline_vs_fused.md`, `phn0`/whole-row,
+cap48, `WAN_GALAXY_LINKS=2`. LayerNorm BH not yet benched — WH-only so far.)
+
 Detailed per-shape WH numbers: `REBENCH_baseline_vs_fused.md` (perf) and `ABLATION_LEVERS.md`
-(component breakdown) — both have a Wormhole section and a Blackhole stub to fill.
+(component breakdown). `REBENCH` has both a Wormhole AND a filled Blackhole section for
+RMSNorm (cap48, 2 links) plus the WH LayerNorm table (BH LayerNorm still TBD).
 
 ---
 
