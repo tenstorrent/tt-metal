@@ -97,6 +97,30 @@ REP_PENALTY = float(os.environ.get("HY_REP_PENALTY", str(_SAMPLE_DEFAULTS.repeti
 _WMAP = json.load(open(glob.glob(f"{WEIGHTS}/*.index.json")[0]))["weight_map"]
 _OPEN = {}
 
+# --- lightweight per-stage timing -------------------------------------------
+_TIMINGS = []
+
+
+def _mark(name, since):
+    """Record elapsed since `since`, print it, and return a fresh timestamp."""
+    dt = time.time() - since
+    _TIMINGS.append((name, dt))
+    print(f"[timing] {name}: {dt:.1f}s", flush=True)
+    return time.time()
+
+
+def _print_timing_summary(total):
+    print("\n==================== T2I TIMING SUMMARY ====================", flush=True)
+    acc = 0.0
+    for name, dt in _TIMINGS:
+        acc += dt
+        print(f"[timing] {name:34s} {dt:8.1f}s  ({100 * dt / total:5.1f}%)", flush=True)
+    other = total - acc
+    if abs(other) > 0.5:
+        print(f"[timing] {'(unaccounted)':34s} {other:8.1f}s  ({100 * other / total:5.1f}%)", flush=True)
+    print(f"[timing] {'TOTAL':34s} {total:8.1f}s", flush=True)
+    print("============================================================", flush=True)
+
 
 def _load(key):
     shard = _WMAP[key]
@@ -254,6 +278,8 @@ def _run_recaption(c, tok, proc, wte, prompt, generator):
 
 
 def main():
+    t_start = time.time()
+    t = t_start
     print(f"[demo] prompt={PROMPT!r}  steps={STEPS}  layers={NUM_LAYERS}  guidance={GUIDANCE}  recaption={RECAPTION}")
     c = _cfg()
     H = c["H"]
@@ -264,6 +290,7 @@ def main():
     wte = _load("model.wte.weight").float()
     proc = HunyuanImage3ImageProcessor(json.load(open(f"{WEIGHTS}/config.json")))
     generator = torch.Generator().manual_seed(SEED)
+    t = _mark("1_setup_weights_tokenizer", t)
 
     # 0) optional AR recaption: rewrite the prompt with the text-sampling loop
     #    (temperature/top-k/top-p/repetition penalty) on a resident backbone + LM head.
@@ -271,6 +298,7 @@ def main():
     if RECAPTION:
         cot_text, image_size = _run_recaption(c, tok, proc, wte, PROMPT, generator)
         print(f"[demo] recaption cot_text:\n{cot_text}\n[demo] resolved image_size={image_size}")
+        t = _mark("2_recaption_ar", t)
     if IMAGE_SIZE is not None:  # explicit HY_IMAGE_SIZE overrides the resolved size
         image_size = IMAGE_SIZE
         print(f"[demo] HY_IMAGE_SIZE override -> image_size={image_size}")
@@ -287,6 +315,7 @@ def main():
 
     # 2) text embeddings (host wte lookup — exact) for cond/uncond rows.
     emb = torch.nn.functional.embedding(ids, wte)  # [2, S, H]
+    t = _mark("3_tokenize_embed", t)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     # 2x2 mesh (full QB2): SP=axis0 / TP=axis1 layout. Phase 1 wires 4-way expert
@@ -359,6 +388,7 @@ def main():
 
         sched = HunyuanTtScheduler(mesh_device)
         sched.set_timesteps(STEPS)
+        t = _mark("4_build_denoise_mesh_backbone", t)
         print(f"[demo] denoising {STEPS} steps (CFG={GUIDANCE}) on resident backbone ...")
         latent = denoise_loop(
             step,
@@ -372,6 +402,7 @@ def main():
             mesh_device=mesh_device,
         )
         print(f"[demo] denoised latent {tuple(latent.shape)}  (finite={bool(torch.isfinite(latent).all())})")
+        t = _mark("5_denoise_loop", t)
     finally:
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -397,6 +428,7 @@ def main():
     finally:
         ttnn.close_mesh_device(vae_mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    t = _mark("6_vae_decode", t)
     img = img[0]  # [3, 1024, 1024]
 
     from PIL import Image
@@ -404,6 +436,8 @@ def main():
     arr = (img.permute(1, 2, 0).cpu().numpy() * 255).round().astype("uint8")
     Image.fromarray(arr).save(OUT_PNG)
     print(f"[demo] saved image -> {OUT_PNG}")
+    t = _mark("7_save_png", t)
+    _print_timing_summary(time.time() - t_start)
 
 
 if __name__ == "__main__":
