@@ -33,7 +33,7 @@ import torch
 
 import ttnn
 from models.demos.diffusion_drive.tt.ttnn_perception import _prep_linear
-from models.demos.diffusion_drive.tt.ttnn_resnet34 import _ttnn_conv2d, prep_conv_weights
+from models.demos.diffusion_drive.tt.ttnn_resnet34 import _RELU_ACT, _ttnn_conv2d, prep_conv_weights
 
 
 class TtnnGridSampleCrossBEVAttention:
@@ -71,11 +71,10 @@ class TtnnGridSampleCrossBEVAttention:
         # Reassign self._vp_w/_b to the device-prepared weights so each per-step
         # value_proj reuses them (trace-safe; no host re-upload of the conv weights).
         out, Ho, Wo, self._vp_w, self._vp_b = _ttnn_conv2d(
-            self._device, xt, self._vp_w, self._vp_b, B, H, W, C, self._vp_cout, 3, 1, 1
+            self._device, xt, self._vp_w, self._vp_b, B, H, W, C, self._vp_cout, 3, 1, 1, activation=_RELU_ACT
         )
         if out.is_sharded():
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.relu(out)
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.reshape(out, (B, Ho, Wo, self._vp_cout))
 
