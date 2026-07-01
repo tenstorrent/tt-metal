@@ -21,8 +21,15 @@ from models.tt_dit.utils.conv3d import (
     register_conv3d_configs,
 )
 
+import os
+
 # Max im2col elements (in_ch*T*H*W*kernel_vol) before a conv3d chunks over H.
-_CONV3D_CHUNK_ELEMS = 2 * 1024 * 1024 * 1024
+# The conv3d op's internal buffers are addressed with 32 bits, so a single buffer
+# above ~4 GB (2^31 bf16 elems) faults with a "non-existent physical address" bus
+# error. Cap the per-conv im2col well under that (~1 GB elems => ~2 GB bf16) so a
+# chunk always fits; GRID<=64 stays below this and is unaffected (no chunking).
+# HY_CONV_CHUNK_ELEMS overrides it (used to A/B chunk-vs-nochunk for correctness).
+_CONV3D_CHUNK_ELEMS = int(os.environ.get("HY_CONV_CHUNK_ELEMS", str(1024 * 1024 * 1024)))
 
 register_conv3d_configs(
     {
@@ -222,21 +229,64 @@ class HunyuanSymmetricConv3d(Module):
             if x is not x_bthwc:
                 ttnn.deallocate(x)
             x = xp
-        cfg = get_conv3d_config(
+        # x now carries the halo on any sharded axis, so the conv runs with H/W padding
+        # disabled on those axes. An axis that is NOT sharded keeps its normal padding.
+        conv_pH = 0 if (self.h_mesh_axis is not None and pH > 0) else pH
+        conv_pW = 0 if (self.w_mesh_axis is not None and pW > 0) else pW
+        out = self._conv_valid_h(x, pT, conv_pH, conv_pW)
+        if x is not x_bthwc:
+            ttnn.deallocate(x)
+        return out
+
+    def _conv_valid_h(self, x_bthwc: ttnn.Tensor, pT: int, conv_pH: int, conv_pW: int) -> ttnn.Tensor:
+        """Run the conv, chunking over output H when the im2col buffer would exceed the
+        32-bit addressing cap (_CONV3D_CHUNK_ELEMS). Requires the H halo to already be in
+        x (conv_pH == 0) so each output strip [o:oe] is produced from input rows
+        [o : oe + kH-1] with padding_h=0 — bit-identical to the single-shot conv."""
+        b, t, h, w, c = x_bthwc.shape
+        kT, kH, kW = self.kernel_size
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        cfg_full = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             self.dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            grid_size=grid,
             h_factor=1,
             w_factor=1,
-            T=x.shape[1],
-            H=x.shape[2],
-            W=x.shape[3],
+            T=t,
+            H=h,
+            W=w,
         )
-        out = self._conv(x, (pT, 0, 0), cfg)
-        if x is not x_bthwc:
-            ttnn.deallocate(x)
+        im2col_elems = self.in_channels * t * h * w * kT * kH * kW
+        # Only the valid-conv (halo-padded, conv_pH==0) case can be chunked cleanly.
+        if im2col_elems <= _CONV3D_CHUNK_ELEMS or conv_pH != 0 or h <= kH:
+            return self._conv(x_bthwc, (pT, conv_pH, conv_pW), cfg_full)
+
+        h_out = h - (kH - 1)  # valid-conv output height (padding_h == 0)
+        n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
+        hc = (h_out + n_chunks - 1) // n_chunks
+        outs = []
+        for o in range(0, h_out, hc):
+            oe = min(h_out, o + hc)
+            in_slice = ttnn.slice(x_bthwc, [0, 0, o, 0, 0], [b, t, oe + (kH - 1), w, c])
+            cfg = get_conv3d_config(
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                self.dtype,
+                grid_size=grid,
+                h_factor=1,
+                w_factor=1,
+                T=t,
+                H=in_slice.shape[2],
+                W=w,
+            )
+            outs.append(self._conv(in_slice, (pT, 0, conv_pW), cfg))
+            ttnn.deallocate(in_slice)
+        out = ttnn.concat(outs, dim=2)
+        for o_t in outs:
+            ttnn.deallocate(o_t)
         return out
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
