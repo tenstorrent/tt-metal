@@ -394,19 +394,14 @@ inline void _llk_unpack_bcastA_B_init_()
     _llk_unpack_bcastA_B_mop_config_();
 }
 
-/**
- * @brief Uninitialize the unpacker after the SDPA sub_bcast_row variant.
- *
- * Restores the SrcA Y stride. x-start/x-end is transient and reprogrammed by each operation's init
- * (see tt-llk#1036), so it is not restored here.
- *
- * @param y_stride: SrcA Y stride to restore.
- * @note Call @ref _llk_unpack_bcastA_B_init_ before this function.
- */
-inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_DIM * 2)
+inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    // Revisit default stride value in tt-llk#1015
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(y_stride);
+    // Restore canonical srcA Y-stride established by configure_unpack_AB.
+    // _llk_unpack_bcastA_B_init_ mutates Y-stride to the bcast-specific value (32); the
+    // restore here is order-independent because the canonical value is derivable from
+    // the dst format, so we do not need to snapshot the previous register value.
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format));
+    TT_SETADCXX(p_setadc::UNP_AB, tensor_shape.face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
 /**
