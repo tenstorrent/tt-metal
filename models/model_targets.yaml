@@ -1047,22 +1047,22 @@ targets:
             seq_len: 128
             status: active
             perf:
-              # TTFT is run-to-run unstable (observed 217–351ms across runs);
-              # target the slower observation with a wide tolerance so it gates
-              # gross regressions without flaking on the swing.
-              prefill_time_to_first_token: 351
+              # TTFT is run-to-run unstable and bimodal (observed ~205ms and ~327ms
+              # clusters across the last 8 scheduled runs, mean ~296ms). The old 351
+              # center left the tol-0.4 floor at 211ms, which the ~205ms cluster kept
+              # tripping ("much better than expected"). Center on the observed mean so
+              # the [178, 414] band spans both clusters and still gates gross regressions.
+              prefill_time_to_first_token: 296
               prefill_time_to_first_token_tolerance: 0.4
-              # decode_t/s/u is run-to-run unstable (observed 14.4-21.1 across runs,
-              # see #48510). The earlier 23.8 target was set pre-#48037; the on-device
-              # gibberish fix (#48037) traded decode throughput for correctness
-              # (per-step decode-input re-staging + eager, un-traced sampling), so
-              # sustained perf now centers ~18. This is a Tier 3 model (minimum
-              # coverage, not perf-optimized), so center on the post-fix mean with a
-              # wide 0.2 tolerance ([14.4, 21.6]) to gate gross regressions without
-              # flaking on the swing.
-              decode_t/s/u: 18.0
+              # decode_t/s/u is run-to-run unstable (see #48510). The earlier 18.0 center
+              # (set pre-data, post-#48037) is now stale-low: the last 8 scheduled runs
+              # measured ~19-25 t/s (mean ~22), so 22+ readings tripped the old 21.6
+              # ceiling ("better than expected"). Recenter on the observed mean ~22 with a
+              # wide 0.2 tolerance ([17.6, 26.4]) to absorb the swing while still catching
+              # gross regressions (e.g. a halving to ~11).
+              decode_t/s/u: 22.0
               decode_t_s_u_tolerance: 0.2
-              decode_t/s: 18.0
+              decode_t/s: 22.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
