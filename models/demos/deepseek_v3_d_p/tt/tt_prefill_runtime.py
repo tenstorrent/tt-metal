@@ -2,12 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
@@ -69,8 +67,9 @@ class TtPrefillRuntimeConfig:
 
 
 class TtPrefillRuntime:
-    """Single-rank prefill execution lifecycle: build model -> allocate KV cache ->
-    compile -> prefill(chunk). Owns the KVPE cache and the per-layer LayerAck wiring.
+    """Single-rank prefill execution lifecycle: build model -> prefill(chunk). Owns the per-layer
+    LayerAck wiring. The engine allocates the KV cache and passes it into each call; warm-up is the
+    input driver's job (it sends one throwaway chunk before timed work — no first-run cost is hidden here).
 
     A runtime owns one rank's layer slice. For single-rank prefill the slice is the
     whole model (the config defaults). For pipeline-parallel prefill, a driver builds
@@ -90,7 +89,7 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
-        # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
+        # Per-layer LayerAck callback, built once in set_layer_ack_channel().
         self._on_layer_complete = None
 
         assert (
@@ -98,7 +97,6 @@ class TtPrefillRuntime:
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
 
         self.model_built = False
-        self.compiled = False
 
         self._build_model(state_dict)
 
@@ -162,57 +160,18 @@ class TtPrefillRuntime:
         )
         self.model_built = True
 
-    def make_placeholder_activation(self) -> ttnn.Tensor:
-        """Allocate a zero hidden-state activation matching the embedding output:
-        [1, 1, chunk_per_chip, emb_dim/tp], TILE_LAYOUT, DRAM, replicated.
-
-        Stand-in input for a non-first rank until the upstream D2D-socket sync op
-        delivers the real activation. The first block's attn_norm reads from this
-        tensor; once the sync op lands, the wait-op overwrites it in place.
-        """
-        chunk_per_chip = self.config.chunk_size // self.config.sp_factor
-        emb_per_tp = self.hf_config.hidden_size // self.config.tp_factor
-        zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
-        return ttnn.from_torch(
-            zeros,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
     def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
-        """Build one chunk's device input for `prefill_chunk`. First-rank input is
-        SP-sharded token IDs; a non-first pipeline rank instead gets a placeholder
-        hidden-state activation (it does not embed — it receives the real activation
-        over the D2D socket)."""
-        if self.config.is_first_rank:
-            return prepare_prefill_input_tensor(
-                token_ids,
-                self.mesh_device,
-                self.config.sp_factor,
-                False,  # chunked prefill is block-cyclic (non-balanced)
-                self.config.mesh_shape,
-                self.config.sp_axis,
-            )
-        return self.make_placeholder_activation()
-
-    def compile(self, kv_cache: ttnn.Tensor) -> None:
-        """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine
-        passes the cache it owns; the warm-up writes into it (slot 0) and is harmless."""
-        assert self.model_built
-        chunk = self.config.chunk_size
-        logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
-        t0 = time.perf_counter()
-        tt_input = self.make_chunk_input([0] * chunk)
-        self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk)
-        ttnn.synchronize_device(self.mesh_device)
-        warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(
-            f"[prefill timing] task_id=WARMUP num_tokens={chunk} runtime.prefill_chunk(chunk) = {warmup_ms:.2f} ms"
+        """Build one chunk's first-rank device input for `prefill_chunk`: SP-sharded token IDs. Only
+        the first rank embeds; a non-first pipeline rank receives its input activation over the D2D
+        socket (the engine's `_d2d_recv`), so it never calls this."""
+        return prepare_prefill_input_tensor(
+            token_ids,
+            self.mesh_device,
+            self.config.sp_factor,
+            False,  # chunked prefill is block-cyclic (non-balanced)
+            self.config.mesh_shape,
+            self.config.sp_axis,
         )
-        self.compiled = True
 
     def prefill_chunk(
         self,
@@ -252,8 +211,6 @@ class TtPrefillRuntime:
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real token.
         """
-        # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
-        # marking the runtime compiled. The model must exist, though.
         assert self.model_built, "build the model before prefill_chunk()"
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
         assert (
@@ -290,7 +247,6 @@ class TtPrefillRuntime:
         Per-layer cadence means NUM_LAYERS acks per chunk, so the scheduler must
         be configured with layers_per_chunk == NUM_LAYERS.
         """
-        assert self.compiled, "Call compile() before set_layer_ack_channel()"
 
         def on_layer_complete(layer_idx: int) -> None:
             layer_ack_channel.inject(1)
