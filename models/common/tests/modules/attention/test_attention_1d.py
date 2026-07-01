@@ -1017,11 +1017,11 @@ def _list_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-decode-32-Mistral-7B", marks=_slow),
 
         # --- Phi-4 on N300 (1x2) --- fused qkv_proj split, GQA 40/10, head_dim 128, no bias/qk-norm.
-        # decode-32 xfails: SDPA-decode assigns one output core per batch row, and Phi-4's 10 KV heads
-        # (5/device) trip `idx < num_output_cores` ("Output spatial index 32 out of bounds (max 32)") at
-        # batch-32 on N300. batch-1 decode is validated end-to-end (M5 token-accuracy 97-99% top-1).
+        # decode-32 is validated on N300 for both standard and paged SDPA-decode (the earlier
+        # num_output_cores limit for Phi-4's 10 KV heads no longer trips); batch-1 decode is
+        # additionally covered end-to-end by the M5 token-accuracy demo (97-99% top-1).
         pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-prefill-128-Phi-4", marks=_slow),
-        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-decode-32-Phi-4", marks=[_slow, pytest.mark.xfail(reason="SDPA-decode num_output_cores limit for Phi-4 10 KV heads at batch-32 on N300; follow-up", strict=False)]),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-decode-32-Phi-4", marks=_slow),
 
         # --- Qwen2-7B on N300 (1x2) ---
         # NOTE: Qwen2-7B has Q/K biases causing numerical precision issues
