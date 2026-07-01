@@ -32,6 +32,7 @@ _ALLOWED_TOOLS = [
     "mcp__perf-mcp__git_revert",
     "mcp__perf-mcp__termination_check",
     "mcp__perf-mcp__record_kernel_attempt",
+    "mcp__perf-mcp__verify_tp_fracture",
     "Read",
     "Edit",
     "Write",
