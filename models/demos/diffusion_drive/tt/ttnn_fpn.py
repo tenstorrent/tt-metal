@@ -29,7 +29,7 @@ import torch.nn as nn
 
 import ttnn
 from models.demos.diffusion_drive.tt.ttnn_backbone import _from_ttnn_tile, _to_ttnn_tile
-from models.demos.diffusion_drive.tt.ttnn_resnet34 import _ttnn_conv2d, prep_conv_weights
+from models.demos.diffusion_drive.tt.ttnn_resnet34 import _RELU_ACT, _ttnn_conv2d, prep_conv_weights
 
 
 def _prep(conv: nn.Conv2d):
@@ -112,11 +112,10 @@ class TtnnFPN:
         B, C_in, H, W = x.shape
         x_tt = _to_ttnn_tile(x, B, H, W, C_in, self._device)
         out_tt, H_out, W_out, prep_w, prep_b = _ttnn_conv2d(
-            self._device, x_tt, w, b, B, H, W, C_in, c_out, ksize, stride, pad
+            self._device, x_tt, w, b, B, H, W, C_in, c_out, ksize, stride, pad, activation=_RELU_ACT
         )
         if out_tt.is_sharded():
             out_tt = ttnn.sharded_to_interleaved(out_tt, ttnn.DRAM_MEMORY_CONFIG)
-        out_tt = ttnn.relu(out_tt)
         return _from_ttnn_tile(out_tt, B, H_out, W_out, c_out), prep_w, prep_b
 
     # ------------------------------------------------------------------
