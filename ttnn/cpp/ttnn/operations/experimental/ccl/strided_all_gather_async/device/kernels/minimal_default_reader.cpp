@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/strided_all_gather_common.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -109,6 +110,7 @@ void kernel_main() {
             // Send out local
             uint32_t input_chunk_start_tile = global_tile_index;
             for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
+                DeviceZoneScopedN("AG-LOCAL-READ");
                 uint32_t actual_chunk_w = device_chunk_widths[my_chip_id][chunk_idx];
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                     input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
@@ -142,13 +144,19 @@ void kernel_main() {
 
                 input_chunk_start_tile = global_tile_index;
                 for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
+                    DPRINT("Sender device id: {}\n", actual_sender_chip_id);
+                    DPRINT("Chunk idx: {}\n", chunk_idx);
                     // Receive the next chunk of data
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                    {
+                        DeviceZoneScopedN("AG-RECV-WAIT");
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                    }
                     sem_target++;
 
                     if ((topology == Topology::Linear && writes_expected > 0) ||
                         (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
+                        DeviceZoneScopedN("AG-REMOTE-READ");
                         uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                         uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                             input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
@@ -175,6 +183,7 @@ void kernel_main() {
                         last_input_chunk_start_tile = input_chunk_start_tile;
                     }
                     if constexpr (fuse_op) {
+                        DeviceZoneScopedN("AG-MM-SIGNAL");
                         // Signal matmul to go
                         op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
                     }
