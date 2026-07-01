@@ -66,12 +66,30 @@ class TtnnSequentialMLP(nn.Module):
                 continue
             else:
                 raise ValueError(f"TtnnSequentialMLP: unsupported layer {type(m)}")
+        self._ops = self._fuse_linear_relu(self._ops)
+
+    @staticmethod
+    def _fuse_linear_relu(ops):
+        """Merge a ('linear', w, b) immediately followed by ('relu',) into a single
+        ('linear', w, b, 'relu') so the ReLU is fused into the matmul writeback,
+        dropping a standalone ttnn.relu dispatch."""
+        fused = []
+        i = 0
+        while i < len(ops):
+            op = ops[i]
+            if op[0] == "linear" and i + 1 < len(ops) and ops[i + 1][0] == "relu":
+                fused.append(("linear", op[1], op[2], "relu"))
+                i += 2
+            else:
+                fused.append(op)
+                i += 1
+        return fused
 
     def _dev(self, xt):
         """Device-in/device-out core (no host round-trip) for consolidation."""
         for op in self._ops:
             if op[0] == "linear":
-                xt = ttnn.linear(xt, op[1], bias=op[2])
+                xt = ttnn.linear(xt, op[1], bias=op[2], activation=(op[3] if len(op) > 3 else None))
             elif op[0] == "relu":
                 xt = ttnn.relu(xt)
             elif op[0] == "ln":
