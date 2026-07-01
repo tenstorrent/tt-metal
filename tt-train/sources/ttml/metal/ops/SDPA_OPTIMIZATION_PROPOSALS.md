@@ -39,7 +39,7 @@ Tracking of completed, in-progress, and blocked work.
 |---|---|---|
 | **B11** — FP32 logsumexp intermediates | **Done** (in [#41683](https://github.com/tenstorrent/tt-metal/pull/41683)) | Forward emits single FP32 LSE tile (32 wide, down from 2× 64 BF16). Backward uses fused `apply_softmax_statistics_on_dst`. Ring attention rewritten to logaddexp merge. |
 | **FP32 forward buffers** | **Done** (in [#41683](https://github.com/tenstorrent/tt-metal/pull/41683)) | `cb_attention_weights` promoted to FP32. `cb_prev_mm_out`/`cb_cur_mm_out` promoted to FP32 with `UnpackToDestFp32`. Output update rewritten to SFPU for full FP32 DST precision. |
-| **FP32 backward buffers** | **Done** (in [#41683](https://github.com/tenstorrent/tt-metal/pull/41683)) | Intermediate CB switched to FP32. Q-kernel: `UnpackToDestFp32` for attention weights (full FP32, no transpose needed). KV-kernel: FP32 data format with Default unpack mode (TF32 through SrcA) — SFPU `transpose_wh_dest` is broken on Blackhole, so FPU path is required for cross-arch compatibility. |
+| **FP32 backward buffers** | **Done** (in [#41683](https://github.com/tenstorrent/tt-metal/pull/41683)) | Intermediate CB switched to FP32. Q-kernel: `UnpackToDestFp32` for attention weights (full FP32, no transpose needed). KV-kernel: FP32 data format with Default unpack mode (TF32 through SrcA) — SFPU `transpose_dest` is broken on Blackhole, so FPU path is required for cross-arch compatibility. |
 | **Deferred scaling** (partial F1) | **Done** (in [#41683](https://github.com/tenstorrent/tt-metal/pull/41683)) | Scale factor deferred from masking phase to after max-subtraction in `apply_exp_inplace_and_find_exp_sum`. Not a full F1 (scale not fused into exp intrinsic), but removes one SFPU pass from the hot path. |
 | **Balanced pairing** (related to B16) | **Done** (already in main) | Light/heavy row pairing for both `sdpa_fw` and `sdpa_bw` via `BALANCED_PARALLELISM` kernel mode. Each pair has constant work `Ht+1`, eliminating per-row work variance. Imbalance comes only from pair-to-core remainder (e.g. 128 pairs / 56 cores = 33% for B=1 GQA on N300, but drops to ~10% at B=4 and <1% for MHA). B16 proposes a further upgrade to host-side LPT scheduling for the small-batch GQA case. |
 | **LLK reconfig fix** | **Done** (in [#41683](https://github.com/tenstorrent/tt-metal/pull/41683)) | Replaced `reconfig_data_format(srcA_cb, srcB_cb)` with `reconfig_data_format_srcb(srcB_cb)` for B2D broadcast operations in `init_unary_bcast_col` (FW) and `apply_softmax_statistics_on_dst` (BW). Fixes Blackhole CI hangs without causing Wormhole precision regression. `row_reduce_tile_inplace` uses `mm_init` (full matmul init) instead of `mm_init_short` to properly reset unpacker/math state after broadcast. |
@@ -62,7 +62,7 @@ Tracking of completed, in-progress, and blocked work.
 ### Known Issues / Open Problems
 
 - **`mm_init` vs `mm_init_short` in `row_reduce_tile_inplace`**: After `reconfig_data_format_srcb` + B2D broadcast, `mm_init_short` is insufficient to restore matmul state — `mm_init` (full init) is required. Root cause: `mm_init_short` skips `llk_unpack_hw_configure` and `llk_math_hw_configure`, leaving unpacker B and MATH ALU format registers in broadcast-configured state. Possible fix: call `unary_bcast_uninit` after broadcast to clean up, which could re-enable `mm_init_short`. Needs investigation.
-- **SFPU `transpose_wh_dest` broken on Blackhole**: Prevents `UnpackToDestFp32` for attention weights in `sdpa_bw_kv` kernel. KV-kernel uses FP32 data format with Default unpack (TF32 through SrcA) + FPU transpose as workaround.
+- **SFPU `transpose_dest` broken on Blackhole**: Prevents `UnpackToDestFp32` for attention weights in `sdpa_bw_kv` kernel. KV-kernel uses FP32 data format with Default unpack (TF32 through SrcA) + FPU transpose as workaround.
 - **`UnpackToDestFp32` with `unary_bcast`**: Confirmed by LLK team that `UnpackToDestFp32` only works with plain `copy_tile`, not with `unary_bcast`. B2D broadcast path with `UnpackToDestFp32` CBs produces NaN/Inf. This limits where `UnpackToDestFp32` mode can be applied.
 
 ### Performance Impact (N300 TinyLlama 1B)
@@ -725,7 +725,7 @@ B10.1 (partial fusion) already implements this via `USE_PRECOMPUTED_U_SCALER`.
 
 **Priority 4 — B6: Transposed recomputation [saves 2 transposes per iteration]**
 
-Eliminates `transpose_wh_tile` (L1 round-trip: PACK → scratch CB → UNPACK) called
+Eliminates `transpose_tile` (L1 round-trip: PACK → scratch CB → UNPACK) called
 twice per inner iteration in KV-kernel. Each transpose is ~500-1000 ns of PACK/UNPACK
 pipeline stall. For 520 iterations: ~0.5-1 ms saving on heaviest core.
 
@@ -842,7 +842,7 @@ same approximation in backward (B2). If `P_forward = approx_exp(x)` but
 ### F3. recip_tile_first_column
 
 > **Status: DONE** (Phase A PR) — Implemented as custom SFPU intrinsic in
-> `sdpa_compute_utils.hpp`. Uses `_sfpu_reciprocal_` with `VectorMode::C` (2 faces)
+> `sdpa_compute_utils.hpp`. Uses `sfpu_reciprocal_iter` with `VectorMode::C` (2 faces)
 > and 4 iterations per face with stride-2 access. Handles `DST_ACCUM_MODE` for FP32 DST.
 > Replaces `recip_tile` in `recip_tile_inplace` via `MATH((recip_tile_first_column(dst_idx)))`.
 
@@ -1684,7 +1684,7 @@ recomputations. Pre-computing once actually **improves determinism**.
 **Current code** (`sdpa_bw_compute_utils.hpp:114-131`):
 ```cpp
 inline void transpose_tile(const uint32_t cb_input, const uint32_t cb_transpose_wh) {
-    // ... unpack → transpose_wh_tile → pack to scratch CB ...
+    // ... unpack → transpose_tile → pack to scratch CB ...
 }
 ```
 Called twice per inner iteration: once for P^T (for `dV = P^T @ dO`), once for dS^T
@@ -1753,7 +1753,7 @@ The stored forward-pass intermediates (max, recip_sum_exp) are column-vector til
 tiles (scalar per column, broadcast across rows).
 
 **Options:**
-1. **Transpose intermediate tiles once per outer iteration** — two `transpose_wh_tile`
+1. **Transpose intermediate tiles once per outer iteration** — two `transpose_tile`
    calls on the 2 small intermediate tiles (max, recip_sum_exp) before the inner loop.
    Cost: 2 transposes per outer iteration vs 2 transposes saved per inner iteration.
    Net saving: `2 × (St - 1)` transposes for causal, `2 × (St - 2)` for full attention.
@@ -1807,7 +1807,7 @@ already avoids transposes and needs no changes.
 products are bit-identical. The accumulation order across `d` tiles is the same.
 The only possible difference is which operand comes from `in0` vs `in1` in the matmul
 engine's unpacker, which may differ by at most 1 ULP due to different rounding paths.
-`transpose_wh_tile` itself is a lossless permutation — eliminating it doesn't affect values.
+`transpose_tile` itself is a lossless permutation — eliminating it doesn't affect values.
 
 ---
 
@@ -2125,7 +2125,7 @@ tile must be a row vector instead of a column vector.
 Two options:
 1. **Transpose in `pack_intermediate_result`**: After masking to column 0, transpose the
    tile so value moves to row 0. The function in `sdpa_compute_utils.hpp:289-316` already
-   has the tile in DST register — adding a `transpose_wh_tile` before packing is one extra
+   has the tile in DST register — adding a `transpose_tile` before packing is one extra
    SFPU instruction. Zero cost in backward.
 2. **Store as-is, transpose once in backward**: Transpose the single `lse` tile once per
    outer iteration. Negligible cost.

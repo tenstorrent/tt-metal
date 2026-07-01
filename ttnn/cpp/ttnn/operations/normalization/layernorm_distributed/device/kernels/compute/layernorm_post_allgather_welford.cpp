@@ -126,7 +126,7 @@ void kernel_main() {
             cb_stats,
             cb_stats_reduced,
             stats_tiles_cols,
-            [&](uint32_t b) { return (static_cast<float>(W)); },
+            [W](uint32_t b) { return (static_cast<float>(W)); },
             norm::kernel_util::compute::RSqrtPolicy{false, 0});
         cb_stats_reduced.push_back(2);
         cb_stats_reduced.wait_front(2);

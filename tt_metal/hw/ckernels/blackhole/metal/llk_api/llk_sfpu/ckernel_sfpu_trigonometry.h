@@ -112,7 +112,7 @@ inline void calculate_tangent() {
             __builtin_rvtt_sfpmad(v.get(), inv_pio2.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // We need the LSB of the integer later, to determine the sign of the result.
-        i = sfpi::reinterpret<sfpi::vInt>(j);
+        i = sfpi::as<sfpi::vInt>(j);
 
         // Shift mantissa bits back; j is now round(v / (PI/2)) in fp32.
         j += -rounding_bias;
@@ -174,7 +174,7 @@ inline void calculate_sine() {
 
         // At this point, the mantissa bits of j contain the integer.
         // Store for later; the LSB determines the sign of the result.
-        sfpi::vInt q = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
         // Shift mantissa bits back; j is now round(v / PI) in fp32.
         j = j - rounding_bias;
 
@@ -188,7 +188,7 @@ inline void calculate_sine() {
 
         q <<= 31;
         sfpi::vFloat s = a * a;
-        a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) ^ q);
+        a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) ^ q);
 
         sfpi::vFloat r;
         if (is_fp32_dest_acc_en) {
@@ -256,7 +256,7 @@ inline void calculate_cosine() {
 
         // At this point, the mantissa bits of j contain the rounded integer.
         // Store for later; the LSB tracks quadrant parity for sign selection.
-        sfpi::vInt q = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
 
         j = j + NEG_ROUNDING_BIAS;
 
@@ -273,7 +273,7 @@ inline void calculate_cosine() {
 
         q <<= 31;
         sfpi::vFloat s = a * a;
-        a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) ^ q);
+        a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) ^ q);
 
         sfpi::vFloat r;
         if constexpr (is_fp32_dest_acc_en) {
@@ -476,7 +476,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
     sfpi::vInt i = m;
 
-    sfpi::vFloat r, f, c1;
+    sfpi::vFloat r, f;
 
     if constexpr (!is_fp32_dest_acc_en) {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
@@ -485,9 +485,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
         r = r * f + 0.168174848f;
         i += 125;
         r = r * f + sfpi::vConstFloatPrgm2;
-        c1 = sfpi::reinterpret<sfpi::vFloat>(
-            sfpi::reinterpret<sfpi::vInt>(sfpi::vConst1) - 613);  // 0x3f7ffd9b = 0.999963462f
-        r = r * f + c1;
+        r = r * f + 0.999963462f;
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
@@ -509,7 +507,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     v_if(i < 255) {
         // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
         // materialising 2**i directly near overflow boundary.
-        y = r * sfpi::reinterpret<sfpi::vFloat>(i << 23);
+        y = r * sfpi::as<sfpi::vFloat>(i << 23);
     }
     v_endif;
 
@@ -579,7 +577,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
     // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
     // materialising 2**i directly near overflow boundary.
-    scale = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
+    scale = sfpi::as<sfpi::vFloat>((i << 23) + sfpi::as<sfpi::vInt>(w));
     bias = scale - w;
     // Handle a * log2(e) >= 130, while propagating NaN.
     y = a * std::numeric_limits<float>::infinity();
@@ -844,7 +842,7 @@ inline void calculate_atanh() {
         v_else {
             sfpi::vFloat num = sfpi::vConst1 + inp;
             sfpi::vFloat den = sfpi::vConst1 - inp;
-            sfpi::vFloat tmp = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(den);
+            sfpi::vFloat tmp = sfpu_reciprocal_iter<APPROXIMATION_MODE ? 0 : 2>(den);
             tmp = sfpi::copysgn(tmp, den);
             if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE) {
                 den = tmp;
@@ -868,7 +866,7 @@ void init_inverse_hyperbolic() {
 
 template <bool APPROXIMATION_MODE>
 void init_atanh() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu

@@ -33,8 +33,8 @@ void kernel_main() {
     const uint32_t entry_size1 = dfb1.get_entry_size();
 #endif
 
-    const auto s0 = TensorAccessor(ta::src0);
-    const auto s1 = TensorAccessor(ta::src1);
+    const auto s0 = TensorAccessor(tensor::src0);
+    const auto s1 = TensorAccessor(tensor::src1);
 
     uint32_t itileA_batch = batch_start * MtKt;
     uint32_t itileB_batch = batch_start * KtNt;

@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -43,13 +47,14 @@ Optional:
                                         8x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
                                                        (8 Z-connected 4x4 meshes across 4 galaxies; even single-host, odd split 2x1)
     --test-binary <path>                Path to test binary
-                                        (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
+                                        (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
-                                        (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
+                                        (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
-    --mpi-if <interface>                Network interface for MPI TCP transport (default: ens5f0np0)
+    --mpi-if <interface>                Network interface for MPI TCP transport
+                                        (auto-detected if not specified)
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
                                         e.g. --mpi-args "--tag-output"
     --skip-reorder                      Use --hosts exactly as given; skip the canonical ring
@@ -85,17 +90,18 @@ MESH_GRAPH_DESC_PATH_8x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_gala
 CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
-TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
-TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
+TEST_BINARY="./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+TEST_CONFIG="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml"
 TEST_CONFIG_EXPLICIT=false
 # Multi-mesh (Z) configs default to the multi-mesh sanity config, whose
 # neighbor_exchange/all_to_all patterns route across mesh boundaries (Z links).
 # The single-mesh test_fabric_sanity_neighbor_exchange.yaml is NOT compatible
 # with an inter-mesh Z fabric (its Linear/Ring/Torus setups trip the tensix
 # datamover buffer-index assert), so it must not be the default here.
-TEST_CONFIG_Z="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_sanity_common.yaml"
+TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
 FILTER=""
-MPI_IF="ens5f0np0"
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 SKIP_REORDER=false
 
@@ -180,6 +186,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -221,6 +228,19 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     echo ""
     show_help
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 # For the Nx32x4 family, capture the mesh/host count N (empty for all other configs).

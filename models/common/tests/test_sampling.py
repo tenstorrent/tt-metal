@@ -208,6 +208,87 @@ def test_log_probs_calculation(shape, mesh_device):
     assert passing, f"Assertion failed, PCC={pcc}"
 
 
+def _shard_logits_2d_mesh(logits_host, mesh_device):
+    """Shard vocab along mesh TP axis (matches test_sampling_1d._make_logits_tt)."""
+    cluster_shape = tuple(mesh_device.shape)
+    if cluster_shape[-1] >= cluster_shape[-2]:
+        shard_dims = (None, -1)
+    else:
+        shard_dims = (-1, None)
+    return ttnn.from_torch(
+        logits_host,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_log_probs_calculation_shard_tensor_2d_mesh_1x8(mesh_device):
+    """LogProbsCalculator with ShardTensor2dMesh on 1×8 — the path Sampling1D uses.
+
+    test_log_probs_calculation shards via ShardTensorToMesh(dim=-1), which does not
+    exercise the 1×N _all_gather_cluster_axis bug fixed in tt_log_probs.py.
+    """
+    if mesh_device.get_num_devices() != 8:
+        pytest.skip(f"Test targets 1×8 mesh, got {mesh_device.get_num_devices()} devices")
+
+    batch_size = 32
+    vocab_size = 32768
+    shape = [1, 1, batch_size, vocab_size]
+
+    torch.manual_seed(42)
+    log_probs_calculator = LogProbsCalculator(mesh_device)
+
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    for i in range(batch_size):
+        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(vocab_size)]
+
+    # Pin a few batch slots to tokens on different chips (4096 tokens/chip on 1×8).
+    pinned_tokens = [(0, 100), (1, 20000), (2, 30000), (3, 5000)]  # chips 0, 4, 7, 1
+    for batch_idx, token_id in pinned_tokens:
+        torch_tensor[:, :, batch_idx, token_id] = 10.0
+
+    argmax_tensor = torch.argmax(torch_tensor.float(), dim=-1, keepdim=True)
+    for batch_idx, token_id in pinned_tokens:
+        assert argmax_tensor[0, 0, batch_idx, 0].item() == token_id
+    indices_tensor = argmax_tensor.reshape(
+        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
+    )
+
+    logits_tensor = _shard_logits_2d_mesh(torch_tensor, mesh_device)
+    ttnn_indices_tensor = ttnn.from_torch(
+        indices_tensor,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    log_probs_calculator.set_log_probs_mode(True)
+    tt_log_probs = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
+    assert tt_log_probs is not None
+
+    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    log_probs_tt_host = log_probs_tt_host[:, :, :1, :batch_size]
+
+    log_probs_torch = F.log_softmax(torch_tensor.float(), dim=-1)
+    log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
+    log_probs_torch_argmax = log_probs_torch_argmax.reshape(1, 1, 1, batch_size)
+
+    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
+    assert passing, f"logprobs PCC below threshold: {pcc}"
+
+
 @pytest.mark.parametrize(
     "shape",
     [

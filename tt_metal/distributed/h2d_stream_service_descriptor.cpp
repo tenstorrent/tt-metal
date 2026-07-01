@@ -128,6 +128,7 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
         shape_override_vec.assign(sh.cbegin(), sh.cend());
     }
     auto fb_shape_override = builder.CreateVector(shape_override_vec);
+    auto fb_completion_shm_name = builder.CreateString(completion_shm_name);
 
     std::vector<flatbuffers::Offset<flatbuffer::PerCoordEntry>> entry_offsets;
     entry_offsets.reserve(per_coord_entries.size());
@@ -150,7 +151,11 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
         num_socket_pages,
         metadata_size_bytes,
         static_cast<uint32_t>(socket_buffer_type),
-        static_cast<uint32_t>(socket_mode),
+        fb_completion_shm_name,
+        completion_shm_size,
+        completion_issued_offset,
+        completion_completed_offset,
+        completion_completed_stride,
         fb_entries);
     builder.Finish(fb_desc);
 
@@ -242,7 +247,11 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     desc.num_socket_pages = fb->num_socket_pages();
     desc.metadata_size_bytes = fb->metadata_size_bytes();
     desc.socket_buffer_type = static_cast<BufferType>(fb->socket_buffer_type());
-    desc.socket_mode = static_cast<H2DMode>(fb->socket_mode());
+    desc.completion_shm_name = fb->completion_shm_name() ? fb->completion_shm_name()->str() : "";
+    desc.completion_shm_size = fb->completion_shm_size();
+    desc.completion_issued_offset = fb->completion_issued_offset();
+    desc.completion_completed_offset = fb->completion_completed_offset();
+    desc.completion_completed_stride = fb->completion_completed_stride();
 
     const auto* fb_entries = fb->per_coord_entries();
     TT_FATAL(fb_entries != nullptr, "Service descriptor missing per_coord_entries");

@@ -70,6 +70,7 @@ def _teardown_cached_device():
         try:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         except Exception:
+            # best-effort; fabric may already be disabled during teardown
             pass
 
 
@@ -78,7 +79,7 @@ atexit.register(_teardown_cached_device)
 
 
 @contextmanager
-def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shape=None):
+def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shape=None, disable_cache=False):
     """Open a mesh (or a submesh of the full galaxy) with the given fabric config.
 
     full_mesh_shape: when set and != mesh_shape, open the FULL galaxy mesh first
@@ -95,7 +96,9 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
     TTNN_SWEEP_DISABLE_DEVICE_CACHE=1.
     """
     device_params = device_params or {}
-    cache_enabled = os.environ.get("TTNN_SWEEP_DISABLE_DEVICE_CACHE", "").strip().lower() not in ("1", "true", "yes")
+    cache_enabled = (not disable_cache) and os.environ.get(
+        "TTNN_SWEEP_DISABLE_DEVICE_CACHE", ""
+    ).strip().lower() not in ("1", "true", "yes")
     key = _device_cache_key(mesh_shape, fabric_config, device_params, full_mesh_shape)
 
     # Fast path: reuse the cached device when the config matches — no teardown, no
@@ -113,6 +116,18 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
 
     # Key changed (or caching off / first call): tear down any cached device, then
     # open a fresh one.
+    #
+    # NOTE: do NOT clear the persisted kernel cache here. Wiping
+    # ~/.cache/tt-metal-cache mid-run also deletes the base *firmware* objects
+    # (which define globals like my_x/my_y/noc_*_num_issued, built once at the
+    # first device open). The control-plane reinit on a fabric change rebuilds the
+    # fabric_erisc_router kernel but NOT that firmware, so the fresh kernel fails
+    # to link ("undefined reference to noc_posted_writes_num_issued ...",
+    # build.cpp:67 "Failed to generate binaries for fabric_erisc_router") -> the op
+    # hangs -> FAIL_CRASH_HANG (observed on T3K 2x4 all_gather, run 27607824383).
+    # Cross-process stale-ELF staleness is handled by the workflow's
+    # "Clear stale kernel cache" step, which runs BEFORE this process starts so the
+    # firmware rebuilds cleanly at device open.
     _teardown_cached_device()
     parent_device = None
     mesh_device = None
@@ -139,10 +154,12 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
             elif mesh_device is not None:
                 ttnn.close_mesh_device(mesh_device)
         except Exception:
+            # best-effort teardown; a close failure must not mask the test result
             pass
         try:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         except Exception:
+            # best-effort; fabric may already be disabled during teardown
             pass
         yield None, f"Device error {e}"
         return

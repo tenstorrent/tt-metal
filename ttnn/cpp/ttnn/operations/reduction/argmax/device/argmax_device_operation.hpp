@@ -45,7 +45,6 @@ ttnn::Tensor argmax(
     std::optional<int> dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_multicore,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt);
 

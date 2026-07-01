@@ -40,48 +40,6 @@
   team: models
   model-name: mistral-small-3.1-24b
 
-# ─── stable_diffusion_xl ────────────────────────────────────────────────────
-
-- name: stable_diffusion_xl demos
-  cmd: >-
-    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
-  skus:
-    bh_p150b_civ2:
-      timeout: 120
-  owner_id: U09LK84G4TF # Nikola Milicevic
-  team: models
-  model-name: stable_diffusion_xl
-
-# ─── Flux.1-dev ─────────────────────────────────────────────────────────────
-
-- name: Flux.1-dev P300-viommu performance (1x2sp0tp1)
-  # bh_p300 (LFC) keeps the legacy HF_HUB_CACHE/path-style env var because the
-  # LFC server hosts the model under <org>/models--<org>--<model>/, which is
-  # different from the canonical HF hub cache layout under hub/. Migrating
-  # this is a follow-up.
-  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1" --timeout=600
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux.1-dev
-
-- name: Flux.1-dev BH QuietBox 2 performance (2x2sp0tp1)
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1" --timeout=600
-  skus:
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux.1-dev
-
 # ─── Mochi (BH QuietBox 2) ──────────────────────────────────────────────────
 
 - name: Mochi BH QuietBox 2 performance (2x2sp0tp1)

@@ -4,9 +4,11 @@
 
 #include <cstdint>
 #include <numeric>
+#include <optional>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -74,6 +76,8 @@ struct BorrowedDFBTestConfig {
     DFBAccessPattern cap      = DFBAccessPattern::STRIDED;  // producer is always STRIDED
     bool tensix_consumer      = false;
     bool verify_data          = false;
+    std::optional<uint32_t> num_entries_override = std::nullopt;
+    bool expect_attach_fatal = false;
 };
 
 // Runs a borrowed-memory DFB program and asserts:
@@ -236,6 +240,22 @@ void run_borrowed_memory_dfb_program(
         params.tensor_args.emplace(experimental::TensorParamName{"dst_tensor"}, TensorArgument{*dst_tensor});
     }
     params.tensor_args.emplace(experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor});
+
+    // Issue #45925: optional mutable-size override on the borrowed DFB (applied inside
+    // SetProgramRunArgs before the borrowed buffer is attached).
+    if (cfg.num_entries_override.has_value()) {
+        params.dfb_run_overrides.push_back(
+            {.dfb = experimental::DFBSpecName{"borrowed_dfb"}, .num_entries = cfg.num_entries_override});
+    }
+    if (cfg.expect_attach_fatal) {
+        // Oversized borrowed resize: rejected by the per-bank fit check in AttachBorrowedDFBBuffers
+        // (no launch). This check is unique to borrowed memory.
+        EXPECT_THAT(
+            [&] { SetProgramRunArgs(program, params); },
+            ::testing::ThrowsMessage<std::runtime_error>(
+                ::testing::HasSubstr("exceeds the borrowed Buffer's per-bank size")));
+        return;
+    }
     SetProgramRunArgs(program, params);
 
     // -----------------------------------------------------------------------
@@ -247,10 +267,16 @@ void run_borrowed_memory_dfb_program(
 
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
-    // Assert the borrowed tensor's L1 address was used for the DFB ring.
+    // Assert the borrowed tensor's L1 address was used for the DFB ring. For a borrowed DFB this
+    // stays PINNED across a size override (no reallocation).
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
         static_cast<uint32_t>(ring_tensor.address()));
+
+    if (cfg.num_entries_override.has_value()) {
+        EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *cfg.num_entries_override)
+            << "borrowed DFB num_entries override was not applied";
+    }
 
     if (cfg.verify_data && !cfg.tensix_consumer) {
         std::vector<uint32_t> output;
@@ -263,7 +289,8 @@ void run_borrowed_memory_dfb_program(
 // L1 tensor between runs on the same compiled program.
 void run_update_address_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const NodeCoord& node) {
+    const NodeCoord& node,
+    std::optional<uint32_t> reentry_num_entries_override = std::nullopt) {
     IDevice* device = mesh_device->get_devices()[0];
     const ARCH arch = device->arch();
 
@@ -388,23 +415,50 @@ void run_update_address_test(
         EXPECT_EQ(input_a, output);
     }
 
-    // --- Run 2: ring redirected to ring_tensor_b via UpdateTensorArgs ---
+    // --- Run 2: ring redirected to ring_tensor_b ---
+    // When reentry_num_entries_override is set, Run 2 re-binds the ring to a different tensor AND
+    // applies a num_entries override in the same SetProgramRunArgs. When unset, Run 2 uses the
+    // UpdateTensorArgs fast-path (address only).
     std::vector<uint32_t> input_b(total_words);
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
     detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input_b);
 
-    UpdateTensorArgs(
-        program,
-        Table<experimental::TensorParamName, TensorArgument>{
+    if (reentry_num_entries_override.has_value()) {
+        // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
+        // L1 tensor AND override num_entries together (the sharded program-cache-hit analog). The
+        // per-bank fit check in AttachBorrowedDFBBuffers validates the new size against ring_tensor_b.
+        const NodeRuntimeArgs dm_rtas2{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
+        ProgramRunArgs params2;
+        params2.kernel_run_args = {
+            {.kernel = experimental::KernelSpecName{"producer"}, .runtime_arg_values = {dm_rtas2}},
+            {.kernel = experimental::KernelSpecName{"consumer"}, .runtime_arg_values = {dm_rtas2}},
+        };
+        params2.tensor_args = {
             {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
             {experimental::TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
             {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
-        });
+        };
+        params2.dfb_run_overrides.push_back(
+            {.dfb = experimental::DFBSpecName{"borrowed_dfb"}, .num_entries = reentry_num_entries_override});
+        SetProgramRunArgs(program, params2);
+    } else {
+        UpdateTensorArgs(
+            program,
+            Table<experimental::TensorParamName, TensorArgument>{
+                {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
+                {experimental::TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
+                {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
+            });
+    }
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
         static_cast<uint32_t>(ring_tensor_b.address()));
+    if (reentry_num_entries_override.has_value()) {
+        EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *reentry_num_entries_override)
+            << "combined re-bind + resize: num_entries override was not applied";
+    }
     {
         std::vector<uint32_t> output;
         detail::ReadFromBuffer(*dst_tensor.mesh_buffer().get_reference_buffer(), output);
@@ -432,6 +486,43 @@ TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S) {
 
 TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddress) {
     run_update_address_test(devices_.at(0), NodeCoord{0, 0});
+}
+
+TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize) {
+    run_update_address_test(devices_.at(0), NodeCoord{0, 0}, /*reentry_num_entries_override=*/8);
+}
+
+TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_NumEntriesOverride) {
+    run_borrowed_memory_dfb_program(
+        devices_.at(0),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .cap = DFBAccessPattern::STRIDED,
+            .tensix_consumer = false,
+            .verify_data = true,
+            .num_entries_override = 8,  // 8*256 = 2048 B fits the 16*256 = 4096 B backing tensor
+        });
+}
+
+TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_SizeOverrideExceedsBackingFails) {
+    run_borrowed_memory_dfb_program(
+        devices_.at(0),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .cap = DFBAccessPattern::STRIDED,
+            .tensix_consumer = false,
+            .verify_data = false,
+            .num_entries_override = 32,  // 32*256 = 8192 B > 16*256 = 4096 B backing -> FATAL
+            .expect_attach_fatal = true,
+        });
 }
 
 // =============================================================================

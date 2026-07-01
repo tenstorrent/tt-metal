@@ -11,11 +11,12 @@
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
+#include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -348,6 +349,71 @@ inline void calculate_gelu() {
 }
 
 // =============================================================================
+// GELU tanh approximation in FP32:
+//   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+// =============================================================================
+
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_gelu_tanh() {
+    constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
+    constexpr float GELU_TANH_K = 0.044715f;
+    // Saturation threshold for tanh -> +/- 1.
+    // Empirically calibrated to torch's CPU tanh saturation point.
+    constexpr float TANH_SAT_THRESHOLD = 8.6643f;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // x^3.
+        sfpi::vFloat x2 = x * x;
+        sfpi::vFloat x3 = x2 * x;
+
+        // x + (0.044715 * x^3).
+        sfpi::vFloat kx3 = x3 * GELU_TANH_K;
+        sfpi::vFloat inner = x + kx3;
+
+        sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
+
+        // Handle +-0 by using the sign of x to prevent 1 ULP difference.
+        // NOTE: vConst0 is a vCReg<vFloat>, not a vFloat. copysgn's overloads are
+        // constrained templates whose argument deduction does not apply the implicit
+        // vCReg->vFloat conversion, so materialize a real vFloat first.
+        sfpi::vFloat zero = sfpi::vConst0;
+        sfpi::vFloat result = sfpi::copysgn(zero, x);
+
+        v_if(scaled >= TANH_SAT_THRESHOLD) {
+            // Saturated positive tail: gelu_tanh(x) = x.
+            result = x;
+        }
+        v_elseif(scaled > -TANH_SAT_THRESHOLD) {
+            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
+            sfpi::vFloat one_plus = 1.0f + t;
+            sfpi::vFloat half_x = 0.5f * x;
+            result = half_x * one_plus;
+        }
+        v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void gelu_tanh_init() {
+    // _sfpu_tanh_fp32_accurate_ calls _sfpu_sigmoid_ -> _sfpu_reciprocal_
+    // regardless of is_fp32_dest_acc_en, so we always need reciprocal init.
+    // Calling tanh_init<false, is_fp32_dest_acc_en>() does NOT work when
+    // is_fp32_dest_acc_en=false: it loads polynomial constants for the
+    // BF16 polynomial tanh path that this kernel doesn't take, and skips
+    // reciprocal init.
+    sigmoid_init<false>();
+}
+
+// =============================================================================
 // GELU Derivative - Polynomial Approximation
 // =============================================================================
 // GELU'(x) = Φ(x) + x*φ(x) where Φ is CDF, φ is PDF of standard normal
@@ -430,7 +496,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             result = x_exp * INV_SQRT_2PI;
         } else {
             // 1 NR step suffices for BF16 (7 mantissa bits); FP32 needs 2 steps (23 bits).
-            sfpi::vFloat inv_x2 = _sfpu_reciprocal_<is_fp32_dest_acc_en ? 2 : 1>(x2);
+            sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<is_fp32_dest_acc_en ? 2 : 1>(x2);  // 1/x²
             sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             result = x_exp * INV_SQRT_2PI * correction;
@@ -459,18 +525,18 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_
+        // Call sfpu_reciprocal_init directly: gelu derivative uses sfpu_reciprocal_iter
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
-        // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
+        // not needed. On BH, _init_reciprocal_ omits sfpu_reciprocal_init (it only
         // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
         //
-        // Not keyed on is_fp32_dest_acc_en: the template arg to _sfpu_reciprocal_<N>
+        // Not keyed on is_fp32_dest_acc_en: the template arg to sfpu_reciprocal_iter<N>
         // selects the Newton-Raphson step count (2 for FP32, 1 for BF16), but
-        // _init_sfpu_reciprocal_ only seeds the initial estimate and does not vary
+        // sfpu_reciprocal_init only seeds the initial estimate and does not vary
         // with N. A single <false> call therefore covers both precisions. The
         // asymmetry vs gelu_init() (which gained an fp32-specific branch) is
         // intentional — the derivative path has no LUT to load.
-        _init_sfpu_reciprocal_<false>();
+        sfpu_reciprocal_init<false>();
     }
 }
 

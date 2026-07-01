@@ -31,6 +31,11 @@ namespace tt::tt_metal::experimental {
 //
 // The ComputeHardwareConfig fields configure this pipeline.
 //
+// NOTE: The Unpack, Math, and Pack stages are hardware pipeline stages internal
+//       to a single kernel thread, not to be confused with KernelSpec::num_threads!
+//       Each thread of a multi-threaded compute kernel runs its own independent
+//       Unpack/Math/Pack pipeline.
+//
 // ============================================================================
 
 struct ComputeHardwareConfig {
@@ -51,6 +56,16 @@ struct ComputeHardwareConfig {
 
     // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
+
+    // (Quasar only).
+    //
+    // When true, the unpacker packs two values into each source-register
+    // slot instead of one, so the math engine reads twice as many elements per
+    // pass. Only the matmul family of instructions work with this format — matmul (MVMUL/MVMULDI) and the GAPOOL
+    // instruction that column reduce ops are built on.
+    //
+    // So set this true only for kernels whose inputs are consumed solely by a matmul or a column reduce.
+    bool enable_2x_src_format = false;
 
     // Per-DFB choice of how the unpacker delivers data into the math stage:
     //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)

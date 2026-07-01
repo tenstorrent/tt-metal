@@ -83,6 +83,8 @@ void issue_trace_commands(
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
+    TT_FATAL(device->arch() != tt::ARCH::QUASAR, "Trace commands are currently not supported on Quasar");
+
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, dispatch_md.cmd_sequence_sizeB);
@@ -226,8 +228,8 @@ std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, const uin
     // to maximize read bandwidth.
     // Min size is bounded by NOC transfer efficiency
     // Max size is bounded by Prefetcher CmdDatQ size
-    constexpr uint32_t kExecBufPageMin = 1024;
-    constexpr uint32_t kExecBufPageMax = 8192;
+    constexpr uint32_t kExecBufPageMin = kMinTraceBufPageSize;
+    constexpr uint32_t kExecBufPageMax = kMaxTraceBufPageSize;
     // If the trace buffer uses at least 2 pages per bank (for a specific page size), require using that page size or
     // larger to improve prefetcher read performance. This limits wasted space to at most 33% or the page size * the
     // number of banks, whichever is smaller.

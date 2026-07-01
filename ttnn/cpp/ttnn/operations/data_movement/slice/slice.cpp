@@ -134,11 +134,12 @@ ttnn::Tensor slice(
             const auto& in_mc = source.memory_config();
             if (in_mc.is_sharded() && in_mc.memory_layout() == resolved_mc.memory_layout() &&
                 in_mc.shard_spec().has_value()) {
-                resolved_mc = resolved_mc.with_shard_spec(in_mc.shard_spec());
+                resolved_mc =
+                    ttnn::MemoryConfig(resolved_mc.memory_layout(), resolved_mc.buffer_type(), in_mc.shard_spec());
             } else {
                 auto spec = operations::data_movement::transpose::generate_transpose_shard_spec(
                     source, source.padded_shape(), resolved_mc.memory_layout());
-                resolved_mc = resolved_mc.with_shard_spec(spec);
+                resolved_mc = ttnn::MemoryConfig(resolved_mc.memory_layout(), resolved_mc.buffer_type(), spec);
             }
         }
         return resolved_mc;
@@ -519,6 +520,16 @@ template ttnn::Tensor slice<int32_t>(
     ttsl::Span<const int32_t> begins,
     ttsl::Span<const int32_t> ends,
     ttsl::Span<const int32_t> step,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids);
+
+template ttnn::Tensor slice<int64_t>(
+    const ttnn::Tensor& input_tensor,
+    ttsl::Span<const int64_t> begins,
+    ttsl::Span<const int64_t> ends,
+    ttsl::Span<const int64_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,

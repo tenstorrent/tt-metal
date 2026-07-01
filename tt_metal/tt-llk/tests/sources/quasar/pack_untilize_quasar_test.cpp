@@ -71,10 +71,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
         // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
         // ZEROACC to wipe subsequent tile rows after packing the first one.
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, BLOCK_CT_DIM);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, BLOCK_CT_DIM);
         for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
         {
-            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM);
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, ckernel::DEFAULT_TENSOR_SHAPE);
             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
         }
     }
@@ -89,8 +89,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
         }
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
-        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
+        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 }
 

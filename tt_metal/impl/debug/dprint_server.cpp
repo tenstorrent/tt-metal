@@ -51,7 +51,6 @@
 #include "impl/debug/inspector/inspector.hpp"
 #include "jit_build/build_env_manager.hpp"
 
-using std::flush;
 using std::ofstream;
 using std::ostream;
 using std::string;
@@ -322,6 +321,11 @@ private:
     // stdout, or nothing.
     ostream* get_output_stream(const RiscKey& risc_key);
 
+    // Flushes the shared output stream and any per-risc file streams. print_buffer_data no longer
+    // flushes per line (that turned into millions of write() syscalls under heavy load); both the
+    // DRAM-aggregation path and the L1-fallback path call this once after processing instead.
+    void flush_output_streams();
+
     // Helper functions to init/attach/detach a single device
     void init_device(ChipId device_id);
     void attach_device(ChipId device_id);
@@ -429,11 +433,12 @@ void DPrintServer::Impl::print_buffer_data(
                     // Find firmware elf path from BuildEnvManager.
                     auto [processor_class, processor_type_idx] =
                         hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
-                    auto firmware_elf_path = BuildEnvManager::get_instance().get_firmware_binary_path(
-                        device_id,
-                        programmable_core_type_idx,
-                        static_cast<uint32_t>(processor_class),
-                        processor_type_idx);
+                    auto firmware_elf_path = BuildEnvManager::get_instance(context_->get_context_id())
+                                                 .get_firmware_binary_path(
+                                                     device_id,
+                                                     programmable_core_type_idx,
+                                                     static_cast<uint32_t>(processor_class),
+                                                     processor_type_idx);
 
                     risc_data.firmware_elf_path = firmware_elf_path;
                     risc_data.firmware_elf_parser = DevicePrintParser::get_parser_for_elf(firmware_elf_path);
@@ -463,16 +468,21 @@ void DPrintServer::Impl::print_buffer_data(
                 auto formatted_message =
                     elf_parser->format_message(header->info_id, payload_bytes, format_message_buffer);
                 if (!formatted_message.empty()) {
-                    // Find if we have something buffered from before
-                    if (!risc_data.message_buffer.empty()) {
-                        // We have something in the buffer, prepend it to the current message and clear the buffer.
-                        risc_data.message_buffer += formatted_message;
-                        formatted_message = risc_data.message_buffer;
+                    // Append onto any buffered partial line and work in message_buffer;
+                    std::string& buffer = risc_data.message_buffer;
+                    buffer.append(formatted_message);
+
+                    // DEVICE_PRINT will output '\r' when it wants to open a new line without
+                    // flushing the host buffer for that core. This allows multiple calls to DEVICE_PRINT
+                    // to span multiple lines without interleaving with prints from other cores
+                    auto last_newline_pos = buffer.rfind('\n');
+                    if (last_newline_pos != std::string::npos) {
+                        // replace the '\r' before the '\n' because they will be flushed in this iteration
+                        std::replace(buffer.begin(), buffer.begin() + last_newline_pos, '\r', '\n');
                     }
 
                     // Check if we hit new line
-                    auto newline_pos = formatted_message.find('\n');
-
+                    auto newline_pos = buffer.find('\n');
                     if (newline_pos != std::string::npos) {
                         // We will do message printing. Check if we have generated line prefix for this risc before,
                         // if not generate one.
@@ -497,28 +507,22 @@ void DPrintServer::Impl::print_buffer_data(
                         // Are we printing the whole string, or we need to split it into multiple lines because of
                         // multiple new lines in the message or because we want to prepend line prefix to each line?
                         ostream* output_stream = get_output_stream(risc_key);
-                        if (newline_pos == formatted_message.size() - 1) {
-                            *output_stream << line_prefix << formatted_message << flush;
-                            risc_data.message_buffer.clear();
+                        if (newline_pos == buffer.size() - 1) {
+                            *output_stream << line_prefix << buffer;
+                            buffer.clear();
                         } else {
                             std::size_t newline_start = 0;
-                            std::string_view full_message_view = formatted_message;
+                            std::string_view full_message_view = buffer;
                             while (newline_pos != std::string::npos) {
                                 std::string_view line =
                                     full_message_view.substr(newline_start, newline_pos - newline_start);
-                                *output_stream << line_prefix << line << std::endl;
+                                *output_stream << line_prefix << line << '\n';
                                 newline_start = newline_pos + 1;
                                 newline_pos = full_message_view.find('\n', newline_start);
                             }
-                            if (newline_start < full_message_view.size()) {
-                                risc_data.message_buffer = formatted_message.substr(newline_start);
-                            } else {
-                                risc_data.message_buffer.clear();
-                            }
+                            // Keep only the trailing partial line (everything after the last '\n') for next time.
+                            buffer.erase(0, newline_start);
                         }
-                    } else {
-                        // We don't have a complete line yet, buffer the message for next time.
-                        risc_data.message_buffer = formatted_message;
                     }
                 }
             }
@@ -737,7 +741,8 @@ bool DPrintServer::Impl::poll_device_print_data(
             const uint32_t first = data.buffer_size - rpos;
             payload_vector.resize((first + wpos + sizeof(uint32_t) - 1) / sizeof(uint32_t));
             cluster.read_dram_vec(payload_vector.data(), first, device_id, data.dram_view, data.buffer_address + rpos);
-            cluster.read_dram_vec(payload_vector.data() + first, wpos, device_id, data.dram_view, data.buffer_address);
+            cluster.read_dram_vec(
+                payload_vector.data() + first / sizeof(uint32_t), wpos, device_id, data.dram_view, data.buffer_address);
         }
 
         // Walk the payload as a sequence of {DramStreamMessageHeader, padding, payload}.
@@ -864,6 +869,10 @@ bool DPrintServer::Impl::poll_device_print_data(
             // Each chunk is dram-aligned in the kernel; advance accordingly.
             pos += round_up(chunk_end_bytes, dram_align);
         }
+        // Flush once per drain window instead of per line (see print_buffer_data). This batches the
+        // millions of lines a drain can emit into far fewer write() syscalls, which is what dominated
+        // runtime on a journaled filesystem. Output still appears per drain (every few ms).
+        flush_output_streams();
 
         // Update read pointer in DRAM.
         const uint32_t new_read_pointer = wpos;
@@ -941,8 +950,9 @@ DPrintServer::Impl::~Impl() {
 
     // Wait for the thread to end, with a timeout
     auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
-    if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-        log_fatal(tt::LogMetal, "Timed out waiting on debug print thread to terminate.");
+    const int join_timeout_sec = debug_server_finish_timeout_sec(env_.get_rtoptions());
+    if (future.wait_for(std::chrono::seconds(join_timeout_sec)) == std::future_status::timeout) {
+        log_fatal(tt::LogMetal, "Timed out waiting on debug print thread to terminate ({}s).", join_timeout_sec);
     }
     delete print_server_thread_;
     print_server_thread_ = nullptr;
@@ -986,8 +996,9 @@ void DPrintServer::Impl::await() {
         } while (num_riscs_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
     };
     auto future = std::async(std::launch::async, poll_until_no_new_data);
-    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
-        TT_THROW("Timed out waiting on debug print server to read data.");
+    const int await_timeout_sec = debug_server_wait_timeout_sec(env_.get_rtoptions());
+    if (future.wait_for(std::chrono::seconds(await_timeout_sec)) == std::future_status::timeout) {
+        TT_THROW("Timed out waiting on debug print server to read data ({}s).", await_timeout_sec);
     }
 }  // await
 
@@ -1297,6 +1308,7 @@ bool DPrintServer::Impl::poll_device_print_data_l1(
             // re-throw the exception.
             if (env_.get_rtoptions().get_test_mode_enabled()) {
                 server_killed_due_to_hang_ = true;
+                flush_output_streams();
                 return new_data_this_iter;  // Stop the print loop
             }  // Re-throw for instant exit
             throw e;
@@ -1304,11 +1316,29 @@ bool DPrintServer::Impl::poll_device_print_data_l1(
 
         // If this read detected a print hang, stop processing prints.
         if (server_killed_due_to_hang_) {
+            flush_output_streams();
             return new_data_this_iter;
         }
     }
+    // Flush here too: the L1-fallback path (used when dispatch_s isn't running — early boot,
+    // self-disabled, or after the dispatcher finished) is where prompt, complete output matters
+    // most for hang debugging, and print_buffer_data no longer flushes per line.
+    if (new_data_this_iter) {
+        flush_output_streams();
+    }
     return new_data_this_iter;
 }  // poll_device_print_data_l1
+
+void DPrintServer::Impl::flush_output_streams() {
+    if (stream_ != nullptr) {
+        stream_->flush();
+    }
+    for (auto& [risc_key, risc_stream] : risc_to_file_stream_) {
+        if (risc_stream != nullptr) {
+            risc_stream->flush();
+        }
+    }
+}  // flush_output_streams
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;

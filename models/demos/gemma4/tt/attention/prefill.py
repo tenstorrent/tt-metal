@@ -60,6 +60,11 @@ def _prefill_forward_single(
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
+    # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
+    # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
+    # the two rotary_embedding calls into one, but it adds concat+split device
+    # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
+    # rotated separately.
     tt_q = apply_rope(tt_q, cos_cache, sin_cache)
     if shared_kv is None:
         tt_k = apply_rope(tt_k, cos_cache, sin_cache)
@@ -158,6 +163,7 @@ def prefill_forward(
     shared_kv=None,
     keep_kv=False,
     batch_size=1,
+    valid_seq_len=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -180,6 +186,7 @@ def prefill_forward(
             ccl_manager=ccl_manager,
             shared_kv=shared_kv,
             keep_kv=keep_kv,
+            valid_seq_len=valid_seq_len,
         )
 
     tp = mesh_config.tp if mesh_config else 1
@@ -211,6 +218,11 @@ def prefill_forward(
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
+    # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
+    # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
+    # the two rotary_embedding calls into one, but it adds concat+split device
+    # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
+    # rotated separately.
     tt_q = apply_rope(tt_q, cos_cache, sin_cache)
     if shared_kv is None:
         tt_k = apply_rope(tt_k, cos_cache, sin_cache)

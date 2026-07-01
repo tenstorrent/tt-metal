@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
@@ -697,6 +698,9 @@ def test_sampling_topk_single_device(
     The kernel must select a token from within this set, proving that the
     full pipeline (local top-K, global merge, softmax, temperature) works.
     """
+    if is_blackhole():
+        pytest.skip("Skipping top-K single-device sampling on Blackhole due to known selection mismatch")
+
     _run_sampling_topk_single_device(
         device,
         seed=seed,

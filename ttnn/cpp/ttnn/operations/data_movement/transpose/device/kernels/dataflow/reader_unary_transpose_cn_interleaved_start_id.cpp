@@ -44,7 +44,7 @@ void kernel_main() {
         // when the buffer is BLOCK/WIDTH-sharded. TILE-layout path below must keep the
         // original single-page transfer since each tile is one indivisible NOC unit.
         const uint32_t cb_write_ptr = cb.get_write_ptr();
-        tt::data_movement::common::noc_async_read_sharded(cb_write_ptr, s, page_idx, 0, read_size);
+        tt::data_movement::common::noc_async_read_sharded(noc, cb_write_ptr, s, page_idx, 0, read_size);
 #else
         noc.async_read(s, cb, page_size, {.page_id = page_idx}, {.offset_bytes = 0});
 #endif

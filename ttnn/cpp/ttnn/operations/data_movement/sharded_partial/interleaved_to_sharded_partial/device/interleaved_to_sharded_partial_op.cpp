@@ -57,7 +57,10 @@ TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     shape[1] = 1;
     shape[2] = new_height;
 
-    auto mem_config = operation_attributes.output_mem_config.with_shard_spec(operation_attributes.shard_spec);
+    auto mem_config = MemoryConfig(
+        operation_attributes.output_mem_config.memory_layout(),
+        operation_attributes.output_mem_config.buffer_type(),
+        operation_attributes.shard_spec);
 
     return TensorSpec(
         shape,

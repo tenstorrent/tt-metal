@@ -12,6 +12,7 @@
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/work_split.hpp"
+#include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
 
 namespace ttnn::prim {
@@ -117,9 +118,12 @@ void validate_matmul_tile_constraints(
 }
 
 void validate_matmul_block_and_subblock_configuration(
-    const MatmulParams& attributes, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const MatmulParams& attributes,
+    const ttnn::Shape& a_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     std::visit(
-        [&attributes](const auto& program_config) {
+        [&attributes, &a_shape_padded, &in0_tile](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> ||
@@ -135,6 +139,13 @@ void validate_matmul_block_and_subblock_configuration(
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
+                const uint32_t Kt = a_shape_padded[-1] / in0_tile.get_width();
+                TT_FATAL(
+                    Kt % program_config.in0_block_w == 0,
+                    "Kt ({}) must be divisible by in0_block_w ({})",
+                    Kt,
+                    program_config.in0_block_w);
                 TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
                 TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
                 if constexpr (
@@ -466,6 +477,29 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
             }
         },
         chosen_program_config);
+}
+
+void validate_matmul_bias(
+    const std::optional<const Tensor>& optional_bias,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    // Determine which program configs support bias.
+    bool config_supports_bias = false;
+    std::visit(
+        [&config_supports_bias](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            // MatmulMultiCoreReuseProgramConfig has no bias kernel path and the wrapper
+            // does not post-process bias for it. All other configs either support bias in
+            // the kernel or have it handled by get_post_process_bias() in matmul.cpp.
+            // gather_in0 on 1D multicast rejects bias separately in its dedicated check.
+            config_supports_bias =
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
+        },
+        chosen_program_config);
+
+    TT_FATAL(
+        !optional_bias.has_value() || config_supports_bias,
+        "Bias is not supported for this matmul program config: {}",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
 }
 
 bool get_broadcast_batch(
@@ -864,9 +898,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
 
     validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
-    validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
-
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
+    validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
+    validate_matmul_bias(optional_bias, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_reuse_sharded_output_block_divisibility(
@@ -894,8 +928,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         // Check if in0 reuse optimization can be applied
         // This optimization keeps input A (batch=1) in L1 and reuses it across all input B batches
         // 1. Program config requirements: must use 1D mcast with specific settings
-        // 2. Shape requirements: must be rank-4 tensors (to ensure dim 1 is the batch dimension)
-        // 3. Batch dimension requirement: input A must have batch size 1 on dim 1
+        // 2. Shape requirements: must be rank >= 3 (to have at least one batch dimension)
+        // 3. Batch dimension requirement: all batch dimensions of input A must be size 1
         // 4. Memory layout requirement: inputs must not be sharded
         auto in0_reuse = [&]() {
             if (!std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
@@ -907,26 +941,25 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             if (config.fuse_batch || config.fused_activation.has_value() || config.mcast_in0) {
                 return false;
             }
-            if (a_shape.rank() != 4 || b_shape.rank() != 4) {
+            if (a_shape.rank() < 3 || b_shape.rank() < 3) {
                 return false;
             }
-            if (a_shape[1] != 1) {
-                return false;
+            for (auto j = 0; j < static_cast<int>(a_shape.rank()) - 2; j++) {
+                if (a_shape[j] != 1) {
+                    return false;
+                }
             }
-            if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
-                return false;
-            }
-            return true;
+            return !input_tensor_a.is_sharded() && !input_tensor_b.is_sharded();
         };
 
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
-                a_shape[i] == b_shape[i] || (i == 1 && in0_reuse()),
+                a_shape[i] == b_shape[i] || (a_shape[i] == 1 && in0_reuse()),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
-                "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on dim 1 "
-                "for rank-4 tensors when a[1]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig with "
-                "fuse_batch=false, fused_activation=none, mcast_in0=false, and non-sharded inputs for in0 reuse "
-                "optimization)",
+                "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed "
+                "when all batch dimensions of a are size 1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig "
+                "with fuse_batch=false, fused_activation=none, mcast_in0=false, and non-sharded inputs for in0 "
+                "reuse optimization)",
                 i,
                 a_shape[i],
                 b_shape[i]);
@@ -1044,7 +1077,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 chosen_program_config),
             "Untilize out is not supported for this program config: {}",
-            typeid(chosen_program_config).name());
+            ttsl::get_active_type_name_in_variant(chosen_program_config));
     }
 
     using namespace tt;
@@ -1101,7 +1134,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
-                            // Receiver-contiguous DRAM-core prefetcher: in1 is an NdShardSpec DRAM
+                            // Receiver-contiguous Tensor prefetcher: in1 is an NdShardSpec DRAM
                             // weight (reported as ND_SHARDED) whose data is delivered via the
                             // global CB receivers, not read directly per its DRAM layout. The
                             // weight's own layout is irrelevant to the matmul in this case.
@@ -1770,14 +1803,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     "Output memory layout must be INTERLEAVED, got: {}",
                     attributes.output_mem_config.memory_layout());
             }
-            if constexpr (
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                TT_FATAL(
-                    (a_shape_padded[-1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
-                    "Kt must be divisible by in0_block_w");
-            }
         },
         chosen_program_config);
 
@@ -1901,7 +1926,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                                 ShardOrientation::ROW_MAJOR};
-                            mem_config = mem_config.with_shard_spec(shard_spec);
+                            mem_config = tt::tt_metal::MemoryConfig(
+                                mem_config.memory_layout(), mem_config.buffer_type(), shard_spec);
                         }
                     }
                     // support for multi-tensor output
@@ -1947,7 +1973,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         ShardOrientation::ROW_MAJOR};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -1988,21 +2017,34 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
-                    ShardOrientation shard_orientation =
-                        program_config.transpose_mcast ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+                    // The output CB is globally allocated against the output tensor on the factory's
+                    // work grid {start_core, start_core + num_blocks - 1}, so the output shard grid
+                    // computed here must match it exactly. Mirror the factory's start_core derivation
+                    // (allowed_worker_cores is the single source of truth for core placement) rather
+                    // than trusting a user-supplied output shard grid, which need not agree.
+                    const CoreCoord start_core =
+                        program_config.allowed_worker_cores.has_value()
+                            ? program_config.allowed_worker_cores.value().bounding_box().start_coord
+                            : CoreCoord{0, 0};
                     CoreRangeSet all_cores;
-                    if (attributes.output_mem_config.shard_spec().has_value()) {
-                        all_cores = attributes.output_mem_config.shard_spec()->grid;
-                    } else if (program_config.transpose_mcast) {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_y - 1, num_blocks_x - 1})});
+                    ShardOrientation shard_orientation;
+                    if (program_config.transpose_mcast) {
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_y - 1, start_core.y + num_blocks_x - 1})});
+                        shard_orientation = ShardOrientation::COL_MAJOR;
                     } else {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_x - 1, num_blocks_y - 1})});
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_x - 1, start_core.y + num_blocks_y - 1})});
+                        shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -2042,7 +2084,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(

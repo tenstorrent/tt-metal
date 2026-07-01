@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -63,7 +63,7 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
         }
 
         sfpi::vFloat sin2_ax = r * r;
-        sfpi::vFloat inv_beta = _sfpu_reciprocal_<RECIP_ITER>(beta);
+        sfpi::vFloat inv_beta = sfpu_reciprocal_iter<RECIP_ITER>(beta);
         sfpi::vFloat result = x + sin2_ax * inv_beta;
 
         if constexpr (!is_fp32_dest_acc_en) {
@@ -77,7 +77,7 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
 
 template <bool APPROXIMATE>
 inline void snake_beta_init() {
-    _init_sfpu_reciprocal_<APPROXIMATE>();
+    sfpu_reciprocal_init<APPROXIMATE>();
 }
 
 }  // namespace ckernel::sfpu

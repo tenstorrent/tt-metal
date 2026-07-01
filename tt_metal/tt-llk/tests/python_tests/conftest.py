@@ -321,9 +321,15 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
+    worker_id = getattr(config, "workerinput", {}).get("workerid", "master")
+
+    if worker_id != "master":
+        import torch
+
+        torch.set_num_threads(1)
+
     TestConfig.setup_mode(
-        # Pass worker id here, so TestConfig can calculate Tensix tile it will run on
-        getattr(config, "workerinput", {}).get("workerid", "master"),
+        worker_id,
         config.getoption("--compile-consumer", default=False),
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),
@@ -403,6 +409,17 @@ def pytest_configure(config):
                 )
         else:
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
+
+
+def pytest_ignore_collect(collection_path, config):
+    # Skip collecting the quasar/ dir on non-quasar arch — those tests are
+    # deselected there anyway, so there's no need to collect them.
+    if (
+        get_chip_architecture() != ChipArchitecture.QUASAR
+        and "quasar" in collection_path.parts
+    ):
+        return True
+    return None
 
 
 def pytest_collection_modifyitems(config, items):

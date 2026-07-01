@@ -14,6 +14,7 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "tensix_types.h"
+#include "tensor_shape.h"
 
 namespace ckernel::trisc
 {
@@ -175,6 +176,29 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
 }
 
 /**
+ * @brief Helper function to calculate log2 for FPU rows
+ * since FPU rows are <=16, and are power of 2, can use
+ * simplified higher perf method
+ * @param val: Input value to log2 operation
+ */
+inline std::uint32_t rows_log2(const std::uint32_t math_rows)
+{
+    switch (math_rows)
+    {
+        case 16:
+            return 4;
+        case 8:
+            return 3;
+        case 4:
+            return 2;
+        case 2:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/**
  * @brief Returns dest buffer base addr
  * If dest register is set to 16bit mode:
  *     Bank 0 -> addr = 0
@@ -239,11 +263,21 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    constexpr static std::uint32_t MATH_PACK = 1; // math <-> pack sync on dest register
+    // The math thread is always the middleman, for regular unpack and for unpack_to_dest.
+    // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
+    // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
+    // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
+    // SFPU/FPU work slots in between the UNPACK_MATH get and the MATH_PACK post.
+    //
+    // Keep pairwise naming with producer_consumer direction:
+    // - MATH_PACK = math->pack
+    // - UNPACK_MATH = unpack->math
+    constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
-        return (1 << sem_index);
+        return (1u << sem_index);
     }
 };
 
@@ -257,7 +291,7 @@ inline void t6_semaphore_post(const std::uint8_t index)
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
-    TTI_SEMPOST(0, semaphore::t6_sem(index));
+    TT_SEMPOST(0, semaphore::t6_sem(index));
 }
 
 // Tensix thread semaphore get optionally stalled
@@ -270,7 +304,7 @@ inline void t6_semaphore_get(const std::uint8_t index)
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
-    TTI_SEMGET(0, semaphore::t6_sem(index));
+    TT_SEMGET(0, semaphore::t6_sem(index));
 }
 
 /**
@@ -321,6 +355,61 @@ struct srcs_dims
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
     return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
+}
+
+/**
+ * @brief finds and returns the larger value between two inputs
+ * @note if both values are equal returns input1
+ *
+ * @param input1/input2: the values to be compared
+ */
+inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
+{
+    return (input1 >= input2) ? input1 : input2;
+}
+
+/**
+ * @brief helper function used to compute z-dim for buf_desc from TensorShape.
+ * Compares two values, then computes the square of the smaller value.
+ *
+ * @param input1/input2: values to be compared, then squared
+ */
+inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t input2)
+{
+    return (input1 < input2) ? input1 * input1 : input2 * input2;
+}
+
+/**
+ * @brief Creates a tdma_descriptor_t structure from TensorShape and other needed parameters
+ * Currently supported buffer descriptor dimensions are:
+ * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
+ *
+ * @param tensor_shape: Tile/face dimensions and shape of input tensor
+ * @param base_l1_16B: base address of the buffer in L1
+ * @param data_format: L1 data encoding format
+ * @param buf_desc_id: buffer descriptor table ID
+ * @param reg_data_format: Register data encoding format
+ */
+inline tdma_descriptor_t construct_tdma_desc(
+    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
+{
+    buffer_descriptor_u buf_desc = {0};
+    buf_desc.f.x_dim             = tensor_shape.face_c_dim;
+    buf_desc.f.y_dim             = tensor_shape.face_r_dim;
+    if (tensor_shape.num_faces_r_dim == tensor_shape.num_faces_c_dim)
+    {
+        buf_desc.f.z_dim = tensor_shape.total_num_faces();
+    }
+    else
+    {
+        buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
+    }
+    buf_desc.f.l1_addr_16B  = base_l1_16B;
+    buf_desc.f.format       = static_cast<std::uint8_t>(data_format);
+
+    tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
+
+    return tdma_desc;
 }
 
 } // namespace ckernel::trisc
