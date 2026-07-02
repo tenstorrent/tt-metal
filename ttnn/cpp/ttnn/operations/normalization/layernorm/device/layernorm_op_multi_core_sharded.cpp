@@ -344,8 +344,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // per-element divide is 1/logical_K (winv*cinv), so the cross-core mean and variance reduce over
     // exactly the logical width however its tiles distribute across cores. Welford has no column
     // mask, so each core is instead told its real (logical) column count (welford_reduce_w) and reduces
-    // exactly those columns -- full block_w on the cores before the last, the remaining logical columns
-    // (ending in a partial tile) on the final real core -- and the cross-core combine weights the final
+    // exactly those columns; full block_w on the cores before the last, the remaining logical columns
+    // (ending in a partial tile) on the final real core; and the cross-core combine weights the final
     // block by its true width (last_block_w).
     // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned width's final tile so
     // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for

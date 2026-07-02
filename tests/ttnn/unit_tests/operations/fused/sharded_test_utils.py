@@ -518,7 +518,7 @@ _LOGICAL_WIDTH_NORM_PAD_POISON = 1000.0  # poison the implicit tile padding so a
 
 
 def run_sharded_norm_logical_width_multicore(
-    device, is_rmsnorm, w, num_cores_w, dtype=ttnn.bfloat16, eps=1e-5, use_welford=False
+    device, is_rmsnorm, w, num_cores_w, dtype=ttnn.bfloat16, eps=1e-5, use_welford=False, weight_layout=ttnn.TILE_LAYOUT
 ):
     """Verify a width-sharded layer/RMS norm normalizes over the LOGICAL width when the width is split
     across cores so the final core owns fewer real tiles (and, for a non-tile-aligned width, a partially
@@ -534,6 +534,9 @@ def run_sharded_norm_logical_width_multicore(
     defined above.
 
     use_welford applies to LayerNorm only, since RMSNorm does not support Welford.
+
+    weight_layout selects the gamma/beta layout: TILE_LAYOUT or ROW_MAJOR_LAYOUT (which selects the
+    row-major gamma/beta writer kernel).
     """
     assert not (use_welford and is_rmsnorm), "RMSNorm does not use the Welford reduction"
     kt = -(-w // TILE_WIDTH)  # ceil: a non-tile-aligned width rounds up to a whole number of tiles
@@ -568,7 +571,21 @@ def run_sharded_norm_logical_width_multicore(
 
     # gamma = 1, beta = 0 isolate the normalization (the affine is trivially correct and would only
     # hide a scale error behind PCC). gamma padded width must equal the input padded width (= w).
-    ones = ttnn.from_torch(torch.ones(1, 1, 1, w, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    if weight_layout == ttnn.ROW_MAJOR_LAYOUT:
+        # A row-major gamma/beta presents its last padded dim as a whole tile width, with the tile count
+        # carried in an earlier dim, so it is shaped [kt, TILE_WIDTH]. Its volume aligns with the input's
+        # padded width (kt whole tiles), not the wider physical shard span. The elements past the logical
+        # width w are gamma's tile padding and must be zero, matching how tile-layout gamma is zero-padded:
+        # otherwise the padding columns' normalized (poisoned) values reach the output, and for a lossy
+        # sharded output their magnitude corrupts the boundary tile's shared exponent.
+        gamma_flat = torch.zeros(kt * TILE_WIDTH, dtype=torch.bfloat16)
+        gamma_flat[:w] = 1.0
+        gamma_torch = gamma_flat.reshape(kt, TILE_WIDTH)
+        beta_torch = torch.zeros(kt, TILE_WIDTH, dtype=torch.bfloat16)
+    else:
+        gamma_torch = torch.ones(1, 1, 1, w, dtype=torch.bfloat16)
+        beta_torch = torch.zeros(1, 1, 1, w, dtype=torch.bfloat16)
+    gamma = ttnn.from_torch(gamma_torch, layout=weight_layout, device=device)
 
     # fp32 dest caps subblock_w at 4; keep it a divisor of the shard width in tiles.
     subblock_w = next(d for d in range(min(shard_wt, 4), 0, -1) if shard_wt % d == 0)
@@ -589,7 +606,7 @@ def run_sharded_norm_logical_width_multicore(
         packer_l1_acc=False,
     )
     common = dict(
-        epsilon=eps, weight=ones, program_config=prgm, compute_kernel_config=compute_cfg, memory_config=sharded_cfg
+        epsilon=eps, weight=gamma, program_config=prgm, compute_kernel_config=compute_cfg, memory_config=sharded_cfg
     )
     if use_welford:
         # Welford normalizes via a reciprocal LUT rather than a divide, so it needs the per-core LUT.
@@ -599,8 +616,8 @@ def run_sharded_norm_logical_width_multicore(
     if is_rmsnorm:
         tt_out = ttnn.rms_norm(tt_x, **common)
     else:
-        zeros = ttnn.from_torch(torch.zeros(1, 1, 1, w, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-        tt_out = ttnn.layer_norm(tt_x, bias=zeros, **common)
+        beta = ttnn.from_torch(beta_torch, layout=weight_layout, device=device)
+        tt_out = ttnn.layer_norm(tt_x, bias=beta, **common)
     out = ttnn.to_torch(ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
 
     assert_numeric_metrics(

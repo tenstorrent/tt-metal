@@ -7,8 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #ifdef DO_COL_MASK
-#include "ttnn/kernel/dataflow/moreh_common.hpp"  // generate_mask_w<T>
-#include "api/debug/assert.h"
+#include "col_mask_dataflow.h"
 #endif
 
 void kernel_main() {
@@ -21,35 +20,13 @@ void kernel_main() {
         scalar_w_f);
 
 #ifdef DO_COL_MASK
-    // Generate this core's column mask on-device (block_w tiles, one per tile across the shard width),
-    // zeroing the boundary tile's padding columns and any all-padding tiles.
-    {
-        constexpr uint32_t block_w = get_compile_time_arg_val(3);
-        // This core's first tile index along the width (the normalized dimension): width_index * block_w,
-        // the start of this core's width shard. Here it supplies the column mask's width offset.
-        const uint32_t width_shard_tile_start_id = get_arg_val<uint32_t>(5);
-        constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
-        constexpr uint32_t logical_K = get_named_compile_time_arg_val("logical_K");
-        constexpr uint32_t tile_w = 32;
-        CircularBuffer cb_col_mask_obj(cb_col_mask);
-        // A width shard always starts on a block boundary, so this offset is an exact multiple of block_w.
-        ASSERT(width_shard_tile_start_id % block_w == 0);
-        const uint32_t core_start_col = width_shard_tile_start_id * tile_w;
-        for (uint32_t wt = 0; wt < block_w; wt++) {
-            const uint32_t tile_start_col = core_start_col + wt * tile_w;
-            uint32_t mask_w;
-            if (logical_K <= tile_start_col) {
-                mask_w = 0;
-            } else if (logical_K - tile_start_col >= tile_w) {
-                mask_w = tile_w;
-            } else {
-                mask_w = logical_K - tile_start_col;
-            }
-            // The mask holds only 1.0 or 0.0 (exact in bfloat16) and is always generated as bfloat16;
-            // each masking multiply reconfigures the unpacker so SrcB reads it in this format.
-            generate_mask_w<uint16_t>(cb_col_mask_obj, mask_w);
-        }
-    }
+    // width_shard_tile_start_id is this core's first tile index along the width (the normalized
+    // dimension): width_index * block_w, the start of this core's width shard.
+    generate_col_mask(
+        get_named_compile_time_arg_val("cb_col_mask"),
+        get_compile_time_arg_val(3),  // block_w
+        get_named_compile_time_arg_val("logical_K"),
+        get_arg_val<uint32_t>(5));  // width_shard_tile_start_id
 #endif
 
     if constexpr (is_all_to_all_worker && !use_welford) {

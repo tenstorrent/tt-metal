@@ -513,3 +513,23 @@ def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_
     run_sharded_norm_logical_width_multicore(
         device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, dtype=dtype, use_welford=use_welford
     )
+
+
+# Column masking of a non-tile-aligned width must work regardless of whether gamma/beta are supplied
+# in TILE or ROW_MAJOR layout: ROW_MAJOR gamma/beta selects the row-major writer kernel, and the
+# compute kernel needs its column mask on that path too.
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+)
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize(("w", "num_cores_w"), [(72, 1), (200, 3)], ids=["w72_c1", "w200_c3"])
+def test_layer_norm_sharded_uneven_multicore_logical_width_row_major(device, w, num_cores_w, use_welford, dtype):
+    run_sharded_norm_logical_width_multicore(
+        device,
+        is_rmsnorm=False,
+        w=w,
+        num_cores_w=num_cores_w,
+        dtype=dtype,
+        use_welford=use_welford,
+        weight_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )

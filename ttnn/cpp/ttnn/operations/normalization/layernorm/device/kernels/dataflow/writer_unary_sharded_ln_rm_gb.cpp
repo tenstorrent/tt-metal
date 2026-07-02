@@ -10,6 +10,9 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "reshard_writer.hpp"
+#ifdef DO_COL_MASK
+#include "col_mask_dataflow.h"
+#endif
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
@@ -32,8 +35,8 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
     // This core's first tile index along the width (the normalized dimension): width_index * block_w,
-    // the start of this core's width shard. Used by the gamma read and the beta read, which both index
-    // off this same per-core width offset.
+    // the start of this core's width shard. Used by the gamma read, the beta read, and the column mask,
+    // which all index off this same per-core width offset.
     const uint32_t width_shard_tile_start_id = get_arg_val<uint32_t>(5);
 
     // Reshard writer
@@ -67,6 +70,14 @@ void kernel_main() {
         constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
         const uint32_t eps = get_arg_val<uint32_t>(2);
         generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
+
+#ifdef DO_COL_MASK
+        generate_col_mask(
+            get_named_compile_time_arg_val("cb_col_mask"),
+            block_w,
+            get_named_compile_time_arg_val("logical_K"),
+            width_shard_tile_start_id);
+#endif
 
         if constexpr (is_all_to_all_worker) {
             constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");

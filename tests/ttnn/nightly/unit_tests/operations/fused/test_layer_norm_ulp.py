@@ -340,7 +340,7 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, d
 
 
 def _make_sharded_norm_mem_config(num_cores_w: int, h: int, shard_w: int):
-    """Single-row block-sharded L1 config spanning num_cores_w cores, each owning an [h, shard_w] shard."""
+    """Single-row block-sharded SRAM config spanning num_cores_w cores, each owning an [h, shard_w] shard."""
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))}),
         [h, shard_w],
