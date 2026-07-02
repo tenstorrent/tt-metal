@@ -833,26 +833,19 @@ def test_wan_residual_block(
     )
 
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    tt_output_torch = convert_to_torch_channels_first(
+        tt_output, h_axis, w_axis, mesh_device, is_channels_last=True, logical_h=logical_h
     )
-    tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
-    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.012)
 
     for i in range(len(tt_feat_cache)):
-        tt_feat_cache[i] = ttnn.to_torch(
-            tt_feat_cache[i],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+        if tt_feat_cache[i] is None:
+            continue
+        tt_feat_cache[i] = convert_to_torch_channels_first(
+            tt_feat_cache[i], h_axis, w_axis, mesh_device, is_channels_last=True, logical_h=logical_h
         )
-        tt_feat_cache[i] = conv_unpad_height(tt_feat_cache[i], logical_h)
-        tt_feat_cache[i] = tt_feat_cache[i].permute(0, 4, 1, 2, 3)
         logger.info(f"checking feat_cache {i}")
         assert_quality(torch_feat_cache[i], tt_feat_cache[i], pcc=0.999_000, relative_rmse=0.04)
 
@@ -1016,26 +1009,18 @@ def test_wan_mid_block(
     )
 
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    tt_output_torch = convert_to_torch_channels_first(
+        tt_output, h_axis, w_axis, mesh_device, is_channels_last=True, logical_h=logical_h
     )
-    tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
-    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
     for i in range(len(tt_feat_cache)):
-        tt_feat_cache[i] = ttnn.to_torch(
-            tt_feat_cache[i],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+        if tt_feat_cache[i] is None:
+            continue
+        tt_feat_cache[i] = convert_to_torch_channels_first(
+            tt_feat_cache[i], h_axis, w_axis, mesh_device, is_channels_last=True, logical_h=logical_h
         )
-        tt_feat_cache[i] = conv_unpad_height(tt_feat_cache[i], logical_h)
-        tt_feat_cache[i] = tt_feat_cache[i].permute(0, 4, 1, 2, 3)
         logger.info(f"checking feat_cache {i}")
         assert_quality(torch_feat_cache[i], tt_feat_cache[i], pcc=0.999_000, relative_rmse=0.016)
 
