@@ -223,34 +223,45 @@ python_env/bin/python -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner
 - untracked (unrelated, leave alone): `models/demos/deepseek_v3_d_p/reference/dflash_draft_prefill.py`,
   `.../reference/mtp_prefill.py` (from a separate dflash task).
 
-## 8. Phase-5 (L10/L61 traced prefill on rebased-onto-main) — ROOT-CAUSED, BLOCKED (2026-07-02)
+## 8. Phase-5 (L10/L61 traced prefill on rebased-onto-main) — SOLVED (2026-07-02)
 
-Status: rebased branch `trace_experiments_rebased` @ `21a3b24f2a9` builds clean, ring_mla equivalence
-5/5, **L1 trace KV-PCC green**. **L10 trace capture fails** with `TT_FATAL: Writes are not supported
-during trace capture`. All experimental debugging reverted — the branch is back to the clean rebased
-commit (no uncommitted changes). Findings (keep — hard-won):
+Status: **L10 trace KV-PCC green on the clean branch** (17 trace segments, 7.31 MB, min KV-cache PCC =
+0.993266, 0 illegal host writes during capture). Two independent regressions in current `main` broke the
+segmented-trace capture; both now fixed on `trace_experiments_rebased`.
 
-- **NOT padding_config host from_torch.** Memoizing `build_padding_config` per `actual_isl` + a Python
-  monkeypatch instrumenting `from_torch/to_torch/copy_*_tensor/to_device` during capture proved **0
-  Python host transfers** happen inside the capture window. padding_config is not the culprit.
-- **NOT program-cache eviction.** `tt_metal/api/tt-metalium/program_cache.hpp` is a plain unbounded
-  `std::unordered_map` — no LRU/eviction. A program compiled in warmup stays cached.
-- **Root cause = tensor-address non-determinism across warmup→capture.** On a program-cache *hit*, an op
-  re-patches its runtime args (tensor addresses) via WriteBuffer; that WriteBuffer is illegal during
-  capture. It is only skipped when every input/output lands at the *same address* as in the warmup that
-  compiled the program. The full 10-layer main-MoE forward does not allocate deterministically enough:
-  the FIRST fatal op *moves* when you perturb allocations (clean branch: burst of 32 writes + 2 reads
-  right after `forward_layer_9_start`; after a memoize+no-deallocate experiment: the burst moved to the
-  very first op, `ttnn.embedding`, `tt_parallel_embedding.py:240`). "32 writes" = one op × 32 devices.
-- Program factories that "defer tensor destruction until the cached workload is evicted" (seen across
-  pad/pool/conv/sort/reshape factories) pin output tensors forever (unbounded cache), which is one source
-  of allocator drift between the warmup that pins and the capture that doesn't.
-- A 2nd warmup does NOT fix it (the earlier "2 warmups → writes:0" reading was an artifact: that run
-  crashed in warmup2 on a freed memoized tensor *before* capture ran, so 0 writes was trivial).
+**Regression 1 — sub-device swap wipes the program cache (`#47921`, commit `14c8ead609f`).**
+That PR made `MeshDeviceImpl::load_sub_device_manager()` and `clear_loaded_sub_device_manager()` call
+`clear_program_cache()` (a `SubDeviceId` can remap cores across managers → stale-program hazard). The
+segmented trace (`utils/sub_device_trace.py`) swaps sub-device managers around every MoE overlap region,
+so on current main **every swap wiped the cache** → capture-time ops recompiled → each recompile uploads
+its kernel binary via `write_shard_to_device` (`fd_mesh_command_queue.cpp:665`), which is illegal during
+trace capture. Measured: **576 of 608** capture-time writes were these recompiles (10240-byte DRAM
+kernel-binary uploads, spread across the layers).
+- Diagnosis: the "Writes are not supported during trace capture" `TT_FATAL` was temporarily converted to
+  a log-and-continue that printed buffer size/type; that showed the writes were host→device kernel/data
+  uploads (not runtime-arg patches — those wrappers caught 0 Python host ops).
+- Fix: **`#48499` (commit `7f36d0321365`) reverts `#47921`** and is already in `origin/main`. Applied to
+  this branch by cherry-picking the revert (`git cherry-pick 7f36d0321365`, clean, no conflicts) rather
+  than a full rebase onto origin/main (which re-surfaced the entire per-element port as conflicts + a
+  deleted `runner_utils.py`). A future rebase onto post-`#48499` main makes the cherry-pick redundant.
 
-What would actually fix it (not attempted — real trace-integration work, likely needs MoE-owner input):
-make the whole L10 forward allocate deterministically so every op's I/O address matches warmup at capture
-(free all warmup intermediates identically; avoid the per-layer pin drift), OR capture the embedding /
-pre-MoE prefix in its own trace segment with pinned-address I/O. The per-element metadata deliverable
-itself is unaffected and already validated on the original segmented-trace branch (L10/L61 KV-PCC green,
-per project memory) — this blocker is specific to re-hosting that trace on top of current `main`'s MoE.
+**Regression 2 — per-layer `build_padding_config` host upload.**
+With #47921 handled, 256 writes remained: **8 bytes/device × 32 devices × MoE layers**, all right after
+`MoE_START` and before the gate's first op. Cause: `TtMoEGatePrefill.build_padding_config` does a host
+`ttnn.from_torch` of the `[sp_factor, 2]` (→ `[1,2]`=8B/device) padding descriptor every MoE layer — an
+illegal host write during capture.
+- Fix (committed `4b1a1d3f0f2`): **memoize** `build_padding_config` per `(actual_isl, padding_side)` on
+  the gate (built once in warmup, same device tensor reused every forward/replay) and **stop
+  deallocating it** in `tt_moe.forward` and the gate's `owns_padding_config` path (the gate now owns it;
+  freeing it would leave the cache holding a deallocated tensor → `is_allocated()` failure next hit).
+
+Both fixes are required — neither alone reaches 0 writes (608 → 256 with the revert → 0 with memoize).
+
+Superseded wrong theory (kept for the record): earlier this was mis-diagnosed as "tensor-address
+non-determinism across warmup→capture." That was wrong — the write is a genuine C++-internal host upload
+from program recompilation (regression 1) + padding_config from_torch (regression 2), not a runtime-arg
+address re-patch. The `ttnn.embedding` "first op" writes were a red herring (embedding is byte-identical
+to main; pinning its output address did not help — it was just the first op hit by the cache-wipe).
+
+Remaining: L61 full validation, then push. `TT_METAL_SKIP_SUBDEVICE_CACHE_CLEAR` was a temporary local
+opt-out used only to confirm the mechanism; the real fix is the cherry-picked revert (no env var needed).
