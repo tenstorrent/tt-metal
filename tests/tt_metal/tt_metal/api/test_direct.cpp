@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <chrono>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -486,7 +487,7 @@ bool reader_datacopy_writer(
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 auto unpack_modes =
                     (test_config.l1_input_data_format == tt::DataFormat::Float32)
@@ -508,7 +509,7 @@ bool reader_datacopy_writer(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::WorkUnitSpec wu{

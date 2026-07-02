@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <algorithm>
 #include <bit>
 #include <fmt/base.h>
@@ -209,14 +210,14 @@ void run_single_core_transpose(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
                         experimental::DataMovementGen2Config{.disable_implicit_sync_for = {INPUT_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -229,14 +230,14 @@ void run_single_core_transpose(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
                         experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUTPUT_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -272,7 +273,7 @@ void run_single_core_transpose(
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 auto unpack_modes =
                     fp32_dest_acc_en
@@ -294,7 +295,7 @@ void run_single_core_transpose(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::WorkUnitSpec wu{

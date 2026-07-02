@@ -63,7 +63,7 @@ void execute_program_and_verify(
     std::optional<std::vector<uint32_t>> expected_output = std::nullopt) {
     detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
 
-    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (mesh_device->arch() == ARCH::QUASAR) {
         // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
@@ -133,7 +133,7 @@ void run_single_dfb_program(
             (producer_type == DFBPorCType::DM && consumer_type == DFBPorCType::DM),
         "Multi-core DFB programs only support DM producer and consumer.");
 
-    const auto arch = mesh_device->get_devices()[0]->arch();
+    const auto arch = mesh_device->arch();
 
     if (arch != ARCH::QUASAR) {
         // WH/BH DM: one BRISC (RISCV_0) as producer and one NCRISC (RISCV_1) as consumer.
@@ -594,9 +594,7 @@ void run_concurrent_dfbs_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_dfbs,
     experimental::dfb::DataflowBufferConfig& dfb_config) {
-    TT_FATAL(
-        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
-        "Concurrent DFB tests require Quasar (multi-threaded DM)");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "Concurrent DFB tests require Quasar (multi-threaded DM)");
     TT_FATAL(
         dfb_config.num_producers == 1 && dfb_config.num_consumers == 1,
         "run_concurrent_dfbs_program requires 1Sx1S per DFB");
@@ -756,9 +754,7 @@ void run_concurrent_tensix_dm_dfbs_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_dfbs,
     experimental::dfb::DataflowBufferConfig& dfb_config) {
-    TT_FATAL(
-        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
-        "Concurrent Tensix→DM DFB tests require Quasar");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "Concurrent Tensix→DM DFB tests require Quasar");
     TT_FATAL(
         dfb_config.num_producers == 1 && dfb_config.num_consumers == 1,
         "run_concurrent_tensix_dm_dfbs_program requires 1Sx1S per DFB");
@@ -943,9 +939,7 @@ void run_sequential_dfbs_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<experimental::dfb::DataflowBufferConfig>& configs) {
     TT_FATAL(!configs.empty(), "configs must not be empty");
-    TT_FATAL(
-        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
-        "Sequential multi-DFB TC-exhaustion tests require Quasar");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "Sequential multi-DFB TC-exhaustion tests require Quasar");
 
     const uint32_t num_dfbs      = static_cast<uint32_t>(configs.size());
     const uint32_t num_producers = configs[0].num_producers;
@@ -1154,7 +1148,7 @@ void run_in_dfb_out_dfb_program(
         "Num entries must be the same for in and out DFBs");
     TT_FATAL(
         dm2tensix_config.entry_size == tensix2dm_config.entry_size, "Entry size must be the same for in and out DFBs");
-    TT_FATAL(mesh_device->get_devices()[0]->arch() == ARCH::QUASAR, "run_in_dfb_out_dfb_program is Quasar-only");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "run_in_dfb_out_dfb_program is Quasar-only");
 
     const CoreCoord logical_core(0, 0);
     const CoreRangeSet core_range_set(CoreRange(logical_core, logical_core));
