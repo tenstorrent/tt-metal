@@ -37,8 +37,6 @@ encoder, conditioning, the denoise loop and VAE decode internally. Lower-level s
 - [Running the PCC tests](#running-the-pcc-tests)
 - [End-to-end SongEval eval (`test_songeval_pipeline`)](#end-to-end-songeval-eval-test_songeval_pipeline)
 - [Weight loading](#weight-loading)
-- [Known exclusions](#known-exclusions-justified)
-- [References](#references)
 
 ## Approach
 
@@ -265,25 +263,3 @@ via `safetensors.safe_open` (the full `AutoModel.from_pretrained` fails on `Resi
 meta-init). `load_module_weights(ref_module, "decoder.")` populates an instantiated reference
 sub-module; the TT test helpers then transpose HF `[out,in]` weights to `[in,out]` for
 `ttnn.linear` and wrap them in `LazyWeight` (mirrors the Phi-4 `weight_utils` pattern).
-
-## Known exclusions (justified)
-
-- **FSQ / ResidualFSQ tokenizer** — cover-song aux path only (`is_covers=True`); the library's
-  internal quantizer normalization could not be replicated exactly (~0.98 ceiling), so it was
-  not shipped rather than misrepresent the numerics. See `.auto/ideas.md`.
-- **`pack_sequences`** — host-side data-dependent argsort/gather; with all-valid masks it is
-  exactly `concat` (the case validated). Padded-batch reordering is caller orchestration.
-- **CFG guidance combine** (`apg_forward`/`adg_forward`) — `apg_guidance.py` is absent from the
-  checkpoint snapshot; guidance-only, orthogonal to the validated solver step.
-- **5Hz LM planner** (`acestep-5Hz-lm-1.7B`) — optional prompt-blueprint expander, **not required
-  for text-to-music** (the text encoder + tokenizer already drive generation). Its base is a causal
-  Qwen3Model; `build_lm_planner` reuses the text-encoder path and per-layer PCC is 0.9997, but the
-  full 28-layer stack lands at ~0.76 in bf16 due to massive activations (absmax ~55 vs mean ~1.0) —
-  a precision ceiling, not a bug. Deferred pending fp32-residual / outlier-aware work. See
-  `.auto/ideas.md`.
-
-## References
-
-- TTTv2 module contract: `models/common/modules/README.md`
-- Weight-loading pattern: `models/common/models/phi4/weight_utils.py`
-- File/test layout pattern: `models/demos/wormhole/bge_m3/`
