@@ -314,6 +314,11 @@ struct KernelConfig {
     // Non-distributed stage generates the CB 19 mask on-device in the writer; this feeds that generation:
     // the logical (un-padded) width, i.e. where the padding columns begin.
     uint32_t logical_K = 0;
+
+    // Emitted as named compile-time args on the writer kernels (per-core width in tiles and the Welford
+    // flag).
+    uint32_t block_wt = 0;
+    bool use_welford = false;
 };
 
 // Struct to hold CB configuration for building CB descriptors

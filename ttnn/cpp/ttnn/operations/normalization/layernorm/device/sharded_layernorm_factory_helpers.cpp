@@ -761,6 +761,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         // shard in the cross-core combine, so it must reflect the logical width, not padded K.
         uint32_t last_tile_W = (ctx.logical_K % tile_width == 0) ? tile_width : (ctx.logical_K % tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
+        const uint32_t logical_Kt = (ctx.logical_K + tile_width - 1) / tile_width;
         // Number of valid (logical) tiles the final width block reduces. The other width blocks each own
         // block_wt tiles; the final block owns the remainder. Each block spans a whole number of tiles
         // (block_w columns), so when the logical width does not fill them evenly the final core owns
@@ -771,12 +772,11 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         // first core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles),
         // the second core owns last_block_wt = 1 tile that is itself partial (last_tile_W = 16 valid
         // columns) plus one padding tile.
-        // last_block_wt is always >= 1 (no unsigned underflow here, nor in the kernel's
-        // (last_block_wt - 1) * tile_width): validate_sharded_input requires the trailing width pad to
-        // be strictly less than one shard, i.e. (num_blocks - 1) * block_wt < Kt. The padded width Kt
-        // equals logical_Kt (padded_shape rounds the logical width up to a whole tile), so the final
-        // width block always owns at least one logical tile.
-        const uint32_t logical_Kt = (ctx.logical_K + tile_width - 1) / tile_width;
+        // The subtraction below does not underflow: validate_sharded_input requires the trailing width pad
+        // to be strictly less than one shard, i.e. (num_blocks - 1) * block_wt < Kt, and the padded width
+        // Kt equals logical_Kt (padded_shape rounds the logical width up to a whole tile). So
+        // (num_blocks - 1) * block_wt is strictly less than logical_Kt, and the final width block always
+        // owns at least one logical tile: last_block_wt >= 1.
         const uint32_t last_block_wt = logical_Kt - (ctx.grid->num_blocks - 1) * ctx.block_wt;
 
         args.compute_all_to_all.push_back(tile_width);
@@ -831,6 +831,10 @@ void add_kernel_descriptors(
         // CB and the logical width (where the padding columns begin).
         {"cb_col_mask", tt::CBIndex::c_19},
         {"logical_K", kernel_config.logical_K},
+        // Per-core width in tiles and the Welford flag, shared by both writer descriptors. The
+        // per-role is_all_to_all_worker flag is appended per descriptor below, since it differs.
+        {"block_w", kernel_config.block_wt},
+        {"use_welford", static_cast<uint32_t>(kernel_config.use_welford)},
     };
 
     KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
@@ -922,7 +926,9 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_sender_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
-    writer_sender_kernel_desc.named_compile_time_args = writer_cb_named_args;
+    auto writer_sender_named_args = writer_cb_named_args;
+    writer_sender_named_args.push_back({"is_all_to_all_worker", 1});
+    writer_sender_kernel_desc.named_compile_time_args = std::move(writer_sender_named_args);
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
     writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -938,7 +944,9 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
-        writer_receiver_kernel_desc.named_compile_time_args = writer_cb_named_args;
+        auto writer_receiver_named_args = writer_cb_named_args;
+        writer_receiver_named_args.push_back({"is_all_to_all_worker", 0});
+        writer_receiver_kernel_desc.named_compile_time_args = std::move(writer_receiver_named_args);
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
         writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -1153,8 +1161,7 @@ void add_cb_descriptors(
         if (cb_config.do_col_mask) {
             // CB 19: writer-generated column mask, block_wt tiles (one tile-row), always in bfloat16.
             // The mask holds only 1.0 or 0.0 in bfloat16. The writer fills it per core from the core's
-            // width position (full / partial / all-padding per tile); compute waits on it and reads by tile index,
-            // so no host buffer is needed.
+            // width position (full / partial / all-padding per tile); compute waits on it and reads by tile index.
             program_descriptor.cbs.push_back(make_cb_descriptor(
                 cb_config.col_mask_gen_CB_size_bytes,
                 core_ranges.all_cores,
@@ -1386,9 +1393,9 @@ std::vector<uint32_t> build_compute_args(
             args.push_back((uint32_t)ctx.num_distributed_devices);
         }
     }
-    // Appended last (after the all-to-all args) so the other compute kernels, which do not read it, are
-    // unaffected. The Welford kernel reads it at index 4 on all-to-all workers (num_reduce_tiles,
-    // num_rows, use_two_stage_reduce, is_second_stage_reader, welford_reduce_w) and index 1 otherwise.
+    // Welford-only args, appended after the all-to-all args so the other compute kernels, which do not
+    // read them, are unaffected. The Welford kernel reads welford_reduce_w at different index on
+    // all-to-all workers vs other workers.
     args.push_back(idx.welford_reduce_w);
     // The global width-block index of the last real (partial) block, and this core's own width-block
     // index. The Welford cross-core combine (run only on all-to-all workers) uses these to weight each

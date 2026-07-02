@@ -132,9 +132,9 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t K = shape[-1];
     uint32_t Kt = K / tile_width;
     uint32_t block_w = block_wt * tile_width;
-    // Logical (un-padded) width. Welford must normalize over the true element count and index
-    // its reciprocal LUT by it, so a non-tile-aligned width normalizes by the logical N rather
-    // than folding the tile padding columns into the mean and variance.
+    // Logical (un-padded) width. Welford normalizes over the true element count N, so a
+    // non-tile-aligned width must exclude the tile padding columns from both the running count
+    // and the final 1/N divisor rather than folding them into the mean and variance.
     const uint32_t logical_K = a.logical_shape()[-1];
 
     // Compute grid and worker distribution using helper structs
@@ -303,7 +303,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
 
     uint32_t last_core_width_index =
-        grid.mcast_1d ? cores.size() - 1 : (grid.row_wise ? grid.grid_size.x - 1 : grid.grid_size.y - 1);
+        grid.mcast_1d ? (cores.size() - 1) : (grid.row_wise ? (grid.grid_size.x - 1) : (grid.grid_size.y - 1));
 
     // A column mask is needed only when a reduced tile contains padding, i.e. the last tile of the
     // logical width is partially valid (logical width not a multiple of the tile width). Whole padding
@@ -315,10 +315,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // The reduction scaler (winv) is applied per core; when the reduction is split across cores
     // (num_blocks > 1) the cross-core global reduce then averages across the num_blocks blocks
     // (cinv = 1/num_blocks). The net per-element divide is winv*cinv and must equal 1/logical_K (the
-    // reduction only ever sums the logical columns: a partial final tile is column-masked and whole
-    // padding tiles are excluded by the reduce-tile count). With num_blocks == 1 there is no cross-core
-    // average, so winv = 1/logical_K. With num_blocks > 1, winv = num_blocks/logical_K cancels the
-    // average; this equals the per-core 1/block_w when the blocks tile the logical width exactly, and
+    // reduction only ever sums the logical columns; padding is kept out of the sum by the masking
+    // described below). With num_blocks == 1 there is no cross-core average, so winv = 1/logical_K.
+    // With num_blocks > 1, winv = num_blocks/logical_K cancels the average;
+    // this equals the per-core 1/block_w when the blocks tile the logical width exactly, and
     // stays correct when they do not (e.g. 96 over two 64-wide blocks: divide by the logical 96, not
     // the physical 128).
     float winv = (grid.num_blocks == 1) ? (1.0f / logical_K) : (static_cast<float>(grid.num_blocks) / logical_K);
@@ -340,21 +340,18 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // A non-tile-aligned width split across multiple cores is supported on every path. The non-Welford
-    // path masks each core's final-tile padding columns with its per-core column mask (CB 19); the
-    // per-element divide is 1/logical_K (winv*cinv), so the cross-core mean and variance reduce over
-    // exactly the logical width however its tiles distribute across cores. Welford has no column
-    // mask, so each core is instead told its real (logical) column count (welford_reduce_w) and reduces
-    // exactly those columns; full block_w on the cores before the last, the remaining logical columns
-    // (ending in a partial tile) on the final real core; and the cross-core combine weights the final
-    // block by its true width (last_block_w).
+    // path masks each core's final-tile padding columns with its per-core column mask (CB 19). Welford
+    // has no column mask, so each core is instead told its real (logical) column count (welford_reduce_w)
+    // and reduces exactly those columns; full block_w on the cores before the last, the remaining logical
+    // columns (ending in a partial tile) on the final real core; and the cross-core combine weights the
+    // final block by its true width (last_block_w).
     // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned width's final tile so
     // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for
     // RMSNorm), except the post-all-gather stage, which reduces gathered stats rather than the input.
     // The mask is CB 19 at every masking site, generated on-device in the writer (generate_mask_w<T>)
-    // keyed off each core's width position (so no host tensor is needed), so it carries the correct
-    // validity whether the width lives on one core or is split across many. CB 14 (E[x] scratch)
-    // additionally feeds the non-distributed LayerNorm E[x] site so cb_in stays intact for the
-    // (x - E[x]) pass.
+    // keyed off each core's width position, so it carries the correct validity whether the width lives
+    // on one core or is split across many. CB 14 (E[x] scratch) additionally feeds the non-distributed
+    // LayerNorm E[x] site so cb_in stays intact for the (x - E[x]) pass.
     const bool do_col_mask = col_mask_needed && !use_welford && !is_post_all_gather;
     const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather;
 
@@ -423,6 +420,9 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // RMSNorm doesn't use Welford in this kernel path.
     kernel_config.welford_fp32_alias =
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
+    // Writer named compile-time args (block_w in tiles and the Welford flag).
+    kernel_config.block_wt = block_wt;
+    kernel_config.use_welford = use_welford;
     if (do_col_mask) {
         // The writer generates the CB 19 mask on-device with generate_mask_w; compute applies it at
         // every masking site. Pass the logical width so the writer knows where the padding columns begin.
