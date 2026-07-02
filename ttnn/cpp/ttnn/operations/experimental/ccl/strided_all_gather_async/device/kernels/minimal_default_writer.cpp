@@ -125,7 +125,8 @@ void kernel_main() {
         // core (a single remote core), which collects all N workers and signals the matmul once.
         agg_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
         agg_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
-        agg_per_worker_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        // GlobalSemaphore L1 address (already resolved host-side); do NOT get_semaphore() it.
+        agg_per_worker_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     }
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
