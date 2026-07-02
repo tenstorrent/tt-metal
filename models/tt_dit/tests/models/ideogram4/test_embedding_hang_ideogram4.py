@@ -52,23 +52,48 @@ def _log(m):
 @pytest.mark.parametrize("layout", ["TILE", "ROW_MAJOR"], ids=["tile", "rowmajor"])
 @pytest.mark.parametrize("mesh_axis", [1, None], ids=["sharded", "replicated"])
 @pytest.mark.parametrize("seq_len", [32, 2048], ids=["seq32", "seq2048"])
-def test_embedding_noc_cb_overflow(*, mesh_device, submesh_shape, tp_axis, layout, mesh_axis, seq_len) -> None:
+# idx_layout selects which embedding program factory runs. ROW_MAJOR indices ->
+# EmbeddingsRMProgramFactory (safe). TILE indices -> EmbeddingsTilizedIndicesProgramFactory,
+# which uses embedding_ind_tilized.cpp (the faulting NCRISC reader). The full Qwen3-VL
+# encoder pads/converts input_ids to TILE before ttnn.embedding, so TILE is the real path.
+@pytest.mark.parametrize("idx_layout", ["ROW_MAJOR", "TILE"], ids=["idxrm", "idxtile"])
+def test_embedding_noc_cb_overflow(
+    *, mesh_device, submesh_shape, tp_axis, layout, mesh_axis, seq_len, idx_layout
+) -> None:
     torch.manual_seed(0)
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
 
     emb = Embedding(VOCAB, HIDDEN, device=submesh, mesh_axis=mesh_axis)
-    emb.load_torch_state_dict({"weight": torch.randn(VOCAB, HIDDEN, dtype=torch.bfloat16)})
+    weight_torch = torch.randn(VOCAB, HIDDEN, dtype=torch.bfloat16)
+    emb.load_torch_state_dict({"weight": weight_torch})
 
     ids = torch.randint(0, VOCAB, (1, seq_len), dtype=torch.int32)
-    tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
+    idx_tt_layout = ttnn.TILE_LAYOUT if idx_layout == "TILE" else ttnn.ROW_MAJOR_LAYOUT
+    tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=idx_tt_layout, device=submesh)
 
     out_layout = ttnn.TILE_LAYOUT if layout == "TILE" else ttnn.ROW_MAJOR_LAYOUT
     per_dev = HIDDEN // (2 if mesh_axis is not None else 1)
     _log(
-        f"[emb-repro] layout={layout} mesh_axis={mesh_axis} seq_len={seq_len} per_device_row={per_dev}bf16={per_dev*2}B"
+        f"[emb-repro] idx_layout={idx_layout} out_layout={layout} mesh_axis={mesh_axis} seq_len={seq_len} "
+        f"per_device_row={per_dev}bf16={per_dev*2}B"
     )
 
     out = ttnn.embedding(tt_ids, emb.weight.data, layout=out_layout)
     ttnn.synchronize_device(submesh)  # watcher NOC-sanitize check completes here
-    _log(f"[emb-repro] OK layout={layout} mesh_axis={mesh_axis} seq_len={seq_len} out_shape={tuple(out.shape)}")
+
+    # Correctness: gather rows of the per-device weight shard and compare (PCC).
+    out_torch = ttnn.to_torch(
+        out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=-1) if mesh_axis is not None else None
+    )
+    if mesh_axis is not None:
+        # replicate torch weight across the tp shards then gather; ConcatMeshToTensor already
+        # reassembled the hidden dim, so compare against full weight lookup
+        ref = torch.nn.functional.embedding(ids.long(), weight_torch.float())
+    else:
+        ref = torch.nn.functional.embedding(ids.long(), weight_torch.float())
+    ref = ref.reshape(1, 1, seq_len, HIDDEN)
+    got = out_torch.float().reshape(1, 1, seq_len, HIDDEN)
+    pcc = torch.corrcoef(torch.stack([ref.flatten(), got.flatten()]))[0, 1].item()
+    _log(f"[emb-repro] OK idx_layout={idx_layout} out_layout={layout} seq_len={seq_len} PCC={pcc:.5f}")
+    assert pcc > 0.999, f"PCC too low: {pcc}"
     ttnn.deallocate(out)

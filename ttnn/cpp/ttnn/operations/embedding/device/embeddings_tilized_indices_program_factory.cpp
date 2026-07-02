@@ -5,6 +5,7 @@
 #include "embeddings_tilized_indices_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <algorithm>
 
 namespace ttnn::prim {
 
@@ -80,10 +81,17 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    // The reader (embedding_ind_tilized.cpp) brings in the index tensor one *page* at a time via
+    // noc_async_read_page(), which always transfers the input buffer's full aligned page size
+    // (for a TILE_LAYOUT index tensor that is one 32x32 tile = 4096B for uint32 indices). The CB
+    // must therefore be at least one full input page; sizing it to FACE_HEIGHT index sticks
+    // (16*32=512B) under-allocates and the NOC read overruns the CB (watcher NOC-sanitizer halt).
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    uint32_t index_cb_page_size =
+        std::max<uint32_t>(FACE_HEIGHT * index_page_size, static_cast<uint32_t>(a.buffer()->aligned_page_size()));
     tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
+        tt::tt_metal::CircularBufferConfig(index_cb_page_size, {{src1_cb_index, input_cb_data_format}})
+            .set_page_size(src1_cb_index, index_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
