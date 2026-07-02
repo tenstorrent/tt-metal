@@ -183,3 +183,75 @@ now corroborated by the acceptance suite passing on every axis value it exercise
 ### Issues encountered
 None. No kernel, descriptor, or op-file change was needed — the acceptance suite passed
 on the first successful multi-device run.
+
+## 2026-07-02 — Verifier pass 2: mechanized golden + precision now OBSERVED (verifier CLI clean)
+
+The Phase-0 golden claims were previously verified analytically + by the acceptance
+suite only; the registry verifier CLI (`eval.verify_supported`) had never run on
+observed results because the golden-test scaffold did not exist at pass 1. It now
+exists (`test_golden.py` / `helpers.py` / `conftest.py`), so this pass ran the golden
+suite through the verifier CLI on the `bh_8xP150_p2p` sim and produced a real
+`verifier_report.json`.
+
+### What was done
+- **Golden suite → `eval.verify_supported`** on the multi-device sim (single-device
+  `eval_test_runner.sh` is the wrong driver for a CCL op — it neither sets up the
+  mesh nor enables the fabric). Driven via
+  `scripts/run_multidevice_sim_pytest.py --topology bh_8xP150_p2p` with
+  `-p eval.axes_plugin` + `PYTEST_AXES_JSON` + `--junitxml`, classified with
+  `eval.classify_failures`, joined by `eval.verify_supported`. Two runs merged (dedup
+  by nodeid) so one report spans every axis value:
+  - 32×32 full cartesian: dtype×6 × layout×2 × topology×2 = 24 cells (22 pass + 2
+    bf8b×RM invalid_skipped).
+  - integer dtypes (uint16/int32/uint32) × {TILE,RM} × non-tile-aligned 48×64 ×
+    Linear = adds non_tile_aligned coverage for the integer dtypes.
+  - **Merged: 28 supported_pass + 2 invalid_skipped; 0 supported_fail / 0 xpass_drift
+    / 0 xfail_wrong_mode / 0 xfail_expected.** Artifact:
+    `eval/results/point_to_point/verifier_report.json`.
+- **Precision baseline** re-pointed to the required mesh and run 8/8 green: PCC = 1.0,
+  max/mean abs err = 0, rel RMS = 0 for all 4 shapes × {bf16, f32} (identity copy).
+- **Acceptance `program_cache`** re-confirmed green on the edited tree (cache-reuse
+  semaphore-reset footgun survives).
+
+### Issues fixed
+1. **`point_to_point.py` — dead boolean clause in `validate()` page-size check.**
+   `if page % 16 != 0 and page != 16:` → `if page % 16 != 0:` (the `and page != 16`
+   was unreachable; behaviour-identical). Confirmed by the 28-cell golden run passing
+   through the edited `validate()`.
+2. **`test_point_to_point_precision_baseline.py` — mesh/topology mismatch.** The test
+   opened `mesh_device == (1, 2)`, which matches no p2p sim topology and would hang
+   fabric init ("Fabric Router Sync: Timeout"). Changed to `MESH_SHAPE = (2, 4)` to
+   match the required `bh_8xP150_p2p` topology (same shape as the immutable acceptance
+   suite). After the fix: 8/8 pass on the sim.
+
+### SUPPORTED (unchanged this pass) — now fully OBSERVED
+- dtype = `[bfloat16, float32, bfloat8_b, uint16, int32, uint32]` — all 6 supported_pass.
+- layout = `[TILE, ROW_MAJOR]` — both supported_pass.
+- topology = `[Linear, Ring]` — both supported_pass.
+- alignment = `[tile_aligned, non_tile_aligned]` — both supported_pass.
+- `SUPPORTED == TARGET` on every axis → `TARGET − SUPPORTED = ∅` → **0 axis-expansion
+  refinements**; refinement queue remains empty (documented in `op_requirements.md`
+  against the three sanity gates).
+
+### Accuracy achieved
+Identity oracle exact: PCC = 1.0, zero error for every measured cell (bit-for-bit
+byte copy adds no error over the device-resident sender shard).
+
+### Coverage caveats (not defects, not refinements)
+- The segmented-packet de-coalescing path (`page_segments > 1`) is implemented and
+  reviewed but unreachable by any `feature_spec.INPUTS` shape (max RM page ≈ 2 KB ≪
+  fabric max packet), so it is not exercised on the sim.
+- Only the required `bh_8xP150_p2p` topology (mesh `(2,4)`) was run; the two optional
+  p2p topologies (`bh_galaxy_4x2_p2p` `[4,2]`, `bh_bh6u_8x4_p2p` `[8,4]`) were not,
+  because the golden/acceptance tests hardcode the `(2,4)` mesh (matching the required
+  topology). `--op` would fan to those shapes and hang fabric init on the mismatch —
+  a test/topology mismatch, not an op defect.
+
+### Tests touched
+- `test_point_to_point_precision_baseline.py` — mesh `(1,2)` → `(2,4)` (fix).
+
+### Artifacts written
+- `verification_report.md` (rewritten — observed, not analytical),
+  `op_requirements.md` (updated — observed empty queue),
+  `eval/results/point_to_point/verifier_report.json` (real verifier CLI output),
+  this changelog entry.

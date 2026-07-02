@@ -42,6 +42,11 @@ PCC = {
 
 LINEAR = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear)
 
+# Required verification mesh shape (bh_8xP150_p2p, FABRIC_1D). MUST match the sim
+# topology's mesh-graph descriptor or fabric init hangs ("Fabric Router Sync:
+# Timeout"). The acceptance suite hardcodes the same (2, 4) shape.
+MESH_SHAPE = (2, 4)
+
 # small / multi-tile / non-square / larger — a compact 4-shape sweep.
 SHAPES = [
     (1, 1, 32, 32),
@@ -93,7 +98,7 @@ def _metrics(golden: torch.Tensor, calc: torch.Tensor):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT), (ttnn.float32, ttnn.TILE_LAYOUT)])
 @pytest.mark.parametrize("shard_shape", SHAPES)
 def test_point_to_point_precision_baseline(mesh_device, topology, dtype, layout, shard_shape):
