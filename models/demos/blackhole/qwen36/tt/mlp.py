@@ -165,6 +165,7 @@ class Qwen36MLP:
     def _forward_tp(self, x):
         """Tensor-parallel forward. Input x is replicated (full hidden dim) on
         every device; output is fractured along the hidden dim (reduce-scatter)."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
         from models.tt_transformers.tt.ccl import tt_all_reduce
 
         w = self.weights
@@ -173,6 +174,7 @@ class Qwen36MLP:
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
         mc = ttnn.DRAM_MEMORY_CONFIG
+        _silu_fused = False
         if getattr(self, "_dram_sharded", False):
             # w1/w3 weights are DRAM-WIDTH_SHARDED. The DRAM-sharded matmul kernel
             # only supports a single input tile-row (M == 1 tile = 32 rows), which
@@ -202,20 +204,32 @@ class Qwen36MLP:
                 w1_out = ttnn.to_memory_config(w1_out, mc)
                 w3_out = ttnn.to_memory_config(w3_out, mc)
             else:
-                pc = args.prefill_progcfg(seq, args.dim, w.w1.shape[-1])
-                w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc, memory_config=mc)
-                w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc, memory_config=mc)
+                # SILU in the program config's fused_activation (the sharded/2D matmul kernel
+                # rejects the ttnn.linear(activation=...) kwarg when a progcfg is supplied).
+                pc_gate = tpc.create_prefill_matmul_program_config(
+                    seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU
+                )
+                pc_up = args.prefill_progcfg(seq, args.dim, w.w3.shape[-1])
+                w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=mc)
+                w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=mc)
+                _silu_fused = True
         else:
             # Interleaved weights → let ttnn auto-select the matmul program (serves
             # both decode and prefill).
-            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, memory_config=mc)
+            w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
+            _silu_fused = True
 
-        # SILU applied separately, then gate * up.
-        w1_act = ttnn.silu(w1_out, memory_config=mc)
-        ttnn.deallocate(w1_out)
-        hidden = ttnn.mul(w1_act, w3_out, memory_config=mc)
-        ttnn.deallocate(w1_act)
+        # gate * up. SILU is fused into the w1 matmul above except on the DRAM-sharded
+        # decode path, which still needs the standalone silu.
+        if _silu_fused:
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+            ttnn.deallocate(w1_out)
+        else:
+            w1_act = ttnn.silu(w1_out, memory_config=mc)
+            ttnn.deallocate(w1_out)
+            hidden = ttnn.mul(w1_act, w3_out, memory_config=mc)
+            ttnn.deallocate(w1_act)
         ttnn.deallocate(w3_out)
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc)
         ttnn.deallocate(hidden)

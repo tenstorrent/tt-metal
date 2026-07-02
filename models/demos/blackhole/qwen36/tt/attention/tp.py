@@ -46,21 +46,37 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # weights when the fused memcfg is unavailable. Distinct `.dramshard` cache names: ttnn.as_tensor
     # reloads a cache as-is, ignoring the requested memory_config, so layouts must not share a file.
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
+    # De-interleave the per-head [q,gate] pack so _make_heads/decode extract q and gate as contiguous
+    # slices instead of the ~5.3ms reshape+chunk relayout (measured -2.6% prefill ttft, coherence-
+    # neutral — it's a column permutation). Default for the fused path. Distinct cache name (layout
+    # differs from the interleaved weight; as_tensor reloads a cache file as-is).
+    qg_deint = fused_qkv
     if fused_qkv:
-        fused = tpc.prepare_attn_qkv(
-            state_dict["q_proj.weight"],
-            state_dict["k_proj.weight"],
-            state_dict["v_proj.weight"],
-            args.n_local_heads * args.head_dim * 2,
-            args.n_local_kv_heads * args.head_dim,
-            args.num_devices,
-        )
+        if qg_deint:
+            fused = tpc.prepare_attn_qkv_deint(
+                state_dict["q_proj.weight"],
+                state_dict["k_proj.weight"],
+                state_dict["v_proj.weight"],
+                args.n_local_heads,
+                args.head_dim,
+                args.n_local_kv_heads * args.head_dim,
+                args.num_devices,
+            )
+        else:
+            fused = tpc.prepare_attn_qkv(
+                state_dict["q_proj.weight"],
+                state_dict["k_proj.weight"],
+                state_dict["v_proj.weight"],
+                args.n_local_heads * args.head_dim * 2,
+                args.n_local_kv_heads * args.head_dim,
+                args.num_devices,
+            )
         tw["wqkv_fused"] = tpc.shard_w(
             fused,
             mesh,
             dim=-1,
             memory_config=args.attn_qkv_fused_weight_memcfg,
-            cache_path=c("wqkv_fused.dramshard"),
+            cache_path=c("wqkv_fused_deint.dramshard" if qg_deint else "wqkv_fused.dramshard"),
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -135,6 +151,9 @@ class TPAttention:
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         # P4: one fused [q+gate|k|v] matmul (default for TP). Must match fused_qkv in the loader.
         self._fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
+        # q+gate stored de-interleaved ([all_q|all_gate] per device) so q/gate are contiguous slices
+        # (kills the ~5.3ms per-head reshape relayout). Must match qg_deint in load_attention_weights_tp.
+        self._qg_deint = self._fused_qkv
         self.k_caches = None
         self.v_caches = None
         # Paged KV cache (vLLM / model-contract path). Bound via set_paged_kv_cache;
@@ -196,6 +215,29 @@ class TPAttention:
         concatenated `input_kv`) — replacing 5 reshape/slice/transpose ops with one purpose-built
         kernel. The gate keeps its own transpose."""
         NH, NKV, HD = self.NH, self.NKV, self.HD
+        if self._qg_deint:
+            # qg = [all_q | all_gate] (de-interleaved): extract q and gate as contiguous slices
+            # instead of the reshape+chunk relayout. q goes straight into the fused create-heads;
+            # only the gate keeps a (half-width) reshape+transpose.
+            q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD))
+            gate_flat = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, S, 2 * NH * HD))
+            ttnn.deallocate(qg)
+            gate = ttnn.transpose(ttnn.reshape(gate_flat, (1, S, NH, HD)), 1, 2)  # [1,NH,S,HD]
+            ttnn.deallocate(gate_flat)
+            kv = ttnn.concat([kp, vp], dim=-1)
+            ttnn.deallocate(kp)
+            ttnn.deallocate(vp)
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                q_flat,
+                kv,
+                num_heads=NH,
+                num_kv_heads=NKV,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q_flat)
+            ttnn.deallocate(kv)
+            return q, gate, k, v
         # split [q;gate] per head, keep the gate as [1,NH,S,HD] for the post-SDPA mul.
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
         q_part, gate_part = ttnn.chunk(qg, 2, dim=-1)  # each [1,S,NH,HD]
@@ -311,11 +353,23 @@ class TPAttention:
 
         qg, kp, vp = self._qkv(x)
 
-        qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2), memory_config=_L1)
-        ttnn.deallocate(qg)
-        q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD), memory_config=_L1)
-        gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2), memory_config=_L1)
-        ttnn.deallocate(qg_r)
+        if self._qg_deint:
+            # qg = [all_q | all_gate] (de-interleaved): slice contiguous halves, then split heads.
+            q = ttnn.reshape(
+                ttnn.slice(qg, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1), (1, B, NH, HD), memory_config=_L1
+            )
+            gate = ttnn.reshape(
+                ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, B, 2 * NH * HD), memory_config=_L1),
+                (1, B, NH, HD),
+                memory_config=_L1,
+            )
+            ttnn.deallocate(qg)
+        else:
+            qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2), memory_config=_L1)
+            ttnn.deallocate(qg)
+            q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD), memory_config=_L1)
+            gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2), memory_config=_L1)
+            ttnn.deallocate(qg_r)
         k = ttnn.reshape(kp, (1, B, NKV, HD), memory_config=_L1)
         ttnn.deallocate(kp)
         v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
