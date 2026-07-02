@@ -416,4 +416,10 @@ struct p_exp
     constexpr static std::uint32_t ADJ_EXP = 0xBD3F;
 };
 
+struct p_mop
+{
+    constexpr static std::uint32_t MASK_LOOP   = 0;
+    constexpr static std::uint32_t DOUBLE_LOOP = 1;
+};
+
 } // namespace ckernel
