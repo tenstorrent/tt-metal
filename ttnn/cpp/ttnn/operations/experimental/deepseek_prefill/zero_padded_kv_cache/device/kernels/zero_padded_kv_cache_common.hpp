@@ -21,17 +21,18 @@ struct ZeroPadChipWork {
     uint32_t batch_page_base;  // page offset of this (slot,layer) batch slot in the cache
 };
 
-inline ZeroPadChipWork zero_pad_compute_chip_work() {
+// Core derivation, taking the two per-call values (slot_idx, valid_global=v) as parameters. The
+// metadata path reads them on-device from the metadata tensor and calls this; the scalar path reads
+// common args 9/3 via the no-arg overload below. All other inputs are structural common args.
+inline ZeroPadChipWork zero_pad_compute_chip_work(uint32_t slot, uint32_t v) {
     const uint32_t my = get_common_arg_val<uint32_t>(0);
     const uint32_t sp = get_common_arg_val<uint32_t>(1);
     const uint32_t chunk_local = get_common_arg_val<uint32_t>(2);
-    const uint32_t v = get_common_arg_val<uint32_t>(3);
     const uint32_t pad = get_common_arg_val<uint32_t>(4);
     const uint32_t layer = get_common_arg_val<uint32_t>(5);
     const uint32_t num_layers = get_common_arg_val<uint32_t>(6);
     const uint32_t Wt = get_common_arg_val<uint32_t>(7);
     const uint32_t cache_CHtWt = get_common_arg_val<uint32_t>(8);
-    const uint32_t slot = get_common_arg_val<uint32_t>(9);
 
     ZeroPadChipWork w{0, 0, 0, 0, Wt, (slot * num_layers + layer) * cache_CHtWt};
 
@@ -61,4 +62,9 @@ inline ZeroPadChipWork zero_pad_compute_chip_work() {
         ++w.count;
     }
     return w;
+}
+
+// Scalar path: read the two per-call values from common args (slot_idx = 9, valid_global = 3).
+inline ZeroPadChipWork zero_pad_compute_chip_work() {
+    return zero_pad_compute_chip_work(get_common_arg_val<uint32_t>(9), get_common_arg_val<uint32_t>(3));
 }
