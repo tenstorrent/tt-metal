@@ -152,6 +152,15 @@ def run_bringup_cc(
         mcp_env["TT_HW_PLANNER_SHARD"] = _shard_flag
         if _shard_tp:
             mcp_env["TT_HW_PLANNER_SHARD_TP"] = _shard_tp
+        if not os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+            _tpn = int(_shard_tp or "2")
+            _mgd_name = (
+                "p300_x2_mesh_graph_descriptor.textproto" if _tpn > 2 else "p300_mesh_graph_descriptor.textproto"
+            )
+            _mgd = repo_root / "tt_metal" / "fabric" / "mesh_graph_descriptors" / _mgd_name
+            if _mgd.is_file():
+                mcp_env["TT_MESH_GRAPH_DESC_PATH"] = str(_mgd)
+                print(f"  [shard] TT_MESH_GRAPH_DESC_PATH={_mgd.name} (Blackhole fabric mesh graph for TP={_tpn})")
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "bringup-mcp")
     import re as _re
 
