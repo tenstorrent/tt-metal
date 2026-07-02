@@ -301,6 +301,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::UnaryBackward
         TTNN::Ops::Experimental::NeighborPadConv3d
+        TTNN::Ops::Experimental::NeighborPadHalo
         TTNN::Ops::Experimental::Test
         TTNN::Ops::Full
         TTNN::Ops::FullLike
@@ -545,6 +546,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d)
+add_subdirectory(cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)

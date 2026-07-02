@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <vector>
+#include <variant>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "neighbor_pad_halo_device_operation_types.hpp"
+#include "neighbor_pad_halo_program_factory.hpp"
+
+namespace ttnn::experimental::prim {
+
+struct NpHaloDeviceOperation {
+    using operation_attributes_t = NpHaloParams;
+    using tensor_args_t = NpHaloInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<NpHaloMeshWorkloadFactory>;
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
+
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+// Primitive entry point: runs the standalone halo-only fabric exchange (no conv, no interior copy).
+// halo_buffer must be a pre-allocated compact DRAM buffer sized for
+//   [H-top | H-bot | W-left | W-right] sticks; it is written in place and returned as the output.
+Tensor neighbor_pad_halo(
+    const Tensor& input, const Tensor& halo_buffer, const ttnn::experimental::prim::NpHaloParams& params);
+
+}  // namespace ttnn::prim
