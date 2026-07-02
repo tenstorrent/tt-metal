@@ -5,6 +5,7 @@
 #include "untilize_multi_core_sub_core_grids_program_factory.hpp"
 
 #include <filesystem>
+#include <functional>
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -130,11 +131,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+    ComputeUnpackToDestModes utd;
     if (fp32_dest_acc_en) {
-        std::get<ComputeGen2Config>(compute_hw)
-            .unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        utd.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
+    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
+        if (a.device()->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+    });
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(
