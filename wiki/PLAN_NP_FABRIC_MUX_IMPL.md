@@ -77,6 +77,25 @@ Data regime here (~1MB/link) wants 4 workers/link (all_gather default_workers he
       HYPOTHESIS TO TEST NEXT: the mux's EDM link (get_fabric_mux_run_time_args link_idx=w_link) may
       conflict with / not be initialized the way the mux expects under NP's fabric setup.
 Shipping default (num_w_workers=1, no mux) VERIFIED PCC-intact (coalesce 2/2). All mux work gated.
+
+## MUX FUNCTIONALLY VALIDATED for middle-device W exchange (2026-07-02)
+Systematic DPRINT bring-up (KEY: the stream `DPRINT <<` is deprecated/-Werror; use `DPRINT("fmt {}", v)`).
+Markers proved the full mux path works for MIDDLE-MIDDLE W pairs: A_start->B_built->C_ready->D_connected
+->send loop (G_cbfront,H_wrote,I_loopdone)->E_sent->J_disc->K_termwait->Z_termdone, reader barrier clears
+(prebar->postbar), and recv succeeds (NPRD w_neighbor_sem have=40, Z_done). Bugs fixed to get here (7):
+ 1 H->W barrier signalled column-0 cores not mux cores; 2 send CB missing on mux worker cores; 3 recv-sem
+ targeted mux core not neighbor reader; 4 writer startup-barrier clobbered reader's shared barrier_sem;
+ 5 writer RT-arg layout; 6 mux reader missing SetCommonRuntimeArgs (barrier_sem_addr unset); 7 recv-sem
+ must target the OPPOSITE-direction worker (the receiving reader).
+REMAINING BLOCKER (edge<->middle boundary): on a 4-device W chain, edge devices (w=0,3) use the standard
+np_writer (targets column-0 W cores) but their middle neighbors' readers moved to mux cores => edge->middle
+recv never lands (6 readers have=0). middle<->middle works. FIX OPTIONS: (a) uniform mux for ALL W devices
+(needs the mux writer/reader to handle the edge per-stick/zeros case + reader coalesce for edge); or
+(b) retarget the edge standard-writer recv-sem to the mux worker coords when the mux is enabled shape-wide.
+PERF NOTE: a measured WIN needs num_w_workers>1 (1-worker-mux adds mux overhead for no parallelism), which
+ALSO needs per-worker recv sems (shared w_neighbor_sem races across N workers). So the path to a perf win:
+edge fix + per-worker recv sems, then num_w_workers=2/4 sweep. The hard part (mux connect/send/recv/term)
+is DONE and proven.
 Note: Watcher is UNUSABLE on 2x4 BH fabric (overflows active-eth cfg buffer), so hang-debug is by reasoning +
 DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
