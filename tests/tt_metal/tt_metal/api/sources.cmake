@@ -26,6 +26,7 @@ set(UNIT_TESTS_API_SOURCES
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
+    metal2_host_api/test_scratchpad_hw.cpp
     metal2_host_api/test_program_run_args.cpp
     metal2_host_api/test_table.cpp
     test_kernel_thread_sync.cpp
