@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -43,29 +43,29 @@ void kernel_main() {
     constexpr bool param_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset() + 1) == 1;
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_dst(cb_id_dst);
-    CircularBuffer cb_batch_var(cb_id_batch_var);
-    CircularBuffer cb_weight(cb_id_weight);
-    CircularBuffer cb_bias(cb_id_bias);
+    DataflowBuffer cb_src(cb_id_src);
+    DataflowBuffer cb_dst(cb_id_dst);
+    DataflowBuffer cb_batch_var(cb_id_batch_var);
+    DataflowBuffer cb_weight(cb_id_weight);
+    DataflowBuffer cb_bias(cb_id_bias);
 
-    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const uint32_t src_tile_bytes = cb_src.get_entry_size();
     const auto src = TensorAccessor(src_args, src_addr);
 
     // output
-    const uint32_t dst_tile_bytes = cb_dst.get_tile_size();
+    const uint32_t dst_tile_bytes = cb_dst.get_entry_size();
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
     // batch_var
-    const uint32_t batch_var_tile_bytes = cb_batch_var.get_tile_size();
+    const uint32_t batch_var_tile_bytes = cb_batch_var.get_entry_size();
     const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr);
 
     // weight
-    const uint32_t weight_tile_bytes = cb_weight.get_tile_size();
+    const uint32_t weight_tile_bytes = cb_weight.get_entry_size();
     const auto weight = TensorAccessor(weight_args, weight_addr);
 
     // bias
-    const uint32_t bias_tile_bytes = cb_bias.get_tile_size();
+    const uint32_t bias_tile_bytes = cb_bias.get_entry_size();
     const auto bias = TensorAccessor(bias_args, bias_addr);
 
     uint32_t tiles_per_batch = HtWt * C;

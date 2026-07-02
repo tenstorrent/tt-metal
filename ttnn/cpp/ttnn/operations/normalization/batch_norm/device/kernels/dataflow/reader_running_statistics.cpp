@@ -7,7 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/kernel/dataflow/cb_fill_helpers.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
@@ -32,10 +32,10 @@ void kernel_main() {
     constexpr uint32_t k_tile_face_elems = 1024;
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_momentum(cb_id_momentum);
+    DataflowBuffer cb_src(cb_id_src);
+    DataflowBuffer cb_momentum(cb_id_momentum);
 
-    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const uint32_t src_tile_bytes = cb_src.get_entry_size();
     const auto src = TensorAccessor(src_args, src_addr);
 
     uint32_t tiles_per_batch = HtWt * C;

@@ -8,7 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -56,8 +56,8 @@ void kernel_main() {
     constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in2(cb_id_in2);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in2(cb_id_in2);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 

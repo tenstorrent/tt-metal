@@ -32,16 +32,16 @@ void kernel_main() {
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_x_welford(cb_id_x_welford);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_x_welford(cb_id_x_welford);
 #ifdef FUSE_PRE_ADD
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in1(cb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    CircularBuffer cb_gamma(cb_id_gamma);
+    DataflowBuffer cb_gamma(cb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    CircularBuffer cb_beta(cb_id_beta);
+    DataflowBuffer cb_beta(cb_id_beta);
 #endif
 
     // ublocks size defined in tiles

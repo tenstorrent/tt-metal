@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/transpose.h"
 #include "api/compute/ema.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "../../../device/kernels/accumulation_common.hpp"
 
 /*
@@ -79,9 +79,9 @@ void kernel_main() {
     constexpr auto dst_cb_idx = tt::CBIndex::c_1;
     constexpr auto trp_cb_idx = tt::CBIndex::c_2;
 
-    CircularBuffer cb_src(src_cb_idx);
-    CircularBuffer cb_dst(dst_cb_idx);
-    CircularBuffer cb_trp(trp_cb_idx);
+    DataflowBuffer cb_src(src_cb_idx);
+    DataflowBuffer cb_dst(dst_cb_idx);
+    DataflowBuffer cb_trp(trp_cb_idx);
 
     // DST indices
     // -----------

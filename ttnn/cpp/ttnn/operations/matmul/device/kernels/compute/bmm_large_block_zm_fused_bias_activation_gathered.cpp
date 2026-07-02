@@ -8,7 +8,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #ifdef SFPU_ACTIVATION
@@ -26,7 +26,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    DataflowBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
@@ -220,9 +220,9 @@ void kernel_main() {
     constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
 #endif
 
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer sync_buf(sync_cb);
-    CircularBuffer sync2_buf(sync_cb2);
+    DataflowBuffer in1_cb(in1_cb_id);
+    DataflowBuffer sync_buf(sync_cb);
+    DataflowBuffer sync2_buf(sync_cb2);
 
     constexpr std::array<uint32_t, batch> mm_out_cb_ids = fill_named_cb_array<batch>(mm_out_cb_names);
     constexpr std::array<uint32_t, batch> mm_partials_cb_ids = fill_named_cb_array<batch>(mm_partials_cb_names);
@@ -295,8 +295,8 @@ void kernel_main() {
 #endif
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
-        CircularBuffer mm_out_cb(mm_out_cb_id);
-        CircularBuffer mm_partials_cb(mm_partials_cb_id);
+        DataflowBuffer mm_out_cb(mm_out_cb_id);
+        DataflowBuffer mm_partials_cb(mm_partials_cb_id);
 
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -329,7 +329,7 @@ void kernel_main() {
             }
 
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
-            CircularBuffer input0_cb(input0_cb_id);
+            DataflowBuffer input0_cb(input0_cb_id);
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU

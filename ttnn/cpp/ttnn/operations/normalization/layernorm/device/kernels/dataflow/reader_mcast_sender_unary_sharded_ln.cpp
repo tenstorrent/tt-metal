@@ -109,11 +109,11 @@ void kernel_main() {
                                            const uint32_t cb_ex_global_id,
                                            const uint32_t cb_reduce_first_stage_id,
                                            const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
-        CircularBuffer cb_partial_obj(cb_partial_id);
-        CircularBuffer cb_external_obj(cb_external_id);
-        CircularBuffer cb_ex_obj(cb_ex_id);
-        CircularBuffer cb_ex_global_obj(cb_ex_global_id);
-        CircularBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
+        DataflowBuffer cb_partial_obj(cb_partial_id);
+        DataflowBuffer cb_external_obj(cb_external_id);
+        DataflowBuffer cb_ex_obj(cb_ex_id);
+        DataflowBuffer cb_ex_global_obj(cb_ex_global_id);
+        DataflowBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
 
         // ============================================================================
         // Partial reduction

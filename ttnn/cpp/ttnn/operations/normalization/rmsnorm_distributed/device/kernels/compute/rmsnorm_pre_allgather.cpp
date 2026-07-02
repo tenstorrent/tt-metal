@@ -50,11 +50,11 @@ void kernel_main() {
         binary_op_init_common(cb_inp_id, cb_reduce_id, cb_x2_id);
     }
 
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_res(cb_res_id);
-    CircularBuffer cb_inp(cb_inp_id);
-    CircularBuffer cb_x2(cb_x2_id);
-    CircularBuffer cb_reduce(cb_reduce_id);
+    DataflowBuffer cb_in0(cb_in0_id);
+    DataflowBuffer cb_res(cb_res_id);
+    DataflowBuffer cb_inp(cb_inp_id);
+    DataflowBuffer cb_x2(cb_x2_id);
+    DataflowBuffer cb_reduce(cb_reduce_id);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)

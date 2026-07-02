@@ -7,12 +7,13 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 // HW-bcast scale for fused scale-attn-softmax
 FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
-    CircularBuffer cb_fused_scale_obj(cb_fused_scale);
+    DataflowBuffer cb_fused_scale_obj(cb_fused_scale);
     uint32_t u = get_arg_val<uint32_t>(0);
     cb_fused_scale_obj.reserve_back(1);
     auto ptr = reinterpret_cast<uint16_t*>(cb_fused_scale_obj.get_write_ptr());
@@ -38,7 +39,7 @@ void kernel_main() {
     const auto addr_mask = TensorAccessor(mask_args, mask_addr);
 
     Noc noc;
-    CircularBuffer cb_attn_obj(cb_attn);
+    DataflowBuffer cb_attn_obj(cb_attn);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(0);

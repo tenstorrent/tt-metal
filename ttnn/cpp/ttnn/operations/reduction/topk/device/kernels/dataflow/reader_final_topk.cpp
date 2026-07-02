@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
@@ -25,8 +25,8 @@ void kernel_main() {
     Noc noc;
     Semaphore<> receiver_sem(receiver_sem_id);
     Semaphore<> sender_sem(sender_sem_id);
-    CircularBuffer final_values_cb(final_values_cb_index);
-    CircularBuffer final_indices_cb(final_indices_cb_index);
+    DataflowBuffer final_values_cb(final_values_cb_index);
+    DataflowBuffer final_indices_cb(final_indices_cb_index);
 
     // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row

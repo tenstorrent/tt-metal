@@ -17,7 +17,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 using namespace ckernel;
 
@@ -28,8 +28,8 @@ void sub_exp_block_bcast_cols_inplace() {
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
 
-    CircularBuffer in0_cb_obj(in0_cb);
-    CircularBuffer in1_cb_obj(in1_cb);
+    DataflowBuffer in0_cb_obj(in0_cb);
+    DataflowBuffer in1_cb_obj(in1_cb);
 
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     exp_tile_init<true>();
@@ -67,8 +67,8 @@ void add_block_bcast_rows_inplace(
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
-    CircularBuffer in0_cb_obj(in0_cb);
-    CircularBuffer in1_cb_obj(in1_cb);
+    DataflowBuffer in0_cb_obj(in0_cb);
+    DataflowBuffer in1_cb_obj(in1_cb);
 
     uint32_t num_tiles = rows * cols;
     if (first_call) {
@@ -102,8 +102,8 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-    CircularBuffer in0_cb_obj(in0_cb);
-    CircularBuffer in1_cb_obj(in1_cb);
+    DataflowBuffer in0_cb_obj(in0_cb);
+    DataflowBuffer in1_cb_obj(in1_cb);
 
     reconfig_data_format(in0_cb, in1_cb);
     mul_tiles_init(in0_cb, in1_cb);
@@ -131,8 +131,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows consumed
 
-    CircularBuffer in0_cb_obj(in0_cb);
-    CircularBuffer in1_cb_obj(in1_cb);
+    DataflowBuffer in0_cb_obj(in0_cb);
+    DataflowBuffer in1_cb_obj(in1_cb);
 
     uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
@@ -161,7 +161,7 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
     // Precondition: in0_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
 
-    CircularBuffer in0_cb_obj(in0_cb);
+    DataflowBuffer in0_cb_obj(in0_cb);
 
     reconfig_data_format_srca(in0_cb);
     eqz_tile_init();
@@ -188,7 +188,7 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
-    CircularBuffer in_cb_obj(in_cb);
+    DataflowBuffer in_cb_obj(in_cb);
 
     copy_tile_to_dst_init_short(in_cb);
     recip_tile_init();
@@ -252,14 +252,14 @@ void mask_and_topk() {
     constexpr uint32_t index_dest_end = 3;
     ckernel::topk_tile_init();
 
-    CircularBuffer input_cb(input_cb_index);
-    CircularBuffer expert_mask_cb(expert_mask_cb_index);
-    CircularBuffer masked_input_cb(masked_input_cb_index);
-    CircularBuffer index_cb(index_cb_index);
-    CircularBuffer input_transposed_cb(input_transposed_cb_index);
-    CircularBuffer index_transposed_cb(index_transposed_cb_index);
-    CircularBuffer values_cb(values_cb_index);
-    CircularBuffer output_ind_cb(output_ind_cb_index);
+    DataflowBuffer input_cb(input_cb_index);
+    DataflowBuffer expert_mask_cb(expert_mask_cb_index);
+    DataflowBuffer masked_input_cb(masked_input_cb_index);
+    DataflowBuffer index_cb(index_cb_index);
+    DataflowBuffer input_transposed_cb(input_transposed_cb_index);
+    DataflowBuffer index_transposed_cb(index_transposed_cb_index);
+    DataflowBuffer values_cb(values_cb_index);
+    DataflowBuffer output_ind_cb(output_ind_cb_index);
 
     if (first_call) {
         transpose_init(input_cb_index);

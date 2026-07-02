@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -66,8 +66,8 @@ void kernel_main() {
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in2(cb_id_in2);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in2(cb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
     Semaphore<> sender_sem(get_compile_time_arg_val(9));

@@ -29,15 +29,15 @@ void kernel_main() {
     constexpr uint32_t cb_intermediate_id = tt::CBIndex::c_7;    // intermediate result
     constexpr uint32_t cb_out_id = tt::CBIndex::c_8;
 
-    CircularBuffer cb_inp(cb_inp_id);
-    CircularBuffer cb_stats(cb_stats_id);
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_eps(cb_eps_id);
-    CircularBuffer cb_stats_reduced(cb_stats_reduced_id);
-    CircularBuffer cb_recip_sqrt_var(cb_recip_sqrt_var_id);
-    CircularBuffer cb_intermediate(cb_intermediate_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_inp(cb_inp_id);
+    DataflowBuffer cb_stats(cb_stats_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_eps(cb_eps_id);
+    DataflowBuffer cb_stats_reduced(cb_stats_reduced_id);
+    DataflowBuffer cb_recip_sqrt_var(cb_recip_sqrt_var_id);
+    DataflowBuffer cb_intermediate(cb_intermediate_id);
+    DataflowBuffer cb_out(cb_out_id);
 
     constexpr uint32_t stats_tile_stride = 2;
 
@@ -113,7 +113,7 @@ void kernel_main() {
 
             // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate_id : cb_out_id;
-            CircularBuffer norm_target_cb_obj(norm_target_cb);
+            DataflowBuffer norm_target_cb_obj(norm_target_cb);
             reconfig_data_format(cb_intermediate_id, cb_recip_sqrt_var_id);
             pack_reconfig_data_format(norm_target_cb);
             mul_bcast_cols_init_short(cb_intermediate_id, cb_recip_sqrt_var_id);
@@ -140,7 +140,7 @@ void kernel_main() {
             // 3) optional gamma
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_cb = do_beta ? cb_intermediate_id : cb_out_id;
-                CircularBuffer gamma_out_cb_obj(gamma_out_cb);
+                DataflowBuffer gamma_out_cb_obj(gamma_out_cb);
                 reconfig_data_format(norm_target_cb, cb_gamma_id);
                 pack_reconfig_data_format(gamma_out_cb);
                 mul_bcast_rows_init_short(norm_target_cb, cb_gamma_id);

@@ -9,7 +9,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -30,11 +30,11 @@ void kernel_main() {
     constexpr uint32_t cb_acc = tt::CBIndex::c_4;
     constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
 
-    CircularBuffer cb_input_obj(cb_input);
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_output_obj(cb_output);
-    CircularBuffer cb_acc_obj(cb_acc);
-    CircularBuffer cb_ineg_obj(cb_ineg);
+    DataflowBuffer cb_input_obj(cb_input);
+    DataflowBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer cb_output_obj(cb_output);
+    DataflowBuffer cb_acc_obj(cb_acc);
+    DataflowBuffer cb_ineg_obj(cb_ineg);
 
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
     cb_scaler_obj.wait_front(1);  // scaler tile from the reader

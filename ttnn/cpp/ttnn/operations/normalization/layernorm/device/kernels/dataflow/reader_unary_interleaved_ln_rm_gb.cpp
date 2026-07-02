@@ -9,6 +9,7 @@
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 
@@ -36,16 +37,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_x_welford(cb_id_x_welford);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_x_welford(cb_id_x_welford);
 #ifdef FUSE_PRE_ADD
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in1(cb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    CircularBuffer cb_gamma(cb_id_gamma);
+    DataflowBuffer cb_gamma(cb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    CircularBuffer cb_beta(cb_id_beta);
+    DataflowBuffer cb_beta(cb_id_beta);
 #endif
 
     // ublocks size defined in tiles

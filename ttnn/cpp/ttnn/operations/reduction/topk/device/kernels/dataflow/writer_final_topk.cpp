@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -31,10 +31,10 @@ void kernel_main() {
     const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1);
 
     Noc noc;
-    CircularBuffer values_cb(values_cb_index);
-    CircularBuffer indices_cb(output_ind_cb_index);
-    const uint32_t tile_bytes_val = values_cb.get_tile_size();
-    const uint32_t tile_bytes_idx = indices_cb.get_tile_size();
+    DataflowBuffer values_cb(values_cb_index);
+    DataflowBuffer indices_cb(output_ind_cb_index);
+    const uint32_t tile_bytes_val = values_cb.get_entry_size();
+    const uint32_t tile_bytes_idx = indices_cb.get_entry_size();
 
     // Process each height row sequentially, writing Kt tiles of TopK results
     for (uint32_t j = 0; j < Ht; ++j) {

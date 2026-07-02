@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -58,8 +58,8 @@ void kernel_main() {
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in1(cb_id_in1);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

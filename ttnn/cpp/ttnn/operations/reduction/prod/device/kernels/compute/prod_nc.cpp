@@ -7,7 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
@@ -18,8 +18,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_out0_obj(cb_out0);
+    DataflowBuffer cb_in0_obj(cb_in0);
+    DataflowBuffer cb_out0_obj(cb_out0);
 
     binary_op_init_common(cb_in0, cb_in0, cb_out0);
     pack_reconfig_data_format(cb_out0);

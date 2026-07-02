@@ -9,12 +9,13 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
 void generate_tile_with_packed_bfloat16_values(uint32_t cb_id, uint32_t packed_bf16_value) {
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(1);
     CoreLocalMem<uint32_t> ptr(cb.get_write_ptr());
     for (uint32_t i = 0; i < 512U; ++i) {
@@ -64,9 +65,9 @@ void kernel_main() {
     constexpr uint32_t cb_ones_id = tt::CBIndex::c_26;
 
     Noc noc;
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_input_mask(cb_input_mask_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_input_mask(cb_input_mask_id);
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma_id);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
@@ -77,7 +78,7 @@ void kernel_main() {
     constexpr uint32_t cb_input_negative_mask_id = tt::CBIndex::c_14;
     const uint32_t input_negative_mask_single_tile_size_bytes = get_tile_size(cb_input_negative_mask_id);
 
-    CircularBuffer cb_input_negative_mask(cb_input_negative_mask_id);
+    DataflowBuffer cb_input_negative_mask(cb_input_negative_mask_id);
 
     constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
     const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);

@@ -14,7 +14,7 @@
 #define APPROX false
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
@@ -23,9 +23,9 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
 
-    CircularBuffer cb_in_obj(CB_IN);
-    CircularBuffer cb_out_obj(CB_OUT);
-    CircularBuffer cb_acc_obj(CB_ACC);  // note: only used in compute kernel
+    DataflowBuffer cb_in_obj(CB_IN);
+    DataflowBuffer cb_out_obj(CB_OUT);
+    DataflowBuffer cb_acc_obj(CB_ACC);  // note: only used in compute kernel
 
     unary_op_init_common(CB_IN, CB_OUT);
 

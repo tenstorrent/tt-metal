@@ -10,19 +10,15 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt>
 ALWI void maybe_typecast_stat(
-    CircularBuffer& src_obj,
-    uint32_t src_cb,
-    uint32_t dst_cb,
-    uint32_t& last_srca_cb,
-    uint32_t tile_index) {
+    DataflowBuffer& src_obj, uint32_t src_cb, uint32_t dst_cb, uint32_t& last_srca_cb, uint32_t tile_index) {
     if constexpr (NeedsTypecast) {
         constexpr uint32_t onetile = 1;
         src_obj.wait_front(onetile);
-        CircularBuffer dst_obj(dst_cb);
+        DataflowBuffer dst_obj(dst_cb);
         dst_obj.reserve_back(onetile);
 
         tile_regs_acquire();
@@ -70,18 +66,18 @@ void kernel_main() {
     constexpr bool needs_mean_typecast = old_running_mean_has_value && stat_needs_typecast;
     constexpr bool needs_var_typecast = old_running_var_has_value && stat_needs_typecast;
 
-    CircularBuffer cb_batch_mean_obj(cb_batch_mean);
-    CircularBuffer cb_batch_var_obj(cb_batch_var);
-    CircularBuffer cb_out0_obj(cb_out0);
-    CircularBuffer cb_old_running_mean_obj(cb_old_running_mean);
-    CircularBuffer cb_old_running_var_obj(cb_old_running_var);
-    CircularBuffer cb_updated_running_mean_obj(cb_updated_running_mean);
-    CircularBuffer cb_updated_running_var_obj(cb_updated_running_var);
-    CircularBuffer cb_momentum_obj(cb_momentum);
-    CircularBuffer cb_one_obj(cb_one);
-    CircularBuffer cb_tmp1_obj(cb_tmp1);
-    CircularBuffer cb_tmp2_obj(cb_tmp2);
-    CircularBuffer cb_tmp3_obj(cb_tmp3);
+    DataflowBuffer cb_batch_mean_obj(cb_batch_mean);
+    DataflowBuffer cb_batch_var_obj(cb_batch_var);
+    DataflowBuffer cb_out0_obj(cb_out0);
+    DataflowBuffer cb_old_running_mean_obj(cb_old_running_mean);
+    DataflowBuffer cb_old_running_var_obj(cb_old_running_var);
+    DataflowBuffer cb_updated_running_mean_obj(cb_updated_running_mean);
+    DataflowBuffer cb_updated_running_var_obj(cb_updated_running_var);
+    DataflowBuffer cb_momentum_obj(cb_momentum);
+    DataflowBuffer cb_one_obj(cb_one);
+    DataflowBuffer cb_tmp1_obj(cb_tmp1);
+    DataflowBuffer cb_tmp2_obj(cb_tmp2);
+    DataflowBuffer cb_tmp3_obj(cb_tmp3);
 
     unary_op_init_common(cb_batch_mean, cb_out0);
     uint32_t last_srca_cb = cb_batch_mean;

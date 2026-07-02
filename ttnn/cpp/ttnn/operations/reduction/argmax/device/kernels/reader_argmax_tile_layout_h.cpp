@@ -6,7 +6,7 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include <stdint.h>
 
@@ -48,10 +48,10 @@ void kernel_main() {
     auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
     using dst_accessor_type = decltype(s_dst);
 
-    CircularBuffer src_cb(src_cb_idx);
+    DataflowBuffer src_cb(src_cb_idx);
     const uint32_t src_cb_addr = src_cb.get_write_ptr();
     constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
-    CircularBuffer dst_cb(dst_cb_idx);
+    DataflowBuffer dst_cb(dst_cb_idx);
     const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();

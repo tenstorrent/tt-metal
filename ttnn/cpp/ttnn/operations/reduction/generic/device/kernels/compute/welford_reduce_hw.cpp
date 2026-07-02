@@ -26,7 +26,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
@@ -62,10 +62,10 @@ void kernel_main() {
     // Combined scalar result from the writer kernel (Float32).
     constexpr auto cb_combined = tt::CBIndex::c_22;
 
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_partial_obj(cb_partial);
-    CircularBuffer cb_combined_obj(cb_combined);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_partial_obj(cb_partial);
+    DataflowBuffer cb_combined_obj(cb_combined);
 
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;

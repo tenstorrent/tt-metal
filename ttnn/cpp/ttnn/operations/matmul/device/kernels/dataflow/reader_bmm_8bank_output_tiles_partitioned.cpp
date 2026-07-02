@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -55,8 +55,8 @@ void kernel_main() {
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in1(cb_id_in1);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {

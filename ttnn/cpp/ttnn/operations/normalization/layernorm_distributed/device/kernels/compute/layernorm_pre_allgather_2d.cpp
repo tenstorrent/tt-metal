@@ -43,12 +43,12 @@ void kernel_main() {
         binary_op_init_common(cb_inp_id, cb_reduce_id, cb_x2_id);
     }
 
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_res(cb_res_id);
-    CircularBuffer cb_inp(cb_inp_id);
-    CircularBuffer cb_x2(cb_x2_id);
-    CircularBuffer cb_reduce(cb_reduce_id);
-    CircularBuffer cb_zero(cb_zero_id);
+    DataflowBuffer cb_in0(cb_in0_id);
+    DataflowBuffer cb_res(cb_res_id);
+    DataflowBuffer cb_inp(cb_inp_id);
+    DataflowBuffer cb_x2(cb_x2_id);
+    DataflowBuffer cb_reduce(cb_reduce_id);
+    DataflowBuffer cb_zero(cb_zero_id);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)
@@ -100,8 +100,8 @@ void kernel_main() {
     if (is_merge_core) {
         constexpr uint32_t cb_x2_merge_id = tt::CBIndex::c_15;
         constexpr uint32_t cb_out_final_id = tt::CBIndex::c_14;
-        CircularBuffer cb_x2_merge(cb_x2_merge_id);
-        CircularBuffer cb_out_final(cb_out_final_id);
+        DataflowBuffer cb_x2_merge(cb_x2_merge_id);
+        DataflowBuffer cb_out_final(cb_out_final_id);
         constexpr int dst0 = 0;
 
         // Wait for all num_cores_y tiles

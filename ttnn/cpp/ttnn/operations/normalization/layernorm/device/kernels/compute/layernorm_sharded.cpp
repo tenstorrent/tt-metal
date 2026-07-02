@@ -11,7 +11,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #ifdef DO_COL_MASK
 #include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
@@ -109,22 +109,22 @@ void kernel_main() {
     CircularBuffer cb_col_mask_packed(cb_col_mask_packed_id);
 #endif
 
-    CircularBuffer cb_scaler(cb_scaler_id);
-    CircularBuffer cb_scaler_global(cb_scaler_global_id);
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_xmm(cb_xmm_id);
-    CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    CircularBuffer cb_ex(cb_ex_id);
-    CircularBuffer cb_ex_external(cb_ex_external_id);
-    CircularBuffer cb_ex_partial2(cb_ex_partial2_id);
-    CircularBuffer cb_ex2(cb_ex2_id);
-    CircularBuffer cb_ex_external2(cb_ex_external2_id);
-    CircularBuffer cb_ex_global(cb_ex_global_id);
-    CircularBuffer cb_xmm2(cb_xmm2_id);
-    CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    CircularBuffer cb_fusion(cb_fusion_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_scaler(cb_scaler_id);
+    DataflowBuffer cb_scaler_global(cb_scaler_global_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_xmm(cb_xmm_id);
+    DataflowBuffer cb_ex_partial(cb_ex_partial_id);
+    DataflowBuffer cb_ex(cb_ex_id);
+    DataflowBuffer cb_ex_external(cb_ex_external_id);
+    DataflowBuffer cb_ex_partial2(cb_ex_partial2_id);
+    DataflowBuffer cb_ex2(cb_ex2_id);
+    DataflowBuffer cb_ex_external2(cb_ex_external2_id);
+    DataflowBuffer cb_ex_global(cb_ex_global_id);
+    DataflowBuffer cb_xmm2(cb_xmm2_id);
+    DataflowBuffer cb_ex2pe(cb_ex2pe_id);
+    DataflowBuffer cb_fusion(cb_fusion_id);
+    DataflowBuffer cb_out(cb_out_id);
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
 
@@ -153,11 +153,11 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in_id = cb_in0;
 #endif
-    CircularBuffer cb_in(cb_in_id);
+    DataflowBuffer cb_in(cb_in_id);
     constexpr uint32_t cb_im_id = do_gamma ? cb_x : (do_beta ? cb_fusion_id : cb_out_id);
-    CircularBuffer cb_im(cb_im_id);
+    DataflowBuffer cb_im(cb_im_id);
     constexpr uint32_t cb_outgamma_id = do_beta ? cb_fusion_id : cb_out_id;
-    CircularBuffer cb_outgamma(cb_outgamma_id);
+    DataflowBuffer cb_outgamma(cb_outgamma_id);
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
@@ -256,8 +256,8 @@ void kernel_main() {
                 cb_ex_external.pop_front(1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
-                cb_ex_external.wait_front(num_blocks_second_stage - 1);
-                cb_ex_external.pop_front(num_blocks_second_stage - 1);
+                cb_ex_external.wait_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
+                cb_ex_external.pop_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -399,8 +399,8 @@ void kernel_main() {
                 cb_ex_external2.pop_front(1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
-                cb_ex_external2.wait_front(num_blocks_second_stage - 1);
-                cb_ex_external2.pop_front(num_blocks_second_stage - 1);
+                cb_ex_external2.wait_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
+                cb_ex_external2.pop_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
             }
             tile_regs_commit();
             tile_regs_wait();

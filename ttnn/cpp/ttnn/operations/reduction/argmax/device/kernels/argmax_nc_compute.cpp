@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /**
  * Register-based argmax along a non-HW (N or C) dim for TILE-layout inputs.
@@ -51,8 +51,8 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr uint32_t onetile = 1;
 
-    CircularBuffer cb_val_obj(cb_val);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_val_obj(cb_val);
+    DataflowBuffer cb_out_obj(cb_out);
 
     // Slot layout inside DST (32-bit mode):
     //   slot 0: max_val       (fp value)

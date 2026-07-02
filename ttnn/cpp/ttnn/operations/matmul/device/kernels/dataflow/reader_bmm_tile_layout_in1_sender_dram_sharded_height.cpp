@@ -13,7 +13,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 
 void kernel_main() {
@@ -62,14 +62,14 @@ void kernel_main() {
     constexpr uint32_t out_block_size_bytes = out_block_num_tiles * out_single_tile_size_bytes;
 
     Noc noc;
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_out(cb_id_out);
     // DRAM read setup
     AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     // Output reshard setup - build NOC address for remote output storage core
     UnicastEndpoint remote;
 #ifdef FUSE_BIAS
-    CircularBuffer cb_in3(cb_id_in3);
+    DataflowBuffer cb_in3(cb_id_in3);
 #endif
 
     // Process each batch
@@ -124,7 +124,7 @@ void kernel_main() {
         // NOC write output to remote output storage core (CB6)
         uint32_t out_batch_offset = batch * out_tensor_stride_batch_bytes;
         noc.async_write(
-            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+            cb_out,
             remote,
             out_block_size_bytes,
             {.offset_bytes = 0},

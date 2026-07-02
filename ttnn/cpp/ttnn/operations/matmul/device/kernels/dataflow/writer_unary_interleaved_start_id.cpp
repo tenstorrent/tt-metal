@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_out(cb_id_out);
 
 #ifdef OUT_SHARDED
     cb_out.wait_front(num_pages);
@@ -38,12 +38,7 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
         cb_out.wait_front(onepage);
-        noc.async_write(
-            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
-            s,
-            page_bytes,
-            {.offset_bytes = 0},
-            {.page_id = i});
+        noc.async_write(cb_out, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
         noc.async_writes_flushed();
         cb_out.pop_front(onepage);
     }

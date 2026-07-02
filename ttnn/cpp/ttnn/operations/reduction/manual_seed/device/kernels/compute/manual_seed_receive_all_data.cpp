@@ -5,7 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/rand.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
@@ -18,7 +18,7 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_tile = 1;
 
-    CircularBuffer kernel_communication_cb(kernel_communication_cb_index);
+    DataflowBuffer kernel_communication_cb(kernel_communication_cb_index);
 
     // Get message from reader
     kernel_communication_cb.wait_front(one_tile);

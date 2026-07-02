@@ -16,7 +16,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "layernorm_compute_utils.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -70,21 +70,21 @@ void kernel_main() {
     constexpr uint32_t cb_x_id = cb_in_id;
 #endif
 
-    CircularBuffer cb_eps(cb_eps_id);
-    CircularBuffer cb_in(cb_in_id);
-    CircularBuffer cb_inb(cb_inb_id);
-    CircularBuffer cb_out(cb_out_id);
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_xmm(cb_xmm_id);
-    CircularBuffer cb_ex(cb_ex_id);
-    CircularBuffer cb_ex2(cb_ex2_id);
-    CircularBuffer cb_xmm2(cb_xmm2_id);
-    CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    CircularBuffer cb_accumulate(cb_accumulate_id);
-    CircularBuffer cb_scaler(cb_scaler_id);
-    CircularBuffer cb_in_rm(cb_in_rm_id);
-    CircularBuffer cb_x(cb_x_id);
+    DataflowBuffer cb_eps(cb_eps_id);
+    DataflowBuffer cb_in(cb_in_id);
+    DataflowBuffer cb_inb(cb_inb_id);
+    DataflowBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_xmm(cb_xmm_id);
+    DataflowBuffer cb_ex(cb_ex_id);
+    DataflowBuffer cb_ex2(cb_ex2_id);
+    DataflowBuffer cb_xmm2(cb_xmm2_id);
+    DataflowBuffer cb_ex2pe(cb_ex2pe_id);
+    DataflowBuffer cb_accumulate(cb_accumulate_id);
+    DataflowBuffer cb_scaler(cb_scaler_id);
+    DataflowBuffer cb_in_rm(cb_in_rm_id);
+    DataflowBuffer cb_x(cb_x_id);
 
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in_id, cb_inb_id, cb_x_id);
@@ -211,11 +211,11 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            CircularBuffer(pack_cb).reserve_back(onetile);
+            DataflowBuffer(pack_cb).reserve_back(onetile);
             pack_reconfig_data_format(pack_cb);
             pack_tile(dst0, pack_cb);
             tile_regs_release();
-            CircularBuffer(pack_cb).push_back(onetile);
+            DataflowBuffer(pack_cb).push_back(onetile);
         }
 
         // End of
@@ -352,13 +352,13 @@ void kernel_main() {
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_fusion = cb_out_id;
             }
-            CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
+            DataflowBuffer(cb_fusion).reserve_back(block.full_block_size());
             pack_reconfig_data_format(cb_fusion);
             for (auto i : block.local()) {
                 pack_tile(i, cb_fusion);
             }
             tile_regs_release();
-            CircularBuffer(cb_fusion).push_back(block.full_block_size());
+            DataflowBuffer(cb_fusion).push_back(block.full_block_size());
             cb_xmm.pop_front(block.full_block_size());
 
             if constexpr (do_gamma == 1) {
@@ -369,7 +369,7 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_out_id);
                 }
                 cb_gamma.wait_front(block.full_block_size());
-                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
+                DataflowBuffer(cb_fusion).wait_front(block.full_block_size());
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma_id);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma_id, i, i, i);
@@ -385,7 +385,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 cb_gamma.pop_front(block.full_block_size());
-                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
+                DataflowBuffer(cb_fusion).pop_front(block.full_block_size());
                 if constexpr (!do_beta) {
                     cb_out.reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
@@ -393,11 +393,11 @@ void kernel_main() {
                     }
                     cb_out.push_back(block.full_block_size());
                 } else {
-                    CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
+                    DataflowBuffer(cb_fusion).reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_fusion);
                     }
-                    CircularBuffer(cb_fusion).push_back(block.full_block_size());
+                    DataflowBuffer(cb_fusion).push_back(block.full_block_size());
                 }
 
                 tile_regs_release();
@@ -408,7 +408,7 @@ void kernel_main() {
                 reconfig_data_format(cb_fusion, cb_beta_id);
                 pack_reconfig_data_format(cb_out_id);
                 cb_beta.wait_front(block.full_block_size());
-                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
+                DataflowBuffer(cb_fusion).wait_front(block.full_block_size());
                 add_bcast_rows_init_short(cb_fusion, cb_beta_id);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta_id, i, i, i);
@@ -419,7 +419,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 cb_beta.pop_front(block.full_block_size());
-                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
+                DataflowBuffer(cb_fusion).pop_front(block.full_block_size());
                 cb_out.reserve_back(block.full_block_size());
                 for (auto i : block.local()) {
                     pack_tile(i, cb_out_id);
@@ -430,7 +430,7 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
             constexpr auto cb_out_rm_id = get_named_compile_time_arg_val("cb_out_rm");
-            CircularBuffer cb_out_rm(cb_out_rm_id);
+            DataflowBuffer cb_out_rm(cb_out_rm_id);
             untilize_row_major_block<decltype(block), block_size>(cb_out, cb_out_rm, block);
 #endif
         }  // block loop
