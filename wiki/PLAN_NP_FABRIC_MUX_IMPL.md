@@ -109,6 +109,21 @@ the final data packet, or routing the sem through the mux's own credit path — 
 atomic inc. Everything else (connect, coalesced data send, termination, barrier, uniform edge handling,
 per-worker alignment) is device-validated. This is the last bug between here and a completing op + perf
 sweep. Total mux bugs fixed this session: 10.
+
+## RECV-DELIVERY: linear-API atomic-inc ALSO fails (2026-07-02) => deeper mux routing/delivery issue.
+Tried switching the recv-sem from the mux-interface fabric_atomic_inc to the LINEAR API
+(fabric_unicast_noc_unicast_atomic_inc_set_state/with_state with to_chip_unicast(num_hops=1), matching
+all_gather). STILL hangs (recv-sems don't land at most readers). So the bug is NOT the atomic-inc API.
+Two remaining hypotheses (need deeper fabric-mux routing debug):
+ (a) the DATA writes also aren't reaching most neighbors (can't observe directly — straight-to-DRAM, no
+     re-read), i.e. the mux forwarding/routing per (link,dir) is only working for a subset; the 2 that
+     land are one specific config.
+ (b) num_hops / route for the through-mux packet is wrong for one direction (fwd vs bwd asymmetry seen).
+NEXT DEBUG: add a DATA-landing probe (have the receiver read back one sent stick and DPRINT it) to
+separate "data lands, sem doesn't" from "nothing lands". Then compare the exact route/num_hops the
+working (backward) vs failing (forward) directions use through the mux. This is fabric-mux routing
+internals; it exceeded a reasonable single-session debug budget. Everything else is device-validated.
+STATE: 14 commits, shipping 1-worker op PCC-intact, mux opt-in. Fabric BW NOT yet reached/measured.
 Note: Watcher is UNUSABLE on 2x4 BH fabric (overflows active-eth cfg buffer), so hang-debug is by reasoning +
 DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
