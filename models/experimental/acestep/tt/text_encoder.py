@@ -71,7 +71,15 @@ class AceStepTextEncoder(LightweightModule):
     def __init__(self, config: AceStepTextEncoderConfig):
         super().__init__()
         self.config = config.resolved()
-        self.embed_tokens = config.embed_tokens  # host [vocab, hidden]
+        self.embed_tokens = config.embed_tokens  # host [vocab, hidden] (kept for lyric-embed lookup)
+        # Resident on-device embedding table (ROW_MAJOR, as ttnn.embedding requires) so the vocab
+        # gather runs on-device (trace-safe) instead of a host lookup + from_torch each call.
+        self.embed_weight = ttnn.from_torch(
+            config.embed_tokens.reshape(config.embed_tokens.shape[0], config.hidden_size),
+            device=self.config.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
         self.layers = [AceStepEncoderLayer(lc) for lc in config.layer_configs]
         self.norm = RMSNorm1D.from_config(RMSNorm1DConfig(weight=config.norm_weight, eps=config.eps))
         self._mask_cache: dict[int, ttnn.Tensor] = {}
@@ -89,18 +97,27 @@ class AceStepTextEncoder(LightweightModule):
             )
         return self._mask_cache[seq_len]
 
-    def embed(self, input_ids: torch.Tensor) -> ttnn.Tensor:
-        """Host vocab lookup -> device tensor [1,1,L,hidden]."""
-        if input_ids.dim() == 1:
-            input_ids = input_ids.unsqueeze(0)
-        embeds = self.embed_tokens[input_ids.long()]  # [1, L, hidden]
-        L = embeds.shape[1]
-        return ttnn.from_torch(
-            embeds.reshape(1, 1, L, self.config.hidden_size),
-            device=self.config.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
+    def embed(self, input_ids) -> ttnn.Tensor:
+        """On-device vocab gather -> device tensor [1,1,L,hidden].
+
+        Accepts a torch LongTensor [L] or [1,L] (eager/test path — uploaded once at the input
+        boundary, before any trace region), or an already-on-device ttnn index tensor [1,L] uint32
+        (traced path). The gather itself is `ttnn.embedding` on-device.
+        """
+        if isinstance(input_ids, ttnn.Tensor):
+            ids = input_ids
+        else:
+            if input_ids.dim() == 1:
+                input_ids = input_ids.unsqueeze(0)
+            ids = ttnn.from_torch(
+                input_ids.to(torch.int32).reshape(1, input_ids.shape[-1]),
+                device=self.config.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        L = ids.shape[-1]
+        emb = ttnn.embedding(ids, self.embed_weight, layout=ttnn.TILE_LAYOUT)  # [1, L, hidden]
+        return ttnn.reshape(emb, (1, 1, L, self.config.hidden_size))
 
     def forward(self, input_ids: torch.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         x = self.embed(input_ids)

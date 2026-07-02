@@ -79,7 +79,28 @@ def main():
         return
     device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
     try:
-        pipe = create_tt_pipeline(AceStepModelConfig.from_hf(), device, with_encoders=False)
+        pipe = create_tt_pipeline(AceStepModelConfig.from_hf(), device)
+
+        # ---- Stage: text encoder (on-device embedding gather + 28 causal layers) ----
+        # Pass DEVICE inputs (uint32 ids + rope tables) so nothing host-side runs inside capture.
+        from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
+
+        Lt = 32
+        ids_t = torch.randint(0, 1000, (1, Lt), dtype=torch.int32)
+        ids_dev = ttnn.from_torch(ids_t, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        te_rope = Qwen3RotaryEmbedding(pipe._hf_text_cfg)
+        tcos, tsin = pipe._rope_tt(te_rope, Lt)
+        # warm the causal-mask cache (built host-side once, resident after) before capture.
+        pipe.text_encoder._causal_mask(Lt)
+        _try_stage(
+            "text_encoder",
+            device,
+            eager_fn=lambda ids, cos, sin: pipe.text_encoder.forward(ids, cos, sin),
+            tracer_fn=lambda ids, cos, sin: pipe.text_encoder.forward(ids, cos, sin),
+            inputs={"ids": ids_dev, "cos": tcos, "sin": tsin},
+            gate=0.99,
+        )
+        sys.stdout.flush()
 
         # ---- Stage: VAE decode (fixed shape, single forward, already pure ttnn) ----
         T = 256  # T'=128 target
