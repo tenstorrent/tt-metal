@@ -129,10 +129,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     TT_FATAL(op.np_pad_dim2.has_value(), "NpConv3d: fused op requires 2D padding (H+W).");
     const bool is_2d = true;
 
-    // Halo-only op: the two NP-fabric reorders (H corner-first, W global two-pass) are perf levers
-    // added in a later slice. The W two-pass is compiled out at progress_t_batch_size==0 anyway (its
-    // kernel path is guarded on the per-batch signal), so both start OFF for the correctness slice.
-    const uint32_t use_corner_first = 0u;
+    // H corner-first (PCC-neutral): the H-writer sends the W-boundary corner sticks to the neighbor's L1
+    // recv buffer + raises the recv sem BEFORE the bulk middle row, so the neighbor's H recv-wait clears
+    // after ~2 sticks instead of the full row. Requires padding==1 (the kernel's corner-first path).
+    // W two-pass is the progress>0 conv gate; the halo op uses its own interior-first reorder (below)
+    // instead, so keep this OFF here.
+    const uint32_t use_corner_first = (op.np_padding_h == 1) ? 1u : 0u;
     const uint32_t use_w_two_pass = 0u;
 
     // For the compact halo buffer, H-section rows are exactly W_dev wide.
