@@ -11,7 +11,7 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.events import profiler_event_callback
@@ -196,6 +196,10 @@ def test_pipeline_performance(
 
     benchmark_profiler = BenchmarkProfiler()
     traced = mesh_shape == (4, 32)  # trace only for quadx32
+
+    # Skip WH 4x8 720p t2v - failing on Wormhole Galaxy, refs #46875
+    if is_wormhole_b0() and mesh_shape == (4, 8) and height == 720 and model_type == "t2v":
+        pytest.skip("Temporarily skipped on Wormhole Galaxy for 4x8 720p t2v, refs #46875")
 
     # Skip 4U.
     if galaxy_type == "4U":
