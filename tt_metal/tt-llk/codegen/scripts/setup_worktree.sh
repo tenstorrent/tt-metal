@@ -1,23 +1,22 @@
 #!/bin/bash
-# Worktree setup for codegen agents.
+# Worktree setup for codegen agents. Creates a branch from origin/main + a
+# worktree with the codegen infra (agents/scripts/references/config/.claude)
+# symlinked in, so agents read their playbooks while the fix stays based on a
+# clean main.
 #
-# Creates a git branch from origin/main, sets up a worktree, and symlinks
-# the codegen infrastructure (agents, scripts, references, config) so that
-# Claude Code agents running in the worktree can read their playbooks.
-#
-# Usage (sourced by other scripts or the orchestrator):
+# Usage (sourced):
 #   source codegen/scripts/setup_worktree.sh
-#   setup_worktree issue-123             # issue solving
-#   setup_worktree generate-gelu-quasar  # kernel generation
-#   cleanup_worktree issue-123
+#   setup_worktree issue-123     # create; exports WORKTREE_DIR / WORKTREE_BRANCH
+#   cleanup_worktree issue-123   # remove this run's worktree (default)
+#   prune_worktrees 14           # GC leftover worktrees older than 14d
+# Standalone:
+#   ./codegen/scripts/setup_worktree.sh {create|cleanup|prune|list} [ARG]
 #
-# Or standalone:
-#   ./codegen/scripts/setup_worktree.sh create issue-123
-#   ./codegen/scripts/setup_worktree.sh cleanup issue-123
-#
-# Exports:
-#   WORKTREE_BRANCH  — the branch name (e.g., ai-code-gen/issue-123-v1)
-#   WORKTREE_DIR     — absolute path to the worktree
+# Env:
+#   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: $HOME/.codegen/worktrees)
+#   CODEGEN_KEEP_WORKTREE  — "false" (default) removes the worktree after the run;
+#                            "true" keeps the live checkout
+# Exports: WORKTREE_BRANCH, WORKTREE_DIR
 
 set -euo pipefail
 
@@ -29,12 +28,22 @@ REPO_ROOT="$(cd "$LLK_ROOT" && git rev-parse --show-toplevel)"
 # Relative path from repo root to tt-llk (needed for worktree paths)
 LLK_REL="${LLK_ROOT#"$REPO_ROOT/"}"
 
-GIT_USER="ai-code-gen"
+GIT_USER="llk_code_gen"
+
+# Durable parent dir (not /tmp, which reboots/tmpwatch wipe); dir is versioned
+# per run so concurrent runs never collide.
+CODEGEN_WORKTREE_ROOT="${CODEGEN_WORKTREE_ROOT:-$HOME/.codegen/worktrees}"
+# Serialises version-reserve + branch-create + worktree-add across concurrent
+# runs. On the LOCAL .git — flock is unreliable on NFS ($HOME).
+CODEGEN_SETUP_LOCK="${REPO_ROOT}/.git/codegen-worktree-setup.lock"
+# Remove the worktree after the run (the fix survives as the branch commit +
+# generated.patch); "true" keeps it for inspection. `prune` GCs crashed runs.
+CODEGEN_KEEP_WORKTREE="${CODEGEN_KEEP_WORKTREE:-false}"
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-# Find the next available branch version for a task identifier.
-# e.g., if ai-code-gen/issue-123-v1 exists, returns 2.
+# Next free branch version for a task (e.g. returns 2 if ...-v1 exists).
+# Call with the setup lock held — read-then-create races otherwise.
 next_branch_version() {
   local task_id="$1"
   local pattern="${GIT_USER}/${task_id}-v"
@@ -51,6 +60,13 @@ next_branch_version() {
   echo $(( max + 1 ))
 }
 
+# List every worktree directory this tooling owns (under CODEGEN_WORKTREE_ROOT).
+codegen_worktree_dirs() {
+  git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+    | awk '/^worktree /{print $2}' \
+    | grep -F "${CODEGEN_WORKTREE_ROOT}/" || true
+}
+
 # ── Main functions ───────────────────────────────────────────────────────
 
 # Create a branch + worktree for the given task, with codegen infra symlinked in.
@@ -59,21 +75,25 @@ next_branch_version() {
 setup_worktree() {
   local task_id="$1"
 
-  # ── Create branch from origin/main ──
+  mkdir -p "$CODEGEN_WORKTREE_ROOT"
+  cd "$REPO_ROOT"
+  git fetch origin main --quiet 2>/dev/null || true
+
+  # Reserve a unique branch + dir under a lock (concurrency-safe).
+  local lock_fd
+  exec {lock_fd}>"$CODEGEN_SETUP_LOCK"
+  flock "$lock_fd"
+
   local version
   version="$(next_branch_version "$task_id")"
   WORKTREE_BRANCH="${GIT_USER}/${task_id}-v${version}"
+  # Version in the dir name too, so concurrent same-task runs don't collide.
+  WORKTREE_DIR="${CODEGEN_WORKTREE_ROOT}/${task_id}-v${version}"
 
-  cd "$REPO_ROOT"
   echo "[worktree] Creating branch $WORKTREE_BRANCH from origin/main"
-  git fetch origin main --quiet 2>/dev/null || true
   git branch "$WORKTREE_BRANCH" origin/main
 
-  # ── Create worktree ──
-  WORKTREE_DIR="/tmp/codegen_worktree_${task_id}"
-
-  # Remove stale worktree: covers both (a) directory exists and (b) directory is
-  # missing but still registered in git ("missing but already registered" error).
+  # Clean only THIS exact dir (a crashed prior run of this version).
   if [[ -d "$WORKTREE_DIR" ]] || git -C "$REPO_ROOT" worktree list 2>/dev/null | grep -q "$WORKTREE_DIR"; then
     echo "[worktree] Cleaning up stale worktree at $WORKTREE_DIR"
     git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
@@ -83,6 +103,9 @@ setup_worktree() {
 
   echo "[worktree] Creating worktree at $WORKTREE_DIR"
   git worktree add "$WORKTREE_DIR" "$WORKTREE_BRANCH"
+
+  flock -u "$lock_fd"
+  exec {lock_fd}>&-
 
   # ── Symlink codegen infrastructure ──
   # The codegen/ directory doesn't exist on main — symlink read-only parts
@@ -151,25 +174,41 @@ GITIGNORE
   export WORKTREE_DIR
 }
 
-# Remove worktree and optionally the branch for the given task.
+# Remove this run's worktree after the run (default). The fix is already on
+# WORKTREE_BRANCH + archived as generated.patch, so nothing is lost. Only ever
+# removes THIS run's $WORKTREE_DIR (never a concurrent sibling); keeps the branch
+# unless delete_branch=true.
 cleanup_worktree() {
   local task_id="$1"
   local delete_branch="${2:-false}"
-  local wt_dir="/tmp/codegen_worktree_${task_id}"
 
   cd "$REPO_ROOT"
 
-  if git worktree list 2>/dev/null | grep -q "$wt_dir"; then
-    echo "[worktree] Removing worktree at $wt_dir"
-    git worktree remove --force "$wt_dir" 2>/dev/null || true
+  if [[ "$CODEGEN_KEEP_WORKTREE" == "true" ]]; then
+    echo "[worktree] Keeping worktree for '$task_id' (CODEGEN_KEEP_WORKTREE=true). GC later: $0 prune"
+    return 0
   fi
 
-  # Fallback: if worktree remove failed, clean up manually
-  if [[ -d "$wt_dir" ]]; then
-    echo "[worktree] Force-removing leftover directory $wt_dir"
-    rm -rf "$wt_dir"
-    git worktree prune 2>/dev/null || true
+  if [[ -n "${WORKTREE_DIR:-}" ]]; then
+    # Normal path: only this run's worktree.
+    echo "[worktree] Removing worktree at $WORKTREE_DIR (fix preserved on branch + patch)"
+    git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+    [[ -d "$WORKTREE_DIR" ]] && rm -rf "$WORKTREE_DIR"
+  else
+    # Standalone admin (no WORKTREE_DIR): remove all of this task's worktrees
+    # (may hit a concurrent same-task run — prefer `prune` for routine GC).
+    echo "[worktree] WORKTREE_DIR unset — removing ALL worktrees for '$task_id' (may affect a concurrent same-task run)."
+    local wt
+    while IFS= read -r wt; do
+      case "$wt" in
+        "${CODEGEN_WORKTREE_ROOT}/${task_id}-v"*)
+          echo "[worktree] Removing worktree at $wt"
+          git worktree remove --force "$wt" 2>/dev/null || true
+          [[ -d "$wt" ]] && rm -rf "$wt" ;;
+      esac
+    done < <(codegen_worktree_dirs)
   fi
+  git worktree prune 2>/dev/null || true
 
   if [[ "$delete_branch" == "true" && -n "${WORKTREE_BRANCH:-}" ]]; then
     echo "[worktree] Deleting branch $WORKTREE_BRANCH"
@@ -179,24 +218,70 @@ cleanup_worktree() {
   echo "[worktree] Cleanup complete for $task_id"
 }
 
+# GC worktree dirs older than N days (default 14); branches are left intact.
+prune_worktrees() {
+  local days="${1:-14}"
+  mkdir -p "$CODEGEN_WORKTREE_ROOT"
+  cd "$REPO_ROOT"
+  echo "[worktree] Pruning worktrees under $CODEGEN_WORKTREE_ROOT older than ${days}d"
+  local wt pruned=0
+  while IFS= read -r wt; do
+    [[ -z "$wt" ]] && continue
+    case "$wt" in "${CODEGEN_WORKTREE_ROOT}/"*) ;; *) continue ;; esac
+    # -newermt returns the dir if it is NEWER than the cutoff; empty ⇒ old.
+    if [[ -d "$wt" ]] && [[ -z "$(find "$wt" -maxdepth 0 -newermt "-${days} days" 2>/dev/null)" ]]; then
+      echo "[worktree]   removing old worktree $wt"
+      git worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
+      pruned=$((pruned + 1))
+    fi
+  done < <(codegen_worktree_dirs)
+  git worktree prune 2>/dev/null || true
+  echo "[worktree] Pruned $pruned worktree(s)"
+}
+
+# List codegen worktrees.
+list_worktrees() {
+  echo "[worktree] Root: $CODEGEN_WORKTREE_ROOT"
+  local wt
+  while IFS= read -r wt; do
+    [[ -z "$wt" ]] && continue
+    echo "  $wt"
+  done < <(codegen_worktree_dirs)
+}
+
 # ── Standalone mode ──────────────────────────────────────────────────────
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   cmd="${1:-}"
-  task_id="${2:-}"
-
-  if [[ -z "$cmd" || -z "$task_id" ]]; then
-    echo "Usage: $0 {create|cleanup} TASK_ID"
-    echo ""
-    echo "TASK_ID examples:"
-    echo "  issue-123                  — for issue solving"
-    echo "  generate-gelu-quasar       — for kernel generation"
-    exit 1
-  fi
+  arg="${2:-}"
 
   case "$cmd" in
-    create)  setup_worktree "$task_id" ;;
-    cleanup) cleanup_worktree "$task_id" ;;
-    *)       echo "Unknown command: $cmd (use create or cleanup)"; exit 1 ;;
+    create)
+      [[ -z "$arg" ]] && { echo "Usage: $0 create TASK_ID" >&2; exit 1; }
+      setup_worktree "$arg" ;;
+    cleanup)
+      [[ -z "$arg" ]] && { echo "Usage: $0 cleanup TASK_ID" >&2; exit 1; }
+      cleanup_worktree "$arg" ;;
+    prune)
+      prune_worktrees "${arg:-14}" ;;
+    list)
+      list_worktrees ;;
+    *)
+      echo "Usage: $0 {create|cleanup|prune|list} [ARG]"
+      echo ""
+      echo "  create TASK_ID   Create a durable worktree + branch"
+      echo "  cleanup TASK_ID  Remove this run's worktree (default; kept if"
+      echo "                   CODEGEN_KEEP_WORKTREE=true)"
+      echo "  prune [DAYS]     GC leftover worktrees older than DAYS (default 14)"
+      echo "  list             List codegen worktrees"
+      echo ""
+      echo "TASK_ID examples:"
+      echo "  issue-123                  — for issue solving"
+      echo "  generate-gelu-quasar       — for kernel generation"
+      echo ""
+      echo "Env: CODEGEN_WORKTREE_ROOT (default \$HOME/.codegen/worktrees),"
+      echo "     CODEGEN_KEEP_WORKTREE (default false)"
+      [[ -z "$cmd" ]] && exit 1 || { [[ "$cmd" == "--help" || "$cmd" == "-h" ]] && exit 0 || exit 1; }
+      ;;
   esac
 fi
