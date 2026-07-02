@@ -74,9 +74,18 @@ class DiffusionGemmaSelfConditioning(Module):
         # replicated ``inputs_embeds`` (and the post_norm reduction) sees the full hidden dim.
         # Use ``dim=-1`` so this works whether the caller feeds a 3D [B,S,H] tensor (as the
         # decoder does — embed_tokens output before the 4D unsqueeze) or a 4D [1,B,S,H].
+        # ``use_persistent_buffer=False`` avoids sharing the ping-pong cache with the
+        # layer stack's all_gathers (they use the same input shape); a persistent-buffer
+        # collision was manifesting as "Input Tensor is not allocated" on the first layer's
+        # MLP all_gather. self_conditioning runs once per decoder call so the extra
+        # allocation is not a hot path.
         if self.parallel_config.tensor_parallel.factor > 1:
-            sc_signal = self.ccl_manager.all_gather_persistent_buffer(
-                sc_signal, dim=-1, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            sc_signal = self.ccl_manager.all_gather(
+                sc_signal,
+                dim=-1,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=False,
+                use_persistent_buffer=False,
             )
         combined = ttnn.add(inputs_embeds, sc_signal)
         ttnn.deallocate(sc_signal)
