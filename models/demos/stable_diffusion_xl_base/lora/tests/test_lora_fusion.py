@@ -152,3 +152,63 @@ def test_lora_fusion_pcc(mesh_device, lora_path):
     assert (
         not skipped_keys
     ), f"{len(skipped_keys)} LoRA impacted weights were not fused into base weights. Following weights were not fused: {skipped_keys}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {},
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(
+    get_device_name() not in ["n150", "p150"],
+    reason="test_lora_fusion runs only on n150 and p150",
+)
+@torch.no_grad()
+def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
+    """Fuse a text-encoder-impacting LoRA and check the fused CLIP weights match a
+    PEFT reference. The default adapter used by `test_lora_fusion_pcc` is UNet-only,
+    so this is the only coverage of the text-encoder fuse path (`_fuse_text_encoder_lora`).
+    """
+    torch_pipeline_for_tt = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+    )
+
+    pipeline_config = TtSDXLPipelineConfig(
+        num_inference_steps=50,
+        guidance_scale=5.0,
+        is_galaxy=is_galaxy(),
+        encoders_on_device=True,  # TE LoRA is only applied when encoders run on device.
+    )
+    tt_pipeline = TtSDXLPipeline(mesh_device, torch_pipeline_for_tt, pipeline_config)
+
+    tt_pipeline.load_lora_weights(te_lora_path)
+    components = tt_pipeline._lora_weights_manager.text_encoder_components()
+    assert components, (
+        "Chosen LoRA does not impact any text encoder; pick a LoRA that trains "
+        "text_encoder / text_encoder_2 to exercise this path."
+    )
+
+    tt_pipeline.fuse_lora(lora_scale=1.0)
+    assert tt_pipeline.get_lora_status()["text_encoder"] is True, "text-encoder LoRA was not marked fused"
+
+    # PEFT reference: fuse the same LoRA into the text encoders of a fresh pipeline
+    # and compare the merged CLIP weights against the ones the TT pipeline pushed to
+    # its (host-side) torch encoders before reloading them on device.
+    ref_pipeline = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+    )
+    ref_pipeline.load_lora_weights(te_lora_path)
+    ref_pipeline.fuse_lora(components=components, lora_scale=1.0)
+
+    for component in components:
+        ref_sd = getattr(ref_pipeline, component).state_dict()
+        fused_sd = getattr(tt_pipeline.torch_pipeline, component).state_dict()
+        for name, ref_tensor in ref_sd.items():
+            assert name in fused_sd, f"{component}: missing fused weight {name}"
+            assert_with_pcc(ref_tensor, fused_sd[name], pcc=0.999)
