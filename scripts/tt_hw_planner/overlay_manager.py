@@ -14,8 +14,47 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 
 _THIS_DIR = Path(__file__).resolve().parent
-_OVERLAYS_DIR = _THIS_DIR / "overlays"
 _INDEX_NAME = "index.json"
+_OVERLAYS_HOME_ENV = "TT_HW_PLANNER_OVERLAYS_HOME"
+_OVERLAYS_DIR: Optional[Path] = None
+_overlays_dir_cache: Optional[Path] = None
+
+
+def _main_repo_overlays_dir() -> Path:
+    if _OVERLAYS_DIR is not None:
+        return Path(_OVERLAYS_DIR)
+    global _overlays_dir_cache
+    if _overlays_dir_cache is not None:
+        return _overlays_dir_cache
+    env = os.environ.get(_OVERLAYS_HOME_ENV)
+    if env:
+        p = Path(env)
+        resolved = p if p.name == "overlays" else p / "overlays"
+        _overlays_dir_cache = resolved
+        return resolved
+    resolved: Optional[Path] = None
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=str(_THIS_DIR),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        common = Path(out.stdout.strip())
+        if not common.is_absolute():
+            common = (_THIS_DIR / common).resolve()
+        candidate = common.parent / "scripts" / "tt_hw_planner"
+        if candidate.is_dir():
+            resolved = candidate / "overlays"
+    except Exception:
+        resolved = None
+    if resolved is None:
+        resolved = _THIS_DIR / "overlays"
+    os.environ[_OVERLAYS_HOME_ENV] = str(resolved)
+    _overlays_dir_cache = resolved
+    return resolved
+
 
 _SHARED_PREFIXES = (
     "models/tt_transformers/",
@@ -85,7 +124,7 @@ def _slug(model_id: str) -> str:
 
 
 def _model_dir(model_id: str) -> Path:
-    return _OVERLAYS_DIR / _slug(model_id)
+    return _main_repo_overlays_dir() / _slug(model_id)
 
 
 def _index_path(model_id: str) -> Path:
@@ -585,9 +624,10 @@ def capture(model_id: str, rel_path: str) -> Optional[OverlayRecord]:
 
 def list_overlays(model_id: Optional[str] = None) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
-    if not _OVERLAYS_DIR.is_dir():
+    _overlays_dir = _main_repo_overlays_dir()
+    if not _overlays_dir.is_dir():
         return rows
-    model_dirs = [_model_dir(model_id)] if model_id else sorted([p for p in _OVERLAYS_DIR.iterdir() if p.is_dir()])
+    model_dirs = [_model_dir(model_id)] if model_id else sorted([p for p in _overlays_dir.iterdir() if p.is_dir()])
     for md in model_dirs:
         if not md.is_dir():
             continue
