@@ -20,7 +20,6 @@
 #include "ttnn/operations/data_movement/move/move_nanobind.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_nanobind.hpp"
 #include "ttnn/operations/data_movement/pad/pad_nanobind.hpp"
-#include "ttnn/operations/data_movement/permute/permute_nanobind.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat_nanobind.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave_nanobind.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape_nanobind.hpp"
@@ -52,7 +51,6 @@ void py_module(nb::module_& mod) {
     detail::bind_concat(mod);
     detail::bind_indexed_fill(mod);
     detail::bind_pad(mod);
-    detail::bind_permute(mod);
     detail::bind_repeat_interleave(mod);
     detail::bind_tilize(mod);
     detail::bind_tilize_with_val_padding(mod);

@@ -17,7 +17,6 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <tt_stl/small_vector.hpp>
@@ -393,7 +392,8 @@ static Tensor std_var_impl(
         permute_swap.resize(rank);
         std::iota(permute_swap.begin(), permute_swap.end(), 0);
         std::swap(permute_swap[target_dim], permute_swap[rank - 2]);
-        input_tensor = ttnn::permute(input_tensor, permute_swap, memory_config);
+        // TODO(nuked-op permute): restore real call
+        // (passthrough — no-op)
         needs_inverse_permute = true;  // swap is its own inverse
     } else {
         // 2+ dims: unified HW path.  Permute all reduction dims to the end,
@@ -416,7 +416,8 @@ static Tensor std_var_impl(
         }
 
         // ttnn::permute checks for identity internally and skips data movement if not needed.
-        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
+        // TODO(nuked-op permute): restore real call
+        // (passthrough — no-op)
 
         // Extra reduction dims beyond the last two contribute to reduce_batch_size.
         for (size_t i = 0; i < dim.size() - 2; ++i) {
@@ -445,7 +446,8 @@ static Tensor std_var_impl(
         reduce_batch_size);
 
     if (needs_inverse_permute) {
-        output_tensor = ttnn::permute(output_tensor, permute_swap, memory_config);
+        // TODO(nuked-op permute): restore real call
+        // (passthrough — no-op)
     }
 
     // Compensate for any shape adjustments applied to the input tensor.

@@ -5,7 +5,6 @@
 #include "prepare_conv3d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 // TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -163,8 +162,9 @@ Tensor prepare_conv3d_weights(
     }
     prepare_weights = ttnn::operations::core::to_device(prepare_weights, device, std::nullopt);
 
-    ttsl::SmallVector<int64_t> dims_1 = {2, 3, 4, 1, 0};
-    prepare_weights = ttnn::permute(prepare_weights, dims_1);
+    ttnn::SmallVector<int64_t> dims_1 = {2, 3, 4, 1, 0};
+    // TODO(nuked-op permute): restore real call
+    // (passthrough — no-op)
     uint32_t C = prepare_weights.logical_shape()[3];
     uint32_t ALIGN_PAD = alignment - (C % alignment);
     if (C % alignment != 0) {
@@ -190,8 +190,9 @@ Tensor prepare_conv3d_weights(
 
     prepare_weights =
         ttnn::reshape(prepare_weights, ttnn::Shape{kD, kH, kW, num_C_in_blocks, C_in_block, out_channels});
-    ttsl::SmallVector<int64_t> dims_2 = {3, 0, 1, 2, 4, 5};
-    prepare_weights = ttnn::permute(prepare_weights, dims_2);
+    ttnn::SmallVector<int64_t> dims_2 = {3, 0, 1, 2, 4, 5};
+    // TODO(nuked-op permute): restore real call
+    // (passthrough — no-op)
     prepare_weights = ttnn::reshape(prepare_weights, ttnn::Shape{-1, out_channels});
     return prepare_weights;
 }

@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 // TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -1727,27 +1726,31 @@ std::vector<Tensor> prod_bw(
     auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
     if (prod_result.logical_shape() != grad.padded_shape()) {
         if (*dim == 3 || *dim == -1) {
-            ttsl::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<uint32_t> end_index = {
+            ttnn::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
+            // TODO(nuked-op permute): restore real call
+            Tensor required = grad;
+            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttnn::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
             Tensor new_slice_tensor = /*nuked-op*/ required;
             after_permute_dims = {0, 2, 3, 1};
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            // TODO(nuked-op permute): restore real call
+            updated_grad = new_slice_tensor;
             if (updated_grad.storage_type() != StorageType::DEVICE) {
                 Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
                 pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
                 updated_grad = pad_updated_grad.to_device(input.device());
             }
         } else if (*dim == 2 || *dim == -2) {
-            ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<uint32_t> end_index = {
+            ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
+            // TODO(nuked-op permute): restore real call
+            Tensor required = grad;
+            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttnn::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
             Tensor new_slice_tensor = /*nuked-op*/ required;
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            // TODO(nuked-op permute): restore real call
+            updated_grad = new_slice_tensor;
             if (updated_grad.layout() == Layout::ROW_MAJOR) {
                 updated_grad =
                     ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
@@ -1782,9 +1785,11 @@ std::vector<Tensor> prod_bw(
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
             tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
         }
-        ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
-        Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
-        Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
+        ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
+        // TODO(nuked-op permute): restore real call
+        Tensor tensor_1 = tensor_1_temp;
+        // TODO(nuked-op permute): restore real call
+        Tensor tensor_2 = temp;
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
@@ -1810,10 +1815,9 @@ std::vector<Tensor> prod_bw(
         // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
         after_permute_dims = {0, 3, 1, 2};
-        Tensor result = permute(
-            ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
-            after_permute_dims,
-            output_memory_config);
+        // TODO(nuked-op permute): restore real call
+        Tensor result =
+            ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
         Tensor grad_result = result;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
             ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
@@ -1832,9 +1836,11 @@ std::vector<Tensor> prod_bw(
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
         tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
     }
-    ttsl::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
-    Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
-    Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
+    ttnn::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
+    // TODO(nuked-op permute): restore real call
+    Tensor tensor_1 = tensor_1_temp;
+    // TODO(nuked-op permute): restore real call
+    Tensor tensor_2 = temp;
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
@@ -1859,10 +1865,8 @@ std::vector<Tensor> prod_bw(
     }
     // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
-    Tensor result = ttnn::permute(
-        ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
-        after_permute_dims,
-        output_memory_config);
+    // TODO(nuked-op permute): restore real call
+    Tensor result = ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
     Tensor grad_result = result;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
         ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};

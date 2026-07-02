@@ -10,7 +10,6 @@
 #include "device/accumulation_device_operation_types.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include <ttnn/operations/data_movement/permute/permute.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn::operations::reduction::accumulation::common {

@@ -9,8 +9,6 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -118,8 +116,10 @@ inline Tensor transpose_(
         output_mem_constructed = output_mem_config.value();
     }
 
-    auto prim_permute = [&](const ttnn::Tensor& input, const ttsl::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_constructed, std::nullopt, pad_value);
+    auto prim_permute = [&](const ttnn::Tensor& input,
+                            [[maybe_unused]] const ttnn::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
+        // TODO(nuked-op permute): restore real call
+        return input;
     };
 
     bool interleaved_rm = !a.is_sharded() && a.layout() == Layout::ROW_MAJOR;
@@ -130,14 +130,14 @@ inline Tensor transpose_(
             }
             break;
         case ttnn::prim::TransposeOpDim::NH:
-            return ttnn::permute(
-                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
+            // TODO(nuked-op permute): restore real call
+            return a;
         case ttnn::prim::TransposeOpDim::NW:
-            return ttnn::permute(
-                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
+            // TODO(nuked-op permute): restore real call
+            return a;
         case ttnn::prim::TransposeOpDim::CW:
-            return ttnn::permute(
-                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
+            // TODO(nuked-op permute): restore real call
+            return a;
         case ttnn::prim::TransposeOpDim::CN:
             if (interleaved_rm) {
                 return prim_permute(a, ttsl::SmallVector<uint32_t>({1, 0, 2, 3}));
@@ -171,18 +171,13 @@ inline Tensor transpose_(
 
 ttnn::Tensor transpose_nd(
     const ttnn::Tensor& input_tensor,
-    uint32_t dim1,
-    uint32_t dim2,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    float pad_value = 0.0f) {
-    const auto rank = input_tensor.logical_shape().rank();
-    ttsl::SmallVector<int64_t> permutation;
-    permutation.reserve(rank);
-    for (uint32_t i = 0; i < rank; ++i) {
-        permutation.push_back(i);
-    }
-    std::swap(permutation[dim1], permutation[dim2]);
-    return ttnn::permute(input_tensor, permutation, memory_config_arg, pad_value);
+    [[maybe_unused]] uint32_t dim1,
+    [[maybe_unused]] uint32_t dim2,
+    [[maybe_unused]] const std::optional<MemoryConfig>& memory_config_arg,
+    [[maybe_unused]] float pad_value = 0.0f) {
+    // TODO(nuked-op permute): restore real call
+    // (dead permutation-build removed: dim1/dim2/memory_config_arg/pad_value only fed the deleted permute)
+    return input_tensor;
 }
 
 inline bool is_block_or_width_sharded_mc(const tt::tt_metal::MemoryConfig& mc) {
