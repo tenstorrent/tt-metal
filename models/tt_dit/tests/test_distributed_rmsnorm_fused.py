@@ -735,6 +735,11 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             # (intermittent wrong-row output, ~50% on a multi-config run). Mirrors the bench.
             sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
             pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
+            # Barrier so EVERY device has finished creating+zeroing its out_ready GlobalSemaphore
+            # and allocating the POB before any device launches the op and fires a cross-device
+            # round-0 atomic-inc. Without it a fast device's inc can race a peer's sem creation
+            # (which zeroes it) -> the inc is lost -> out_ready stuck at ring_size-2 -> round-0 hang.
+            ttnn.synchronize_device(submesh)
             ref = _torch_ref(cfg)
 
             def _fused(k, _inp=inp, _sems=sems, _pobs=pobs, _cfg=cfg):  # launch k -> ping-pong set k%_PINGPONG
