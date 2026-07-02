@@ -207,16 +207,18 @@ class Gemma4Attention(Module):
             per layer to feed the decoder later. Pass ``None`` through in non-encoder use.
         """
         B, S = hidden_states.shape[0], hidden_states.shape[1]
-        pc = self.parallel_config
 
-        # 1. Projections (column-parallel: input replicated → output sharded on heads).
-        q = self.q_proj(hidden_states, parallel_config=pc)
-        k = self.k_proj(hidden_states, parallel_config=pc)
+        # 1. Projections (column-parallel over head axis). ``parallel_config`` is only passed
+        # when the input is TP-fractured on its last dim (triggers the fused
+        # ``all_gather_minimal_matmul_async`` path). Here ``hidden_states`` is replicated —
+        # each device runs ``minimal_matmul`` against its local weight shard.
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
         # K=V quirk for full attention: V uses the raw k_proj output BEFORE k_norm / RoPE.
         # `v_raw = k` is a tensor alias — safe because ttnn ops are non-in-place by default
         # (RMSNorm/RoPE return new tensors). The underlying k_proj output lives until both
         # the k-path (k_norm → RoPE) and v-path (v_norm) have consumed it.
-        v_raw = k if not self.is_sliding else self.v_proj(hidden_states, parallel_config=pc)
+        v_raw = k if not self.is_sliding else self.v_proj(hidden_states)
 
         # 2. Reshape (B, S, H_local * D) → (B, S, H_local, D) → permute (B, H_local, S, D).
         q = ttnn.permute(ttnn.reshape(q, (B, S, self.num_local_heads, self.head_dim)), (0, 2, 1, 3))

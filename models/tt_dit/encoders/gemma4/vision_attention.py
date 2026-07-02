@@ -232,14 +232,15 @@ class Gemma4VisionAttention(Module):
             replicated [B, num_patches, hidden_size].
         """
         B, P = hidden_states.shape[0], hidden_states.shape[1]
-        pc = self.parallel_config
         H_local = self.num_local_heads
         Dp = self.head_dim_padded
 
-        # Projections (column-parallel).
-        q = self.q_proj(hidden_states, parallel_config=pc)
-        k = self.k_proj(hidden_states, parallel_config=pc)
-        v = self.v_proj(hidden_states, parallel_config=pc)
+        # Projections (column-parallel over head axis). Input is replicated per the
+        # docstring — no ``parallel_config`` argument, so ColParallelLinear runs its
+        # ``minimal_matmul`` path (each device against its local weight shard).
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
 
         # Reshape and permute to (B, H_local, P, Dp).
         q = ttnn.permute(ttnn.reshape(q, (B, P, H_local, Dp)), (0, 2, 1, 3))
