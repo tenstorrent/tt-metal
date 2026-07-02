@@ -43,7 +43,7 @@ class PatchEmbedConfig:
             self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=True,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
         return self
