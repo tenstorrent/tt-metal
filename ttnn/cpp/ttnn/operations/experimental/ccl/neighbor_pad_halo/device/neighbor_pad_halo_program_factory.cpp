@@ -725,8 +725,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     // Split this (link,dir)'s W rows across workers.
                     const uint32_t rows_this_link = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
                     const uint32_t base_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
-                    const uint32_t per_wk = rows_this_link / num_w_workers;
-                    const uint32_t extra_wk = rows_this_link % num_w_workers;
+                    // 8-aligned split: give each worker a whole number of 8-row (bank) units so its coalesce
+                    // base stays bank-aligned (bank-major coalesce needs base % 8 == 0). rows_this_link is
+                    // 8-aligned (w_coalesce_ok). Last workers absorb the remainder units.
+                    constexpr uint32_t BANKS = 8;
+                    const uint32_t units = rows_this_link / BANKS;
+                    const uint32_t units_per_wk = units / num_w_workers;
+                    const uint32_t extra_units = units % num_w_workers;
                     const uint32_t pw = w_dir ? op.np_pad2_right : op.np_pad2_left;
                     const uint32_t section_base = w_dir ? w_section_wright_base : w_section_wleft_base;
                     // recv-sem target = the SAME-direction worker core (matches the standard W writer,
@@ -735,8 +740,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     for (uint32_t wk = 0; wk < num_w_workers; wk++) {
                         CoreCoord wc = mux_worker_cores[s * num_w_workers + wk];
                         CoreCoord wc_vc = mux_worker_virtual[s * num_w_workers + wk];
-                        const uint32_t wk_start = base_link_start + wk * per_wk + std::min(wk, extra_wk);
-                        const uint32_t wk_count = per_wk + (wk < extra_wk ? 1 : 0);
+                        const uint32_t prior_units = wk * units_per_wk + std::min(wk, extra_units);
+                        const uint32_t wk_units = units_per_wk + (wk < extra_units ? 1 : 0);
+                        const uint32_t wk_start = base_link_start + prior_units * BANKS;
+                        const uint32_t wk_count = wk_units * BANKS;
                         // Reader RT args (same layout as the standard W reader).
                         std::vector<uint32_t> r_rt = {
                             wk_count, wk_start, pw, num_h_fabric_cores, output_num_sticks_per_halo_dim,
