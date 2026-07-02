@@ -155,6 +155,23 @@ DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - Core budget: 4H + (N workers + 1 mux)*2 dir * pad2_links W cores; clamp vs grid.y
 - Mux hangs are hard to debug; add Watcher-OFF (2x4 fabric) + timeout + tt-smi reset on fail
 
+## CONFORMANCE to all_gather_matmul mux usage (2026-07-02)
+all_gather_matmul_async reuses build_all_gather_async_minimal_default_program_artifacts, so the
+reference mux impl IS all_gather_async_default_program_factory + minimal_default_writer.cpp.
+| mux usage element                              | NP status |
+|------------------------------------------------|-----------|
+| build_connection -> wait_ready -> connect      | matches   |
+| stateful set_state + with_state send API       | MATCHES (now; was per-packet header rebuild) |
+| atomic_inc via with_state                       | matches (now) |
+| worker count auto by data-per-link              | matches (heuristic applied; capped 2) |
+| mux config (full-size ch = workers, 0 hdr-only) | matches   |
+| termination-master handshake                    | matches   |
+| num_buffers_per_channel                         | NP=8, all_gather default=1 (golden flat 15.3-15.5 B/c; config value, not usage) |
+| chunks_per_sync incremental recv-sem            | DELIBERATELY NOT matched — standalone NP has no mid-flight consumer, one deferred inc is strictly fewer fabric txns |
+| 4 workers for >256KB/link                        | capped at 2 (validated); golden 2ch 15.07 vs 4ch 15.40 B/c = +2%, plateau. 4-worker mux unvalidated (hangs) |
+Driver-level mux usage now matches all_gather. Residual deltas are a golden-flat config value, a correct
+standalone divergence, and a +2% plateau worker-count cap — not usage-pattern differences.
+
 ## Key Measurements — FABRIC BANDWIDTH REACHED via multi-worker mux (2026-07-02)
 Perf test (T32, trace wall, coalesce shape [1,32,272,480,128], 2x4):
 | config                         | time (us) | GB/s (send+recv) | speedup vs neighbor_pad_async |
