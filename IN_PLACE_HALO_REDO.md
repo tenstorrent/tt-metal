@@ -465,6 +465,75 @@ SAVE region is large enough here that building it out for height-sharded is clea
 
 ---
 
+## 10. Implementation design — LOCKED (per user direction 2026-07-02)
+
+**Silent auto-activation, no user toggle.** There is NO `in_place` flag exposed to the
+user (unlike the original, which put `in_place` on Conv2d/MaxPool). The halo op decides
+internally, per invocation, using the exact runtime core count. In-place activates iff
+**(a) it net-saves L1** (the §9 gate) **AND (b) it is corruption-safe** (a class the
+kernel provably handles). Otherwise it silently falls back to normal halo.
+
+**The aliasing mechanism (confirmed from archived `halo_device_operation.cpp:87-107`).**
+Sharded L1 buffers allocate top-down, so:
+1. Deallocate the input buffer (`input.mesh_buffer()->deallocate()`).
+2. Allocate the (larger) output — it reuses the same top region, landing `delta` *below*
+   the old input, so the input data survives at the tail `[delta, out_nsticks)` and
+   `src_buffer->address() == dst_buffer->address() + delta` holds. Assert this.
+Under the current framework this goes in `create_output_tensors`
+(`halo_device_operation.cpp:93-97`): if in-place, dealloc input then
+`create_device_tensor(output_spec)`; the factory binds `src_cb`→(old input addr) and
+`out_cb`→output buffer, which now overlap.
+
+**Caller-lifecycle adaptation (silent).** The pool/conv callers today call
+`deallocate_input` and `reallocate_halo_output` (`ttnn::move`) after halo
+(`generic_pools.cpp:350-356`). When in-place activates these MUST be skipped —
+`deallocate` would double-free the shared buffer and `move` would copy the output to a
+fresh buffer (spiking L1 and undoing the saving). Since there is no user flag, the caller
+determines this by calling the SAME shared decision function the op uses. So the gate is a
+**pure function of (config, input shard, output shard sizes)** — `should_halo_be_in_place(...)`
+— computed identically at: (i) the pool caller (to skip dealloc/move), (ii)
+`create_output_tensors` (to dealloc+alias), (iii) the factory (to build the in-place
+program). No state stored; program-cache-consistent because it's a pure function of the
+attributes.
+
+**The gate** = `max_ref_size (outbound-halo sticks) + aux_margin < in_nsticks_per_core`
+AND layout ∈ {validated classes} (start: height-sharded). `aux_margin` accounts for the
+config-CB / pad-CB / untilize-temp deltas the §9 proxy ignores; start conservative and
+tighten once real peak-L1 is measured.
+
+**Build order (vertical slice first):**
+1. `should_halo_be_in_place(...)` shared pure fn (+ unit test extending the §9e probe).
+2. In-place config generation in `sliding_window.cpp` (local forward-then-reverse ordering,
+   remote transfers kept together + `max_ref_size`, pad) — host, unit-testable.
+3. Aliasing in `create_output_tensors` + overlap assert.
+4. `halo_gather_in_place.cpp` (port archived; reconcile with current `experimental::CB` +
+   split-reader model). Ordering: stage-remote→temp, local (memmove-direction), global
+   semaphore/multicast barrier, padding, distribute-from-temp, atomic barrier at exit.
+5. Factory in-place path (ProgramDescriptor): dst-bound CBs, remote-temp CB (post-untilize
+   dtype), rectangular grid + noop + semaphore, two DM kernels; `num_cores_x` from bbox.
+6. Caller adaptation in `generic_pools` (skip dealloc/move when gate true).
+7. Rigorous tests (§11), WH; then BH.
+
+**Deferred (tracked, non-blocking):** DRAM-slicing L1 estimation. Lowering L1 can make the
+estimator *over*-estimate → unnecessary DRAM slicing (already happens today) → no
+correctness risk. Only *under*-estimation is dangerous, and in-place never raises L1 when
+active. Revisit after the op is solid.
+
+## 11. Verification rigor (per user — this is how the original bugs were caught)
+
+In-place halo "looks" correct extremely easily while harboring races that only corrupt
+under specific shapes. Testing discipline:
+- **Elementwise `allclose`, NOT just PCC.** Small corruption (a few wrong sticks) can pass
+  a PCC threshold; use exact/near-exact elementwise comparison to catch it.
+- **Structured inputs** where each stick's value encodes its (core, local index) origin, so
+  a wrong value pinpoints the exact sub-stick and the race that produced it.
+- **Run in-place vs normal on identical shapes** (the gate can be forced on for tests via a
+  test-only hook) and compare outputs elementwise — any divergence is a bug.
+- **Cover the edge classes** that historically broke: forward-reads-on-some-cores /
+  reverse-on-others (N=8 112×112, N=32 264×40), noop/partial grids, small sticks (C=1,7,16),
+  large kernels/dilation, wide untilize, non-tile-multiple NHW, both bf16 and bf8_b.
+- **WH is not sufficient** — corruption can be WH-clean, BH-broken (alignment, NoC order).
+
 ## 8. Curriculum lessons to capture (running list)
 
 Per the standing request to log novel/unexpected/useful findings via the curriculum
