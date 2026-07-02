@@ -3738,13 +3738,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     };
 
     m2::ComputeHardwareConfig compute_hw_config{
-        .gen2_config =
-            m2::ComputeHardwareConfig::Gen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = false,
-                .math_approx_mode = math_approx_mode,
-            },
+        m2::ComputeGen2Config{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false,
+            .math_approx_mode = math_approx_mode,
+        },
     };
 
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
@@ -3889,11 +3888,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_1 + in0_noc (legacy parity): the in0 row-mcast dest rectangle is swapped for
             // in0_noc below, so the mcast must issue on in0_noc or it inverts and only the sender's
             // own column receives in0 (degenerate 2-corner delivery -> partial-grid hang).
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         };
         // Block-sharded in0 sender reads num_x + num_y per-core mcast-coord varargs (in0_mcast_noc_x/y);
         // declare the count so the framework allocates the vararg slots (else get_vararg is OOB).
@@ -3921,11 +3917,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .compile_time_args = std::move(no_work_cta),
             .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
             // Pin RISCV_1 + in0_noc (legacy parity) to match the in0-mcast rectangle geometry.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         };
         // Same varargs (in0_mcast_noc_x/y) as the work in0 sender (block-sharded only path).
         no_work_ks.advanced_options.num_runtime_varargs = num_x_bs + num_y_bs;
@@ -3962,11 +3955,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
             // Pin RISCV_1 + in0_noc (legacy parity). The m2 path computes a single in0-mcast geometry
             // on in0_noc for both the main and _other receivers, so both must use in0_noc.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         };
     };
     if (has_in0_receiver) {
@@ -4088,11 +4078,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
             // Pin RISCV_0 + in1_noc (legacy parity): the in1 column-mcast dest rectangle is swapped
             // for in1_noc below, so the mcast must issue on in1_noc or it inverts and degenerates.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 
@@ -4169,11 +4156,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity). The m2 path computes a single in1-mcast geometry
             // on in1_noc for both the main and _other receivers, so both must use in1_noc to match
             // the sender's multicast rectangle and semaphore signaling.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         };
     };
     const bool has_in1_receiver = in1_receiver.num_cores() > 0;

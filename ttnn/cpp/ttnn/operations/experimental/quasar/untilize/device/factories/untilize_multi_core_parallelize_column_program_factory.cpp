@@ -110,9 +110,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
             .dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ---- Writer (Metal 2.0 fork of writer_..._interleaved_parallel_columns) ----
@@ -127,9 +125,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_core", "tile_width_size", "start_stick_id", "offset_within_stick"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // ---- Compute (Metal 2.0 fork of untilize; full + cliff) ----
@@ -138,10 +134,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{
-            .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+        ComputeHardwareConfig hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
         if (fp32_dest_acc_en) {
-            hw.gen2_config->unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            std::get<ComputeGen2Config>(hw).unpack_to_dest_mode.emplace(
+                IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
         return hw;
     };

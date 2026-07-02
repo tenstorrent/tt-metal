@@ -79,9 +79,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // -- Writer kernel --
@@ -95,16 +93,14 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // -- Compute kernel --
-    ComputeHardwareConfig compute_hw{
-        .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
+    ComputeHardwareConfig compute_hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
     if (fp32_llk_acc) {
-        compute_hw.gen2_config->unpack_to_dest_mode = {{WS_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
+        std::get<ComputeGen2Config>(compute_hw).unpack_to_dest_mode = {
+            {WS_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
     }
     KernelSpec compute{
         .unique_id = WS_COMPUTE_KERNEL,

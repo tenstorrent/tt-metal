@@ -612,13 +612,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             },
         .hw_config =
             m2::ComputeHardwareConfig{
-                .gen2_config =
-                    m2::ComputeHardwareConfig::Gen2Config{
-                        .math_fidelity = math_fidelity,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .dst_full_sync_en = dst_full_sync_en,
-                        .math_approx_mode = math_approx_mode,
-                    },
+                m2::ComputeGen2Config{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .math_approx_mode = math_approx_mode,
+                },
             },
     };
 
@@ -692,9 +691,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             },
         .hw_config =
             m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc},
+                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc},
             },
     };
     if (skip_activation_mcast) {
@@ -753,9 +750,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             },
         .hw_config =
             m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc},
+                m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc},
             },
     };
 

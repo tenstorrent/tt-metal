@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -43,6 +44,8 @@
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+
+#include "impl/context/metal_context.hpp"
 
 #include "gtest/gtest.h"
 
@@ -71,11 +74,13 @@ TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, uint32_t num_pag
 }
 
 experimental::DataMovementHardwareConfig make_dm_config(DataMovementProcessor processor, NOC noc) {
-    return experimental::DataMovementHardwareConfig{
-        .gen1_config = experimental::DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
             .disable_implicit_sync_for = {SCRATCH_DFB},
         }};
+    }
+    return experimental::DataMovementHardwareConfig{
+        experimental::DataMovementGen1Config{.processor = processor, .noc = noc}};
 }
 
 }  // namespace

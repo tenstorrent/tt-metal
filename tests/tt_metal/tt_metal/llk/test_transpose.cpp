@@ -209,12 +209,14 @@ void run_single_core_transpose(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {INPUT_DFB}}},
+            [&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {INPUT_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+            }(),
     };
 
     experimental::KernelSpec writer_spec{
@@ -227,12 +229,14 @@ void run_single_core_transpose(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUTPUT_DFB}}},
+            [&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUTPUT_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+            }(),
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -272,18 +276,18 @@ void run_single_core_transpose(
                 experimental::ComputeHardwareConfig cfg;
                 auto unpack_modes =
                     fp32_dest_acc_en
-                        ? experimental::ComputeHardwareConfig::
-                              UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{};
+                        ? experimental::
+                              ComputeUnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
+                        : experimental::ComputeUnpackToDestModes{};
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
-                    cfg.gen2_config = experimental::ComputeHardwareConfig::Gen2Config{
+                    cfg = experimental::ComputeGen2Config{
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = test_config.dst_full_sync_en,
                         .unpack_to_dest_mode = unpack_modes,
                         .unpack_to_dest_en = fp32_dest_acc_en,
                     };
                 } else {
-                    cfg.gen1_config = experimental::ComputeHardwareConfig::Gen1Config{
+                    cfg = experimental::ComputeGen1Config{
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = test_config.dst_full_sync_en,
                         .unpack_to_dest_mode = unpack_modes,

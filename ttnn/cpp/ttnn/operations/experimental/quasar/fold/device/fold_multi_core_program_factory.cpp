@@ -119,9 +119,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .compile_time_args = make_cta(/*is_reader=*/1),
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     KernelSpec reader{
@@ -134,9 +132,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .compile_time_args = make_cta(/*is_reader=*/0),
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ---- Assemble the spec ----

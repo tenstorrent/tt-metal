@@ -83,11 +83,8 @@ void RunTest(
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
         .dfb_bindings = {experimental::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
+            .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)

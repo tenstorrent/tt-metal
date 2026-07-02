@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <numeric>
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -167,11 +168,11 @@ void run_borrowed_memory_dfb_program(
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        std::get<DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
+        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
         if (!cfg.tensix_consumer) {
-            std::get<DataMovementHardwareConfig>(consumer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config))
+                .disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
         }
     }
 
@@ -341,10 +342,10 @@ void run_update_address_test(
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        std::get<DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
-        std::get<DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
+        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
+        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
     }
 
     DataflowBufferSpec dfb_spec{

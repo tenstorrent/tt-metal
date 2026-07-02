@@ -5737,13 +5737,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     };
 
     m2::ComputeHardwareConfig compute_hw_config{
-        .gen2_config =
-            m2::ComputeHardwareConfig::Gen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = false,
-                .math_approx_mode = math_approx_mode,
-            },
+        m2::ComputeGen2Config{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false,
+            .math_approx_mode = math_approx_mode,
+        },
     };
 
     // ---- in0 sender kernel CTAs (named) ----
@@ -5891,11 +5890,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         // issue on in0_noc; a READER hint resolves to NOC0, inverts the rectangle into a degenerate
         // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
         // Matches the working mcast_2d factory.
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+        .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
     });
 
     const bool has_no_work_in_recv =
@@ -5921,11 +5917,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .compile_time_args = make_in0_sender_cta(0, 1),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         });
     }
     if (has_no_work_not_in_recv) {
@@ -5947,11 +5940,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .compile_time_args = make_in0_sender_cta(0, 0),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         });
     }
 
@@ -5985,11 +5975,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
             // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
             // sender_sem.up to the sender must use the same NOC as the mcast geometry).
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         });
     }
 
@@ -6101,11 +6088,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // reads/output-writes run on the opposite NOC from the in0 mcast (NOC1) — legacy parity.
             // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
             // (npw_sent=0), hanging the final barrier.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 
@@ -6741,13 +6725,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     };
 
     m2::ComputeHardwareConfig compute_hw_config{
-        .gen2_config =
-            m2::ComputeHardwareConfig::Gen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = false,
-                .math_approx_mode = math_approx_mode,
-            },
+        m2::ComputeGen2Config{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false,
+            .math_approx_mode = math_approx_mode,
+        },
     };
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
@@ -6835,10 +6818,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                          "last_block_h",
                          "sparsity_addr",
                      }},
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config::create_from_role(m2::DataMovementRoleHint::READER)},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config::create_from_role(
+                m2::DataMovementRoleHint::READER)},
         });
     }
 
@@ -6945,11 +6926,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
             // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
             // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 
@@ -7027,11 +7005,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = std::move(in1_recv_rta_names)},
             // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
             // the sender's multicast geometry.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 
@@ -7108,20 +7083,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .unique_id = RO_NOOP_BRISC_KERNEL,
             .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
             .dfb_bindings = std::move(noop_dm_dfb),
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_NCRISC_KERNEL,
             .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc}},
+            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc}},
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
