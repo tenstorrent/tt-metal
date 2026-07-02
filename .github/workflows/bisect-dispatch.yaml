@@ -110,6 +110,8 @@ jobs:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
       env:
         GH_TOKEN: ${{ github.token }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         ARCH_NAME: ${{ needs.determine-runner-config.outputs.arch-name }}
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work:/work/ttnn:/work/tools
