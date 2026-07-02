@@ -21,6 +21,7 @@ file(
     common/kernels/*
     fill_pad/device/kernels/*
     fill_rm/device/kernels/*
+    flip/device/kernels/*
     fold/device/kernels/*
     gather/device/kernels/*
     copy/device/kernels/*
@@ -116,6 +117,9 @@ target_sources(
             fill_rm/fill_rm_nanobind.hpp
             fill_rm/device/fill_rm_device_operation_types.hpp
             fill_rm/device/fill_rm_program_factory.hpp
+            # flip/
+            flip/flip_nanobind.hpp
+            flip/device/flip_device_operation.hpp
             # fold/
             fold/fold.hpp
             fold/fold_nanobind.hpp

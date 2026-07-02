@@ -35,6 +35,10 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     fill_rm/device/fill_rm_device_operation.cpp
     fill_rm/device/fill_rm_program_factory.cpp
     fill_rm/fill_rm.cpp
+    flip/device/flip_device_operation.cpp
+    flip/device/flip_rm_program_factory.cpp
+    flip/device/flip_tiled_program_factory.cpp
+    flip/flip.cpp
     fold/device/fold_device_op.cpp
     fold/device/fold_multi_core_dram_program_factory.cpp
     fold/device/fold_multi_core_program_factory.cpp
@@ -191,6 +195,7 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     fill_pad/device/fill_pad_device_operation.hpp
     fill_rm/fill_rm.hpp
     fill_rm/device/fill_rm_device_operation.hpp
+    flip/flip.hpp
     move/device/move_device_operation.hpp
     pad/pad.hpp
     permute/permute.hpp
