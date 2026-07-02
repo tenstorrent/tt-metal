@@ -7,45 +7,36 @@
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
 namespace {
 
-// Anonymous-namespace helper unique to interleaved_to_sharded to avoid unity-build collisions.
-void push_i2s_cb_pair(
-    ProgramDescriptor& desc,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_size,
-    uint32_t page_size,
-    const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
-    CBDescriptor cb;
-    cb.total_size = total_size;
-    cb.core_ranges = core_ranges;
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-    });
-    cb.buffer = bound_buffer;
-    desc.cbs.push_back(std::move(cb));
-}
+// Spec resource names. Prefixed to stay distinct under unity builds
+// (Pattern: Unity-build hygiene for anonymous-namespace symbols).
+const DFBSpecName I2S_INPUT_DFB{"i2s_input"};
+const DFBSpecName I2S_OUTPUT_DFB{"i2s_output"};
+const DFBSpecName I2S_SCRATCH_DFB{"i2s_scratch"};
+
+const TensorParamName I2S_INPUT{"i2s_input"};
+const TensorParamName I2S_OUTPUT{"i2s_output"};
+
+const KernelSpecName I2S_READER{"i2s_reader"};
+const KernelSpecName I2S_WRITER{"i2s_writer"};
+const KernelSpecName I2S_COMPUTE{"i2s_compute"};
 
 }  // namespace
 
@@ -55,7 +46,7 @@ void push_i2s_cb_pair(
 constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
 
-ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::create_program_artifacts(
     const InterleavedToShardedParams& /*operation_attributes*/,
     const InterleavedToShardedInputs& tensor_args,
     Tensor& output_tensor) {
@@ -139,112 +130,185 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
         }
     }
 
-    uint32_t input_cb_index = tt::CBIndex::c_0;
-    uint32_t scratch_cb_index = tt::CBIndex::c_1;
-    uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
     uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
-
-    ProgramDescriptor desc;
-
-    if (convert_df) {
-        out_cb_index = tt::CBIndex::c_16;
-        uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
-        // Non-globally-allocated input CB (interleaved input streamed via reader).
-        push_i2s_cb_pair(
-            desc,
-            input_cb_index,
-            input_cb_data_format,
-            num_input_units * input_page_size,
-            input_page_size,
-            all_cores,
-            /*bound_buffer=*/nullptr);
-    }
-
-    // Output CB. When destination is sharded (non-DRAM) we bind it to the output buffer
-    // for dynamic-CB rebinding on cache hits via cb.buffer. When dst is DRAM, no binding.
-    push_i2s_cb_pair(
-        desc,
-        out_cb_index,
-        output_cb_data_format,
-        num_input_units * output_page_size,
-        output_page_size,
-        all_cores,
-        /*bound_buffer=*/dst_is_dram ? nullptr : dst_buffer);
 
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
-    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
-        // scratchpad going to be used to align DRAM (64B) to L1 (16B)
-        // This is done to mitigate the alignment issues.
-        // See issue #34414.
-        uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
-        push_i2s_cb_pair(
-            desc,
-            scratch_cb_index,
-            input_cb_data_format,
-            num_trids * scratch_cb_page_size,
-            scratch_cb_page_size,
-            all_cores,
-            /*bound_buffer=*/nullptr);
+
+    // The scratch DFB is only used by the stick-layout (ROW_MAJOR) reader. Match the legacy
+    // condition that decided whether the scratch CB was created.
+    bool use_scratch = (src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned;
+    uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
+
+    uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
+
+    bool is_tile = (input.layout() == Layout::TILE);
+
+    // ---- Build the ProgramSpec ----
+    ProgramSpec spec;
+    spec.name = "interleaved_to_sharded";
+
+    // Tensor parameters (typed bindings replace the legacy buffer-address RTA slot 0).
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = I2S_INPUT, .spec = input.tensor_spec()},
+        TensorParameter{.unique_id = I2S_OUTPUT, .spec = output.tensor_spec()},
+    };
+
+    // Dataflow buffers.
+    // OUTPUT DFB: always present. Borrowed onto the output buffer when the destination is
+    // sharded-L1 (legacy dynamic-CB rebinding via cb.buffer); plain L1 DFB when dst is DRAM.
+    DataflowBufferSpec output_dfb{
+        .unique_id = I2S_OUTPUT_DFB,
+        .entry_size = output_page_size,
+        .num_entries = num_input_units,
+        .data_format_metadata = output_cb_data_format,
+    };
+    if (!dst_is_dram) {
+        output_dfb.borrowed_from = I2S_OUTPUT;
+    }
+    spec.dataflow_buffers.push_back(output_dfb);
+
+    // INPUT DFB: only when a data-format conversion compute kernel is inserted.
+    if (convert_df) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = I2S_INPUT_DFB,
+            .entry_size = input_page_size,
+            .num_entries = num_input_units,
+            .data_format_metadata = input_cb_data_format,
+        });
     }
 
-    // Reader kernel.
-    KernelDescriptor reader_desc;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.config = ReaderConfigDescriptor{};
-    if (input.layout() == Layout::TILE) {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores()};
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-        reader_desc.kernel_source =
+    // SCRATCH DFB: only on the stick-layout reader path, used as a TRID staging buffer.
+    if (!is_tile && use_scratch) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = I2S_SCRATCH_DFB,
+            .entry_size = scratch_cb_page_size,
+            .num_entries = num_trids,
+            .data_format_metadata = input_cb_data_format,
+        });
+    }
+
+    // Reader kernel. Produces into INPUT_DFB (when converting) or directly into OUTPUT_DFB.
+    const DFBSpecName reader_out_dfb = convert_df ? I2S_INPUT_DFB : I2S_OUTPUT_DFB;
+    KernelSpec reader{
+        .unique_id = I2S_READER,
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_INPUT, .accessor_name = "src"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+    };
+    if (is_tile) {
+        reader.source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
             "reader_unary_sharded_blocks_interleaved_start_id.cpp";
-        reader_desc.compile_time_args = std::move(reader_compile_time_args);
+        // tile_bytes: the in0 DFB's tile size (== the bound DFB's data-format tile size).
+        // Passed as a CTA because the kernel needs it as a compile-time constant (template
+        // arg) and the device-side get_tile_size() is not arch-portable to Quasar.
+        reader.compile_time_args = {
+            {"num_readers", all_cores.num_cores()}, {"tile_bytes", convert_df ? input_unit_size : output_unit_size}};
+        reader.dfb_bindings = {ProducerOf(reader_out_dfb, "in0")};
+        reader.runtime_arg_schema = {
+            .runtime_arg_names = {
+                "block_height_tiles",
+                "block_width_tiles",
+                "padded_offset_bytes",
+                "input_width_offset_tiles",
+                "block_num_tiles",
+                "start_id_offset",
+                "start_id_base"}};
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_trids};
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-        reader_desc.kernel_source =
+        reader.source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";
-        reader_desc.compile_time_args = std::move(reader_compile_time_args);
+        reader.compile_time_args = {{"num_trids", num_trids}};
+        // SCRATCH is a self-loop on the reader (produces and consumes its own staging buffer).
+        reader.dfb_bindings = {
+            ProducerOf(reader_out_dfb, "in0"),
+            DFBBinding{
+                .dfb_spec_name = I2S_SCRATCH_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{
+                .dfb_spec_name = I2S_SCRATCH_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+        };
+        reader.runtime_arg_schema = {
+            .runtime_arg_names = {
+                "block_height",
+                "block_width_bytes",
+                "padded_block_width_bytes",
+                "aligned",
+                "aligned_input_width_offset_bytes",
+                "aligned_block_width_bytes",
+                "aligned_offset",
+                "start_id"}};
     }
 
     // Writer kernel.
-    KernelDescriptor writer_desc;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.config = WriterConfigDescriptor{};
-    std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
+    KernelSpec writer{
+        .unique_id = I2S_WRITER,
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+    };
     if (dst_is_dram) {
-        if (input.layout() == Layout::TILE) {
-            writer_desc.kernel_source =
+        writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};
+        writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_OUTPUT, .accessor_name = "dst"}};
+        if (is_tile) {
+            writer.source =
                 "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
                 "writer_unary_sharded_blocks_start_id.cpp";
+            writer.runtime_arg_schema = {
+                .runtime_arg_names = {
+                    "block_height_tiles",
+                    "block_width_tiles",
+                    "padded_offset",
+                    "block_width_padded_num_tiles",
+                    "output_width_tiles",
+                    "start_id_offset",
+                    "start_id_base"}};
         } else {
-            writer_desc.kernel_source =
+            writer.source =
                 "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
                 "writer_unary_sharded_stick_layout_start_id.cpp";
+            writer.runtime_arg_schema = {
+                .runtime_arg_names = {
+                    "block_height",
+                    "block_width_bytes",
+                    "padded_block_width_bytes",
+                    "start_id",
+                    "output_width_in_pages"}};
         }
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     } else {
-        writer_desc.kernel_source =
+        writer.source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
             "writer_unary_sharded.cpp";
+        writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};
+        writer.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
     }
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
 
-    // Optional compute kernel for data-format conversion.
-    KernelDescriptor compute_desc;
+    spec.kernels.push_back(reader);
+    spec.kernels.push_back(writer);
+
+    // Optional compute kernel for data-format conversion: consumes INPUT_DFB, produces OUTPUT_DFB.
     if (convert_df) {
-        compute_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/compute/"
-            "eltwise_copy.cpp";
-        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc.core_ranges = all_cores;
-        compute_desc.config = ComputeConfigDescriptor{};
+        spec.kernels.push_back(KernelSpec{
+            .unique_id = I2S_COMPUTE,
+            .source = "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/compute/"
+                      "eltwise_copy.cpp",
+            .dfb_bindings = {ConsumerOf(I2S_INPUT_DFB, "in0"), ProducerOf(I2S_OUTPUT_DFB, "out")},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
+            .hw_config = ComputeHardwareConfig{},
+        });
     }
+
+    // Single work unit: every core runs the same kernel set; per-core variation is via RTAs.
+    Group<KernelSpecName> wu_kernels = {I2S_READER, I2S_WRITER};
+    if (convert_df) {
+        wu_kernels.push_back(I2S_COMPUTE);
+    }
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = wu_kernels, .target_nodes = all_cores}};
+
+    // ---- Build the ProgramRunArgs (per-core runtime args) ----
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = I2S_READER};
+    KernelRunArgs writer_run{.kernel = I2S_WRITER};
+    KernelRunArgs compute_run{.kernel = I2S_COMPUTE};
 
     uint32_t starting_idx_h =
         operations::data_movement::detail::calculate_starting_idx_h(input, num_slices, slice_index);
@@ -253,7 +317,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
 
     for (const auto& core : cores) {
         uint32_t curr_num_units_per_shard = num_units_per_shard;
-        if (input.layout() == Layout::TILE) {
+        if (is_tile) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
             uint32_t padded_offset = 0;
@@ -287,33 +351,34 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             }
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
 
-            // Reader run-time args: arg 0 is the source-buffer base address (binding).
-            KernelDescriptor::RTArgList reader_rt;
-            reader_rt.push_back(src_buffer);
-            reader_rt.push_back(shard_height);
-            reader_rt.push_back(shard_width);
-            reader_rt.push_back(padded_offset);
-            reader_rt.push_back(num_units_offset);
-            reader_rt.push_back(curr_num_units_per_shard);
-            reader_rt.push_back(curr_idx_h + curr_idx_w);
-            reader_rt.push_back(starting_idx_h);
-            reader_desc.emplace_runtime_args(core, reader_rt);
+            // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter).
+            reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+                .node = core,
+                .args = {
+                    {"block_height_tiles", shard_height},
+                    {"block_width_tiles", shard_width},
+                    {"padded_offset_bytes", padded_offset},
+                    {"input_width_offset_tiles", num_units_offset},
+                    {"block_num_tiles", curr_num_units_per_shard},
+                    {"start_id_offset", curr_idx_h + curr_idx_w},
+                    {"start_id_base", starting_idx_h}}});
 
             // Writer run-time args
             uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
             if (dst_is_dram) {
-                KernelDescriptor::RTArgList writer_rt;
-                writer_rt.push_back(dst_buffer);
-                writer_rt.push_back(shard_height);
-                writer_rt.push_back(shard_width);
-                writer_rt.push_back(pad_offset);
-                writer_rt.push_back(curr_num_units_per_shard);
-                writer_rt.push_back(num_units_offset);
-                writer_rt.push_back(curr_idx_h + curr_idx_w);
-                writer_rt.push_back(starting_idx_h);
-                writer_desc.emplace_runtime_args(core, writer_rt);
+                writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+                    .node = core,
+                    .args = {
+                        {"block_height_tiles", shard_height},
+                        {"block_width_tiles", shard_width},
+                        {"padded_offset", pad_offset},
+                        {"block_width_padded_num_tiles", curr_num_units_per_shard},
+                        {"output_width_tiles", num_units_offset},
+                        {"start_id_offset", curr_idx_h + curr_idx_w},
+                        {"start_id_base", starting_idx_h}}});
             } else {
-                writer_desc.emplace_runtime_args(core, {curr_num_units_per_shard});
+                writer_run.runtime_arg_values.push_back(
+                    KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
             }
 
             // Update indexing
@@ -384,35 +449,37 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
                 aligned_offset = 0;
             }
 
-            // Reader run-time args: arg 0 is the source-buffer base address (binding).
-            KernelDescriptor::RTArgList reader_rt;
-            reader_rt.push_back(src_buffer);
-            reader_rt.push_back(num_units_per_row);
-            reader_rt.push_back(shard_height);
-            reader_rt.push_back(shard_width);
-            reader_rt.push_back(padded_offset_bytes);
-            reader_rt.push_back(static_cast<uint32_t>(aligned));
-            reader_rt.push_back(aligned_width_offset);
-            reader_rt.push_back(aligned_shard_width);
-            reader_rt.push_back(aligned_offset);
-            reader_rt.push_back(curr_idx_h);
-            reader_desc.emplace_runtime_args(core, reader_rt);
+            // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter;
+            // legacy slot 1 `num_units_per_row` was emitted but never read by the kernel, so it
+            // is dropped here to match the kernel's actual reads).
+            reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+                .node = core,
+                .args = {
+                    {"block_height", shard_height},
+                    {"block_width_bytes", shard_width},
+                    {"padded_block_width_bytes", padded_offset_bytes},
+                    {"aligned", static_cast<uint32_t>(aligned)},
+                    {"aligned_input_width_offset_bytes", aligned_width_offset},
+                    {"aligned_block_width_bytes", aligned_shard_width},
+                    {"aligned_offset", aligned_offset},
+                    {"start_id", curr_idx_h}}});
 
             // Writer run-time args
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
                 uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
-                KernelDescriptor::RTArgList writer_rt;
-                writer_rt.push_back(dst_buffer);
-                writer_rt.push_back(shard_height);
-                writer_rt.push_back(shard_width);
-                writer_rt.push_back(padded_offset_bytes);
-                writer_rt.push_back(start_id);
-                writer_rt.push_back(output_width_in_pages);
-                writer_desc.emplace_runtime_args(core, writer_rt);
+                writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+                    .node = core,
+                    .args = {
+                        {"block_height", shard_height},
+                        {"block_width_bytes", shard_width},
+                        {"padded_block_width_bytes", padded_offset_bytes},
+                        {"start_id", start_id},
+                        {"output_width_in_pages", output_width_in_pages}}});
             } else {
-                writer_desc.emplace_runtime_args(core, {curr_num_units_per_shard});
+                writer_run.runtime_arg_values.push_back(
+                    KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
             }
 
             // Update indexing
@@ -423,17 +490,22 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             }
         }
         if (convert_df) {
-            compute_desc.emplace_runtime_args(core, {curr_num_units_per_shard});
+            compute_run.runtime_arg_values.push_back(
+                KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    run_args.kernel_run_args.push_back(reader_run);
+    run_args.kernel_run_args.push_back(writer_run);
     if (convert_df) {
-        desc.kernels.push_back(std::move(compute_desc));
+        run_args.kernel_run_args.push_back(compute_run);
     }
 
-    return desc;
+    // Tensor arguments: reference the same MeshTensors the parameters were declared from.
+    run_args.tensor_args.emplace(I2S_INPUT, TensorArgument{input.mesh_tensor()});
+    run_args.tensor_args.emplace(I2S_OUTPUT, TensorArgument{output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <enchantum/enchantum.hpp>
+
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
@@ -79,6 +81,33 @@ void override_mock_allocator_state(distributed::MeshDevice& device, const MockAl
     MockAllocator* allocator = get_mock_allocator(device);
     TT_FATAL(allocator != nullptr, "override_mock_allocator_state requires a mock device");
     allocator->override_state(state.impl_->state);
+}
+
+MockAllocatorState MockAllocatorState::with_allocations(const std::vector<AllocationRecord>& live) const {
+    // Replace regions with the live records' intervals.
+    auto states = impl_->state.get_states_per_buffer_type();  // copy: config kept, regions reset below
+    for (auto& [buffer_type, bts] : states) {
+        bts.allocated_regions.clear();
+        bts.region_source_allocator_ids.clear();
+    }
+
+    for (const auto& record : live) {
+        auto it = states.find(record.buffer_type);
+        TT_FATAL(
+            it != states.end(),
+            "with_allocations: state has no bank config for buffer type {}; the template must come from a device "
+            "extract (which always carries DRAM/L1/L1_SMALL/TRACE)",
+            enchantum::to_string(record.buffer_type));
+        it->second.allocated_regions.emplace_back(record.address, record.address + record.size_per_bank);
+    }
+
+    for (auto& [buffer_type, bts] : states) {
+        bts.normalize();  // canonical form: sort + coalesce, matching a real extract_state
+    }
+
+    MockAllocatorState result;
+    result.impl_->state = AllocatorState(std::move(states), /*all_allocated_buffers=*/{});
+    return result;
 }
 
 }  // namespace tt::tt_metal::experimental

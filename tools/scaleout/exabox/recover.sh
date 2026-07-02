@@ -5,6 +5,7 @@ set -eo pipefail
 # Source MPI interface validation utility
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+source "$SCRIPT_DIR/utils/host_utils.sh"
 
 # Function to display help
 show_help() {
@@ -282,6 +283,8 @@ if [[ -z "$HOSTS" ]]; then
     exit 1
 fi
 
+check_duplicate_hosts "$HOSTS" || exit 1
+
 if [[ "$SKIP_RESET" == true && "$SKIP_VALIDATION" == true ]]; then
     echo "Error: cannot use both --skip-reset and --skip-validation"
     exit 1
@@ -293,7 +296,11 @@ if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
     validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
 else
     MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
-    echo "Auto-detected MPI interface: $MPI_IF"
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 # Set log file path inside output directory (captures actual start time).

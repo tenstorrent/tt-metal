@@ -17,7 +17,8 @@ import pytest
 import torch
 from loguru import logger
 
-from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM, resolve_trace_region_size
+from models.tt_transformers.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
 from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations
@@ -295,7 +296,9 @@ def get_tt_cache_path():
 
 @pytest.fixture(scope="function")
 def device_params(request):
-    return getattr(request, "param", {})
+    # Return a copy so the mesh_device fixture can resolve/pop TRACE_MODEL_KEY_PARAM
+    # (using the logical submesh SKU) without mutating the shared parametrize dict.
+    return dict(getattr(request, "param", {}))
 
 
 @pytest.fixture(scope="module")
@@ -577,10 +580,26 @@ def mesh_device(request, silicon_arch_name, device_params):
             )
         mesh_shape = ttnn.MeshShape(1, param)
 
-    override_trace_region_size = get_supported_trace_region_size(request, param)
-    if override_trace_region_size:
-        device_params["trace_region_size"] = override_trace_region_size
-        logger.info(f"Overriding trace region size to {override_trace_region_size}")
+    # Resolve trace_region_size against the SKU of the submesh actually opened.
+    # TRACE_MODEL_KEY_PARAM is resolved here (not at device_params/collection time) so the
+    # logical SKU reflects request.param/data_parallel/MESH_DEVICE, not the physical cluster.
+    trace_model_key = device_params.pop(TRACE_MODEL_KEY_PARAM, None)
+    if "trace_region_size" in device_params:
+        logger.info(
+            f"Keeping trace_region_size={device_params['trace_region_size']!r} from device_params (already set)"
+        )
+    elif trace_model_key is not None:
+        sku = get_logical_sku(request, param)
+        if sku is None:
+            logger.info(f"No SKU for {param!r}; not setting trace_region_size for model {trace_model_key!r}")
+        else:
+            device_params["trace_region_size"] = resolve_trace_region_size(trace_model_key, sku)
+    else:
+        override_trace_region_size = get_supported_trace_region_size(request, param)
+        if override_trace_region_size is None:
+            logger.info(f"No trace region size for {param!r}")
+        else:
+            device_params["trace_region_size"] = override_trace_region_size
 
     updated_device_params = get_updated_device_params(device_params)
     updated_device_params.pop("require_exact_physical_num_devices", False)
@@ -889,6 +908,7 @@ ALL_ARCHS = set(
         "grayskull",
         "wormhole_b0",
         "blackhole",
+        "quasar",
     ]
 )
 
@@ -1175,16 +1195,19 @@ def ttnn_graph_report(request):
     """
     Automatically generate graph reports when config enables it.
 
-    Only activates when enable_logging, enable_graph_report, and report_path
-    are all set. Skipped when a graph capture is already active (e.g. a test
-    that manages its own capture).
+    Activates when enable_logging and report_path are set, and either
+    enable_graph_report or enable_comparison_mode is on. Skipped when a graph
+    capture is already active (e.g. a test that manages its own capture).
     """
     import ttnn
 
     if not getattr(ttnn.CONFIG, "enable_logging", False):
         yield
         return
-    if not getattr(ttnn.CONFIG, "enable_graph_report", False):
+
+    enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
+    enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
+    if not enable_graph_report and not enable_comparison_mode:
         yield
         return
     report_path = getattr(ttnn.CONFIG, "report_path", None)
@@ -1206,47 +1229,57 @@ def ttnn_graph_report(request):
     report_path = Path(report_path)
     enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
 
-    if enable_detailed_buffer_report:
-        ttnn.graph.enable_detailed_buffer_tracing()
+    if enable_graph_report:
+        if enable_detailed_buffer_report:
+            ttnn.graph.enable_detailed_buffer_tracing()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     try:
         yield
     finally:
-        if not ttnn.graph.is_graph_capture_active():
-            logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+        report_path.mkdir(parents=True, exist_ok=True)
+
+        if enable_graph_report:
+            if not ttnn.graph.is_graph_capture_active():
+                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+            else:
+                if ttnn.distributed_context_is_initialized():
+                    rank = int(ttnn.distributed_context_get_rank())
+                    world_size = int(ttnn.distributed_context_get_size())
+                else:
+                    rank, world_size = 0, 1
+                if world_size > 1:
+                    json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
+                else:
+                    json_path = report_path / "graph_capture.json"
+                ttnn.graph.end_graph_capture_to_file(str(json_path))
+                if ttnn.distributed_context_is_initialized():
+                    ttnn.distributed_context_barrier()
+                if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
+                    from ttnn.graph_report import import_report
+
+                    import_report(report_path, report_path)
+                    (report_path / "graph_capture.json").unlink(missing_ok=True)
+                    for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
+                        p.unlink(missing_ok=True)
+                if ttnn.distributed_context_is_initialized():
+                    ttnn.distributed_context_barrier()
+
+            if enable_detailed_buffer_report:
+                ttnn.graph.disable_detailed_buffer_tracing()
+        elif enable_comparison_mode and ttnn.graph.has_comparison_records():
+            ttnn.graph.flush_comparison_records_to_db(report_path)
+
+        if ttnn.distributed_context_is_initialized():
+            rank = int(ttnn.distributed_context_get_rank())
+            world_size = int(ttnn.distributed_context_get_size())
         else:
-            report_path.mkdir(parents=True, exist_ok=True)
-            if ttnn.distributed_context_is_initialized():
-                rank = int(ttnn.distributed_context_get_rank())
-                world_size = int(ttnn.distributed_context_get_size())
-            else:
-                rank, world_size = 0, 1
-            if world_size > 1:
-                json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
-            else:
-                json_path = report_path / "graph_capture.json"
-            ttnn.graph.end_graph_capture_to_file(str(json_path))
-            if ttnn.distributed_context_is_initialized():
-                ttnn.distributed_context_barrier()
-            if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
-                from ttnn.graph_report import import_report
-
-                import_report(report_path, report_path)
-                (report_path / "graph_capture.json").unlink(missing_ok=True)
-                for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
-                    p.unlink(missing_ok=True)
-            if ttnn.distributed_context_is_initialized():
-                ttnn.distributed_context_barrier()
-
-            if world_size > 1:
-                config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
-            else:
-                config_path = report_path / "config.json"
-            ttnn.save_config_to_json_file(config_path)
-
-        if enable_detailed_buffer_report:
-            ttnn.graph.disable_detailed_buffer_tracing()
+            rank, world_size = 0, 1
+        if world_size > 1:
+            config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
+        else:
+            config_path = report_path / "config.json"
+        ttnn.save_config_to_json_file(config_path)
 
 
 @pytest.fixture(scope="function", autouse=True)

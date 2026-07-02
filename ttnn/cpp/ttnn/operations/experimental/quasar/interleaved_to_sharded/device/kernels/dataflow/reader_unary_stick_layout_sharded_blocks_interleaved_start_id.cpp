@@ -4,38 +4,43 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t block_height = get_arg_val<uint32_t>(2);
-    const uint32_t block_width_bytes = get_arg_val<uint32_t>(3);
-    const uint32_t padded_block_width_bytes = get_arg_val<uint32_t>(4);
-    const bool aligned = static_cast<bool>(get_arg_val<uint32_t>(5));
-    const uint32_t aligned_input_width_offset_bytes = get_arg_val<uint32_t>(6);
-    const uint32_t aligned_block_width_bytes = get_arg_val<uint32_t>(7);
-    const uint32_t aligned_offset = get_arg_val<uint32_t>(8);
-    const uint32_t start_id = get_arg_val<uint32_t>(9);
+    const uint32_t block_height = get_arg(args::block_height);
+    const uint32_t block_width_bytes = get_arg(args::block_width_bytes);
+    const uint32_t padded_block_width_bytes = get_arg(args::padded_block_width_bytes);
+    const bool aligned = static_cast<bool>(get_arg(args::aligned));
+    const uint32_t aligned_input_width_offset_bytes = get_arg(args::aligned_input_width_offset_bytes);
+    const uint32_t aligned_block_width_bytes = get_arg(args::aligned_block_width_bytes);
+    const uint32_t aligned_offset = get_arg(args::aligned_offset);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t num_trids = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr uint32_t num_trids = get_arg(args::num_trids);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(dfb::in0);
+    DataflowBuffer cb_in1(dfb::in1);
 
-    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
+    // The source-buffer base address is bound via the tensor parameter (tensor::src). The
+    // legacy reader pre-shifted the base by `aligned_input_width_offset_bytes`; in the typed
+    // model that per-core byte shift becomes the source-side `offset_bytes` on each read.
+    const auto s0 = TensorAccessor(tensor::src);
     uint32_t stick_id = start_id;
     cb_in0.reserve_back(block_height);
     if (aligned) {
         uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
-            noc.async_read(s0, cb_in0, block_width_bytes, {.page_id = stick_id}, {.offset_bytes = dest_off});
+            noc.async_read(
+                s0,
+                cb_in0,
+                block_width_bytes,
+                {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
+                {.offset_bytes = dest_off});
             stick_id++;
             dest_off += padded_block_width_bytes;
         }
@@ -46,7 +51,7 @@ void kernel_main() {
         constexpr uint32_t trid_base = 1;
 
         cb_in1.reserve_back(num_trids);
-        uint32_t scratch_cb_page_size = get_local_cb_interface(cb_id_in1).fifo_page_size;
+        uint32_t scratch_cb_page_size = get_local_cb_interface(dfb::in1).fifo_page_size;
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
         uint32_t scratch_offsets[num_trids];
@@ -78,7 +83,7 @@ void kernel_main() {
                         s0,
                         cb_in1,
                         aligned_block_width_bytes,
-                        {.page_id = stick_id},
+                        {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
                         {.offset_bytes = scratch_offsets[slot]},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
                     dest_offsets[slot] = dest_off;
@@ -117,6 +122,10 @@ void kernel_main() {
                 }
             }
         }
+
+        // cb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
+        // commit the reservation so the CB is left balanced.
+        cb_in1.push_back(num_trids);
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;

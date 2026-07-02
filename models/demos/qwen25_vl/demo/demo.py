@@ -14,7 +14,6 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForCond
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
@@ -27,13 +26,28 @@ from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
-# trace_region_size per architecture
-TRACE_REGION_SIZE = 28467200
-if is_blackhole():
-    TRACE_REGION_SIZE = 36000000
+
+def _qwen25_vl_model_key() -> str:
+    hf_model = os.getenv("HF_MODEL", "")
+    hf_lower = hf_model.lower()
+    if "72b" in hf_lower:
+        return "qwen2.5-vl-72b"
+    if "32b" in hf_lower:
+        return "qwen2.5-vl-32b"
+    return "qwen2.5-vl-7b"
+
+
+def _qwen25_vl_device_params():
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
+    return {
+        "fabric_config": True,
+        TRACE_MODEL_KEY_PARAM: _qwen25_vl_model_key(),
+        "num_command_queues": 1,
+    }
 
 
 def create_tt_page_table(paged_attention_config, tt_model_args):
@@ -236,7 +250,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 1}],
+    [_qwen25_vl_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -496,7 +510,13 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = model._supports_on_device_sampling
+        # Diagnostic A/B toggle (#48037). The gibberish fix is enabling the on-device force-argmax
+        # sampling path for the qwen25_vl Transformer (allow_force_argmax via SAMPLING_AG_CONFIG;
+        # see tt/model.py), which keeps greedy decode on-device. Setting TT_QWEN_FORCE_HOST_SAMPLING=1
+        # forces host argmax instead: a known-good reference (correct output) but slower (per-step
+        # logits read-back, fails the wh_llmbox_perf decode target), useful only for local A/B.
+        force_host_sampling = os.environ.get("TT_QWEN_FORCE_HOST_SAMPLING", "0") == "1"
+        argmax_on_device = model._supports_on_device_sampling and not force_host_sampling
         if argmax_on_device:
             logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
@@ -550,6 +570,9 @@ def test_demo(
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                # Normalize to [batch, 1] to match the on-device path (out_tok feeds the next
+                # decode and is indexed per-user); the host argmax can return [batch] or [1, batch].
+                out_tok = out_tok.reshape(batch_size, 1)
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
@@ -660,7 +683,29 @@ def test_demo(
 
     if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
+        import importlib
+
         from bert_score import score as bert_score
+
+        # transformers 5.x hands tokenizer.model_max_length straight to the Rust tokenizer's
+        # enable_truncation. deberta-xlarge-mnli has no configured max length, so it is the
+        # VERY_LARGE_INTEGER sentinel (1e30), which does not fit a usize -> "OverflowError: int
+        # too big to convert". Cap it to the model's real 512 on the tokenizer bert-score builds
+        # internally. Patch bert_score.score.get_tokenizer (where score() resolves the name from
+        # its module globals). Use importlib to get the *module* — `import bert_score.score as x`
+        # binds x to the package's shadowing `score` function instead, not the submodule.
+        # TODO(#47822): Qwen2.5-VL-32B produces gibberish output on wh_llmbox_perf; once that
+        # accuracy bug is fixed the BERTScore F1 assertion below should pass. Investigate separately.
+        _bs_score = importlib.import_module("bert_score.score")
+        _orig_get_tokenizer = _bs_score.get_tokenizer
+
+        def _get_tokenizer_capped(model_type, use_fast=False):
+            tok = _orig_get_tokenizer(model_type, use_fast)
+            if tok.model_max_length is None or tok.model_max_length > 100_000:
+                tok.model_max_length = 512
+            return tok
+
+        _bs_score.get_tokenizer = _get_tokenizer_capped
 
         candidates = text_outputs_all_users_all_batches
         references = [expected_output] * len(candidates)
@@ -828,7 +873,7 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_perf",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
             device_name=tt_device_name,

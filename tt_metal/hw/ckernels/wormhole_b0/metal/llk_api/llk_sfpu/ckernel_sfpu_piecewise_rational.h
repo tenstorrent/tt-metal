@@ -46,12 +46,12 @@ inline void piecewise_exp_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& k_
     constexpr float NEG_LN2_LO = -3.19461832987e-05f;
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
     sfpi::vFloat tmp = x * INV_LN2 + c231;
-    k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    k_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
     s = (tmp - c231) * NEG_LN2_LO + ((tmp - c231) * NEG_LN2_HI + x);
 }
 
 inline sfpi::vFloat piecewise_exp_expand(sfpi::vFloat poly_result, sfpi::vInt k_int) {
-    return sfpi::setexp(poly_result, sfpi::exexp(poly_result, sfpi::ExponentMode::NoDebias) + k_int);
+    return sfpi::setexp(poly_result, sfpi::exexp(poly_result, sfpi::ExponentMode::Biased) + k_int);
 }
 #endif
 
@@ -62,7 +62,7 @@ inline void piecewise_trig_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& q
     // Compute x / pi and round-to-nearest integer value (c.f. Hacker's Delight)
     sfpi::vFloat tmp = x * FRAC_1_PI + c231;
     sfpi::vFloat q = tmp - c231;
-    q_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    q_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
     constexpr float NEG_PI_HI = -3.140625f;
     constexpr float NEG_PI_LO = -0.00096765358979323846f;
     s = q * NEG_PI_LO + (q * NEG_PI_HI + x);
@@ -70,8 +70,7 @@ inline void piecewise_trig_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& q
 
 inline sfpi::vFloat piecewise_trig_expand(sfpi::vFloat poly_result, sfpi::vInt q_int) {
     // Sign flip via bitwise XOR: (q_int << 31) ^ result
-    poly_result = sfpi::reinterpret<sfpi::vFloat>(
-        (sfpi::reinterpret<sfpi::vUInt>(q_int) << 31) ^ sfpi::reinterpret<sfpi::vUInt>(poly_result));
+    poly_result = sfpi::as<sfpi::vFloat>((sfpi::as<sfpi::vUInt>(q_int) << 31) ^ sfpi::as<sfpi::vUInt>(poly_result));
     return poly_result;
 }
 #endif

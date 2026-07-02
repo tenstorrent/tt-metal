@@ -59,13 +59,21 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
 }
 
 int firmware_wait_timeout_ms() {
+    // Default timeout for real silicon.
+    constexpr int kDefaultTimeoutMs = 10'000;
+    // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
+    constexpr int kFunctionalSimTimeoutMs = 30'000;
+
     const auto& rtoptions = MetalContext::instance().rtoptions();
-    // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
-    // llrt treats timeout_ms==0 on sim as infinite wait.
-    if (rtoptions.get_simulator_enabled() && rtoptions.get_simulator_path().extension() != ".so") {
-        return 0;
+    if (rtoptions.get_simulator_enabled()) {
+        // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
+        // llrt treats timeout_ms==0 on sim as infinite wait.
+        if (rtoptions.get_simulator_path().extension() != ".so") {
+            return 0;
+        }
+        return kFunctionalSimTimeoutMs;
     }
-    return 10000;
+    return kDefaultTimeoutMs;
 }
 
 }  // namespace
@@ -301,8 +309,7 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         uint32_t dram_l1_size = hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
         std::vector<uint32_t> dram_zero_vec(dram_l1_size / sizeof(uint32_t), 0);
         const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             cluster_.write_core(
                 dram_zero_vec.data(),
                 dram_l1_size,
@@ -396,8 +403,7 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
     }
@@ -1378,10 +1384,10 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
         dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
         const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
-            dram_core_info.view().absolute_logical_x() = dram_noc.x;
-            dram_core_info.view().absolute_logical_y() = dram_noc.y;
+
+        for (const auto& virtual_dram_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
+            dram_core_info.view().absolute_logical_x() = virtual_dram_core.x;
+            dram_core_info.view().absolute_logical_y() = virtual_dram_core.y;
             uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
             cluster_.write_core(
                 dram_core_info.data(),

@@ -28,6 +28,13 @@ struct TopologySatSolver::Impl {
 
     int solve() { return solver.solve(); }
 
+    int solve_limited(int max_conflicts) {
+        solver.limit("conflicts", max_conflicts);
+        const int r = solver.solve();
+        solver.limit("conflicts", -1);  // -1 == unlimited; clear so later solve() calls are unbounded
+        return r;
+    }
+
     int val(int lit) const {
         const int a = std::abs(lit);
         const int r = solver.val(a);
@@ -66,6 +73,8 @@ void TopologySatSolver::add(int lit) { impl_->add(lit); }
 void TopologySatSolver::assume(int lit) { impl_->assume(lit); }
 
 int TopologySatSolver::solve() { return impl_->solve(); }
+
+int TopologySatSolver::solve_limited(int max_conflicts) { return impl_->solve_limited(max_conflicts); }
 
 int TopologySatSolver::val(int lit) const { return impl_->val(lit); }
 

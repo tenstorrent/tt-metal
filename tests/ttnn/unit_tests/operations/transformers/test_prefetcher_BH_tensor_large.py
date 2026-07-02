@@ -78,7 +78,9 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
+        pytest.skip(
+            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
+        )
 
 
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int):
@@ -417,7 +419,7 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
     assert passing, f"[factory layers_buffered={layers_buffered}] PCC check failed: {output_str}"
 
 
-def test_create_global_circular_buffer_for_matmul_1d_rejects_undersized(device):
+def test_create_global_circular_buffer_for_matmul_1d_rejects_undersized(device, expect_error):
     """Factory must TT_FATAL when size < num_blocks * in1_block_size (matmul would deadlock)."""
     num_dram_banks = device.dram_grid_size().x
     recv_per_bank = 1
@@ -464,7 +466,7 @@ def test_create_global_circular_buffer_for_matmul_1d_rejects_undersized(device):
     bank_to_receivers = [
         (b, _bank_receivers_row_major(b, recv_per_bank, num_dram_banks)) for b in range(num_dram_banks)
     ]
-    with pytest.raises(RuntimeError, match="must be at least num_blocks"):
+    with expect_error(RuntimeError, "must be at least num_blocks"):
         ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
             device,
             [program_config],
@@ -582,6 +584,8 @@ def test_tensor_prefetcher_multi_tensor(device, num_tensors, num_layers):
 
 @pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (2, 5)])
 def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
+    if device.dram_grid_size().x != 8:
+        pytest.skip("Receiver-contiguous smoke test expects 8 unharvested DRAM banks")
     num_dram_banks = device.dram_grid_size().x
     num_recv_per_bank = _MT_NUM_RECV_PER_BANK
     num_receivers = num_dram_banks * num_recv_per_bank

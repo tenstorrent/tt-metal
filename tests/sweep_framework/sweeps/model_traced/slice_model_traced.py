@@ -112,34 +112,75 @@ def _slice_input_shard_axis_and_factor(placement_dict):
 
 
 def invalidate_vector(test_vector) -> tuple:
-    """Exclude the distributed mesh-partition slice whose bound tensors weren't traced.
+    """Exclude the index-tensor slice form whose bound tensors weren't traced.
 
-    One traced config (8dc9af…) calls ttnn.slice in its tensor-parallel form
-    (slice_dim + num_devices, with starts/ends passed as device TENSORS that shard
-    the input across the mesh). The tracer captured only the starts/ends tensor
-    *shapes*, not their *values*, so the exact per-device slice bounds are
-    unrecoverable — the generic golden has to guess (defaulting to a [0:dim/2]
-    index slice), which doesn't match the partition the op actually performs. Rather
-    than assert against a fabricated golden, mark these unreconstructable.
+    The ``slice_dim`` (+optional ``num_devices``) overload of ttnn.slice passes
+    starts/ends as device TENSORS rather than int lists — either captured as
+    ``starts_shape``/``ends_shape`` or as the 2nd/3rd positional tensor args
+    (``input_b_``/``input_c_``, each an INT32 ``(2,)`` start/end pair, e.g. the
+    tt_transformers LM-head vocab slice). The tracer records only the bound
+    tensors' *shapes*, not their *values*, so the exact slice bounds are
+    unrecoverable — the generic golden falls back to a ``[0:dim/2]`` half-slice
+    that doesn't match what the op did (≈0.5 PCC). Mark these unreconstructable
+    rather than assert against a fabricated golden.
 
-    Regular slice configs (no num_devices, or with concrete list starts/ends) are
-    unaffected.
+    Regular slice configs (concrete list starts/ends via starts/ends,
+    slice_start/slice_end, or arg1/arg2) are unaffected.
     """
 
     def _present(v):
         return v is not None and v != "__ABSENT__"
 
     num_devices = test_vector.get("num_devices")
-    starts_val = test_vector.get("starts")
-    ends_val = test_vector.get("ends")
-    # tensor-form bounds: a *_shape is recorded but no concrete value list.
-    tensor_bounds = _present(test_vector.get("starts_shape")) or _present(test_vector.get("ends_shape"))
-    if _present(num_devices) and tensor_bounds and not (_present(starts_val) or _present(ends_val)):
+    slice_dim = test_vector.get("slice_dim")
+    # Any concrete list bounds the run() path can replay.
+    list_bounds = any(
+        _present(test_vector.get(k)) for k in ("starts", "ends", "slice_start", "slice_end", "arg1", "arg2")
+    )
+    # Tensor-form bounds: bound *shapes* recorded but no concrete values. They
+    # arrive as starts_shape/ends_shape or as the 2nd/3rd positional tensor args.
+    tensor_bounds = any(
+        _present(test_vector.get(k)) for k in ("starts_shape", "ends_shape", "input_b_shape", "input_c_shape")
+    )
+    if (_present(num_devices) or _present(slice_dim)) and tensor_bounds and not list_bounds:
         return (
             True,
-            "tensor-parallel slice (slice_dim+num_devices) with untraced starts/ends tensor values — slice bounds unrecoverable",
+            "index-tensor slice (slice_dim) with untraced starts/ends tensor values — slice bounds unrecoverable",
         )
     return False, None
+
+
+def _tp_index_tensor_placement(explicit, num_devices, mesh_shape):
+    """Placement for a tensor-parallel slice's per-device starts/ends index tensor.
+
+    Prefer the explicitly traced placement. Otherwise mirror how the model
+    distributes it: tensor dim-0 sharded along the mesh axis whose size equals
+    ``num_devices``, replicated on the other axis (e.g. num_devices=8 on an 8x4
+    mesh -> Shard(0)+Replicate over [8, 4]). The previous hardcoded [1, 2]
+    Replicate+Shard(0) default only matched a 2-wide mesh and mismatched the
+    master trace on 8x4 / 4x8 galaxy meshes."""
+    if isinstance(explicit, dict):
+        return explicit
+    try:
+        rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    except Exception:
+        rows, cols = 1, 2
+    if num_devices == rows and rows > 1:
+        plac = "['PlacementShard(0)', 'PlacementReplicate']"
+    elif num_devices == cols and cols > 1:
+        plac = "['PlacementReplicate', 'PlacementShard(0)']"
+    else:
+        # Legacy fallback (no mesh axis matches num_devices).
+        return {
+            "distribution_shape": "[1, 2]",
+            "mesh_device_shape": "[1, 2]",
+            "placement": "['PlacementReplicate', 'PlacementShard(0)']",
+        }
+    return {
+        "distribution_shape": f"[{rows}, {cols}]",
+        "mesh_device_shape": f"[{rows}, {cols}]",
+        "placement": plac,
+    }
 
 
 def run(
@@ -176,10 +217,25 @@ def run(
         "input_tensor_tensor_placement", None
     )
     is_mesh_device = hasattr(device, "get_num_devices")
+
+    # Some traced vectors carry the slice bounds under the op's internal C++ arg
+    # names (slice_start/slice_end/slice_step) instead of positional arg1/arg2/arg3.
+    # The model called ttnn.slice positionally — those names are NOT valid Python
+    # kwargs for the binding (it exposes starts/ends) — so route them into the
+    # positional bounds. They must also be excluded from op_kwargs below, else they
+    # leak in as invalid keyword args ("incompatible function arguments").
+    if arg1 is None:
+        arg1 = kwargs.get("slice_start")
+    if arg2 is None:
+        arg2 = kwargs.get("slice_end")
+    if arg3 is None:
+        arg3 = kwargs.get("slice_step")
+
     op_kwargs = build_op_kwargs(
         kwargs,
-        exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
+        exclude={"starts", "ends", "steps", "slice_start", "slice_end", "slice_step", "slice_dim", "num_devices"},
         output_memory_config=output_memory_config,
+        device=device,
     )
     # Forward slice_dim, num_devices, and output_tensor when master had them.
     absent_keys = set(kwargs.get("__absent_keys__") or [])
@@ -297,15 +353,14 @@ def run(
         pos_args_raw = extract_positional_args(kwargs)
         if isinstance(slice_start, list):
             _start_torch = _torch_s.tensor(slice_start, dtype=_torch_s.int32)
-            _start_placement = (
-                pos_args_raw.get(1, {}).get("tensor_placement") if isinstance(pos_args_raw.get(1), dict) else None
-            )
+            _start_placement = kwargs.get("starts_tensor_placement")
+            if not isinstance(_start_placement, dict):
+                _start_placement = (
+                    pos_args_raw.get(1, {}).get("tensor_placement") if isinstance(pos_args_raw.get(1), dict) else None
+                )
             if is_mesh_device:
-                _sp = _start_placement or {
-                    "distribution_shape": "[1, 2]",
-                    "mesh_device_shape": "[1, 2]",
-                    "placement": "['PlacementReplicate', 'PlacementShard(0)']",
-                }
+                _mesh = get_mesh_shape() or (device.shape if hasattr(device, "shape") else (1, 2))
+                _sp = _tp_index_tensor_placement(_start_placement, op_kwargs.get("num_devices"), _mesh)
                 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 
                 slice_start = replicate_with_topology(
@@ -326,15 +381,14 @@ def run(
                 )
         if isinstance(slice_end, list):
             _end_torch = _torch_s.tensor(slice_end, dtype=_torch_s.int32)
-            _end_placement = (
-                pos_args_raw.get(2, {}).get("tensor_placement") if isinstance(pos_args_raw.get(2), dict) else None
-            )
+            _end_placement = kwargs.get("ends_tensor_placement")
+            if not isinstance(_end_placement, dict):
+                _end_placement = (
+                    pos_args_raw.get(2, {}).get("tensor_placement") if isinstance(pos_args_raw.get(2), dict) else None
+                )
             if is_mesh_device:
-                _ep = _end_placement or {
-                    "distribution_shape": "[1, 2]",
-                    "mesh_device_shape": "[1, 2]",
-                    "placement": "['PlacementReplicate', 'PlacementShard(0)']",
-                }
+                _mesh = get_mesh_shape() or (device.shape if hasattr(device, "shape") else (1, 2))
+                _ep = _tp_index_tensor_placement(_end_placement, op_kwargs.get("num_devices"), _mesh)
                 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 
                 slice_end = replicate_with_topology(

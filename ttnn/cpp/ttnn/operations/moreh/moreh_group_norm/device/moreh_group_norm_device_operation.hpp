@@ -37,12 +37,6 @@ struct MorehGroupNormOperation {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& outputs);
 
-    // Custom program-cache hash: include eps (the only attribute that doesn't flow
-    // through compile_time_args). Without this, different eps values would hit the
-    // same cache entry, breaking the BufferBinding fast cache-hit path. With it, a
-    // cache hit guarantees identical attrs, so BufferBinding can be safely adopted.
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_tensors(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

@@ -1,0 +1,162 @@
+name: LLK PR Review
+run-name: "LLK PR Review — PR #${{ github.event.inputs.pr_number }} (effort: ${{ github.event.inputs.effort }})"
+
+# On-demand AI code review for LLK pull requests.
+#
+# Run it manually from the Actions tab (workflow_dispatch) against any PR
+# number. The job runs the code-review plugin command against the PR's diff,
+# with:
+#   * the LLK MCP servers (tt_metal/tt-llk/.mcp.json — DeepWiki, Atlassian, Glean),
+#   * the team's private LLK review knowledge, fetched at runtime and injected as
+#     an appended system prompt.
+# It posts its findings as inline review comments on the PR.
+#
+# The human gate is that a person with write access must dispatch the workflow.
+
+on:
+  # Manual on-demand trigger: review any open PR by number at a chosen effort.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+        type: string
+      effort:
+        description: "Reasoning effort for the review session (--effort)"
+        required: false
+        default: "max"
+        type: choice
+        options: [low, medium, high, max]
+
+# One review at a time per PR; a newer trigger does not kill an in-flight review.
+concurrency:
+  group: llk-pr-review-${{ github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60          # the command fans out subagents; this bounds it
+    permissions:
+      contents: read             # read the checkout
+      pull-requests: write       # post inline review comments
+      issues: write              # post acknowledgement / summary
+      id-token: write            # OIDC, if the key path requires it
+    env:
+      PR_NUMBER: ${{ github.event.inputs.pr_number }}
+    steps:
+      # 1. Checkout so the command (and the knowledge assembly step) has the repo.
+      #    The command fetches the diff itself via `gh pr diff`, so a shallow
+      #    checkout of the default ref is enough.
+      - name: Checkout repository
+        uses: actions/checkout@main   # intentionally floating: always latest
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Fetch the private LLK review knowledge, kept out of the public tree and
+      #    pulled at runtime into a scratch dir via a sparse checkout.
+      - name: Fetch private LLK review knowledge
+        uses: actions/checkout@main   # intentionally floating: always latest
+        with:
+          repository: tenstorrent/llk_code_gen
+          # Token with read access to the private knowledge repo.
+          token: ${{ secrets.LLK_KNOWLEDGE_TOKEN }}
+          path: .llk-review-knowledge-src
+          sparse-checkout: dashboard/pr_review/knowledge
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # 3. Assemble the knowledge into a single append-system-prompt file:
+      #    a framing line, then each .md file. (Posting mechanics are handled by
+      #    the code-review command itself — it uses the action's inline-comment
+      #    MCP tool — so we only inject domain knowledge here.)
+      - name: Assemble review system prompt
+        run: |
+          set -euo pipefail
+          src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
+          out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
+          {
+            # === AMPLIFIED RECALL DIRECTIVE (Option A) ===
+            # This overrides the code-review command's default precision-over-recall
+            # posture for this specialized LLK hardware review. Placed FIRST so it
+            # frames everything that follows.
+            echo "# ============================================================"
+            echo "# TOP-PRIORITY REVIEW DIRECTIVE — READ AND OBEY BEFORE ANYTHING ELSE"
+            echo "# ============================================================"
+            echo
+            echo "You are the LLK PR review bot reviewing low-level kernel (LLK) code for"
+            echo "Tenstorrent hardware. Subtle correctness, hazard, and performance issues in"
+            echo "this code are extremely costly and hard to catch in normal review, so the"
+            echo "cost of MISSING a real issue vastly outweighs the cost of a false positive."
+            echo
+            echo "THEREFORE, the usual \"only flag HIGH SIGNAL issues / if you are not certain,"
+            echo "do not flag it / false positives erode trust\" posture DOES NOT APPLY to this"
+            echo "review. You MUST NOT silently discard, filter out, or downgrade a finding"
+            echo "merely because:"
+            echo "  - you are not fully certain it is a real bug,"
+            echo "  - it depends on specific inputs, state, or hardware configuration,"
+            echo "  - it is a style / convention / quality concern rather than a hard bug, or"
+            echo "  - it is not a quotable rule in a repo CLAUDE.md file."
+            echo
+            echo "REPORT ANYTHING SUSPICIOUS. If something looks off, surface it. When you are"
+            echo "uncertain, DO NOT drop it — report it and clearly label it as a SUSPICION"
+            echo "with your confidence level and what would confirm or refute it. Err strongly"
+            echo "on the side of OVER-reporting. \"Nothing to flag\" must be a rare, last-resort"
+            echo "conclusion that you reach only after genuinely finding nothing suspicious,"
+            echo "never a default."
+            echo
+            echo "Do NOT restrict your analysis to the diff alone. Read the surrounding code"
+            echo "and cross-file context (e.g. macro init vs. calculate paths, ISA/assembly"
+            echo "headers, both Blackhole and Wormhole variants) — LLK hazards usually live in"
+            echo "the interaction between files, not in the diff lines themselves."
+            echo
+            echo "Treat the LLK knowledge below as AUTHORITATIVE documented convention. A"
+            echo "finding that is grounded in this knowledge IS a citeable violation of a"
+            echo "documented convention, regardless of file path or which CLAUDE.md applies."
+            echo "Apply it to ALL files in this PR, including those under tt_metal/hw/."
+            echo
+            echo "# ------------------------------------------------------------"
+            echo "# LLK REVIEW KNOWLEDGE (authoritative)"
+            echo "# ------------------------------------------------------------"
+            echo
+            for f in "$src"/*.md; do
+              [ -e "$f" ] || continue
+              echo "# === $(basename "$f") ==="
+              cat "$f"
+              echo
+            done
+          } > "$out"
+          echo "Assembled $(wc -l < "$out") lines into $out"
+
+      # 4. Run the review: the code-review plugin command against the PR, posting
+      #    findings inline via --comment, with the LLK MCP servers and knowledge.
+      - name: Run /code-review
+        uses: anthropics/claude-code-action@v1
+        env:
+          # GITHUB_TOKEN is the per-run automatic token; its write scope comes
+          # from the job's `permissions:` block (pull-requests/issues: write), so
+          # comments post as github-actions[bot] — no user PAT needed.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Real Anthropic API key — sent as x-api-key to api.anthropic.com.
+          anthropic_api_key: ${{ secrets.LLK_PR_REVIEW_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: false   # keep the run log quiet; flip to true to debug
+          # Install the code-review command from Anthropic's plugin marketplace.
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          # The command takes a PR reference and an optional --comment flag (there
+          # is no effort argument). --comment makes it post inline comments.
+          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
+          # No --model override: defaults apply, so the command's per-role
+          # haiku/sonnet/opus subagents each use their intended model. --effort
+          # sets the session reasoning effort (the code-review command itself
+          # takes no effort argument). The allowlist must include the inline-
+          # comment MCP tool the command posts with, plus gh for diff/view.
+          claude_args: |
+            --effort ${{ github.event.inputs.effort || 'max' }}
+            --allowedTools "Task,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
+            --max-turns 100
+            --mcp-config tt_metal/tt-llk/.mcp.json
+            --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md

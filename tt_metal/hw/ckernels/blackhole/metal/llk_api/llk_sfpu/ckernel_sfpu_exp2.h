@@ -35,9 +35,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
-    i = sfpi::abs(sfpi::reinterpret<sfpi::vInt>(sm));
+    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + sfpi::vConstFloatPrgm2;
-    i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
+    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + sfpi::vConstFloatPrgm1;
     y *= std::numeric_limits<float>::infinity();
     r = r * f + sfpi::vConstFloatPrgm0;
@@ -46,7 +46,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
 
     // Exclude -NaN: abs(-NaN) remains negative.
     v_if(abs_x >= 0.0f) {
-        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
+        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased);
         e += i;
         // e < 255
         v_block {
@@ -83,18 +83,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
 
     // Clamp to [0, 255]. Boundary inputs land on the +inf / +0 encodings after
     // setexp + bf16 round.
-    sfpi::vFloat threshold_low = 0.f;
-    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
-    sfpi::vec_min_max(threshold_low, xlog2);
-    sfpi::vec_min_max(xlog2, threshold_high);
+    xlog2 = sfpi::clamp(xlog2, 0.0f, 255.0f);
 
     // Decompose xlog2 in [0, 255] into:
     //   exponential_part = floor(xlog2)             (integer in [0, 255])
     //   fractional_part  = (xlog2 - floor) * 2^23   (integer in [0, 2^23))
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
-    sfpi::vMag fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
+    sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
+    sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
