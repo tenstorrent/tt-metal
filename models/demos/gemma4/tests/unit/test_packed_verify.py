@@ -26,11 +26,45 @@ import ttnn
 from ...tests.test_factory import parametrize_mesh_with_fabric
 
 
+def _is_moe_model(model_path):
+    """True for Mixture-of-Experts checkpoints (e.g. gemma-4-26B-A4B).
+
+    Packed verify folds the K+1 candidates into ONE multi-token forward, so it
+    drives the model with seq_len = P = draft_len+1 (e.g. 5) — not a multiple of
+    32. On an MoE checkpoint the experts block routes any seq_len != 1 through
+    its prefill path, which asserts ``seq_len % 32 == 0`` (see
+    gemma4/tt/experts/__init__.py). Dense models (12B, 31B) have no experts block
+    and are unaffected. Padding P up to 32 would run the experts on 32 tokens per
+    verify and erase the packed-verify win, so packed verify is unsupported on
+    MoE. Detect it cheaply from the config (no weights loaded) so we can skip
+    before ``from_pretrained`` — which also avoids writing the weight cache on the
+    read-only NAS mount used by CI e2e.
+    """
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        tc = getattr(cfg, "text_config", cfg)
+        return bool(getattr(tc, "num_experts", 0))
+    except Exception:
+        return False
+
+
+_MOE_UNSUPPORTED_REASON = (
+    "packed verify drives the model with seq_len=P=draft_len+1 (not a multiple of 32); "
+    "MoE experts prefill requires seq_len%32==0, so packed verify is unsupported on MoE "
+    "checkpoints (e.g. gemma-4-26B-A4B). Dense targets (12B, 31B) run this test."
+)
+
+
 @parametrize_mesh_with_fabric()
 def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
     model_path = os.getenv("HF_MODEL")
     if not model_path:
         pytest.skip("set HF_MODEL (target) to run")
+
+    if _is_moe_model(model_path):
+        pytest.skip(_MOE_UNSUPPORTED_REASON)
 
     # Single-device (TP=1) is unsupported for packed verify on the 12B model: the
     # global layers (global_head_dim=512) run the packed SDPA with fp32_dest_acc_en
@@ -173,6 +207,8 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     model_path = os.getenv("HF_MODEL")
     if not model_path:
         pytest.skip("set HF_MODEL (target) to run")
+    if _is_moe_model(model_path):
+        pytest.skip(_MOE_UNSUPPORTED_REASON)
     if mesh_device.get_num_devices() == 1:
         pytest.skip("single-device L1 limit: use a TP mesh (e.g. 1x4)")
 
