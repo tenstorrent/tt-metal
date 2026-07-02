@@ -445,8 +445,11 @@ Layered, oracle-driven (all via #47468):
    (#47464), and **Phase 3 correctness is gated by the #48291 decision** — surface that, don't
    silently pick around it. Cross-check the Part III status table for per-workstream detail.
 2. **Do the smallest shippable increment** of that task (one module / one device test).
-3. **Validate on device** (recipe §1). The oracle is always `reference/` — assert the
-   ttnn output matches it (PCC or `torch.equal`), never assert against a fresh guess.
+3. **Validate on device** (recipe §1). For RUN-first integration increments, assert the
+   executable surface directly (exit 0, `DG_TEXT_DEMO_SUCCESS`, block/position fields,
+   no uncaught `DG_TEXT_DEMO_FAILURE`). For correctness increments, the oracle is always
+   `reference/` — assert the ttnn output matches it (PCC or `torch.equal`), never assert
+   against a fresh guess.
 4. **Update the Part III status table**: flip the row, note the test file + measured PCC + date.
 5. **Commit ONLY IF commits are explicitly enabled** for this loop (user/loop config says
    so) AND the device test in step 3 passed. Never commit a half-finished increment, a
@@ -460,10 +463,13 @@ Layered, oracle-driven (all via #47468):
 7. **Never mark a row ✅ without a passing device test** (or, for a deliberately
    host-side fallback, a passing CPU test + a one-line note saying why it's host-side).
 
-**Definition of done for the whole loop:** a single entry point runs
-prefill → denoise(≤48 steps) → commit for one 256-token block on QB2, and its
-per-step trajectory matches `reference/denoise_loop.py` under injected noise
-(`tests/trajectory_pcc.compare_trajectories`), within the PCC bar agreed in §3.
+**RUN-first definition of done:** a single entry point runs prompt → prefill →
+denoise → commit → decode on QB2 with real 26B weights, and the regression target
+asserts the success marker plus committed-block/position advancement fields. This
+is now covered by the short- and long-prompt two-block smokes in
+`tests/test_device_text_demo_run.py` and the `bh-diffusion-gemma-run-smoke` QB2
+pipeline entry. The older trajectory-PCC requirement remains the **correctness**
+definition of done and is deferred to #48291 / the correctness track.
 
 ---
 
