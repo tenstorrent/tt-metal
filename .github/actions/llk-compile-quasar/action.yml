@@ -15,9 +15,9 @@ inputs:
     required: false
     default: '1'
   num-workers:
-    description: 'Number of pytest-xdist workers (-n). "auto" (one per CPU) OOM''d on a 40-core xlarge runner even with -Os and serial inner builds; 30 is the current known-safe value there. Override per-call if a different runner size needs a different number.'
+    description: 'Number of pytest-xdist workers (-n). 30 measured ~3.6 GiB sustained RAM+swap per worker on a 40-core/78.5 GiB xlarge runner (mean mem 92.35% + mean swap 46.18%), saturating RAM and forcing sustained swapping even with -Os and serial inner builds. 18 targets ~80% RAM with zero swap at that per-worker footprint; re-measure and adjust if it still swaps. Override per-call if a different runner size needs a different number.'
     required: false
-    default: '30'
+    default: '18'
 
 runs:
   using: composite
