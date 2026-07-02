@@ -3,41 +3,66 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include <filesystem>
 
 namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-ProgramDescriptor RotaryEmbeddingLlamaMultiCore::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_program_artifacts(
     const RotaryEmbeddingLlamaParams& operation_attributes,
     const RotaryEmbeddingLlamaInputs& tensor_args,
     tt::tt_metal::Tensor& output) {
-    ProgramDescriptor desc;
+    // Metal 2.0 named resource handles (declared as LOCALS for unity-build hygiene).
+    const DFBSpecName IN_DFB{"in"};
+    const DFBSpecName COS_DFB{"cos"};
+    const DFBSpecName SIN_DFB{"sin"};
+    const DFBSpecName TRANS_MAT_DFB{"trans_mat"};
+    const DFBSpecName ROTATED_INTERM_DFB{"rotated_in_interm"};
+    const DFBSpecName COS_INTERM_DFB{"cos_interm"};
+    const DFBSpecName SIN_INTERM_DFB{"sin_interm"};
+    const DFBSpecName OUT_DFB{"out"};
+    const DFBSpecName ZERO_DFB{"zero"};
+
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName COS_TENSOR{"cos_tensor"};
+    const TensorParamName SIN_TENSOR{"sin_tensor"};
+    const TensorParamName TRANS_MAT_TENSOR{"trans_mat_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
+
+    const KernelSpecName READER_KERNEL{"reader"};
+    const KernelSpecName WRITER_KERNEL{"writer"};
+    const KernelSpecName COMPUTE_KERNEL{"compute"};
 
     const auto& input = tensor_args.input_tensor;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
     const auto& trans_mat = tensor_args.trans_mat;
 
-    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
+    const tt::DataFormat cos_cb_data_format = datatype_to_dataformat_converter(cos.dtype());
     const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
 
-    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
+    const tt::DataFormat sin_cb_data_format = datatype_to_dataformat_converter(sin.dtype());
     const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
 
-    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
+    const tt::DataFormat trans_mat_cb_data_format = datatype_to_dataformat_converter(trans_mat.dtype());
     const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
 
-    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const uint32_t batch = input.padded_shape()[0];
@@ -101,204 +126,207 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCore::create_descriptor(
         num_cos_sin_tiles = num_input_tiles;
     }
 
-    constexpr uint8_t input_cb_index = CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = input_cb_num_tiles * input_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = input_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
+    const uint32_t num_interm_tiles = head_dim_t;
+    const std::string reload_define = use_reload_impl ? "1" : "0";
 
-    constexpr uint8_t cos_cb_index = CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * cos_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
-        }}},
-    });
+    // ----------------------------------------------------------------------------
+    // Tensor parameters — all five tensors are Case 1 (the reader/writer build a
+    // TensorAccessor from each binding). No borrowed-memory DFB in this interleaved factory.
+    // ----------------------------------------------------------------------------
+    TensorParameter in_param{.unique_id = IN_TENSOR, .spec = input.tensor_spec()};
+    TensorParameter cos_param{.unique_id = COS_TENSOR, .spec = cos.tensor_spec()};
+    TensorParameter sin_param{.unique_id = SIN_TENSOR, .spec = sin.tensor_spec()};
+    TensorParameter trans_mat_param{.unique_id = TRANS_MAT_TENSOR, .spec = trans_mat.tensor_spec()};
+    TensorParameter out_param{.unique_id = OUT_TENSOR, .spec = output.tensor_spec()};
 
-    constexpr uint8_t sin_cb_index = CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * sin_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t trans_mat_cb_index = CBIndex::c_3;
-    // We only take one tile of trans_mat
-    uint32_t num_trans_mat_tiles = 1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_trans_mat_tiles * trans_mat_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = trans_mat_cb_index,
-            .data_format = trans_mat_cb_data_format,
-            .page_size = trans_mat_single_tile_size,
-        }}},
-    });
-
-    uint32_t num_interm_tiles = head_dim_t;
-    constexpr uint8_t rotated_input_interm_cb_index = CBIndex::c_24;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = rotated_input_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t cos_interm_cb_index = CBIndex::c_25;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * cos_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_interm_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t sin_interm_cb_index = CBIndex::c_26;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * sin_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_interm_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * output_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t zero_cb_index = CBIndex::c_27;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = head_dim_t * output_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = zero_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    });
-
-    KernelDescriptor::Defines kernel_defines;
-    kernel_defines.emplace_back("RELOAD_IMPL", use_reload_impl ? "1" : "0");
-
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* trans_mat_buffer = trans_mat.buffer();
-    auto* dst_buffer = output.buffer();
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)n_heads,
-        (std::uint32_t)seq_len_t,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)freq_per_head,
-        (std::uint32_t)cos_seq_len_t,
-        (std::uint32_t)sin_seq_len_t,
-        (std::uint32_t)rotary_seq_len_t,
+    // ----------------------------------------------------------------------------
+    // Dataflow buffers (all program-local FIFOs; none borrowed).
+    //   reader -> compute: in (c_0), cos (c_1), sin (c_2), trans_mat (c_3)
+    //   compute self-loop: rotated_in_interm (c_24), cos_interm (c_25), sin_interm (c_26)
+    //   compute -> writer:  out (c_16)
+    //   writer self-loop:   zero (c_27)
+    // ----------------------------------------------------------------------------
+    DataflowBufferSpec in_dfb_spec{
+        .unique_id = IN_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = input_cb_num_tiles,
+        .data_format_metadata = input_cb_data_format,
     };
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*trans_mat_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)zero_cb_index,
-        (std::uint32_t)n_heads,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)seq_len_t,
-        (std::uint32_t)rotary_seq_len_t,
+    DataflowBufferSpec cos_dfb_spec{
+        .unique_id = COS_DFB,
+        .entry_size = cos_single_tile_size,
+        .num_entries = num_cos_sin_tiles,
+        .data_format_metadata = cos_cb_data_format,
     };
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-        "reader_rotary_embedding_llama_interleaved_start_id.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = CoreRangeSet(all_cores);
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = kernel_defines;
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-        "writer_rotary_embedding_llama_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = CoreRangeSet(all_cores);
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.defines = kernel_defines;
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_kernel_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)n_heads,
-        (std::uint32_t)rotary_seq_len_t,
+    DataflowBufferSpec sin_dfb_spec{
+        .unique_id = SIN_DFB,
+        .entry_size = sin_single_tile_size,
+        .num_entries = num_cos_sin_tiles,
+        .data_format_metadata = sin_cb_data_format,
+    };
+    DataflowBufferSpec trans_mat_dfb_spec{
+        .unique_id = TRANS_MAT_DFB,
+        .entry_size = trans_mat_single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = trans_mat_cb_data_format,
+    };
+    DataflowBufferSpec rotated_in_interm_dfb_spec{
+        .unique_id = ROTATED_INTERM_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = input_cb_data_format,
+    };
+    DataflowBufferSpec cos_interm_dfb_spec{
+        .unique_id = COS_INTERM_DFB,
+        .entry_size = cos_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = cos_cb_data_format,
+    };
+    DataflowBufferSpec sin_interm_dfb_spec{
+        .unique_id = SIN_INTERM_DFB,
+        .entry_size = sin_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = sin_cb_data_format,
+    };
+    DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = output_cb_data_format,
+    };
+    DataflowBufferSpec zero_dfb_spec{
+        .unique_id = ZERO_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = output_cb_data_format,
     };
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
-        "rotary_embedding_llama.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = CoreRangeSet(all_cores);
-    compute_desc.compile_time_args = std::move(compute_kernel_args);
-    compute_desc.defines = std::move(kernel_defines);
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
+    // ----------------------------------------------------------------------------
+    // Reader: reads input/cos/sin/trans_mat from DRAM (TensorAccessor) into c_0..c_3.
+    // ----------------------------------------------------------------------------
+    KernelSpec reader_spec{
+        .unique_id = READER_KERNEL,
+        .source = std::filesystem::path{
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
+            "reader_rotary_embedding_llama_interleaved_start_id.cpp"},
+        .compiler_options = {.defines = {{"RELOAD_IMPL", reload_define}}},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = COS_DFB, .accessor_name = "cos", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = SIN_DFB, .accessor_name = "sin", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = TRANS_MAT_DFB,
+                 .accessor_name = "trans_mat",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = IN_TENSOR, .accessor_name = "in"},
+             TensorBinding{.tensor_parameter_name = COS_TENSOR, .accessor_name = "cos"},
+             TensorBinding{.tensor_parameter_name = SIN_TENSOR, .accessor_name = "sin"},
+             TensorBinding{.tensor_parameter_name = TRANS_MAT_TENSOR, .accessor_name = "trans_mat"}},
+        .compile_time_args =
+            {{"n_heads", n_heads},
+             {"Ht", seq_len_t},
+             {"Wt", head_dim_t},
+             {"freq_per_head", static_cast<uint32_t>(freq_per_head)},
+             {"cos_Ht", cos_seq_len_t},
+             {"sin_Ht", sin_seq_len_t},
+             {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
     };
 
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    // ----------------------------------------------------------------------------
+    // Compute: consumes c_0..c_3, produces c_16; c_24/25/26 are intra self-loops.
+    // ----------------------------------------------------------------------------
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE_KERNEL,
+        .source = std::filesystem::path{
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
+            "rotary_embedding_llama_metal2.cpp"},
+        .compiler_options = {.defines = {{"RELOAD_IMPL", reload_define}}},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = COS_DFB, .accessor_name = "cos", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = SIN_DFB, .accessor_name = "sin", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = TRANS_MAT_DFB,
+                 .accessor_name = "trans_mat",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = ROTATED_INTERM_DFB,
+                 .accessor_name = "rotated_in_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = ROTATED_INTERM_DFB,
+                 .accessor_name = "rotated_in_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = COS_INTERM_DFB,
+                 .accessor_name = "cos_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = COS_INTERM_DFB,
+                 .accessor_name = "cos_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = SIN_INTERM_DFB,
+                 .accessor_name = "sin_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SIN_INTERM_DFB,
+                 .accessor_name = "sin_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .compile_time_args = {{"Wt", head_dim_t}, {"n_heads", n_heads}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config =
+            ComputeHardwareConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+            },
+    };
+    compute_spec.advanced_options.dfb_self_loop_connectivities = {
+        {ROTATED_INTERM_DFB, DFBSelfLoopConnectivity::INTRA},
+        {COS_INTERM_DFB, DFBSelfLoopConnectivity::INTRA},
+        {SIN_INTERM_DFB, DFBSelfLoopConnectivity::INTRA},
+    };
 
-    /*
-        Overall loop iterations: # total cores
-    */
+    // ----------------------------------------------------------------------------
+    // Writer: consumes c_16, writes to DRAM (TensorAccessor); c_27 is an intra self-loop.
+    // ----------------------------------------------------------------------------
+    KernelSpec writer_spec{
+        .unique_id = WRITER_KERNEL,
+        .source = std::filesystem::path{
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
+            "writer_rotary_embedding_llama_interleaved_start_id_metal2.cpp"},
+        .compiler_options = {.defines = {{"RELOAD_IMPL", reload_define}}},
+        // The 'zero' DFB holds Wt zero tiles, filled once by the reader (PRODUCER) and consumed
+        // here. A data-movement kernel cannot self-loop a DFB on Gen1, so the fill lives in the
+        // reader rather than the writer; the writer wait_fronts the Wt zeros once and reuses them
+        // for every zero-fill tail tile (pop_front at the end), exactly as the legacy writer did.
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+    };
 
-    // Per-core args tracked as {start_batch, end_batch, start_seq, end_seq, active}.
+    // ----------------------------------------------------------------------------
+    // Per-core runtime args: {batch_start, batch_end, seq_t_start, seq_t_end}. Cores with no
+    // work keep the {0,0,0,0} default (their kernel loops are empty) — mirrors the legacy factory,
+    // which placed all three kernels on the full grid and skipped idle cores via these args.
+    // ----------------------------------------------------------------------------
     struct CoreArgs {
         uint32_t start_batch = 0;
         uint32_t end_batch = 0;
         uint32_t start_seq = 0;
         uint32_t end_seq = 0;
     };
+    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
     std::vector<CoreArgs> per_core_args(cores.size());
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
@@ -310,41 +338,63 @@ ProgramDescriptor RotaryEmbeddingLlamaMultiCore::create_descriptor(
             uint32_t end_seq = std::min(start_seq + seq_per_core, seq_len_t);
 
             if (start_seq >= seq_len_t || start_batch >= batch) {
-                // Important to skip cores which have no work to do, otherwise they will wait
-                // on cos/sin data which will never arrive.
                 continue;
             }
-            log_debug(
-                tt::LogTest,
-                "core: {}, start_batch: {}, end_batch: {}, start_seq: {}, end_seq: {}",
-                core_idx,
-                start_batch,
-                end_batch,
-                start_seq,
-                end_seq);
-
             per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq};
         }
     }
 
-    reader_desc.runtime_args.reserve(cores.size());
-    writer_desc.runtime_args.reserve(cores.size());
-    compute_desc.runtime_args.reserve(cores.size());
+    KernelRunArgs reader_run{.kernel = READER_KERNEL};
+    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
+    KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
+    reader_run.runtime_arg_values.reserve(cores.size());
+    writer_run.runtime_arg_values.reserve(cores.size());
+    compute_run.runtime_arg_values.reserve(cores.size());
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
-        reader_desc.emplace_runtime_args(
-            cores[i],
-            {src_buffer, cos_buffer, sin_buffer, trans_mat_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
-        writer_desc.emplace_runtime_args(cores[i], {dst_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
-        compute_desc.runtime_args.emplace_back(
-            cores[i], std::vector<uint32_t>{a.start_batch, a.end_batch, a.start_seq, a.end_seq});
+        KernelRunArgs::RuntimeArgValues vals{
+            {"batch_start", a.start_batch},
+            {"batch_end", a.end_batch},
+            {"seq_t_start", a.start_seq},
+            {"seq_t_end", a.end_seq}};
+        reader_run.runtime_arg_values.push_back({cores[i], vals});
+        writer_run.runtime_arg_values.push_back({cores[i], vals});
+        compute_run.runtime_arg_values.push_back({cores[i], vals});
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    WorkUnitSpec wu{
+        .name = "rotary_embedding_llama_interleaved",
+        .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL},
+        .target_nodes = CoreRangeSet(all_cores),
+    };
 
-    return desc;
+    ProgramSpec spec{
+        .name = "rotary_embedding_llama_interleaved",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers =
+            {in_dfb_spec,
+             cos_dfb_spec,
+             sin_dfb_spec,
+             trans_mat_dfb_spec,
+             rotated_in_interm_dfb_spec,
+             cos_interm_dfb_spec,
+             sin_interm_dfb_spec,
+             out_dfb_spec,
+             zero_dfb_spec},
+        .tensor_parameters = {in_param, cos_param, sin_param, trans_mat_param, out_param},
+        .work_units = {wu},
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader_run, writer_run, compute_run};
+    run_args.tensor_args = {
+        {IN_TENSOR, TensorArgument{std::cref(input.mesh_tensor())}},
+        {COS_TENSOR, TensorArgument{std::cref(cos.mesh_tensor())}},
+        {SIN_TENSOR, TensorArgument{std::cref(sin.mesh_tensor())}},
+        {TRANS_MAT_TENSOR, TensorArgument{std::cref(trans_mat.mesh_tensor())}},
+        {OUT_TENSOR, TensorArgument{std::cref(output.mesh_tensor())}}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim
