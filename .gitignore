@@ -182,3 +182,4 @@ models/experimental/acestep/**/*.npy
 .auto/
 # third-party SongEval toolkit assets (ASLP-lab) — fetched, never committed
 models/experimental/acestep/demo/songeval/
+acestep_demo_song.wav
