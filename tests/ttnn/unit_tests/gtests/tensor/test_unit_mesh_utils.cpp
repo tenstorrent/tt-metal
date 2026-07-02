@@ -16,14 +16,14 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
+#include "ttnn/tensor/unit_mesh/unit_mesh_error.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::experimental::unit_mesh {
 namespace {
 
-using ::testing::HasSubstr;
 using ::testing::SizeIs;
-using ::testing::ThrowsMessage;
+using ::testing::Throws;
 using ::tt::tt_metal::distributed::MeshShape;
 
 using UnitMeshUtils2x4Test = ::tt::tt_metal::MeshDevice2x4Fixture;
@@ -100,7 +100,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateEmptyVector) {
     std::vector<Tensor> empty_tensors;
     EXPECT_THAT(
         ([&]() { aggregate(empty_tensors); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Cannot aggregate empty tensor vector")));
+        Throws<ttnn::UnitMeshEmptyTensorVector>());
 }
 
 TEST_F(UnitMeshUtils2x4Test, AggregateNonUnitMeshes) {
@@ -120,7 +120,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateNonUnitMeshes) {
     }
 
     EXPECT_THAT(
-        ([&]() { aggregate(tensors); }), ThrowsMessage<std::runtime_error>(HasSubstr("Expected unit mesh (1x1)")));
+        ([&]() { aggregate(tensors); }), Throws<ttnn::UnitMeshNotUnitMesh>());
 }
 
 TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
@@ -155,7 +155,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
 
     EXPECT_THAT(
         ([&]() { aggregate(tensors); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("All tensors must have the same TensorSpec")));
+        Throws<ttnn::UnitMeshTensorSpecMismatch>());
 }
 
 TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedAddresses) {
@@ -188,7 +188,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedAddresses) {
 
     EXPECT_THAT(
         ([&]() { aggregate(tensors); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("All mesh buffers must be at the same address")));
+        Throws<ttnn::UnitMeshBufferAddressMismatch>());
 }
 
 TEST_F(UnitMeshUtils2x4Test, AggregateWrongNumberOfTensors) {
@@ -209,7 +209,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateWrongNumberOfTensors) {
     std::vector<Tensor> tensors = {tensor};
     EXPECT_THAT(
         ([&]() { aggregate(tensors); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Input tensors must span the entire parent mesh")));
+        Throws<ttnn::UnitMeshTensorsNotSpanningMesh>());
 }
 
 TEST_F(UnitMeshUtils2x4Test, DisaggregateWithoutSubmeshes) {
@@ -228,7 +228,7 @@ TEST_F(UnitMeshUtils2x4Test, DisaggregateWithoutSubmeshes) {
     // Should throw because no submeshes exist
     EXPECT_THAT(
         ([&]() { disaggregate(tensor); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Number of submeshes (0) must match mesh size")));
+        Throws<ttnn::UnitMeshSubmeshCountMismatch>());
 }
 
 }  // namespace
