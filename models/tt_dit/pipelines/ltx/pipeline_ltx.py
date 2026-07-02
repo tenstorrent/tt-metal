@@ -696,8 +696,9 @@ class LTXPipeline:
         )
 
     def _new_upsampler(self) -> LTXLatentUpsampler:
-        """Spatial-2x latent upsampler at stage-1 shape: input H/W = full // 64,
-        latent_frames = (num_frames - 1) // 8 + 1. Config read from checkpoint header."""
+        """Spatial-2x latent upsampler at stage-1 shape: input H/W = full // (SPATIAL_COMPRESSION*2)
+        (stage 1 runs at half-res, then the VAE compresses by SPATIAL_COMPRESSION),
+        latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1. Config read from checkpoint header."""
         with safe_open(self._upsampler_path, framework="pt") as f:
             cfg = json.loads(f.metadata()["config"])
         latent_frames = (self._init_num_frames - 1) // TEMPORAL_COMPRESSION + 1
@@ -707,7 +708,10 @@ class LTXPipeline:
         # seams uneven dims (e.g. 17x30) at the 2x4 boundaries.
         hf = self.vae_parallel_config.height_parallel.factor
         wf = self.vae_parallel_config.width_parallel.factor
-        input_hw = (ceil_to(self._init_height // 64, hf), ceil_to(self._init_width // 64, wf))
+        input_hw = (
+            ceil_to(self._init_height // (SPATIAL_COMPRESSION * 2), hf),
+            ceil_to(self._init_width // (SPATIAL_COMPRESSION * 2), wf),
+        )
         return LTXLatentUpsampler(
             input_hw=input_hw,
             in_channels=cfg["in_channels"],
@@ -1185,7 +1189,7 @@ class LTXPipeline:
         if self.upsampler is None:
             return
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
-        s1_lh, s1_lw = height // 64, width // 64
+        s1_lh, s1_lw = height // (SPATIAL_COMPRESSION * 2), width // (SPATIAL_COMPRESSION * 2)
         dummy = torch.zeros(1, self.in_channels, latent_frames, s1_lh, s1_lw)
         self._upsample_latent(dummy)
 
@@ -1950,20 +1954,15 @@ class LTXPipeline:
             mesh_device=self.audio_mesh_device,
             dtype=ttnn.float32,
         )
-        # Capture-once/replay the main vocoder device graph when the pipeline runs traced.
-        # (Previously produced garbage audio: a ttnn trace bakes absolute buffer addresses, and the
-        # vocoder's prep_run alloc/free desynced them from the replay-time allocator state. Fixed in
-        # Vocoder.forward_traced — warm caches on a prior eager decode, then capture with
-        # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
-        # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
-        # Main-vocoder trace defaults ON (wins on small/host-bound meshes — loudbox 2x4: 0.80s
-        # traced). On large/CCL-bound meshes it is net-negative (galaxy 4x8: 1.37s traced vs 1.07s
-        # eager — T-shard=8 AllGather/halo dominates, audio decode does not scale with chips), so
-        # set LTX_VOC_TRACE=0 there.
+        # Main vocoder trace: warm caches on a prior eager decode, then capture with prep_run=False
+        # so capture and every replay share the post-mel-VAE free-list — a ttnn trace bakes absolute
+        # buffer addresses, so a prep_run alloc/free would desync them. Gated by the
+        # test_audio_decode_girl conv1d-vs-torch oracle, which runs under trace.
+        # Defaults ON: net win on small/host-bound meshes; on large CCL-bound meshes the T-shard
+        # AllGather/halo dominates and audio decode doesn't scale with chips, so set LTX_VOC_TRACE=0.
         self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
-        # BWE trace follows the master LTX_TRACED gate, like every other trace region — no
-        # separate opt-in. On the traced steady-state path replay is net-positive (audio decode
-        # ~0.5s traced vs ~0.9s eager, bh 4x8); it captures at warmup alongside the vocoder.
+        # BWE trace follows the master LTX_TRACED gate (no separate opt-in); replay is net-positive
+        # on the traced steady-state path and captures at warmup alongside the vocoder.
         self.tt_vocoder_with_bwe.use_trace_bwe = self._traced
         # mel-VAE audio-decoder trace stays OFF behind its own flag (LTX_VAE_TRACE=1): the
         # captured replay is broken, so it is opt-in only and never tied to LTX_TRACED.
