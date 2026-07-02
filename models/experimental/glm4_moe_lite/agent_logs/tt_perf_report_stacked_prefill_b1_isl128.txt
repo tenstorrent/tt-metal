@@ -1,0 +1,59 @@
+# tt-perf-report stacked category report — GLM-4.7-Flash, batch-1 ISL-128, 2x4 (WH)
+# Source CSV: /tmp/glm_tracy_iter2/reports/2026_07_02_15_32_46/ops_perf_results_2026_07_02_15_32_46.csv
+# Command: tt-perf-report <csv> --arch wormhole --group-by category
+# NOTE: this CSV includes a few decode steps (harness decodes under --phase prefill);
+#       clean prefill-only category split is in PLAN.md §7.3 / opt_progress.md baseline
+#       (Compute 66.5% / TM 16.6% / Other 10.6% / DM 6.3%).
+
+############### STACKED CATEGORY REPORT ###############
+📊 Stacked report 📊
+====================
+
+Total %  Op Code  Device Time Sum  Op Count
+-------------------------------------------
+74.47 %  Compute     75,257.01 μs      1544
+10.66 %  DM          10,774.21 μs       473
+ 9.58 %  TM           9,683.44 μs      1409
+ 5.28 %  Other        5,337.31 μs       418
+-------------------------------------------
+
+############### STACKED OP REPORT ###############
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                               Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+46.48 %  SparseMatmulDeviceOperation              46,973.49 μs        92      Compute
+10.50 %  UnaryDeviceOperation                     10,609.50 μs       230      Compute
+10.08 %  ReduceScatterDeviceOperation             10,181.54 μs        94           DM
+ 7.37 %  MatmulDeviceOperation                     7,445.11 μs       377      Compute     8.03 %   391.12 %     33.45 %    53.99 %              33.66 %
+ 6.07 %  BinaryNgDeviceOperation                   6,132.64 μs       417      Compute
+ 3.86 %  SliceDeviceOperation                      3,899.45 μs       569           TM
+ 2.62 %  AllGatherDeviceOperation                  2,644.39 μs        94        Other
+ 2.15 %  LayerNormDeviceOperation                  2,174.87 μs       192      Compute
+ 1.43 %  TransposeDeviceOperation                  1,440.91 μs        46           TM
+ 1.35 %  ConcatDeviceOperation                     1,363.87 μs       141           TM
+ 1.14 %  SDPAOperation                             1,148.43 μs        47      Compute
+ 1.07 %  FillPadDeviceOperation                    1,083.06 μs       138           TM
+ 0.79 %  FastReduceNCDeviceOperation                 799.20 μs        46        Other
+ 0.78 %  GatherDeviceOperation                       792.78 μs        46        Other
+ 0.73 %  TopKDeviceOperation                         732.80 μs        46        Other
+ 0.63 %  RotaryEmbeddingLlamaDeviceOperation         635.16 μs        95      Compute
+ 0.62 %  TilizeWithValPaddingDeviceOperation         625.47 μs       141           TM
+ 0.41 %  ShardedToInterleavedDeviceOperation         417.56 μs       284           DM
+ 0.35 %  UntilizeWithUnpaddingDeviceOperation        348.71 μs       138           TM
+ 0.30 %  NlpCreateHeadsDeviceOperation               300.88 μs        47           TM
+ 0.29 %  NLPConcatHeadsDeviceOperation               291.64 μs        47           TM
+ 0.20 %  ScatterDeviceOperation                      201.31 μs        46        Other
+ 0.16 %  TypecastDeviceOperation                     160.55 μs        92           TM
+ 0.16 %  PermuteDeviceOperation                      158.75 μs        46           TM
+ 0.14 %  CopyDeviceOperation                         142.18 μs        47           DM
+ 0.07 %  EmbeddingsDeviceOperation                    72.25 μs         2      Compute
+ 0.07 %  MeshPartitionDeviceOperation                 65.73 μs        46        Other
+ 0.06 %  ReduceDeviceOperation                        65.56 μs        92      Compute
+ 0.06 %  PagedFillCacheDeviceOperation                61.35 μs        48        Other
+ 0.04 %  ReshapeViewDeviceOperation                   39.74 μs        46        Other
+ 0.03 %  ReshardDeviceOperation                       32.93 μs        48           DM
+ 0.01 %  TilizeDeviceOperation                        10.15 μs         3           TM
+ 0.00 %  UntilizeDeviceOperation                       0.00 μs         1           TM
+-------------------------------------------------------------------------------------------------------------------------------------------------------

@@ -66,6 +66,14 @@ extra sparse_matmul launches removed at ISL≤512. Structural op-count reduction
 - **delta −155 ms → 1.46× (+46% faster prefill)**, PCC 1.0 / argmax match (bit-identical).
 - Chunk decision verified every iter: OLD n_chunks=4, NEW n_chunks=1 (×46 layers).
 
+**tt-perf-report stacked report CONFIRMS the reduction** (see
+`agent_logs/tt_perf_report_stacked_prefill_b1_isl128.txt`), baseline → post-opt:
+- SparseMatmul **368 → 92** ops (46 layers × 2 = 1 chunk/layer), Slice **1581 → 569**, Concat 187 → 141.
+- **TM share 16.6% → 9.6%** of device time. This is the single biggest TM win found so far and
+  directly serves the "minimize TM" goal. Next TM targets from this report: Slice (569, 3.86%),
+  ReduceScatter (DM 10%), Transpose/Concat/FillPad. Next SLOW-matmul target: the 377 dense Matmuls
+  (mean FLOPs 33%) + lm_head 32×2048×38720 (SLOW).
+
 Tooling added this iter (reusable by the autonomous agent):
 - `scripts/ab_prefill_pcm_pcc.py` — full-depth A/B logits PCC (NEW vs OLD via env toggle) on 2×4.
 - `agent_logs/verify_iter2.sh` — one-shot: chunk-decision debug + A/B PCC gate.
