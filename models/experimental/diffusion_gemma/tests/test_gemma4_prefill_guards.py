@@ -118,6 +118,58 @@ def test_apply_rope_chunked_slices_tensor_and_cache(monkeypatch):
     assert calls[-1] == ("concat", ["rope-out", "rope-out"], 2, "dram")
 
 
+def test_apply_rope_chunked_keeps_single_sequence_chunk_allocated(monkeypatch):
+    calls = []
+
+    class _Tensor:
+        def __init__(self, name, shape):
+            self.name = name
+            self.shape = shape
+            self.deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def slice(tensor, starts, ends, *, memory_config=None):
+            calls.append(("slice", tensor.name, starts, ends, memory_config))
+            return _Tensor(
+                f"{tensor.name}[h{starts[1]}:{ends[1]},s{starts[2]}:{ends[2]},d{starts[3]}:{ends[3]}]",
+                [ends[idx] - starts[idx] for idx in range(4)],
+            )
+
+        @staticmethod
+        def concat(tensors, *, dim, memory_config):
+            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
+            shape = list(tensors[0].shape)
+            shape[dim] = sum(tensor.shape[dim] for tensor in tensors)
+            return _Tensor(f"concat-dim{dim}", shape)
+
+        @staticmethod
+        def mul(lhs, rhs):
+            return _Tensor(f"mul({lhs.name})", lhs.shape)
+
+        @staticmethod
+        def add(lhs, rhs):
+            return _Tensor(f"add({lhs.name})", lhs.shape)
+
+    monkeypatch.setattr(DA, "ttnn", _FakeTtnn)
+    source = _Tensor("k", [1, 2, 32, 256])
+
+    out = _apply_rope_chunked(
+        source, _Tensor("cos", [1, 1, 512, 256]), _Tensor("sin", [1, 1, 512, 256]), start_offset=32
+    )
+
+    assert out.shape == [1, 2, 32, 256]
+    assert out.name == "concat-dim1"
+    assert out.deallocated is False
+    assert source.deallocated is True
+    assert [call for call in calls if call[0] == "concat" and call[2] == 2] == []
+
+
 def test_sdpa_q_chunked_slices_q_and_mask(monkeypatch):
     calls = []
 

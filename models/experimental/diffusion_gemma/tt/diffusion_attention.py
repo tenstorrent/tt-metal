@@ -153,9 +153,12 @@ def _apply_rope_chunked(
             chunks.append(ttnn.concat(head_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             for chunk in head_chunks:
                 chunk.deallocate(True)
-    out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for chunk in chunks:
-        chunk.deallocate(True)
+    if len(chunks) == 1:
+        out = chunks[0]
+    else:
+        out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for chunk in chunks:
+            chunk.deallocate(True)
     tensor.deallocate(True)
     return out
 
