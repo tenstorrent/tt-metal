@@ -325,8 +325,6 @@ private:
     const bool bottom_up_;
     const std::optional<SubDeviceId> sub_device_id_;
     const bool owns_data_;
-    // Cached at construction; device_ may be dangling by the time buffers are torn down.
-    const bool is_emule_device_;
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
     AllocatorImpl* allocator_;
