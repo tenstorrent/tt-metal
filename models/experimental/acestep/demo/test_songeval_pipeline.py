@@ -43,7 +43,6 @@ from models.experimental.acestep.reference.weight_utils import have_pipeline, lo
 from models.experimental.acestep.tt.model_config import AceStepModelConfig
 from models.experimental.acestep.tt.pipeline import create_tt_pipeline
 from models.experimental.acestep.tests.test_utils import require_single_device, to_ttnn_tensor
-from models.experimental.acestep.demo.songeval.scorer import DIMENSIONS, SongEvalScorer, songeval_available
 
 HIDDEN_CH = 64
 CONTEXT_CH = 128
@@ -57,6 +56,17 @@ def _songeval_deps_ok() -> bool:
     import importlib.util
 
     return all(importlib.util.find_spec(m) is not None for m in ("muq", "omegaconf", "hydra", "librosa", "torchaudio"))
+
+
+def _songeval_assets_ok() -> bool:
+    """The SongEval scorer wrapper + checkpoint live in an un-committed, gitignored folder
+    (third-party ASLP-lab toolkit assets). Skip cleanly if that folder isn't present."""
+    try:
+        from models.experimental.acestep.demo.songeval.scorer import songeval_available
+
+        return songeval_available()
+    except Exception:
+        return False
 
 
 def _reference_denoise(ref_dit, args, noise, context, encoder, steps):
@@ -80,13 +90,16 @@ def _reference_denoise(ref_dit, args, noise, context, encoder, steps):
 
 @pytest.mark.slow
 @pytest.mark.skipif(not have_pipeline(), reason="ACE-Step pipeline (incl VAE) not downloaded")
-@pytest.mark.skipif(not songeval_available(), reason="SongEval assets not available (scorer ckpt missing)")
 @pytest.mark.skipif(
     not _songeval_deps_ok(), reason="SongEval python deps not installed (muq/omegaconf/hydra/librosa/torchaudio)"
+)
+@pytest.mark.skipif(
+    not _songeval_assets_ok(), reason="SongEval scorer/ckpt not present (un-committed third-party assets)"
 )
 def test_songeval_ttnn_pipeline(device):
     require_single_device(device)
     from diffusers import AutoencoderOobleck
+    from models.experimental.acestep.demo.songeval.scorer import DIMENSIONS, SongEvalScorer
 
     args = AceStepModelConfig.from_hf(num_hidden_layers=NUM_DIT_LAYERS)
 

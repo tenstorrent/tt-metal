@@ -178,3 +178,7 @@ models/experimental/acestep/**/*.mp3
 models/experimental/acestep/**/*.wav
 models/experimental/acestep/**/*.pt
 models/experimental/acestep/**/*.npy
+# autoresearch session files (not part of the deliverable)
+.auto/
+# third-party SongEval toolkit assets (ASLP-lab) — fetched, never committed
+models/experimental/acestep/demo/songeval/
