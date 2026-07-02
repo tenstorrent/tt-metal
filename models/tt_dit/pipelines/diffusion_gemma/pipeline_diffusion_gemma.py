@@ -122,7 +122,8 @@ class DiffusionGemmaPipeline:
         # bfp8 and bf16 without a stale-cache collision.
         cache_base = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
         model_key = str(hf_model.config._name_or_path).rstrip("/").split("/")[-1] or "diffusion_gemma"
-        dtype_key = "bfp8" if config.expert_dtype == ttnn.bfloat8_b else "bf16"
+        _dtype_to_key = {ttnn.bfloat4_b: "bfp4", ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}
+        dtype_key = _dtype_to_key.get(config.expert_dtype, "unknown")
         moe_cache_root = os.path.join(cache_base, model_key, f"experts_{dtype_key}")
 
         mesh_device = config.mesh_device

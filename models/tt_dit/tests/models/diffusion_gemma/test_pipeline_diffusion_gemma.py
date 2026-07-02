@@ -47,26 +47,30 @@ PROMPT = "Briefly: what is the capital of France?"
 MAX_NEW_TOKENS = 32
 SEED = 0
 
-# Permissive per-mesh-shape × per-expert-dtype latency thresholds (seconds). bfp8 experts
-# are ~4x smaller than bf16, so DRAM traffic through the MoE dominates — bfp8 runs meaningfully
-# faster. Tighten after first hardware run.
-# Key format: (rows, cols, topology, expert_dtype_key) where expert_dtype_key ∈ {"bfp8", "bf16"}.
+# Permissive per-mesh-shape × per-expert-dtype latency thresholds (seconds). Expert dtype
+# strongly affects DRAM traffic through the MoE: bfp4 is ~8x smaller than bf16, bfp8 ~4x.
+# Tighten after first hardware run.
+# Key format: (rows, cols, topology, expert_dtype_key) where
+#   expert_dtype_key ∈ {"bfp4", "bfp8", "bf16"}.
 _DEFAULT_METRICS = {"encoder": 20.0, "denoising": 120.0, "total": 150.0}
 EXPECTED_METRICS = {
     # BH QB2 (2x4 linear)
+    (2, 4, "linear", "bfp4"): {"encoder": 15.0, "denoising": 90.0, "total": 110.0},
     (2, 4, "linear", "bfp8"): _DEFAULT_METRICS,
     (2, 4, "linear", "bf16"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
     # BH galaxy (4x8 linear)
+    (4, 8, "linear", "bfp4"): {"encoder": 6.0, "denoising": 45.0, "total": 60.0},
     (4, 8, "linear", "bfp8"): {"encoder": 8.0, "denoising": 60.0, "total": 80.0},
     (4, 8, "linear", "bf16"): {"encoder": 12.0, "denoising": 90.0, "total": 120.0},
     # WH T3K (2x4 ring) — bf16 doesn't fit in DRAM, skipped in-test.
+    (2, 4, "ring", "bfp4"): {"encoder": 20.0, "denoising": 120.0, "total": 150.0},
     (2, 4, "ring", "bfp8"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
 }
 
 
 def _expert_dtype_key(dtype: ttnn.DataType) -> str:
     """Short stable string for keying ``EXPECTED_METRICS``."""
-    return {ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}[dtype]
+    return {ttnn.bfloat4_b: "bfp4", ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}[dtype]
 
 
 # ----- Test ------------------------------------------------------------------------------
@@ -75,6 +79,7 @@ def _expert_dtype_key(dtype: ttnn.DataType) -> str:
 @pytest.mark.parametrize(
     "expert_dtype",
     [
+        pytest.param(ttnn.bfloat4_b, id="expert_bfp4"),
         pytest.param(ttnn.bfloat8_b, id="expert_bfp8"),
         pytest.param(ttnn.bfloat16, id="expert_bf16"),
     ],
