@@ -85,7 +85,7 @@ class Qwen2ExecutorRuntimeConfig:
         # the family default: N150 -> [128], N300 -> [128, 1024]. (T3K is unsupported here anyway:
         # 8 does not divide the 4 KV heads.) Decode trace remains enabled at the engine layer.
         num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
-        allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
+        allowed = {1: (128,), 2: (128, 1024)}.get(num_devices, (128,))
         return (
             prefill_seq_len in allowed
             and prefill_seq_len <= self.max_prefill_chunk_size

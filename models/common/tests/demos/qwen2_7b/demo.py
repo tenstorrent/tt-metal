@@ -7,8 +7,10 @@ TTTv2 Qwen2-7B-Instruct demo — accuracy and performance measurement.
 Uses ``EagerQwenExecutor`` / ``TracedQwenExecutor`` directly (no vLLM adapter).
 
 **Mesh note:** Qwen2-7B-Instruct has 28 attention heads and 4 KV heads; both must be
-divisible by the mesh device count. Use N150 (1), N300 (2), or a 4-device row mesh —
-not 8 devices (e.g. T3K), which is incompatible with this checkpoint.
+divisible by the mesh device count. Use N150 (1) or N300 (2); T3K (8) is incompatible
+with this checkpoint, and N150x4 (4) is not a validated mesh for this model on TTTv2
+(WH tuning and prefill trace are wired for 1–2 devices only, so 4-device accuracy is
+unvalidated).
 
 Usage:
     # Token accuracy test
@@ -17,20 +19,20 @@ Usage:
     # Batch-1 latency test
     MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen2-7B-Instruct pytest models/common/tests/demos/qwen2_7b/demo.py -k "batch-1" -v
 
-    # Batch-32 throughput test (prefer 4-device mesh if available)
-    MESH_DEVICE=N150x4 HF_MODEL=Qwen/Qwen2-7B-Instruct pytest models/common/tests/demos/qwen2_7b/demo.py -k "batch-32" -v
+    # Batch-32 throughput test
+    MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen2-7B-Instruct pytest models/common/tests/demos/qwen2_7b/demo.py -k "batch-32" -v
 
 LazyWeight tensor cache (same rules as ``models/tt_transformers`` ``ModelArgs``):
 ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` is set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory
-(``device_name`` is ``N150`` / ``N300`` / ``N150x4`` / ``{n}dev`` from mesh size).
+(``device_name`` is ``N150`` / ``N300`` / ``{n}dev`` from mesh size).
 
 **Expected metrics note:** Qwen2-7B-Instruct is not in ``models/tt_transformers/PERF.md``
 as of 2026-05-29. Expected metrics below are taken from the Qwen2.5-7B-Instruct row in
 PERF.md (N300: top1=84, top5=96, tok_s_u=24.6, ttft_ms=92 for both accuracy and
 performance modes) — the two checkpoints share the same architecture dimensions
-(hidden=3584, 28/4 heads, intermediate=18944). N150 and N150x4 targets are scaled from
-the Llama-3.1-8B N150 vs N300 device ratios until measured Qwen2-7B rows are available.
+(hidden=3584, 28/4 heads, intermediate=18944). N150 targets are scaled from the
+Llama-3.1-8B N150 vs N300 device ratios until measured Qwen2-7B rows are available.
 """
 
 import dataclasses
@@ -58,7 +60,7 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # Top-1 / top-5 / tok_s_u / ttft_ms for performance mode sourced from the Qwen2.5-7B
 # rows in PERF.md (N300: top1=84, top5=96, tok_s_u=24.6, ttft_ms=92), which is the
 # closest published TTTv1 baseline (Qwen2-7B shares the same architecture dimensions).
-# N150 / N150x4 targets scaled from Llama-3.1-8B N150 vs N300 device ratios pending
+# N150 targets scaled from Llama-3.1-8B N150 vs N300 device ratios pending
 # measured Qwen2-7B rows.
 #
 # Accuracy mode tok_s_u targets are lower than PERF.md's reported 24.6 because TTTv2
@@ -71,21 +73,20 @@ EXPECTED_METRICS = {
     "performance": {
         "N150": {"top1": 84, "top5": 96, "tok_s_u": 15.7, "ttft_ms": 143},
         "N300": {"top1": 84, "top5": 96, "tok_s_u": 24.6, "ttft_ms": 92},
-        "N150x4": {"top1": 84, "top5": 96, "tok_s_u": 30.0, "ttft_ms": 80},
     },
     "accuracy": {
         "N150": {"top1": 82, "top5": 95, "tok_s_u": 12.0, "ttft_ms": 143},
         "N300": {"top1": 82, "top5": 95, "tok_s_u": 19.5, "ttft_ms": 92},
-        "N150x4": {"top1": 82, "top5": 95, "tok_s_u": 23.0, "ttft_ms": 80},
     },
 }
 
 PERF_TOLERANCE = 0.05
 
+# N150x4 (1, 4) intentionally omitted — not a validated mesh for this model on TTTv2
+# (WH tuning + prefill trace wired for 1–2 devices only; see module docstring).
 _MESH_DEVICE_TO_SHAPE: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
-    "N150x4": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
@@ -95,7 +96,7 @@ def _ttnn_mesh_device_param_from_env() -> dict:
     env = os.environ.get("MESH_DEVICE", "").strip()
     if not env:
         pytest.skip(
-            "MESH_DEVICE must be set (e.g. N300 or N150x4). See module docstring.",
+            "MESH_DEVICE must be set (e.g. N300). See module docstring.",
             allow_module_level=True,
         )
     shape = _MESH_DEVICE_TO_SHAPE.get(env)
@@ -144,7 +145,7 @@ def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice, hf_model_id: st
     pytest.skip(
         f"Incompatible mesh for {hf_model_id}: {n_dev} devices need "
         f"num_attention_heads ({n_h}) and num_key_value_heads ({n_kv}) each divisible by {n_dev}. "
-        f"Try MESH_DEVICE=N300 (2) or N150x4 (4)."
+        f"Try MESH_DEVICE=N300 (2)."
     )
 
 
@@ -155,8 +156,6 @@ def get_device_name(mesh_device):
         return "N150"
     if num_devices == 2:
         return "N300"
-    if num_devices == 4:
-        return "N150x4"
     return f"{num_devices}dev"
 
 
