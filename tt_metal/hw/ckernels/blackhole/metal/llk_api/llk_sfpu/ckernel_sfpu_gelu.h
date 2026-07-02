@@ -387,10 +387,9 @@ inline void calculate_gelu_tanh() {
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
-            sfpi::vFloat one_plus = 1.0f + t;
             sfpi::vFloat half_x = 0.5f * x;
-            result = half_x * one_plus;
+            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(scaled);
+            result = half_x * t + half_x;
         }
         v_endif;
 
@@ -404,13 +403,8 @@ inline void calculate_gelu_tanh() {
 
 template <bool is_fp32_dest_acc_en>
 inline void gelu_tanh_init() {
-    // _sfpu_tanh_fp32_accurate_ calls _sfpu_sigmoid_ -> _sfpu_reciprocal_
-    // regardless of is_fp32_dest_acc_en, so we always need reciprocal init.
-    // Calling tanh_init<false, is_fp32_dest_acc_en>() does NOT work when
-    // is_fp32_dest_acc_en=false: it loads polynomial constants for the
-    // BF16 polynomial tanh path that this kernel doesn't take, and skips
-    // reciprocal init.
-    sigmoid_init<false>();
+    // initialise constants for _sfpu_tanh_fp32_accurate_
+    tanh_init<false, true>();
 }
 
 // =============================================================================
@@ -497,7 +491,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         } else {
             // 1 NR step suffices for BF16 (7 mantissa bits); FP32 needs 2 steps (23 bits).
             sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<is_fp32_dest_acc_en ? 2 : 1>(x2);  // 1/x²
-            sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
+            sfpi::vFloat inv_x4 = inv_x2 * inv_x2;                                        // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             result = x_exp * INV_SQRT_2PI * correction;
         }

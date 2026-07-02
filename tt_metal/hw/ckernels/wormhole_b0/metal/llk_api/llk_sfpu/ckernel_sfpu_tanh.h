@@ -6,6 +6,7 @@
 #pragma once
 
 #include <limits>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -40,15 +41,19 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     r = r * f + 8.331298828e-3f;
     r = r * f + 4.166680202e-2f;
     s = f * f;  // hide SFPMAD latency
+
     r = r * f + sfpi::vConstFloatPrgm2;
     w = 0.5f;
     r = __builtin_rvtt_sfpmad(r.get(), f.get(), w.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    sfpi::vInt e = i + 126;
+    // a, f, r, s, x, i, w
+
+    scale = sfpi::as<sfpi::vFloat>(i + 126);
     r = r * s + f;
-    scale = sfpi::setexp(sfpi::vConst0, e);
+    scale = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(scale) << 23);
+    // scale = sfpi::as<sfpi::vFloat>(e); // sfpi::setexp(sfpi::vConst0, e);
     bias0 = scale - w;
-    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
+    a = __builtin_rvtt_sfpiadd_i(x.get(), -1, sfpi::SFPIADD_MOD1_CC_NONE);
     x0 = r * scale + bias0;
     y = a * 0.0f + 1.0f;
     x1 = x0 + 1.0f;
@@ -58,22 +63,20 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
     t = x1 * rcp + 1.0f;
 
-    //
-    v_if(i < 61) {
+    v_block {
+        // i < 61, without wasting a register
+        i = __builtin_rvtt_sfpiadd_i(i.get(), -61, sfpi::SFPIADD_MOD1_CC_LT0);
         t = t * t + t;
         y = x;
         rcp = rcp * t + rcp;
-        x_exp = sfpi::exexp(x, sfpi::ExponentMode::NoDebias);
-        y0 = x0 * rcp;
-        t = x1 * y0 + x0;
-
-        //
-        v_if(x_exp >= 115) { y = t * rcp + y0; }
-        v_endif;
+        i = __builtin_rvtt_sfpiadd_i(i.get(), -115, sfpi::SFPIADD_MOD1_CC_GTE0);
+        y = x0 * rcp;
+        t = x1 * y + x0;
+        y = t * rcp + y;
     }
-    v_endif;
+    v_endblock;
 
-    return sfpi::copysgn(y, x);
+    return sfpi::copysgn(y, a);
 }
 
 template <bool is_fp32_acc_to_dest_mode>
@@ -148,9 +151,9 @@ inline void calculate_tanh() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     if constexpr (APPROXIMATION_MODE) {
-        uint imm0 = 0x1DFF;  // 0.90625*x
-        uint imm1 = 0x481A;  // 0.09375*x + 0.8125
-        uint imm2 = 0xFF00;  // 1
+        std::uint32_t imm0 = 0x1DFF;  // 0.90625*x
+        std::uint32_t imm1 = 0x481A;  // 0.09375*x + 0.8125
+        std::uint32_t imm2 = 0xFF00;  // 1
         _sfpu_load_imm16_(0, imm0);
         _sfpu_load_imm16_(1, imm1);
         _sfpu_load_imm16_(2, imm2);
