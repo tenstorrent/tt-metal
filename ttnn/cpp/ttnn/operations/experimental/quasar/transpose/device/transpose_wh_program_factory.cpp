@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include <functional>
 #include <vector>
 
 using namespace tt::constants;
@@ -176,14 +177,20 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
         };
 
-        ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+        ComputeUnpackToDestModes utd;
         if (src_is_float32) {
             // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
             // on the unpack-to-dest path; both feed the transpose.
-            std::get<ComputeGen2Config>(compute_cfg).unpack_to_dest_mode = {
+            utd = {
                 {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
                 {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
         }
+        ComputeHardwareConfig compute_cfg = std::invoke([&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+            }
+            return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        });
 
         KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL,
@@ -265,11 +272,16 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
         };
 
-        ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+        ComputeUnpackToDestModes utd;
         if (src_is_float32) {
-            std::get<ComputeGen2Config>(compute_cfg).unpack_to_dest_mode = {
-                {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+            utd = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
         }
+        ComputeHardwareConfig compute_cfg = std::invoke([&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+            }
+            return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        });
 
         KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL,

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <functional>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -175,11 +176,16 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     };
 
     // ---- Compute (Metal 2.0 fork of tilize) ----
-    ComputeHardwareConfig compute_hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
+    ComputeUnpackToDestModes utd;
     if (fp32_llk_acc) {
-        std::get<ComputeGen2Config>(compute_hw)
-            .unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        utd.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
+    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
+        if (a.device()->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+    });
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(

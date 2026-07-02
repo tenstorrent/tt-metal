@@ -11,6 +11,7 @@
 #include <bit>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <map>
 
 using namespace tt::tt_metal;
@@ -171,10 +172,18 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                  DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"Ht", Ht}, {"Wt", compute_Wt}, {"NC", 1u}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-            .hw_config = ComputeHardwareConfig{ComputeGen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en}},
+            .hw_config = std::invoke([&]() -> ComputeHardwareConfig {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return ComputeGen2Config{
+                        .math_fidelity = math_fidelity,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en};
+                }
+                return ComputeGen1Config{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .dst_full_sync_en = dst_full_sync_en};
+            }),
         };
     };
 

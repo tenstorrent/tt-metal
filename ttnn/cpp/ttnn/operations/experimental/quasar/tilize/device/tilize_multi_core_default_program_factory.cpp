@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
+#include <functional>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -133,11 +135,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     };
 
     // -- Compute kernels (preserved multiplicity: per-group CTAs) --
-    ComputeHardwareConfig compute_hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
+    ComputeUnpackToDestModes utd;
     if (fp32_llk_acc) {
-        std::get<ComputeGen2Config>(compute_hw).unpack_to_dest_mode = {
-            {MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
+        utd = {{MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
     }
+    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
+        if (device->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+    });
     const char* compute_src = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {
         return KernelSpec{

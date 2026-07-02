@@ -131,13 +131,15 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     };
 
     // ---- Compute (Metal 2.0 fork; full + cliff) ----
-    auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
+    auto make_compute_hw = [&]() -> ComputeHardwareConfig {
+        ComputeUnpackToDestModes utd;
         if (fp32_llk_acc) {
-            std::get<ComputeGen2Config>(hw).unpack_to_dest_mode.emplace(
-                IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            utd.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
-        return hw;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
     };
     const std::filesystem::path compute_source(
         "ttnn/cpp/ttnn/operations/experimental/quasar/tilize_with_val_padding/device/kernels/compute/"

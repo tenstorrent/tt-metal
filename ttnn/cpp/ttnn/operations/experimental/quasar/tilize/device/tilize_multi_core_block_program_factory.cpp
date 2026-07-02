@@ -7,6 +7,8 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
+#include <functional>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -186,8 +188,6 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         TensorParameter{.unique_id = BLK_OUTPUT_TENSOR, .spec = output.tensor_spec()},
     };
 
-    ComputeHardwareConfig compute_hw_template{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
-
     uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
     for (const auto& g : groups) {
         // c_1 staging fake CB size (legacy push_cb_pair):
@@ -261,10 +261,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).
-        ComputeHardwareConfig compute_hw = compute_hw_template;
+        ComputeUnpackToDestModes utd;
         if (fp32_llk_acc) {
-            std::get<ComputeGen2Config>(compute_hw).unpack_to_dest_mode = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
+            utd = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
         }
+        ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+            }
+            return ComputeGen1Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+        });
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,
             .source = BLK_COMPUTE_SRC,

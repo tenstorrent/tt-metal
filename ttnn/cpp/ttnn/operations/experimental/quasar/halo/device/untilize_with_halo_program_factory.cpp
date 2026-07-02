@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <cmath>
 #include <vector>
@@ -376,15 +377,22 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .compile_time_args =
                 {{"tiles_per_row", ntiles_per_block}, {"block_size", clamped_block_size_height / TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
-            .hw_config =
-                ComputeHardwareConfig{
-                    ComputeGen2Config{
+            .hw_config = std::invoke([&]() -> ComputeHardwareConfig {
+                if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+                    return ComputeGen2Config{
                         .math_fidelity = math_fidelity,
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_approx_mode = math_approx_mode,
-                    },
-                },
+                    };
+                }
+                return ComputeGen1Config{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .math_approx_mode = math_approx_mode,
+                };
+            }),
         };
         kernels.push_back(std::move(compute));
     }

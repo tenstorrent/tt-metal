@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 #include "ttnn/operations/math.hpp"
@@ -234,12 +235,16 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     }
 
     auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+        ComputeUnpackToDestModes utd;
         if (fp32_dest_acc_en) {
-            std::get<ComputeGen2Config>(hw).unpack_to_dest_mode.emplace(
-                IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            utd.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
-        return hw;
+        return std::invoke([&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+            }
+            return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        });
     };
 
     const std::filesystem::path compute_source(

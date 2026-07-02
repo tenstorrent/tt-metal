@@ -9,6 +9,7 @@
 #include <bit>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <map>
 
 using namespace tt::tt_metal;
@@ -190,8 +191,12 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-        .hw_config = ComputeHardwareConfig{ComputeGen2Config{
-            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en}},
+        .hw_config = std::invoke([&]() -> ComputeHardwareConfig {
+            if (a.device().arch() == tt::ARCH::QUASAR) {
+                return ComputeGen2Config{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en};
+            }
+            return ComputeGen1Config{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en};
+        }),
     };
 
     Group<KernelSpec> kernels = {reader, writer, compute};

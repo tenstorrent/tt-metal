@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <vector>
 
 using namespace tt::constants;
@@ -134,11 +135,16 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
     };
 
-    ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+    ComputeUnpackToDestModes utd;
     if (src0_cb_data_format == tt::DataFormat::Float32) {
-        std::get<ComputeGen2Config>(compute_cfg).unpack_to_dest_mode = {
-            {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+        utd = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
     }
+    ComputeHardwareConfig compute_cfg = std::invoke([&]() -> ComputeHardwareConfig {
+        if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+    });
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE_KERNEL,

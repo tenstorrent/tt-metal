@@ -4,6 +4,8 @@
 
 #include "tilize_multi_core_sharded_program_factory.hpp"
 
+#include <functional>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -97,10 +99,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
     };
 
     // -- Compute kernel --
-    ComputeHardwareConfig compute_hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
+    ComputeUnpackToDestModes utd;
     if (fp32_llk_acc) {
-        std::get<ComputeGen2Config>(compute_hw).unpack_to_dest_mode = {{INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
+        utd = {{INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
     }
+    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
+        if (input.device()->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = utd};
+    });
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
         .source = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp",
