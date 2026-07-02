@@ -7,6 +7,11 @@ on:
     - cron: "0 5 * * *" # 05:00 UTC daily
   workflow_dispatch:
     inputs:
+      all:
+        description: "All SKUs (every Wormhole + Blackhole SKU)"
+        required: false
+        type: boolean
+        default: false
       wormhole:
         description: "All Wormhole SKUs (wh_n150_civ2, wh_galaxy)"
         required: false
@@ -23,7 +28,7 @@ on:
         type: boolean
         default: false
       skus:
-        description: "Specific SKUs (comma-separated), added to any boxes ticked above. e.g. 'bh_galaxy, wh_galaxy'. Leave everything empty to run ALL."
+        description: "Specific SKUs (comma-separated), added to any boxes ticked above. e.g. 'bh_galaxy, wh_galaxy'. Tick the 'all' box above to run every SKU."
         required: false
         type: string
         default: ""
@@ -78,6 +83,7 @@ jobs:
 
           # Group checkboxes.
           SELECTED=""
+          [[ "${{ inputs.all }}" == "true" ]] && SELECTED="${SELECTED:+$SELECTED,}$ALL_SKUS"
           [[ "${{ inputs.wormhole }}" == "true" ]] && SELECTED="${SELECTED:+$SELECTED,}$WH_SKUS"
           [[ "${{ inputs.blackhole }}" == "true" ]] && SELECTED="${SELECTED:+$SELECTED,}$BH_SKUS"
           [[ "${{ inputs.multichip }}" == "true" ]] && SELECTED="${SELECTED:+$SELECTED,}$MULTICHIP_SKUS"
@@ -103,8 +109,11 @@ jobs:
             done
           fi
 
-          # Nothing ticked and nothing typed -> run everything.
-          [[ -z "$SELECTED" ]] && SELECTED="$ALL_SKUS"
+          # Require an explicit selection now that "empty = all" is replaced by the 'all' checkbox.
+          if [[ -z "$SELECTED" ]]; then
+            echo "::error::No SKUs selected. Tick 'all' (or wormhole/blackhole/multichip) or list SKUs in the 'skus' box."
+            exit 1
+          fi
 
           # Deduplicate, preserving first-seen order.
           declare -A seen
