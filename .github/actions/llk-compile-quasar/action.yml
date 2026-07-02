@@ -15,9 +15,24 @@ inputs:
     required: false
     default: '1'
   num-workers:
-    description: 'Number of pytest-xdist workers (-n). 30 measured ~3.6 GiB sustained RAM+swap per worker on a 40-core/78.5 GiB xlarge runner (mean mem 92.35% + mean swap 46.18%), saturating RAM and forcing sustained swapping even with -Os and serial inner builds. 18 targets ~80% RAM with zero swap at that per-worker footprint; re-measure and adjust if it still swaps. Override per-call if a different runner size needs a different number.'
+    description: >-
+      Number of pytest-xdist workers (-n). Each worker is a full Python process
+      that imports numpy + torch (via golden_generators) + the config/format
+      tables — a FIXED ~0.6-1.2 GiB RSS paid once per worker for the whole run,
+      independent of compile work. With LLK_BUILD_PARALLELISM=1 each worker fans
+      out to len(KERNEL_COMPONENTS)=4 concurrent g++ (unpack/math/pack/sfpu) for
+      one variant, so total concurrent g++ = -n x 4. The compiler-side anon
+      memory (the swap driver) scales with total g++; the fixed Python tax scales
+      with -n. To hold ~16 total g++ (fully using the 16-core `large` runner)
+      while paying the Python tax only 4x instead of 16x, use -n 4 with inner
+      parallelism on. Reference point: on the older serial regime, -n 30 measured
+      ~3.6 GiB sustained RAM+swap per worker on a 40-core/78.5 GiB xlarge runner
+      and swapped hard. NOTE: this job runs on `large` (16-core), not xlarge — an
+      -n 18 serial config both over-subscribes cores and pays 18x the fixed
+      Python tax; -n 4 with parallelism is the memory-cheaper way to the same
+      g++ concurrency. Override per-call for a different runner size.
     required: false
-    default: '18'
+    default: '4'
 
 runs:
   using: composite
@@ -31,7 +46,16 @@ runs:
       shell: bash
       working-directory: tt_metal/tt-llk/tests/python_tests
       env:
-        LLK_BUILD_PARALLELISM: "0" # one g++ per worker
+        # Inner parallelism ON: each of the -n workers fans out to 4 concurrent
+        # g++ (one per Quasar KERNEL_COMPONENT). With -n 4 that is ~16 total g++
+        # (saturates the 16-core large runner) but only 4 heavyweight Python
+        # processes carrying the fixed numpy+torch tax, vs 16 with serial/-n 16.
+        # Component compiles are write-disjoint ({name}.elf each, build.h written
+        # once before fan-out, all inside the per-variant FileLock), so this is
+        # safe. Was defaulted off (=0) back when it multiplied -n without lowering
+        # it (OOM under -O3 on a smaller runner); with -Os and a proportionally
+        # reduced -n the total g++ concurrency is held constant, not multiplied.
+        LLK_BUILD_PARALLELISM: "1"
         CHIP_ARCH: quasar
       run: |
         echo "Compiling Quasar (group ${{ inputs.test-group }}/${{ inputs.test-splits }})..."
