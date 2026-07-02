@@ -38,7 +38,15 @@ NUM_HEADS = 16
 HEAD_DIM = HIDDEN_SIZE // NUM_HEADS  # 64
 FFN_SIZE = 4 * HIDDEN_SIZE  # 4096 (GPT2 n_inner default)
 LAYER_NORM_EPS = 1e-5
-MAX_POSITIONS = 1024  # >= any prefill length we test; only sizes the causal mask
+
+# Real sequence-length limits, read off the checkpoint's learned position
+# embeddings (gpt.text_pos_embedding=404, gpt.mel_pos_embedding=608). At inference
+# the GPT runs on the concatenated [text] + [mel] stream, so coqui sizes the GPT-2
+# causal backbone to n_positions = text + mel.
+MAX_TEXT_POS = 404  # gpt_max_text_tokens (402) + 2
+MAX_MEL_POS = 608  # gpt_max_audio_tokens (605) + 3
+MAX_GPT_SEQ_LEN = MAX_TEXT_POS + MAX_MEL_POS  # 1012 — full GPT context
+MAX_POSITIONS = MAX_GPT_SEQ_LEN  # sizes the causal mask; must cover any tested seq_len
 
 
 # ---------------------------------------------------------------------------
