@@ -5,9 +5,10 @@
 
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
-#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
+#include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -40,7 +41,7 @@ template <
     uint32_t sticks_per_chunk,
     uint32_t in_idx_cb_id>
 void fill_indexes(uint32_t init_index) {
-    experimental::CB idx_cb(in_idx_cb_id);
+    DataflowBuffer idx_cb(in_idx_cb_id);
     volatile tt_l1_ptr IndexType* idx_ptr = reinterpret_cast<volatile tt_l1_ptr IndexType*>(idx_cb.get_write_ptr());
     uint32_t kernel_idx = 0;
 
@@ -127,7 +128,7 @@ ALWI void initialize_return_indices_data() {
     constexpr uint32_t row_stride = dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
 
     // initialize the index CB
-    experimental::CB idx_cb(in_idx_cb_id);
+    DataflowBuffer idx_cb(in_idx_cb_id);
     idx_cb.reserve_back(1);
     fill_indexes<
         typename IndexType<indexes_32_bit>::type,
@@ -145,7 +146,7 @@ ALWI void initialize_return_indices_data() {
     // TODO we used to fill the 16 bit values two at a time, but this technically resulted in overflow with odd
     // c dimensions so for now we do it one at a time for both 16 and 32 bit indexes
     if constexpr (indexes_32_bit) {
-        auto fill_inc_32 = [&](experimental::CB& inc_cb, uint32_t inc) __attribute__((always_inline)) {
+        auto fill_inc_32 = [&](DataflowBuffer& inc_cb, uint32_t inc) __attribute__((always_inline)) {
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
             for (uint32_t k = 0; k < window_size_hw; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
@@ -154,34 +155,34 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        experimental::CB right_inc_cb(right_inc_cb_id);
+        DataflowBuffer right_inc_cb(right_inc_cb_id);
         right_inc_cb.reserve_back(1);
         fill_inc_32(right_inc_cb, right_inc);
         right_inc_cb.push_back(1);
 
-        experimental::CB down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+        DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
         down_left_wrap_inc_cb.reserve_back(1);
         fill_inc_32(down_left_wrap_inc_cb, down_left_wrap_inc);
         down_left_wrap_inc_cb.push_back(1);
 
-        experimental::CB up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+        DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
         up_left_wrap_inc_cb.reserve_back(1);
         fill_inc_32(up_left_wrap_inc_cb, up_left_wrap_inc);
         up_left_wrap_inc_cb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            experimental::CB intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+            DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
             intra_kernel_right_inc_cb.reserve_back(1);
             fill_inc_32(intra_kernel_right_inc_cb, intra_kernel_right_inc);
             intra_kernel_right_inc_cb.push_back(1);
 
-            experimental::CB intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+            DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
             intra_kernel_down_left_wrap_inc_cb.reserve_back(1);
             fill_inc_32(intra_kernel_down_left_wrap_inc_cb, intra_kernel_down_left_wrap_inc);
             intra_kernel_down_left_wrap_inc_cb.push_back(1);
         }
     } else {
-        auto fill_inc = [&](experimental::CB& inc_cb, uint32_t inc) __attribute__((always_inline)) {
+        auto fill_inc = [&](DataflowBuffer& inc_cb, uint32_t inc) __attribute__((always_inline)) {
             uint16_t inc_16 = (uint16_t)inc;
             uint32_t inc_32_bit = (uint32_t)inc_16 | ((uint32_t)inc_16 << 16);
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
@@ -192,28 +193,28 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        experimental::CB right_inc_cb(right_inc_cb_id);
+        DataflowBuffer right_inc_cb(right_inc_cb_id);
         right_inc_cb.reserve_back(1);
         fill_inc(right_inc_cb, right_inc);
         right_inc_cb.push_back(1);
 
-        experimental::CB down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+        DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
         down_left_wrap_inc_cb.reserve_back(1);
         fill_inc(down_left_wrap_inc_cb, down_left_wrap_inc);
         down_left_wrap_inc_cb.push_back(1);
 
-        experimental::CB up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+        DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
         up_left_wrap_inc_cb.reserve_back(1);
         fill_inc(up_left_wrap_inc_cb, up_left_wrap_inc);
         up_left_wrap_inc_cb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            experimental::CB intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+            DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
             intra_kernel_right_inc_cb.reserve_back(1);
             fill_inc(intra_kernel_right_inc_cb, intra_kernel_right_inc);
             intra_kernel_right_inc_cb.push_back(1);
 
-            experimental::CB intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+            DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
             intra_kernel_down_left_wrap_inc_cb.reserve_back(1);
             fill_inc(intra_kernel_down_left_wrap_inc_cb, intra_kernel_down_left_wrap_inc);
             intra_kernel_down_left_wrap_inc_cb.push_back(1);
@@ -263,12 +264,12 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     // pack_tmp_cb/pack_idx_tmp_cb. The function is template-instantiated per reader, but the
     // preprocessor can't see the reader_id template arg, so the gate uses the READER_ID define.
 #if READER_ID == 0
-    experimental::CB in_cb(in_cb_id);
+    DataflowBuffer in_cb(in_cb_id);
 #else
-    experimental::CB out_cb(out_cb_id);
-    experimental::CB out_idx_cb(out_idx_cb_id);
-    experimental::CB pack_tmp_cb(pack_tmp_cb_id);
-    experimental::CB pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    DataflowBuffer out_cb(out_cb_id);
+    DataflowBuffer out_idx_cb(out_idx_cb_id);
+    DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
 #endif
     Noc noc;
     UnicastEndpoint self_ep;
@@ -490,10 +491,10 @@ void kernel_main() {
     // in_scalar_cb) that are not declared in reader1's build.
 #if READER_ID == 0
     {
-        experimental::CB clear_value_cb(clear_value_cb_id);
+        DataflowBuffer clear_value_cb(clear_value_cb_id);
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
         clear_value_cb.push_back(1);
-        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
+        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
     }
 
     {
@@ -527,16 +528,16 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        experimental::CB in_scalar_cb(in_scalar_cb_id_0);
+        DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_cb.push_back(1);
     }
 #endif  // READER_ID == 0
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
-    experimental::CB in_shard_cb(in_shard_cb_id);
+    DataflowBuffer in_shard_cb(in_shard_cb_id);
     const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
-    experimental::CB in_reader_indices_cb(in_reader_indices_cb_id);
+    DataflowBuffer in_reader_indices_cb(in_reader_indices_cb_id);
     if constexpr (config_in_dram) {
         // reader_indices_cb is a shared DFB (reader0 produces in the DRAM path / reader1 consumes).
         // Only reader0 reads from DRAM, so tensor::reader_indices is referenced (and bound) on

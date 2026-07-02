@@ -664,7 +664,7 @@ def test_layernorm_pre_all_gather_residual_mismatched_dtype(device, inp_dtype, r
     "op_name",
     ["layer_norm_pre_all_gather", "layer_norm"],
 )
-def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, res_shape):
+def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, res_shape, expect_error):
     """Residual with a different logical shape from the input must be rejected.
 
     If validation compares padded_shape, which is tile-aligned and can therefore
@@ -697,7 +697,7 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
         tt_memory_config=dram_memcfg,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Input and residual logical and padded shapes must match"):
         if op_name == "layer_norm_pre_all_gather":
             ttnn.layer_norm_pre_all_gather(
                 tt_inp, residual_input_tensor=tt_res, dtype=ttnn.bfloat16, memory_config=dram_memcfg
@@ -942,10 +942,6 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     ULP (~512) dwarfs the underlying randn variation (~1), so the variance signal is destroyed
     inside the add before welford runs.
     """
-    if use_residual:
-        pytest.xfail(
-            "FUSE_PRE_ADD TF32 floor on add_tiles: variance signal is destroyed inside the add before welford runs. Issue #45231."
-        )
 
     torch.manual_seed(0)
     torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset

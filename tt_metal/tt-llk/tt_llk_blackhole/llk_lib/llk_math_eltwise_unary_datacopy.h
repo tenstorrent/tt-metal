@@ -543,7 +543,6 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
  * (untilize) which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
- * @note May disable debug feature bit 11 (@ref _llk_math_dbg_feature_disable_) for tilize with UInt32/Int32 (budabackend#1948).
  */
 template <
     DataCopyType type,
@@ -601,7 +600,6 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
  *
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam unpack_to_dest: Whether unpack wrote directly to dest.
- * @note Reverses @ref _llk_math_eltwise_unary_datacopy_init_; re-enables debug feature bit 11 (@ref _llk_math_dbg_feature_enable_) only for broadcast
  * unpack-to-dest.
  */
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>

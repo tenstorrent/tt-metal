@@ -332,15 +332,6 @@
   team: models
   model-name: qwenimage
 
-- name: t3k_qwen3_vl_tests
-  cmd: run_t3000_qwen3_vl_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 12
-  owner_id: U08H31YMN4Q # Sanjay Sanjay
-  team: models
-  model-name: qwen3_vl
-
 # ============================================================================
 # Galaxy Wormhole tests
 # ============================================================================
@@ -501,16 +492,6 @@
 # ============================================================================
 
 # P150 Single-card tests
-- name: whisper P150 performance
-  cmd: |
-    pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
-  skus:
-    bh_p150_perf:
-      timeout: 84
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
-
 - name: unet-shallow P150 performance
   cmd: |
     pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"

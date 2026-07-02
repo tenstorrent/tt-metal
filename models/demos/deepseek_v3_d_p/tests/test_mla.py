@@ -724,7 +724,6 @@ def _run_chunked_prefill(
                 rope_tensors=indexed_rope,
                 kvpe_cache=tt_kvpe_cache,
                 actual_start=kv_actual,
-                actual_end=valid_end,
                 cache_user_id=u,
             )
             out_flat = ttnn.to_torch(

@@ -47,7 +47,6 @@ void kernel_main() {
     uint32_t tile_bytes = cb.get_entry_size();
 
     const auto src_addrgen = TensorAccessor(tensor::input);
-    const auto dst_addrgen = TensorAccessor(tensor::output);
 
     // read a ublock of tiles from src to CB
     cb.reserve_back(num_tiles);
@@ -58,7 +57,6 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_write_offset += tile_bytes;
     }
-    cb.push_back(num_tiles);
 
     if (is_controller) {
         sem.wait(control_value);
@@ -79,13 +77,10 @@ void kernel_main() {
         sem.wait(control_value);
     }
 
-    cb.wait_front(num_tiles);
-    uint32_t cb_read_offset = 0;
-    for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
-        noc.async_write(
-            cb, dst_addrgen, tile_bytes, {.offset_bytes = cb_read_offset}, {.page_id = i, .offset_bytes = 0});
-        noc.async_write_barrier();
-        cb_read_offset += tile_bytes;
-    }
-    cb.pop_front(num_tiles);
+    // Publish the staged data to the writer kernel only AFTER the read barriers and the all-cores
+    // handshake above, so the writer's wait_front(dfb::scratch) cannot drain CB -> dst until every
+    // core has finished reading src (the overlap-safety invariant). Then drain the handshake's NoC
+    // writes/atomics before returning (the Metal 2.0 FW epilogue does not).
+    cb.push_back(num_tiles);
+    noc.async_full_barrier();
 }
