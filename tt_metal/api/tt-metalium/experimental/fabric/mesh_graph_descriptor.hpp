@@ -240,7 +240,9 @@ private:
 
     // Connections
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_instance_id_;
-    std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
+    // Must use owning std::string keys: keys were previously string_views into InstanceData::type, which broke
+    // move/copy (e.g. std::vector<MeshGraphDescriptor>::emplace_back / reallocation) by leaving dangling views.
+    std::unordered_map<std::string, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::vector<std::pair<AsicPosition, FabricNodeId>> pinnings_;

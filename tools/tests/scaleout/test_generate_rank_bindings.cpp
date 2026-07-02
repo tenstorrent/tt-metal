@@ -93,6 +93,32 @@ TEST(GenerateRankBindingsHelpersTest, WriteRankfile_SortsByRankAscending) {
     EXPECT_EQ(ranks[2], 2);
 }
 
+TEST(GenerateRankBindingsHelpersTest, WriteRankfile_MockClusterUsesLocalhost) {
+    // Mock runs must place every rank on the literal "localhost" so OpenMPI/PRRTE launches locally instead of
+    // attempting an ssh to the (possibly unresolvable) real hostname returned by gethostname().
+    const auto dir = make_temp_dir("rankfile_mock");
+    const auto path = dir / "rankfile";
+    std::vector<RankBindingConfig> bindings = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 0, 0, "host-b", 1),
+    };
+
+    write_rankfile(bindings, path.string(), /*mock_cluster_rankfile=*/true);
+
+    std::ifstream in(path.string());
+    std::string line;
+    int line_count = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        ++line_count;
+        EXPECT_NE(line.find("=localhost "), std::string::npos)
+            << "Mock rankfile line should target localhost: " << line;
+    }
+    EXPECT_EQ(line_count, 2);
+}
+
 TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_WritesRankToClusterDesc) {
     const auto dir = make_temp_dir("phase2");
     const auto path = dir / "phase2_mock_mapping.yaml";
@@ -146,6 +172,71 @@ TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_NoRankEntriesRemove
     write_phase2_mock_mapping_yaml(bindings, mpi_rank_to_path, path.string());
 
     EXPECT_FALSE(std::filesystem::exists(path));
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_SingleDenseSubcontext_ResolvesRelativeToMappingDir) {
+    const auto dir = make_temp_dir("mgd_map");
+    const auto mgd_dummy = dir / "dummy_mgd.textproto";
+    {
+        std::ofstream f(mgd_dummy);
+        f << "# placeholder\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: dummy_mgd.textproto\n";
+    }
+
+    const auto out = load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out.at(0), std::filesystem::weakly_canonical(mgd_dummy));
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_TwoDenseSubcontexts) {
+    const auto dir = make_temp_dir("mgd_map2");
+    const auto a = dir / "a.textproto";
+    const auto b = dir / "b.textproto";
+    for (const auto& p : {a, b}) {
+        std::ofstream f(p);
+        f << "x\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: a.textproto\n  1: b.textproto\n";
+    }
+
+    const auto out = load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping);
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_EQ(out.at(0), std::filesystem::weakly_canonical(a));
+    EXPECT_EQ(out.at(1), std::filesystem::weakly_canonical(b));
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_GapInSubcontextIds_Throws) {
+    const auto dir = make_temp_dir("mgd_gap");
+    const auto mgd = dir / "m.textproto";
+    {
+        std::ofstream f(mgd);
+        f << "x\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: m.textproto\n  2: m.textproto\n";
+    }
+
+    EXPECT_THROW(load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping), std::invalid_argument);
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_MissingMgdFile_Throws) {
+    const auto dir = make_temp_dir("mgd_missing");
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: does_not_exist.textproto\n";
+    }
+
+    EXPECT_THROW(load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping), std::invalid_argument);
 }
 
 TEST(GenerateRankBindingsHelpersTest, GetActualHostname_PassesThroughNonLocalhost) {
