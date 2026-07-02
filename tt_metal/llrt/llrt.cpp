@@ -352,7 +352,7 @@ std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_
         auto& watcher = *tt::tt_metal::MetalContext::instance().watcher_server();
         if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
             return fmt::format(
-                "Device {}: Aborting wait for physical cores to finish due to watcher error: {}",
+                "Device {}: Aborting wait due to watcher error: {}",
                 device_id,
                 watcher.exception_message());
         }
