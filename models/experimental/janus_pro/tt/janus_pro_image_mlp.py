@@ -74,25 +74,13 @@ class TtJanusProImageFeedForward(LightweightModule):
         seq_len = x.shape[-2]
         batch_size = x.shape[0]
 
-        # Depends on whether we are padding or not
-        MAX_MM_SEQ_LEN = seq_len
-
-        x_in = x
-        if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
-            # Reshape input to to fit on device and parallelize computation
-            x_in = ttnn.reshape(x_in, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-        pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
-        pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
-
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         # Bias + activation applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         c_fc_out = ttnn.linear(
-            x_in,
+            x,
             self.c_fc_weight,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
-            # program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.c_fc_bias is not None:
@@ -103,9 +91,7 @@ class TtJanusProImageFeedForward(LightweightModule):
             c_fc_out,
             self.c_proj_weight,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat16,
-            # program_config=pc_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

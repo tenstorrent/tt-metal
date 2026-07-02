@@ -8,7 +8,6 @@ This is the Vision Tower Model for Janus-Pro-7B.
 
 import torch
 
-import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.janus_pro.tt.janus_pro_image_transformer import TtJanusProImageTransformer
 from models.experimental.janus_pro.tt.janus_pro_vision_embedding import TtJanusProVisionEmbeddings
@@ -82,23 +81,11 @@ class TtJanusProVisionModel(LightweightModule):
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
 
-        bsz, in_channel, h, w = images.shape
-
         x = self.embeddings(images)
-        attention_mask = torch.zeros(bsz, 1, x.shape[1], x.shape[1])
 
-        tt_mask = ttnn.from_torch(
-            attention_mask,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        x = self.encoder(
-            x,
-            mask=tt_mask,
-        )
+        # SigLIP vision uses full bidirectional attention; there is no attention mask
+        # (an all-zeros additive mask would be a no-op), so SDPA runs without one.
+        x = self.encoder(x, mask=None)
 
         x = self.ln_post(x)
 
