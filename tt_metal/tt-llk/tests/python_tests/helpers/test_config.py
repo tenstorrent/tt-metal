@@ -105,7 +105,7 @@ class StimuliMode(Enum):
     LOAD_CACHED = 2  # load from disk, skip computation
 
 
-@dataclass
+@dataclass(slots=True)
 class TestOutcome:
     result: Any = None
     # Lines emitted by DEVICE_PRINT() during this run.
