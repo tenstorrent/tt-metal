@@ -407,12 +407,14 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // H-mux: mirror the W-mux (N workers per (link,dir) feed the H-axis eth link through a mux). Gated on
     // TT_NP_H_MUX during bring-up; auto num_h_workers by heuristic (capped 2), zeros-only. H cores placed
     // in columns after the W-mux block. See PLAN_NP_FABRIC_MUX_IMPL.md.
+    // Auto-engage like W-mux: 2 H workers for zeros+coalesce (validated 8/8 PCC). Replicate stays on the
+    // direct path (pre-existing W-mux edge-outward bug). TT_NP_H_MUX forces on; TT_NP_H_WORKERS overrides.
     const bool h_force_mux = std::getenv("TT_NP_H_MUX") != nullptr;
-    const bool use_h_mux = is_2d && h_force_mux && (h_coalesce_n > 0);
-    uint32_t num_h_workers = (use_h_mux && is_padding_zeros) ? 2u : 1u;  // capped at the validated 2
+    uint32_t num_h_workers = (is_padding_zeros && h_coalesce_n > 0) ? 2u : 1u;  // capped at the validated 2
     if (const char* e = std::getenv("TT_NP_H_WORKERS")) {
         num_h_workers = std::max(1, atoi(e));
     }
+    const bool use_h_mux = is_2d && (h_coalesce_n > 0) && (num_h_workers > 1 || h_force_mux);
     std::vector<CoreCoord> hmux_worker_logical, hmux_worker_virtual, hmux_core_logical;
     if (use_h_mux) {
         const uint32_t h_mux_col = use_w_mux ? (2u + num_w_workers) : 1u;
