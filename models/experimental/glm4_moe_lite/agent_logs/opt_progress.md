@@ -79,6 +79,22 @@ Tooling added this iter (reusable by the autonomous agent):
 - `agent_logs/verify_iter2.sh` — one-shot: chunk-decision debug + A/B PCC gate.
 - `agent_logs/reprofile_iter2.sh` — tracy prefill reprofile → ops_perf_results CSV.
 
+## Iteration 2b — prefill_pcm win across batches (generalization check)
+Ran `agent_logs/verify_multibatch.sh` (A/B PCC + timing at ISL-128) for batches 8/16/32:
+- **batch 32** (`BATCHED_PREFILL=0`, bf8): ✅ PCC=1.0, argmax match, prefill **15,695 → 11,109 ms
+  = 1.41× (+41%)**. The win generalizes to the largest batch.
+- **batch 8 & 16** (`BATCHED_PREFILL=1`, bf16): ❌ crash — but **pre-existing, not this change.**
+  Isolated diagnostic `debug_run_full_tt_greedy … --batch-size 8 --phase prefill` with
+  `GLM4_MOE_LITE_MOE_SPARSE_PREFILL_PCM=1` (exact pre-change behavior) crashes identically:
+  `TT_THROW program.cpp:1549: Statically allocated circular buffers … clash with L1 buffers`
+  (L1 OOM) — i.e. the **batched-prefill (`BATCHED_PREFILL=1`) path is broken at batch>1**
+  independent of prefill_pcm. batch-16 shows a second symptom
+  (`matmul out_block_w % out_subblock_w == 0`). **New worklist item (P1): fix batched-prefill
+  L1 OOM at batch 8/16, or run those batches with `BATCHED_PREFILL=0` like batch 32.**
+
+Summary: prefill_pcm optimization is correct + a win at batch **1 (1.46×)** and **32 (1.41×)**;
+batch 8/16 are blocked by a separate pre-existing bug (documented above), not by this change.
+
 ## Reality note
 Each remaining iteration is deep fused-op code surgery + 10-min reprofile + PCC verify. This is the
 long autonomous grind the PLAN is built for; it is not flag-flipping. Batches 8/16/32 repeat this
