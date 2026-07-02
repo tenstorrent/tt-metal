@@ -80,7 +80,7 @@ tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu 
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # Emule software emulation tests
-tests/emule/ @xanderchin @arminaleTT @tenstorrent/codeowner-bypass
+tests/emule/ @xanderchin @arminaleTT @sgholamiTT @tenstorrent/codeowner-bypass
 
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
