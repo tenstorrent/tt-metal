@@ -152,14 +152,16 @@ def run_bringup_cc(
         mcp_env["TT_HW_PLANNER_SHARD"] = _shard_flag
         if _shard_tp:
             mcp_env["TT_HW_PLANNER_SHARD_TP"] = _shard_tp
-        if not os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+        _phys_chips = _mesh_chips(mesh)
+        if _phys_chips > 1:
+            mcp_env["TT_HW_PLANNER_MESH_CHIPS"] = str(_phys_chips)
             from ..parallelism import mesh_graph_descriptor_path
 
-            _mgd = mesh_graph_descriptor_path(int(_shard_tp or "2"), repo_root)
+            _mgd = mesh_graph_descriptor_path(_phys_chips, repo_root)
             if _mgd:
-                mcp_env["TT_MESH_GRAPH_DESC_PATH"] = _mgd
                 print(
-                    f"  [shard] TT_MESH_GRAPH_DESC_PATH={Path(_mgd).name} (Blackhole fabric mesh graph, {_shard_tp} chips)"
+                    f"  [shard] physical mesh = {_phys_chips} chips → {Path(_mgd).name} "
+                    f"(applied only to shard-mode component runs, not single-device tests)"
                 )
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "bringup-mcp")
     import re as _re
