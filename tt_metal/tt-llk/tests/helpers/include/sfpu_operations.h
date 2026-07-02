@@ -39,6 +39,7 @@
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_heaviside.h"
 #include "llk_sfpu/ckernel_sfpu_i0.h"
+#include "llk_sfpu/ckernel_sfpu_lerp.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
@@ -47,6 +48,7 @@
 #include "llk_sfpu/ckernel_sfpu_selu.h"
 #include "llk_sfpu/ckernel_sfpu_shift.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid.h"
+#include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt.h"
@@ -1118,6 +1120,16 @@ void call_ternary_sfpu_operation_init()
         // addcdiv uses sfpu_reciprocal internally; init_addcdiv forwards to sfpu_reciprocal_init.
         SFPU_TERNARY_INIT_FN(addcdiv, sfpu::init_addcdiv, (APPROX_MODE));
     }
+    else if constexpr (OPERATION == SfpuType::lerp)
+    {
+        // lerp has no per-op init beyond the shared addrmod setup.
+        SFPU_TERNARY_INIT(lerp);
+    }
+    else if constexpr (OPERATION == SfpuType::snake_beta)
+    {
+        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init.
+        SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
+    }
     else
     {
         SFPU_TERNARY_INIT(where);
@@ -1191,6 +1203,34 @@ void call_ternary_sfpu_operation(
             dst_index_out,
             vector_mode,
             value);
+    }
+    else if constexpr (OPERATION == SfpuType::lerp)
+    {
+        // lerp takes no scalar: out = in0 + in2 * (in1 - in0).
+        SFPU_TERNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_lerp,
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_in2,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::snake_beta)
+    {
+        // snake_beta takes no scalar: out = x + sin(alpha * x)^2 / beta.
+        SFPU_TERNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_snake_beta,
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_in2,
+            dst_index_out,
+            vector_mode);
     }
     else
     {

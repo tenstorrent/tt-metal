@@ -3812,16 +3812,19 @@ class WhereGolden:
 
 @register_golden
 class TernarySFPUGolden:
-    """Golden for the ternary addc SFPU kernels (addcmul / addcdiv).
+    """Golden for the ternary SFPU kernels (addcmul / addcdiv / lerp / snake_beta).
 
-    Both operate element-wise on three same-shaped operands (a, b, c) and a
-    scalar constant, so — like where — the result at each position depends only
-    on the same-position inputs. No tilize is needed: the kernel copies each
-    input tile into a Dest tile (layout-preserving) and the SFPU processes rows
-    in place, so a row-major element-wise reference matches the packed result.
+    All operate element-wise on three same-shaped operands (a, b, c) — and, for
+    the addc kernels, a scalar constant — so, like where, the result at each
+    position depends only on the same-position inputs. No tilize is needed: the
+    kernel copies each input tile into a Dest tile (layout-preserving) and the
+    SFPU processes rows in place, so a row-major element-wise reference matches
+    the packed result.
 
-        addcmul: out = a + (value * b * c)
-        addcdiv: out = a + (value * b / c)
+        addcmul:    out = a + (value * b * c)
+        addcdiv:    out = a + (value * b / c)
+        lerp:       out = a + c * (b - a)
+        snake_beta: out = a + sin(b * a)^2 / c    (a=x, b=alpha, c=beta)
     """
 
     def __call__(
@@ -3845,6 +3848,10 @@ class TernarySFPUGolden:
             result = a + (value * b * c)
         elif operation == MathOperation.SfpuAddcdiv:
             result = a + (value * b / c)
+        elif operation == MathOperation.SfpuLerp:
+            result = a + c * (b - a)
+        elif operation == MathOperation.SfpuSnakeBeta:
+            result = a + torch.sin(b * a) ** 2 / c
         else:
             raise ValueError(f"Unsupported ternary SFPU operation: {operation}")
 

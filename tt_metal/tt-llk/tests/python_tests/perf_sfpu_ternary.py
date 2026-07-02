@@ -2,16 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MATH_ISOLATE (and full run-type) perf for the ternary SFPU addc kernels flagged as
-lacking coverage in the PR #48696 verification (table 3):
+MATH_ISOLATE (and full run-type) perf for the ternary SFPU kernels that lack
+dedicated coverage. The addc kernels are flagged in the PR #48696 verification
+(table 3); lerp/snake_beta are the other standalone ternary-dispatch SFPU ops
+with no perf test of their own:
 
-  addcmul -> metal llk_sfpu/ckernel_sfpu_addcmul.h   (out = a + value*b*c)
-  addcdiv -> metal llk_sfpu/ckernel_sfpu_addcdiv.h   (out = a + value*b/c)
+  addcmul    -> metal llk_sfpu/ckernel_sfpu_addcmul.h     (out = a + value*b*c)
+  addcdiv    -> metal llk_sfpu/ckernel_sfpu_addcdiv.h     (out = a + value*b/c)
+  lerp       -> metal llk_sfpu/ckernel_sfpu_lerp.h        (out = a + c*(b - a))
+  snake_beta -> metal llk_sfpu/ckernel_sfpu_snake_beta.h  (out = x + sin(alpha*x)^2/beta)
 
-These are ternary (3 Dest tiles + a scalar) and do not fit the unary/binary
-harnesses, so they run through a dedicated ternary source. The cycles/tile number
-lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE), and the math
-ELF size is TEXT_SIZE(MATH_ISOLATE).
+These are ternary (3 Dest tiles, plus a scalar for the addc kernels) and do not
+fit the unary/binary harnesses, so they run through a dedicated ternary source.
+The cycles/tile number lands in the TILE_LOOP row of the .post.csv as
+mean(MATH_ISOLATE), and the math ELF size is TEXT_SIZE(MATH_ISOLATE).
 """
 
 import struct
@@ -158,6 +162,76 @@ def test_perf_sfpu_addcdiv(
     _run(
         formats,
         MathOperation.SfpuAddcdiv,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
+    ).run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ],
+        same=True,
+    ),
+    dest_acc=[
+        DestAccumulation.Yes,
+        DestAccumulation.No,
+    ],
+    loop_factor=[16],
+    iterations=[32],
+    input_dimensions=[[128, 64]],  # tile_cnt: 8
+)
+def test_perf_sfpu_lerp(
+    perf_report,
+    formats,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+):
+    _run(
+        formats,
+        MathOperation.SfpuLerp,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
+    ).run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ],
+        same=True,
+    ),
+    dest_acc=[
+        DestAccumulation.Yes,
+        DestAccumulation.No,
+    ],
+    loop_factor=[16],
+    iterations=[32],
+    input_dimensions=[[128, 64]],  # tile_cnt: 8
+)
+def test_perf_sfpu_snake_beta(
+    perf_report,
+    formats,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+):
+    _run(
+        formats,
+        MathOperation.SfpuSnakeBeta,
         dest_acc,
         loop_factor,
         iterations,

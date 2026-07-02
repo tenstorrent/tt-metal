@@ -182,6 +182,11 @@ class MathOperation(Enum):
     # addcdiv: odst = idst0 + (value * idst1 / idst2)
     SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
     SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
+    # lerp:       odst = idst0 + idst2 * (idst1 - idst0)
+    # snake_beta: odst = idst0 + sin(idst1 * idst0)^2 / idst2
+    # These ternaries take three dest tiles and no scalar (SFPU_TERNARY_SCALAR is ignored).
+    SfpuLerp = OpSpec("lerp", MathOpType.SFPU_TERNARY)
+    SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
 
     # =============================================================================
     # REDUCE OPERATIONS

@@ -33,12 +33,14 @@ _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
 
 def _run_sfpu_ternary(formats, dest_acc, mathop, input_dimensions=[32, 32]):
-    # addcdiv divides by operand C, so keep C bounded away from zero and
-    # well-conditioned; A/B are kept small so the bf16 result stays accurate.
+    # addcdiv/snake_beta divide by operand C (the divisor / beta), so keep C
+    # bounded away from zero and well-conditioned; A/B are kept small so the
+    # bf16 result (and, for snake_beta, the sin() polynomial) stays accurate.
+    _divide_by_c = mathop in (MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta)
     spec_ab = StimuliSpec.uniform(low=-1.0, high=1.0)
     spec_c = (
         StimuliSpec.uniform(low=1.0, high=2.0)
-        if mathop == MathOperation.SfpuAddcdiv
+        if _divide_by_c
         else StimuliSpec.uniform(low=-1.0, high=1.0)
     )
 
@@ -152,6 +154,54 @@ def test_sfpu_addcmul(formats, dest_acc, mathop):
     mathop=MathOperation.SfpuAddcdiv,
 )
 def test_sfpu_addcdiv(formats, dest_acc, mathop):
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip("Float16_b not supported with DestAccumulation.Yes")
+
+    _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+# lerp: out = a + c * (b - a). Supported in Float32 and Float16_b only.
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ],
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.SfpuLerp,
+)
+def test_sfpu_lerp(formats, dest_acc, mathop):
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip("Float16_b not supported with DestAccumulation.Yes")
+
+    _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+# snake_beta: out = x + sin(alpha * x)^2 / beta. Supported in Float32 and Float16_b only.
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ],
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.SfpuSnakeBeta,
+)
+def test_sfpu_snake_beta(formats, dest_acc, mathop):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
     if (
