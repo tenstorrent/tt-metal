@@ -12,9 +12,10 @@ What it covers:
     - Replicated 5-step Euler denoise on all 8 chips
     - Output extraction via ConcatMeshToTensor + slice [:1]
 
-Test:
+Tests:
     test_perf_1x8_traced_2cq        — 2CQ trace replay (H2D on CQ1 || compute on CQ0);
                                       the headline per-chunk ms (README perf numbers).
+    test_perf_1x8_traced_staged     — per-stage traced breakdown via 3 sub-traces (diagnostic).
 
 Run:
     # optional: pin the 1×8 mesh to a device subset, e.g. TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
@@ -191,4 +192,83 @@ def test_perf_1x8_traced_2cq():
         print(f"1×8 pi0.5 TRACED 2CQ replay  (N_CAMS={N_CAMS})")
         print("=" * 72)
         print(f"  mean ({len(times)} iters) : {mean:.2f} ms")
+        print("=" * 72)
+
+
+def test_perf_1x8_traced_staged():
+    """Per-stage TRACED breakdown via 3 sub-traces on the single 1×8 mesh.
+
+    Captures vision / prefill / denoise as three independent traces (with
+    persistent vision_real and per_layer_kv intermediates living across trace
+    boundaries via the deterministic trace allocator). Replays each in
+    sequence, times each replay with perf_counter + blocking=True.
+
+    These are TRUE traced per-stage numbers (no eager dispatch overhead).
+    """
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp8_mesh
+
+    _print_prod_env_status()
+
+    # 3 sub-traces share the trace region — bump from 128 MiB to 256 MiB.
+    with open_prefill_tp8_mesh(tp=8, l1_small_size=24576, trace_region_size=256 * 1024 * 1024) as mesh:
+        pipe, cfg = _make_pipeline(mesh)
+        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
+
+        pipe.capture_traces_staged(images, lang_tokens)
+
+        ah = cfg.action_horizon
+        ad = cfg.action_dim
+
+        for _ in range(WARMUP_ITERS):
+            _ = pipe.sample_actions_traced_staged_timed(images, lang_tokens)
+
+        runs = []
+        last_actions = None
+        for _ in range(PERF_ITERS):
+            last_actions, t = pipe.sample_actions_traced_staged_timed(images, lang_tokens)
+            runs.append(t)
+        assert last_actions is not None
+        assert last_actions.shape == (1, ah, ad), f"shape mismatch: {tuple(last_actions.shape)}"
+        assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
+
+        keys = [
+            "input_upload_ms",
+            "vision_ms",
+            "prefill_ms",
+            "denoise_ms",
+            "output_readback_ms",
+            "compute_total_ms",
+            "traced_total_ms",
+        ]
+        means = {k: _mean([r[k] for r in runs]) for k in keys}
+        mins = {k: min(r[k] for r in runs) for k in keys}
+
+        compute = means["compute_total_ms"]
+        pct = lambda x: 100.0 * x / compute if compute > 0 else 0.0
+
+        print("\n" + "=" * 72)
+        print(
+            f"1×8 pi0.5 TRACED per-stage breakdown   (PERF_ITERS={PERF_ITERS}, steps={cfg.num_denoising_steps}, N_CAMS={N_CAMS})"
+        )
+        print("=" * 72)
+        print(f"  {'stage':<20} {'mean ms':>10} {'min ms':>10} {'% compute':>10}")
+        print(f"  {'-'*20} {'-'*10} {'-'*10} {'-'*10}")
+        print(
+            f"  {'input_upload (host)':<20} {means['input_upload_ms']:10.2f} {mins['input_upload_ms']:10.2f} {'-':>10}"
+        )
+        print(
+            f"  {'vision (trace)':<20} {means['vision_ms']:10.2f} {mins['vision_ms']:10.2f} {pct(means['vision_ms']):9.1f}%"
+        )
+        print(
+            f"  {'prefill (trace)':<20} {means['prefill_ms']:10.2f} {mins['prefill_ms']:10.2f} {pct(means['prefill_ms']):9.1f}%"
+        )
+        print(
+            f"  {'denoise (trace)':<20} {means['denoise_ms']:10.2f} {mins['denoise_ms']:10.2f} {pct(means['denoise_ms']):9.1f}%"
+        )
+        print(
+            f"  {'output_readback':<20} {means['output_readback_ms']:10.2f} {mins['output_readback_ms']:10.2f} {'-':>10}"
+        )
+        print(f"  {'-'*20} {'-'*10} {'-'*10} {'-'*10}")
+        print(f"  {'compute (v+p+d)':<20} {means['compute_total_ms']:10.2f} {mins['compute_total_ms']:10.2f}")
+        print(f"  {'traced_total':<20} {means['traced_total_ms']:10.2f} {mins['traced_total_ms']:10.2f}")
         print("=" * 72)

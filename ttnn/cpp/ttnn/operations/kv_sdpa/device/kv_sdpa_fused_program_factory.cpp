@@ -52,9 +52,11 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t Kt = prefix_Kt + suffix_Kt;
     const bool use_provided_mask = ta.mask.has_value();
 
-    // KV chunk size: largest small divisor of Kt (matches prod's k_chunk≈96 -> 3 tiles for Kt=33).
+    // KV chunk size: prefer the ~96-elem sweet spot (3-4 tiles, matches prod SDPA for Kt=33 -> 3),
+    // but fall back to larger divisors {5..8} so a Kt coprime to {4,3,2} (e.g. Kt=25 for the 2-cam
+    // 768-token prefix) still chunks coarsely (25 -> 5, i.e. 5 chunks) instead of 1-tile chunks (25).
     uint32_t Sk_chunk_t = 1;
-    for (uint32_t cand : {4u, 3u, 2u}) {
+    for (uint32_t cand : {4u, 3u, 2u, 5u, 6u, 7u, 8u}) {
         if (Kt % cand == 0) {
             Sk_chunk_t = cand;
             break;
