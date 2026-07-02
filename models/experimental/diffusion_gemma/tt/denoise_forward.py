@@ -97,8 +97,12 @@ def _build_denoise_attn_mask_for_layer(
     *,
     prompt_len: int,
     canvas_len: int,
+    use_explicit_sliding_mask: bool = False,
     mask_builder=build_device_canvas_denoise_mask,
 ):
+    if not use_explicit_sliding_mask:
+        return None
+
     layer_type = _layer_type_for_denoise(tt_model, layer_idx)
     if layer_type != "sliding_attention":
         return None
@@ -293,13 +297,16 @@ def denoise_hidden_forward(
     prompt_hidden_by_layer,
     canvas_hidden,
     q_rope_offset: int | None = None,
+    use_explicit_sliding_mask: bool = False,
     mask_builder=build_device_canvas_denoise_mask,
 ):
-    """Run the short-prompt DiffusionGemma denoise backbone to final hidden states.
+    """Run the DiffusionGemma denoise backbone to final hidden states.
 
     ``prompt_hidden_by_layer`` provides the frozen encoder-side attention source
     for each decoder layer. Entries can be either `[1, 1, P, H]` hidden tensors
     (legacy shim) or projected `(K, V)` prompt heads produced by the encoder KV path.
+    The production path is maskless all-attend; set ``use_explicit_sliding_mask``
+    only for HF-geometry A/B tests.
     """
     if len(prompt_hidden_by_layer) != len(tt_model.layers):
         raise ValueError(
@@ -315,6 +322,7 @@ def denoise_hidden_forward(
             layer_idx,
             prompt_len=prompt_len,
             canvas_len=hidden_states.shape[-2],
+            use_explicit_sliding_mask=use_explicit_sliding_mask,
             mask_builder=mask_builder,
         )
         hidden_states = _denoise_layer_forward(
@@ -337,6 +345,7 @@ def denoise_logits_forward(
     prompt_hidden_by_layer,
     canvas_hidden,
     q_rope_offset: int | None = None,
+    use_explicit_sliding_mask: bool = False,
 ):
     """Run a short-prompt DiffusionGemma denoise logits forward.
 
@@ -348,6 +357,7 @@ def denoise_logits_forward(
         prompt_hidden_by_layer=prompt_hidden_by_layer,
         canvas_hidden=canvas_hidden,
         q_rope_offset=q_rope_offset,
+        use_explicit_sliding_mask=use_explicit_sliding_mask,
     )
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
 
@@ -473,6 +483,7 @@ def denoise_logits_from_tokens(
     self_conditioning=None,
     prev_logits=None,
     q_rope_offset: int | None = None,
+    use_explicit_sliding_mask: bool = False,
     self_conditioning_embedding_weight=None,
     self_conditioning_compute_kernel_config=None,
 ):
@@ -492,6 +503,7 @@ def denoise_logits_from_tokens(
         prompt_hidden_by_layer=prompt_hidden_by_layer,
         canvas_hidden=canvas_hidden,
         q_rope_offset=q_rope_offset,
+        use_explicit_sliding_mask=use_explicit_sliding_mask,
     )
 
 

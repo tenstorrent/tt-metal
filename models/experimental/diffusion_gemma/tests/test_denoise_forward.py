@@ -128,6 +128,7 @@ def test_denoise_attn_mask_builder_skips_full_and_short_sliding_layers():
             0,
             prompt_len=2048,
             canvas_len=256,
+            use_explicit_sliding_mask=True,
             mask_builder=mask_builder,
         )
         is None
@@ -138,6 +139,7 @@ def test_denoise_attn_mask_builder_skips_full_and_short_sliding_layers():
             1,
             prompt_len=64,
             canvas_len=256,
+            use_explicit_sliding_mask=True,
             mask_builder=mask_builder,
         )
         is None
@@ -145,7 +147,7 @@ def test_denoise_attn_mask_builder_skips_full_and_short_sliding_layers():
     assert calls == []
 
 
-def test_denoise_attn_mask_builder_materializes_long_prompt_sliding_mask():
+def test_denoise_attn_mask_builder_defaults_to_maskless_for_long_prompt_sliding_layer():
     calls = []
     model = _FakeModel(num_layers=1, layer_types=["sliding_attention"], sliding_window=4)
 
@@ -159,6 +161,28 @@ def test_denoise_attn_mask_builder_materializes_long_prompt_sliding_mask():
             0,
             prompt_len=10,
             canvas_len=6,
+            mask_builder=mask_builder,
+        )
+        is None
+    )
+    assert calls == []
+
+
+def test_denoise_attn_mask_builder_can_materialize_long_prompt_sliding_mask_for_ab_tests():
+    calls = []
+    model = _FakeModel(num_layers=1, layer_types=["sliding_attention"], sliding_window=4)
+
+    def mask_builder(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "mask"
+
+    assert (
+        _build_denoise_attn_mask_for_layer(
+            model,
+            0,
+            prompt_len=10,
+            canvas_len=6,
+            use_explicit_sliding_mask=True,
             mask_builder=mask_builder,
         )
         == "mask"
@@ -185,6 +209,7 @@ def test_denoise_attn_mask_builder_rejects_missing_sliding_window():
             0,
             prompt_len=10,
             canvas_len=6,
+            use_explicit_sliding_mask=True,
             mask_builder=lambda *args, **kwargs: "mask",
         )
 

@@ -1,7 +1,7 @@
 # DiffusionGemma bring-up on tt-metal — agent guide
 
 Working context for bringing up **Google DiffusionGemma 26B-A4B-it** on Tenstorrent hardware.
-Tracking issue: **tenstorrent/tt-metal#47452** (label `DiffusionGemma`). Work branch: `zni/diffusion-gemma-bringup`.
+Tracking issue: **tenstorrent/tt-metal#47452** (label `DiffusionGemma`). Work branch: `diffusion-gemma-function` (current; earlier work on `zni/diffusion-gemma-bringup`).
 
 ## What it is
 - HF [`google/diffusiongemma-26B-A4B-it`](https://huggingface.co/google/diffusiongemma-26B-A4B-it) (released 2026-06-11, Apache-2.0). transformers class `DiffusionGemmaForBlockDiffusion`, `model_type=diffusion_gemma`.
