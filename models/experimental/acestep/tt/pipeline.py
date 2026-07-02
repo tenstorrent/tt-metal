@@ -32,6 +32,7 @@ import torch
 import ttnn
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
 
+from models.tt_dit.utils.tracing import Tracer
 from models.experimental.acestep.reference.hf_reference import load_config, load_modeling_module
 from models.experimental.acestep.tt.flow_match import FlowMatchStep
 from models.experimental.acestep.tt.model_config import (
@@ -103,12 +104,16 @@ class AceStepPipeline:
         )
         return ttnn.from_torch(mk, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    def generate(self, hidden_noise, context_latents, encoder_hidden_states, *, infer_steps=30, shift=1.0):
+    def generate(
+        self, hidden_noise, context_latents, encoder_hidden_states, *, infer_steps=30, shift=1.0, use_trace=False
+    ):
         """Run the ODE denoise loop. Inputs are TT tensors [1,1,T,·]; returns clean latents TT.
 
         hidden_noise:          [1,1,T,64]  initial noise xt
         context_latents:       [1,1,T,128] (src_latents concat chunk_masks)
         encoder_hidden_states: [1,1,enc,2048]
+        use_trace:             capture the DiT velocity step as a ttnn trace and replay it each step
+                               (removes the per-step host dispatch). Numerically identical to eager.
         """
         seq_len = hidden_noise.shape[2]
         t_prime = seq_len // PATCH
@@ -117,6 +122,11 @@ class AceStepPipeline:
 
         solver = FlowMatchStep(self.mesh_device)
         t = _shifted_timesteps(infer_steps, shift, torch.device("cpu"))
+
+        if use_trace:
+            return self._generate_traced(
+                hidden_noise, context_latents, encoder_hidden_states, cos_tt, sin_tt, sliding, solver, t
+            )
 
         xt = hidden_noise
         for step_idx in range(infer_steps):
@@ -131,6 +141,52 @@ class AceStepPipeline:
                 ttnn.deallocate(xt)
             xt = xt_new
         return xt  # [1,1,T,64] clean latents
+
+    def _generate_traced(
+        self, hidden_noise, context_latents, encoder_hidden_states, cos_tt, sin_tt, sliding, solver, t
+    ):
+        """Trace-captured denoise loop, following the SD35/LTX pattern.
+
+        The traced fn returns the DiT velocity `vt`; the Euler update runs eager (outside the trace).
+        Constants (context/enc/rope) are passed on the first (capture) call; subsequent replays reuse
+        the trace's resident input buffers via ``tracer.inputs[...]`` (trace execution may overwrite
+        them, so we always read the handle back). The timestep is a device tensor updated per step.
+        Numerically identical to the eager loop (same on-device ops).
+        """
+        infer_steps = t.numel() - 1
+
+        def _ts(v):
+            return ttnn.from_torch(
+                torch.tensor([[[[float(v)]]]], dtype=torch.float32),
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+        def _dit_velocity(xt, ts, context, enc, cos, sin):
+            return self.dit.forward(xt, context, ts, ts, cos, sin, enc, sliding_mask=sliding)
+
+        tracer = Tracer(_dit_velocity, device=self.mesh_device, prep_run=True, clone_prep_inputs=False)
+
+        xt = hidden_noise
+        for step_idx in range(infer_steps):
+            t_curr = float(t[step_idx].item())
+            t_prev = float(t[step_idx + 1].item())
+            first = step_idx == 0
+            vt = tracer(
+                xt=xt,
+                ts=_ts(t_curr),
+                context=context_latents if first else tracer.inputs["context"],
+                enc=encoder_hidden_states if first else tracer.inputs["enc"],
+                cos=cos_tt if first else tracer.inputs["cos"],
+                sin=sin_tt if first else tracer.inputs["sin"],
+                traced=True,
+            )
+            # Euler runs eager on the trace's velocity output; read xt back from the trace buffer
+            # (trace execution may overwrite it). vt is the trace's resident output -> clone it.
+            xt = solver.euler_step(tracer.inputs["xt"], ttnn.clone(vt), t_curr - t_prev)
+        tracer.release_trace()
+        return xt
 
     # ---- high-level customer API ----
     SAMPLE_RATE = 48000

@@ -171,6 +171,31 @@ def main():
             gate=0.99,
         )
         sys.stdout.flush()
+
+        # ---- Stage: generate() eager vs traced (the real denoise-loop integration proof) ----
+        # Run the whole ODE loop both ways from the SAME noise; assert the clean latents match.
+        try:
+            Tg = 256
+            hch = pipe.args.audio_acoustic_hidden_dim
+            torch.manual_seed(0)
+            noise = torch.randn(1, 1, Tg, hch)
+            ctx = torch.cat([torch.zeros(1, 1, Tg, hch), torch.ones(1, 1, Tg, hch)], dim=-1)
+
+            def _mk(x):
+                return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+            enc_hs = _mk(torch.randn(1, 1, 128, 2048))
+            eager_t = ttnn.to_torch(pipe.generate(_mk(noise), _mk(ctx), enc_hs, infer_steps=6, use_trace=False)).float()
+            traced_t = ttnn.to_torch(pipe.generate(_mk(noise), _mk(ctx), enc_hs, infer_steps=6, use_trace=True)).float()
+            pcc = _pcc(eager_t, traced_t)
+            print(f"REPLAY_PCC generate_loop={pcc:.4f}")
+            if pcc >= 0.99:
+                print("TRACE_STAGE_PASS generate_loop")
+            else:
+                print(f"TRACE_STAGE_FAIL generate_loop: eager-vs-traced PCC {pcc:.4f} < 0.99")
+        except Exception as e:
+            print(f"TRACE_STAGE_FAIL generate_loop: {str(e).splitlines()[0][:140]}")
+        sys.stdout.flush()
     finally:
         ttnn.close_mesh_device(device)
 
