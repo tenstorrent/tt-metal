@@ -33,6 +33,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -438,6 +439,64 @@ void run_connector_metadata(const CrossProcessCase& cs, const std::string& servi
     g_cross_rank_world->barrier();
 }
 
+void run_owner_metadata_only(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const CrossProcessCase& cs,
+    const std::string& service_id,
+    const tt::tt_metal::CoreRange& worker_cores) {
+    tt::tt_metal::D2HStreamService::Config cfg{
+        .global_spec = std::nullopt,
+        .fifo_size_bytes = cs.fifo_size_bytes,
+        .worker_cores = worker_cores,
+        .metadata_size_bytes = cs.metadata_size_bytes,
+    };
+    tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
+    service.export_descriptor(service_id);  // num_socket_pages == 0 marks metadata-only
+    const uint32_t n = cs.metadata_size_bytes / sizeof(uint32_t);
+    const auto record_spec = make_global_spec(CrossProcessCase{.global_shape = ttnn::Shape({1, 1, 1, n})});
+    auto rep = ttnn::distributed::create_mesh_mapper(
+        *mesh_device,
+        MeshMapperConfig{
+            .placements = ttsl::SmallVector<MeshMapperConfig::Placement>(
+                mesh_device->shape().dims(), MeshMapperConfig::Replicate{})});
+    Tensor record_dev = ttnn::distributed::distribute_tensor(
+                            Tensor::from_vector<uint32_t>(std::vector<uint32_t>(n, 0), record_spec), *rep)
+                            .to_device(mesh_device.get());
+    g_cross_rank_world->barrier();
+    for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
+        const auto md = make_metadata_pattern(iter, cs.metadata_size_bytes);
+        std::vector<uint32_t> words(n);
+        std::memcpy(words.data(), md.data(), cs.metadata_size_bytes);
+        auto host_record =
+            ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
+        copy_to_device(host_record, record_dev);
+        ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+        g_cross_rank_world->barrier();  // connector reads here
+        g_cross_rank_world->barrier();
+        Finish(mesh_device->mesh_command_queue());
+    }
+    g_cross_rank_world->barrier();
+}
+void run_connector_metadata_only(const CrossProcessCase& cs, const std::string& service_id) {
+    auto service = tt::tt_metal::D2HStreamService::connect(service_id, /*timeout_ms=*/30000);
+    EXPECT_EQ(service->metadata_size_bytes(), cs.metadata_size_bytes);
+    EXPECT_EQ(service->payload_size_bytes(), 0u)
+        << "connect() must reconstruct metadata-only mode (num_socket_pages==0)";
+    g_cross_rank_world->barrier();
+    for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
+        g_cross_rank_world->barrier();
+        std::vector<std::byte> md(cs.metadata_size_bytes);
+        service->read_metadata(md);
+        service->barrier();
+        const auto expected = make_metadata_pattern(iter, cs.metadata_size_bytes);
+        std::vector<uint8_t> got(md.size());
+        std::memcpy(got.data(), md.data(), md.size());
+        EXPECT_EQ(got, expected) << "connector metadata-only mismatch at iter " << iter;
+        g_cross_rank_world->barrier();
+    }
+    g_cross_rank_world->barrier();
+}
+
 class CrossProcessD2HStreamServiceFixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
 protected:
     CrossProcessD2HStreamServiceFixture() :
@@ -657,6 +716,24 @@ TEST_F(CrossProcessD2HStreamServiceFixture, Sharded_Sweep) {
         run_pattern("FullShard2D", {MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{3}}, [&](uint32_t N) {
             return ttnn::Shape({1, 1, num_rows * N, num_cols * per_row});
         });
+    }
+}
+
+TEST_F(CrossProcessD2HStreamServiceFixture, MetadataOnly) {
+    const std::string service_id = "cross_process_d2h_metadata_only";
+    const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});  // single worker
+    CrossProcessCase cs{
+        .global_shape = ttnn::Shape({1, 1, 1, 4}),  // unused for backing; N=4 -> 16B record
+        .placements = {},
+        .scratch_cb_size_bytes = 0,
+        .fifo_size_bytes = 4096,
+        .metadata_size_bytes = 16,
+        .num_iterations = 10,
+    };
+    if (rank_ == 0) {
+        run_owner_metadata_only(mesh_device_, cs, service_id, worker_cores);
+    } else {
+        run_connector_metadata_only(cs, service_id);
     }
 }
 

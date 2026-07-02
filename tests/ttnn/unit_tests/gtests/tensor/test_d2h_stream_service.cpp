@@ -28,6 +28,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync.hpp"
 
 namespace ttnn::distributed::test {
 namespace {
@@ -412,6 +413,63 @@ void run_d2h_stream_service_case(
     }
 }
 
+void run_d2h_metadata_only_case(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const tt::tt_metal::CoreRange& worker_cores,  // single core -> num_workers == 1
+    uint32_t metadata_size_bytes,
+    uint32_t fifo_size_bytes,
+    uint32_t num_iterations = 5) {
+    TT_FATAL(metadata_size_bytes % sizeof(uint32_t) == 0, "metadata must be uint32-aligned");
+
+    // Metadata-only service: global_spec omitted, single worker, metadata master defaults.
+    tt::tt_metal::D2HStreamService::Config cfg{
+        .global_spec = std::nullopt,
+        .fifo_size_bytes = fifo_size_bytes,
+        .worker_cores = worker_cores,
+        .metadata_size_bytes = metadata_size_bytes,
+    };
+    tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
+
+    // No DRAM backing tensor in metadata-only mode.
+    EXPECT_EQ(service.payload_size_bytes(), 0u) << "metadata-only mode must not allocate a DRAM payload";
+    EXPECT_EQ(service.metadata_size_bytes(), metadata_size_bytes);
+
+    // Record: [1,1,1,N] uint32, replicated across the mesh, allocated once and refilled per iter.
+    const uint32_t n = metadata_size_bytes / sizeof(uint32_t);
+    const auto record_spec = TensorSpec(
+        ttnn::Shape({1, 1, 1, n}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
+    auto rep = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = replicate_all(*mesh_device)});
+    Tensor record_dev = distribute_tensor(Tensor::from_vector<uint32_t>(std::vector<uint32_t>(n, 0), record_spec), *rep)
+                            .to_device(mesh_device.get());
+
+    for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+        SCOPED_TRACE(::testing::Message() << "iter=" << iter);
+
+        const auto expected = make_metadata_pattern(iter, metadata_size_bytes);
+        std::vector<uint32_t> words(n);
+        std::memcpy(words.data(), expected.data(), metadata_size_bytes);
+        // Stage the record on device (same CQ as the op -> ordered), then drive the worker op.
+        auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
+        tt::tt_metal::copy_to_device(host_record, record_dev);
+
+        ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+
+        // Host pulls the record off each chip's socket; read_metadata asserts cross-chip equality.
+        std::vector<std::byte> out(metadata_size_bytes);
+        service.read_metadata(out);
+        service.barrier();
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+
+        std::vector<uint8_t> got(metadata_size_bytes);
+        std::memcpy(got.data(), out.data(), metadata_size_bytes);
+        EXPECT_EQ(got, expected) << "metadata-only readback mismatch";
+    }
+}
+
 // Service cores (ServiceCoreManager::claim) are only supported on Blackhole or UBB Galaxy
 // clusters; skip the whole suite on any other configuration so unsupported runners skip
 // cleanly instead of hitting the claim TT_FATAL.
@@ -753,6 +811,78 @@ TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
                 return ttnn::Shape({1, 1, num_rows * N, num_cols * per_row_size});
             });
     }
+}
+
+TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
+    const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});  // single designated worker
+    run_d2h_metadata_only_case(this->mesh_device_, worker_cores, /*metadata_size_bytes=*/16, /*fifo_size_bytes=*/4096);
+}
+TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp_Sizes) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
+    const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});
+    for (uint32_t md : {16u, 64u, 256u}) {
+        SCOPED_TRACE(::testing::Message() << "metadata_size=" << md);
+        run_d2h_metadata_only_case(this->mesh_device_, worker_cores, md, /*fifo_size_bytes=*/4096);
+    }
+}
+TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
+    const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});
+    const uint32_t md = 16, iters = 1000;
+    tt::tt_metal::D2HStreamService::Config cfg{
+        .global_spec = std::nullopt, .fifo_size_bytes = 4096, .worker_cores = worker_cores, .metadata_size_bytes = md};
+    tt::tt_metal::D2HStreamService service(this->mesh_device_, std::move(cfg));
+
+    // Build the record device tensor (same shape/layout the unit helper uses).
+    const uint32_t n = md / sizeof(uint32_t);
+    const auto record_spec = TensorSpec(
+        ttnn::Shape({1, 1, 1, n}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
+    auto rep =
+        create_mesh_mapper(*this->mesh_device_, MeshMapperConfig{.placements = replicate_all(*this->mesh_device_)});
+    Tensor record_dev = distribute_tensor(Tensor::from_vector<uint32_t>(std::vector<uint32_t>(n, 0), record_spec), *rep)
+                            .to_device(this->mesh_device_.get());
+
+    // Warmup: absorb the first-call program-cache miss so it doesn't skew Path A.
+    ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+    {
+        std::vector<std::byte> out(md);
+        service.read_metadata(out);
+    }
+
+    // Path A: worker op -> read_metadata (no barrier)
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < iters; ++i) {
+        ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+        std::vector<std::byte> out(md);
+        service.read_metadata(out);
+    }
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    // Path B: worker op -> full device sync (the barrier we're replacing)
+    auto t2 = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < iters; ++i) {
+        ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+        tt::tt_metal::distributed::Synchronize(this->mesh_device_.get(), /*cq_id=*/std::nullopt);
+        std::vector<std::byte> out(md);
+        service.read_metadata(out);
+    }
+    auto t3 = std::chrono::high_resolution_clock::now();
+
+    const double a_us = std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
+    const double b_us = std::chrono::duration<double, std::micro>(t3 - t2).count() / iters;
+    std::cout << "[d2h-md] read_metadata=" << a_us << "us  Finish=" << b_us << "us\n";
+    EXPECT_LT(a_us, b_us) << "metadata path should be cheaper than a full device sync";
 }
 
 }  // namespace
