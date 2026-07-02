@@ -58,8 +58,11 @@ bool can_use_sharded_optimized_factories(
             if (input_tensor.shard_spec().value().orientation != ShardOrientation::ROW_MAJOR) {
                 return false;
             }
+            if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
+                return false;  // DRAM output cannot be zero-copy; fall back to default factory.
+            }
         } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            return false;  // Only same-layout or INTERLEAVED output supported for HEIGHT_SHARDED.
+            return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
         }
     }
 
