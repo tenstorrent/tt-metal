@@ -274,6 +274,9 @@ def apply_wh_tp1_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # Chunk prefill so ISL>=512 fits WH L1 (unchunked overflows the MoE-gate matmul CB at M>128).
     # Matches the batch-1 baseline config; verified numerically equivalent to unchunked prefill.
     monkeypatch.setenv("GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE", "128")
+    # Ring all-reduce: the 8-device linear all-reduce is latency-bound on 1x8; ring is ~5.5%
+    # faster decode and prefill-neutral (numerically identical). No deadlock on T3K with num_links=1.
+    monkeypatch.setenv("GLM4_MOE_LITE_CCL_TOPOLOGY", "ring")
 
 
 def apply_single_layer_env(monkeypatch: pytest.MonkeyPatch) -> None:

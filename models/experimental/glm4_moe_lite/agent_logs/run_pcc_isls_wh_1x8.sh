@@ -8,7 +8,7 @@ source python_env/bin/activate
 export GLM4_MOE_LITE_PCC_ISLS="${GLM4_MOE_LITE_PCC_ISLS:-128 512 1024 2048 4096 8192}"
 export TT_METAL_GTEST_ETH_DISPATCH=1
 export GLM4_MOE_LITE_CCL_NUM_LINKS=1
-export GLM4_MOE_LITE_CCL_TOPOLOGY=linear
+export GLM4_MOE_LITE_CCL_TOPOLOGY=ring
 export GLM4_MOE_LITE_PREFILL_MATMUL_TUNED=0
 
 python -m pytest -q -s -p no:randomly \
