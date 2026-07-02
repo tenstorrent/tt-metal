@@ -10,7 +10,10 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "ring_joint_kv_pad_derivation.hpp"
 #include "fused_op_receiver.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
 // Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
@@ -434,15 +437,25 @@ void kernel_main() {
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
     constexpr bool diag_tile_enabled = (is_causal == 1) || chunked_enabled;
+    // Slot 34: trace-safe KV-pad derivation. When set, the writer reads kv_actual_isl from the
+    // kv_actual_isl tensor[0] (common runtime arg 0 = its DRAM addr) and recomputes logical_nt + ring
+    // masks on-device (it's a dataflow kernel, can NoC-read), so a captured trace replays across chunks.
+    // Output accessors therefore start at compile-arg slot 35.
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(34) == 1;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and the joint_out_generator.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto out_args = TensorAccessorArgs<34>();
+    constexpr auto out_args = TensorAccessorArgs<35>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
+    // Metadata accessor (metadata path only) follows the output accessors and precedes the CB compile
+    // args; gate the offset on kv_pad_from_metadata so the no-metadata program never names a non-accessor
+    // compile arg (fall back to a valid unused accessor offset = out_args' slot 35).
+    constexpr uint32_t meta_args_offset = kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : 35;
+    constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -450,15 +463,18 @@ void kernel_main() {
     const uint32_t stats_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
-    const uint32_t single_valid_kv_chunk_mask = get_arg_val<uint32_t>(argidx++);
+    // Mutable: on the kv_pad_from_metadata path these are recomputed on-device below from metadata[1].
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t single_valid_kv_chunk_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
 
-    // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
-    constexpr uint32_t cb_arg_offset = stats_args.next_compile_time_args_offset();
+    // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm. The CB
+    // compile args start after the metadata accessor when it is present (kv_pad_from_metadata).
+    constexpr uint32_t cb_arg_offset =
+        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -477,6 +493,44 @@ void kernel_main() {
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
     Noc noc;
+
+    // Trace-safe KV-pad derivation: recompute logical_nt + ring masks on-device from kv_actual_isl =
+    // kv_actual_isl tensor[0] (the per-core logical_nt/masks args are placeholders on the metadata path
+    // and would be frozen by a captured trace). The writer is a dataflow kernel, so it reads the tensor
+    // directly via NoC into cb_out's L1 scratch (free before the output write loop). chunk_size_t ==
+    // q_chunk_group.
+    if constexpr (kv_pad_from_metadata) {
+        // kv_actual_isl is a 1-element uint32 DRAM tensor (was metadata[1]); its DRAM address is common
+        // runtime arg 0. Read its page 0 (4B).
+        const uint32_t kv_actual_isl_addr = get_common_arg_val<uint32_t>(0);
+        const auto s_meta = TensorAccessor(meta_args, kv_actual_isl_addr);
+        CircularBuffer cb_meta_scratch(cb_out);
+        const uint32_t meta_l1 = cb_meta_scratch.get_write_ptr();
+        noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1), 4, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        CoreLocalMem<volatile uint32_t> meta(meta_l1);
+        const uint32_t kv_actual_isl = meta[0];
+        logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
+        const auto masks = ring_joint::build_ring_work_masks_device(
+            fused_op_receiver.seq.ring_index,
+            ring_size,
+            fused_op_receiver.seq.expected[0],  // backward_writes_expected
+            fused_op_receiver.seq.expected[1],  // forward_writes_expected
+            num_local_k_chunks,
+            Sk_chunk_t,
+            kv_local_padded_Nt,
+            chunked_enabled,
+            chunk_size_t,
+            q_local_padded_Nt,
+            logical_nt,
+            num_joint_k_chunks,
+            L,
+            /*kv_pad_rotation_enabled=*/true,
+            is_causal != 0,
+            is_balanced != 0);
+        active_ring_iter_mask = masks.active_ring_iter_mask;
+        single_valid_kv_chunk_mask = masks.single_valid_kv_chunk_mask;
+    }
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);

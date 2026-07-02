@@ -212,6 +212,10 @@ class TtMoe(LightweightModule):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        # Optional SubDeviceTraceController. When set (capture phase), the shared-expert/dispatch
+        # overlap's sub-device load/clear go through it so the trace can be split at those boundaries
+        # instead of resetting worker state mid-capture. None => load/clear the mesh device directly.
+        self._trace_controller = None
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -414,6 +418,20 @@ class TtMoe(LightweightModule):
 
         logger.debug("TtMoe initialization complete")
 
+    def set_trace_controller(self, controller):
+        """Attach (or clear with None) a SubDeviceTraceController. While set, the shared-expert/
+        dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
+        be split at those boundaries (see utils/sub_device_trace.py)."""
+        self._trace_controller = controller
+
+    def release_sub_device_manager(self):
+        """Remove the overlap sub-device manager this MoE created (no-op if overlap is off). Call
+        before closing the mesh device — leaving managers registered at close has been observed to
+        segfault the teardown. Idempotent."""
+        if getattr(self, "sd_manager_id", None) is not None:
+            self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
+            self.sd_manager_id = None
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -536,7 +554,10 @@ class TtMoe(LightweightModule):
 
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
-            self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(self.sd_manager_id)
+            else:
+                self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
         # Step 1: Shared expert (enabled)
@@ -562,7 +583,10 @@ class TtMoe(LightweightModule):
             padding_config=padding_config,
         )
         if self.overlap_shared_expert_with_dispatch:
-            self.mesh_device.clear_loaded_sub_device_manager()
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_clear()
+            else:
+                self.mesh_device.clear_loaded_sub_device_manager()
         # padding_config was shared with both the gate and dispatch; free it now that
         # dispatch (its last consumer) has been issued.
         if padding_config is not None:

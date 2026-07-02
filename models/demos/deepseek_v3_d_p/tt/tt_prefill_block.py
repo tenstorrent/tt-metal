@@ -198,9 +198,14 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        overlap_shared_expert_with_dispatch: bool = True,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
+        # Overlap the shared expert with dispatch via a sub-device manager (default). Must be False
+        # for ttnn trace capture: load/clear_sub_device_manager resets worker state inside forward,
+        # which begin_trace_capture forbids.
+        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
         # In chunked prefill the flat KV-cache slot is cache_user_id * layer_num + cache_layer_idx, so
         # layer_num must be the model's actual layer count — there is no safe default to fall back to.
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
@@ -288,6 +293,7 @@ class TtPrefillBlock(LightweightModule):
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
+                overlap_shared_expert_with_dispatch=self.overlap_shared_expert_with_dispatch,
             )
         else:
             self.ffn = TtFfn(
@@ -319,6 +325,7 @@ class TtPrefillBlock(LightweightModule):
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
+        overlap_shared_expert_with_dispatch=True,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -366,10 +373,27 @@ class TtPrefillBlock(LightweightModule):
             route_scale=model_cfg.ROUTE_SCALE,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
-            overlap_shared_expert_with_dispatch=True,
+            overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
         )
+
+    def set_trace_controller(self, controller):
+        """Forward a SubDeviceTraceController to this block's MoE (sub-device-swap segmentation) and to
+        its MLA (per-layer migration-ack segmentation; only acts when the controller carries an ack
+        callback). No-op for dense / kv-only FFNs, whose FFN has no sub-device overlap to trace around."""
+        ffn = getattr(self, "ffn", None)
+        if ffn is not None and hasattr(ffn, "set_trace_controller"):
+            ffn.set_trace_controller(controller)
+        mla = getattr(self, "mla", None)
+        if mla is not None and hasattr(mla, "set_trace_controller"):
+            mla.set_trace_controller(controller)
+
+    def release_sub_device_managers(self):
+        """Remove this block's MoE overlap sub-device manager before mesh close (no-op otherwise)."""
+        ffn = getattr(self, "ffn", None)
+        if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
+            ffn.release_sub_device_manager()
 
     def forward(
         self,
@@ -386,6 +410,7 @@ class TtPrefillBlock(LightweightModule):
         return_kv_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        metadata: Optional[ttnn.Tensor] = None,
     ):
         """
         Args:
@@ -425,6 +450,7 @@ class TtPrefillBlock(LightweightModule):
             actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
+            metadata=metadata,
         )
         kv_intermediates = None
         if return_kv_intermediates:
