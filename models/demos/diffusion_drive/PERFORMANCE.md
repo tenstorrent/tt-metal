@@ -19,10 +19,11 @@ python models/demos/diffusion_drive/scripts/profile_forward.py --iters 20
 | Path | Median latency | FPS (median) | Notes |
 |---|---|---|---|
 | eager `__call__` | 71.4 ms | 14.0 | op-by-op host dispatch |
-| **traced `execute_compiled`** | **50.0 ms** | **20.0** | backbone loop replayed as one `execute_trace`; deployed path |
+| **traced `execute_compiled`** | **44.9 ms** | **22.3** | backbone **and perception** replayed as two `execute_trace`s; deployed path |
 
-- **Trace speedup:** ~1.43× on the full forward (backbone loop is captured; the still-eager
-  FPN/perception/DDIM tail dilutes the loop's own ~1.76× — consistent with the README).
+- **Trace speedup:** ~1.58× on the full forward (was ~1.43× with only the backbone traced). The perception
+  forward is now a second trace (§3) — that is the −8.6% step from 49→45 ms. The still-eager DDIM head +
+  agent head dilute the remaining gain.
 - The traced path is what the NavSim in-process agent runs, so it is the number that matters for deployment.
 
 ## 2. Conv+ReLU fusion (Stage 2 "relu with conv")
@@ -44,7 +45,29 @@ The gain is modest-but-real on the traced (deployed) path and a wash on eager: t
 dominated by the conv matmuls and the per-conv DRAM round-trip, not by the ReLU ops themselves. The
 fusion is kept because it satisfies the named Stage 2 requirement at zero accuracy cost and zero downside.
 
-## 3. Where the remaining cost is — conv memory layout
+## 3. Perception forward trace — the largest single win
+
+Originally only the backbone `[stage→fusion]×4` loop was captured as a trace; the FPN, perception
+TransformerDecoder, DDIM head, and agent head ran eagerly (op-by-op host dispatch) after the trace replay.
+The **perception forward** (`TtnnPerceptionForward`: bev_downscale conv → keyval → on-device bilinear
+upsample → bev_proj → 3-layer TransformerDecoder) is a *static device graph with no interleaved host scalar
+glue*, so it is captured as a **second trace** replayed by `execute_compiled` after the backbone trace.
+
+| Path | Backbone trace only | + Perception trace | Δ |
+|---|---|---|---|
+| traced `execute_compiled` | 49.1 ms | **44.9 ms** | **−8.6%** (20.4 → 22.3 FPS) |
+
+**Correctness:** traced-vs-eager trajectory PCC = 1.000000; full PCC suite 29 passed. This is the first
+change with an above-noise latency win — because the perception tail *was* dispatch-bound (~30-40 per-op
+host dispatches), and collapsing them into one `execute_trace` removes that overhead (unlike the fusions,
+which were dispatch-count reductions that the noise floor swallowed).
+
+**Not traced — the DDIM head.** `TrajectoryHead`'s 2-step denoiser interleaves device ops with host
+control-flow (`scheduler.step`, `gen_sineembed` trig, `argmax`/gather best-mode select, norm/denorm, tanh).
+A monolithic trace cannot cross those host scalars; tracing it would require capturing many device
+micro-sequences with host glue between replays — poor effort/value given the host-bound eval (§6). Left eager.
+
+## 4. Where the remaining cost is — conv memory layout
 
 The `profile_forward.py` core-grid probe reports the memory layout each auto-sharded `ttnn.conv2d`
 (`shard_layout=None`) chooses for its **output**, at each ResNet-34 stage resolution:
@@ -58,13 +81,13 @@ The `profile_forward.py` core-grid probe reports the memory layout each auto-sha
 
 Every conv writes its output to **interleaved DRAM**, so each conv in a BasicBlock reads from and writes
 to DRAM rather than handing an L1-resident, sharded activation to the next conv. This looked like the
-highest-value remaining lever, so it was tested directly — see §4. Per-op *compute* core-utilisation
+highest-value remaining lever, so it was tested directly — see §5. Per-op *compute* core-utilisation
 numbers require a profiler-enabled build (`TT_METAL_DEVICE_PROFILER`); this report uses host wall-clock +
 the layout probe.
 
-## 4. Optimization experiments — measured, not adopted
+## 5. Optimization experiments — measured, not adopted
 
-Two conv-config levers aimed at the §3 round-trip were tested and **not adopted** because the measured
+Two conv-config levers aimed at the §4 round-trip were tested and **not adopted** because the measured
 gain was not significant or not robust for this model's (small) conv shapes. Documented here so the
 decision is reproducible (Stage 3 "document advanced tuning / known issues").
 
@@ -100,7 +123,7 @@ sibling small models. The auto (`shard_layout=None`) interleaved path is the rig
 lever would be a genuine L1-resident chain, which this build's `ttnn.conv2d` does not expose at these
 shapes (it re-interleaves the output regardless).
 
-## 5. Context — end-to-end throughput is host-bound
+## 6. Context — end-to-end throughput is host-bound
 
 The headline NavSim PDM eval wall (~26 min for 12146 scenes with the thread-pool funnel) is gated by
 host-side NavSim CPU (scene loading, metric scoring), **not** by the model forward. So forward-latency
@@ -111,7 +134,7 @@ for any deployment that is not host-bound. See README §9.
 like-for-like comparison with Wormhole N300s. The traced path here is 20.0 FPS at batch=1, full
 production resolution, real weights — the same hardware caveat applies to any absolute-FPS comparison.
 
-## 6. Accuracy (unchanged by the perf work)
+## 7. Accuracy (unchanged by the perf work)
 
 | Metric | Value |
 |---|---|
