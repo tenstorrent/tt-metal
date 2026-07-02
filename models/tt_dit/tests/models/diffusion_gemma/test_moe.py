@@ -24,9 +24,13 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
-# Looser thresholds for MoE — sparse_matmul + topk paths add rounding vs HF's per-expert loop.
-PCC_THRESHOLD = 0.99
-ALLCLOSE_ATOL = 5e-2
+# Thresholds calibrated to observed behavior on the demos/gemma4 kernel path:
+# PCC lands ~99.92% and max abs diff ~0.21 with peaked routing (N(0,1.0) router proj weights).
+# PCC 0.998 catches meaningful drift while leaving ~0.001 of headroom for run-to-run bf16
+# rounding jitter; atol=0.25 covers the ~0.21 outlier with slight headroom, rtol=0.05 matches
+# the demos/gemma4 test's tolerance for near-tie topk-selection divergence.
+PCC_THRESHOLD = 0.998
+ALLCLOSE_ATOL = 2.5e-1
 ALLCLOSE_RTOL = 5e-2
 
 
@@ -38,21 +42,29 @@ ALLCLOSE_RTOL = 5e-2
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("seq_len", [64])
+@pytest.mark.parametrize("seq_len", [128])
 def test_diffusion_gemma_moe(
     mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, topology: ttnn.Topology, seq_len: int
 ) -> None:
-    """TT MoE vs HF Gemma4TextRouter + Gemma4TextExperts (tiny config)."""
+    """TT MoE vs HF Gemma4TextRouter + Gemma4TextExperts.
+
+    Config matches the sizes exercised by ``models/demos/gemma4/tests/unit/test_moe.py``:
+    ``hidden_size=2816``, ``moe_intermediate_size=2112``, ``num_experts=8``, ``top_k=4``,
+    ``seq_len=128``. The sparse_matmul + router kernels in demos/gemma4 are tuned for
+    those sizes; a much smaller (hidden=256, intermediate=64) config hangs the kernel
+    since the compiled binary doesn't fit the tiny shape.
+    Weights are still random — no HF checkpoint required.
+    """
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaTextConfig
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextExperts, Gemma4TextRouter
 
     torch.manual_seed(0)
     dtype = torch.float32
 
-    hidden_size = 256
-    intermediate_size = 64
+    hidden_size = 2816
+    intermediate_size = 2112
     num_experts = 8
-    top_k = 2
+    top_k = 4
     eps = 1e-6
     B = 1
 
@@ -79,6 +91,12 @@ def test_diffusion_gemma_moe(
     with torch.no_grad():
         hf_experts.gate_up_proj.data = torch.randn_like(hf_experts.gate_up_proj.data) * 0.02
         hf_experts.down_proj.data = torch.randn_like(hf_experts.down_proj.data) * 0.02
+        # Boost router proj weight so softmax produces peaked distributions. Default
+        # N(0, 0.02) yields near-uniform post-softmax → topk picks different experts under
+        # bf16 vs fp32 purely from mantissa precision. Real trained Gemma4 routing is
+        # peaked, so this mirrors the deployed behavior. Same trick as
+        # models/demos/gemma4/tests/unit/test_moe.py:51.
+        hf_router.proj.weight.normal_(0, 1.0)
 
     router_input = torch.randn(B, seq_len, hidden_size, dtype=dtype)
     expert_input = torch.randn(B, seq_len, hidden_size, dtype=dtype)
