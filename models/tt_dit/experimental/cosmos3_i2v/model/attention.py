@@ -76,9 +76,11 @@ from ....utils.matmul import get_matmul_core_grid
 
 
 def sp_ring_enabled() -> bool:
-    """SP ring SDPA is off by default — the ring op + GQA broadcast stack tripped power
-    on BH Galaxy in initial bring-up. Set TT_COSMOS3_ENABLE_SP_RING=1 to opt in."""
-    return os.environ.get("TT_COSMOS3_ENABLE_SP_RING", "0") not in ("", "0", "false", "False")
+    """SP ring SDPA on by default: the native-cfg dual-submesh path builds each trunk with
+    sequence_parallel factor=2, and the ring SDPA + scatter must match that sharding or the
+    denoised latent is corrupt. Set TT_COSMOS3_ENABLE_SP_RING=0 to disable if the ring op
+    trips power on a given board."""
+    return os.environ.get("TT_COSMOS3_ENABLE_SP_RING", "1") not in ("", "0", "false", "False")
 
 
 # Module-level latch so TT_COSMOS3_DUMP_ATTN_DIR captures the FIRST attention call
@@ -93,6 +95,31 @@ def _default_parallel_config() -> DiTParallelConfig:
         tensor_parallel=ParallelFactor(1, 1),
         sequence_parallel=ParallelFactor(1, 0),
     )
+
+
+def _gqa_interleave_broadcast(t, kv_repeat: int, n_kv_heads: int, sub_core_grids):
+    """Emulate `repeat_interleave(t, kv_repeat, dim=1)` while staying within `sub_core_grids`.
+
+    `ttnn.repeat_interleave` defaults to the full grid — a power-trip risk on BH
+    Galaxy. `concat([t] * kv_repeat, dim=1)` matches repeat_interleave only when
+    `n_kv_heads == 1`. For `n_kv_heads > 1` this slices per-head, replicates each
+    slice `kv_repeat` times in order, then concats: `[h0,h0,...,h0, h1,h1,...,h1]`.
+    """
+    if kv_repeat == 1:
+        return t
+    if n_kv_heads == 1:
+        return ttnn.concat([t] * kv_repeat, dim=1, sub_core_grids=sub_core_grids)
+    B, _, N, D = t.shape
+    slices = []
+    per_head = []
+    for h in range(n_kv_heads):
+        head_h = ttnn.slice(t, [0, h, 0, 0], [B, h + 1, N, D])
+        per_head.append(head_h)
+        slices.extend([head_h] * kv_repeat)
+    result = ttnn.concat(slices, dim=1, sub_core_grids=sub_core_grids)
+    for head_t in per_head:
+        ttnn.deallocate(head_t)
+    return result
 
 
 class Cosmos3JointAttention(Module):
@@ -154,10 +181,14 @@ class Cosmos3JointAttention(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
+        _use_fsdp = os.environ.get("TT_COSMOS3_FSDP_ON_SP") in ("1", "true", "True") and sp_factor > 1
+        fsdp_axis = sp_axis if _use_fsdp else None
+
         col_kw = {
             "bias": attention_bias,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
+            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }
@@ -165,6 +196,7 @@ class Cosmos3JointAttention(Module):
             "bias": attention_bias,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
+            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }
@@ -491,25 +523,13 @@ class Cosmos3JointAttention(Module):
                 raise ValueError(msg)
             # Ring SDPA requires Q.num_heads == K.num_heads (no internal GQA broadcast,
             # unlike the local SDPA op). Cosmos3 is GQA (64 Q-heads / 8 KV-heads), so
-            # broadcast K/V from n_local_kv_heads to n_local_heads.
-            #
-            # Using `ttnn.concat([t]*kv_repeat, dim=1, sub_core_grids=...)` instead of
-            # `ttnn.repeat_interleave` because the latter has no sub_core_grids knob and
-            # defaults to the full 13x10 BH grid (power trip). At n_local_kv_heads==1
-            # the two ops produce identical layouts (single KV head replicated
-            # kv_repeat times); above that they diverge and we'd need a different shape.
+            # broadcast K/V from n_local_kv_heads to n_local_heads via a per-head
+            # interleave that stays within `safe_core_range_set` (see `_gqa_interleave_broadcast`).
             kv_repeat = self.n_local_heads // self.n_local_kv_heads
             if kv_repeat > 1:
-                if self.n_local_kv_heads != 1:
-                    msg = (
-                        f"GQA broadcast via concat assumes n_local_kv_heads == 1 (concat == repeat_interleave); "
-                        f"got n_local_kv_heads={self.n_local_kv_heads}. Implement a per-head broadcast or use "
-                        f"repeat_interleave (full-grid, power risk on BH Galaxy)."
-                    )
-                    raise NotImplementedError(msg)
                 crs = self.safe_core_range_set
-                k_gen_b = ttnn.concat([k_gen] * kv_repeat, dim=1, sub_core_grids=crs)
-                v_gen_b = ttnn.concat([v_gen] * kv_repeat, dim=1, sub_core_grids=crs)
+                k_gen_b = _gqa_interleave_broadcast(k_gen, kv_repeat, self.n_local_kv_heads, crs)
+                v_gen_b = _gqa_interleave_broadcast(v_gen, kv_repeat, self.n_local_kv_heads, crs)
                 ttnn.deallocate(k_gen)
                 ttnn.deallocate(v_gen)
             else:
@@ -542,8 +562,8 @@ class Cosmos3JointAttention(Module):
             q_und_pad = q_und
             if kv_repeat > 1:
                 crs = self.safe_core_range_set
-                k_und_pad_b = ttnn.concat([k_und] * kv_repeat, dim=1, sub_core_grids=crs)
-                v_und_pad_b = ttnn.concat([v_und] * kv_repeat, dim=1, sub_core_grids=crs)
+                k_und_pad_b = _gqa_interleave_broadcast(k_und, kv_repeat, self.n_local_kv_heads, crs)
+                v_und_pad_b = _gqa_interleave_broadcast(v_und, kv_repeat, self.n_local_kv_heads, crs)
                 ttnn.deallocate(k_und)
                 ttnn.deallocate(v_und)
             else:

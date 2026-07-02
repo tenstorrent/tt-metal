@@ -26,7 +26,7 @@ import torch.nn as nn
 
 import ttnn
 from models.tt_dit.experimental.cosmos3_i2v.model_config import HF_REPO
-from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_i2v_native import (
+from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native import (
     NativeLayerProxy,
     build_cosmos3_i2v_native_pipeline,
 )
@@ -165,6 +165,21 @@ def _make_cfg_pipeline_class():
         # Set by the builder after construction.
         _dual_proxy: DualSubmeshProxy
 
+        def __call__(self, *args, **kwargs):
+            # Both caches below are keyed by id() of a per-generation object (input_ids /
+            # the rotary tuple). Within one generation that id is stable; across
+            # generations a freed object's id gets reused, so a stale entry is a false
+            # hit — and a smaller prior gen's rotary then fails a larger one
+            # (cos_seq_len < seq_len). Reset both per call.
+            cache = getattr(self.transformer, "_static_pre_cache", None)
+            if cache is not None:
+                cache.clear()
+            for proxy in (getattr(self._dual_proxy, "_proxy_a", None), getattr(self._dual_proxy, "_proxy_b", None)):
+                if proxy is not None:
+                    object.__setattr__(proxy, "_rotary_cache_key", None)
+                    object.__setattr__(proxy, "_rotary_cache_value", None)
+            return super().__call__(*args, **kwargs)
+
         def _dispatch_cond_uncond(
             self,
             *,
@@ -281,7 +296,7 @@ def build_cosmos3_i2v_native_cfg_pipeline(
     use_tt_vae: bool = True,
     vae_encoder_t_chunk_size: int | None = None,
     vae_decoder_t_chunk_size: int | None = None,
-    flow_shift: float = 5.0,
+    flow_shift: float = 6.0,
     cfg_parallel: bool = True,
     serial_dispatch: bool = False,
     cache_namespace: str = "cosmos3-i2v",
@@ -315,8 +330,16 @@ def build_cosmos3_i2v_native_cfg_pipeline(
             cache_namespace=cache_namespace,
         )
 
-    # Split along the smaller axis: each submesh keeps the TP axis intact.
-    cfg_axis = min(range(2), key=lambda i: mesh_shape[i] if mesh_shape[i] > 0 else 9999)
+    # Split along the smaller axis (default): each submesh keeps the TP axis intact.
+    # `TT_COSMOS3_CFG_SPLIT_LARGER=1` flips to the larger axis, trading TP for SP
+    # per submesh. On 4x8 BH Galaxy this turns dual 2x8 (tp=8, sp=2) into dual 4x4
+    # (tp=4, sp=4) — doubles SP at the cost of halving TP.
+    import os as _os
+
+    if _os.environ.get("TT_COSMOS3_CFG_SPLIT_LARGER") in ("1", "true", "True"):
+        cfg_axis = max(range(2), key=lambda i: mesh_shape[i])
+    else:
+        cfg_axis = min(range(2), key=lambda i: mesh_shape[i] if mesh_shape[i] > 0 else 9999)
     if mesh_shape[cfg_axis] % 2 != 0:
         msg = f"cfg-parallel requires even count on the smaller axis; got mesh={mesh_shape}"
         raise ValueError(msg)

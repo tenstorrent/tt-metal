@@ -4,9 +4,8 @@
 
 """Standalone CLI to generate a Cosmos3-Super-Image2Video clip and save MP4.
 
-Drives the same `build_cosmos3_i2v_pipeline` factory the pytest tests use, but
-opens the mesh device itself so you don't need pytest in the loop. All knobs
-are command-line flags.
+Builds the native (or native-cfg) pipeline and opens the mesh device itself so
+you don't need pytest in the loop. All knobs are command-line flags.
 
 Examples (run from tt-metal root, with the venv activated):
 
@@ -51,8 +50,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Generate a Cosmos3-Super-Image2Video clip on Tenstorrent hardware.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--image", required=True, type=Path, help="Path to the reference image (JPEG/PNG).")
+    p.add_argument(
+        "--image",
+        type=Path,
+        default=None,
+        help="Path to the reference image (JPEG/PNG). Omit for text-to-video (no conditioning frame).",
+    )
     p.add_argument("--prompt", required=True, help="Text prompt for the diffusion model.")
+    p.add_argument(
+        "--negative-prompt",
+        default=None,
+        help=(
+            "Classifier-free-guidance negative prompt. Omit to use the mode's recommended "
+            "default (the NVIDIA quality-control string for video modes; empty for text2image)."
+        ),
+    )
     p.add_argument(
         "--steps", type=int, default=50, help="UniPC denoise steps. Cosmos3 paper default for Image2Video is 50."
     )
@@ -81,16 +93,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Generator seed. Default: nondeterministic.",
     )
     p.add_argument(
-        "--native-joint-attn",
-        default="auto",
-        choices=["auto", "on", "off"],
-        help=(
-            "Phase 2 native TT joint-attention. 'auto' enables it on 1x1+replicated, "
-            "otherwise falls back to Phase 1 host attention. 'on' forces (raises on "
-            "configs the MVP can't handle). 'off' stays on Phase 1 explicitly."
-        ),
-    )
-    p.add_argument(
         "--output-type",
         default="video",
         choices=["video", "latent"],
@@ -103,16 +105,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--pipeline",
-        default="native",
-        choices=["native", "native-cfg", "tt-symbiote"],
+        default="native-cfg",
+        choices=["native-cfg"],
         help=(
-            "Which pipeline factory to use. 'native' (default, recommended) runs the full "
-            "64-layer decoder stack + final RMSNorms on device via Cosmos3OmniTransformer "
-            "from model/transformer.py; the rest (embed / proj_in / proj_out / time / VAE) "
-            "stays as host PyTorch. 'native-cfg' is the same trunk but splits the mesh's "
-            "smaller axis into two submeshes and runs the cond/uncond passes concurrently "
-            "(roughly halves per-step time when CFG is on). 'tt-symbiote' is the old "
-            "per-Linear-replacement path -- kept for A/B comparison."
+            "Pipeline factory. 'native-cfg' runs the 64-layer trunk + final RMSNorms on "
+            "device, splits the mesh's smaller axis into two submeshes, and runs the "
+            "cond/uncond passes concurrently. On a 1-axis mesh it transparently falls back "
+            "to a single submesh. This is the only supported path — the single-mesh 'native' "
+            "trunk produces noise at sp_factor=4 on a full 4x8."
         ),
     )
     p.add_argument(
@@ -126,11 +126,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--flow-shift",
         type=float,
-        default=5.0,
+        default=6.0,
         help=(
-            "Flow-matching sigma shift applied to the UniPC scheduler. Cosmos3 paper Table 21 "
-            "specifies shift=5 for Cosmos3-Super-Image2Video; shift=10 is the Audio-Visual omni "
-            "preset. σ' = s·σ / (1 + (s-1)·σ)."
+            "Flow-matching sigma shift applied to the UniPC scheduler. Default 6.0 is the unified "
+            "Cosmos3 preset (all modes). Cosmos3 paper Table 21 lists shift=5 for "
+            "Cosmos3-Super-Image2Video and shift=10 for the Audio-Visual omni preset. "
+            "σ' = s·σ / (1 + (s-1)·σ)."
         ),
     )
     p.add_argument(
@@ -154,18 +155,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--vae-decoder-t-chunk-size",
         type=int,
-        default=None,
+        default=4,
         help=(
-            "Temporal chunk size for the TT VAE decoder. None=full-T single pass (fastest, most memory). "
-            "Set to 1/2/4 to spread peak activation memory over time. Required on the cfg-parallel "
-            "submesh where VAE has half the SP factor."
+            "Temporal chunk size for the TT VAE decoder. Default 4 fits the cfg-parallel submesh "
+            "(half the SP factor); full-T (0/None) OOMs there at 720p/189f. Chunk caps harmlessly "
+            "below T, so 4 is safe at any frame count."
         ),
     )
     p.add_argument(
         "--vae-encoder-t-chunk-size",
         type=int,
-        default=None,
-        help="Temporal chunk size for the TT VAE encoder. None=full-T. Same memory/perf trade as the decoder.",
+        default=4,
+        help="Temporal chunk size for the TT VAE encoder. Default 4; same memory/perf trade as the decoder.",
     )
     p.add_argument(
         "--guidance-scale",
@@ -244,7 +245,7 @@ def close_mesh(mesh) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    if not args.image.exists():
+    if args.image is not None and not args.image.exists():
         raise SystemExit(f"Reference image not found: {args.image}")
     if (args.frames - 1) % 4 != 0:
         raise SystemExit(
@@ -261,18 +262,19 @@ def main(argv: list[str] | None = None) -> int:
     available = ttnn.get_num_devices()
     mesh_shape = resolve_mesh_shape(args.mesh_shape, available)
     weight_dtype = resolve_weight_dtype(args.weight_dtype, mesh_shape)
-    native_joint_attn = {"auto": None, "on": True, "off": False}[args.native_joint_attn]
 
     print(
         f"[generate] image={args.image} prompt={args.prompt!r}\n"
         f"[generate] mesh={mesh_shape} (of {available} available), weight_dtype={weight_dtype}\n"
         f"[generate] steps={args.steps} frames={args.frames} size={args.width}x{args.height} fps={args.fps}\n"
-        f"[generate] pipeline={args.pipeline} native_joint_attn={args.native_joint_attn} flow_shift={args.flow_shift}\n"
+        f"[generate] pipeline={args.pipeline} flow_shift={args.flow_shift}\n"
         f"[generate] out={args.out}",
         flush=True,
     )
 
-    ref_image = Image.open(args.image).convert("RGB").resize((args.width, args.height))
+    ref_image = None
+    if args.image is not None:
+        ref_image = Image.open(args.image).convert("RGB").resize((args.width, args.height))
 
     generator = None
     if args.seed is not None:
@@ -281,48 +283,21 @@ def main(argv: list[str] | None = None) -> int:
     mesh = open_mesh(mesh_shape)
     try:
         t0 = time.time()
-        if args.pipeline == "native":
-            from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_i2v_native import (
-                build_cosmos3_i2v_native_pipeline,
-            )
+        from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native_cfg import (
+            build_cosmos3_i2v_native_cfg_pipeline,
+        )
 
-            pipe = build_cosmos3_i2v_native_pipeline(
-                mesh,
-                dtype=torch.bfloat16,
-                use_tt_vae=not args.no_tt_vae,
-                num_links=args.num_links,
-                flow_shift=args.flow_shift,
-                # Reuse the existing --weight-dtype flag (also drives the tt-symbiote path).
-                trunk_weight_dtype=weight_dtype,
-                vae_decoder_t_chunk_size=args.vae_decoder_t_chunk_size,
-                vae_encoder_t_chunk_size=args.vae_encoder_t_chunk_size,
-            )
-        elif args.pipeline == "native-cfg":
-            from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_i2v_native_cfg import (
-                build_cosmos3_i2v_native_cfg_pipeline,
-            )
-
-            pipe = build_cosmos3_i2v_native_cfg_pipeline(
-                mesh,
-                dtype=torch.bfloat16,
-                use_tt_vae=not args.no_tt_vae,
-                num_links=args.num_links,
-                flow_shift=args.flow_shift,
-                trunk_weight_dtype=weight_dtype,
-                vae_decoder_t_chunk_size=args.vae_decoder_t_chunk_size,
-                vae_encoder_t_chunk_size=args.vae_encoder_t_chunk_size,
-                serial_dispatch=args.cfg_serial_dispatch,
-            )
-        else:
-            from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_i2v import build_cosmos3_i2v_pipeline
-
-            pipe = build_cosmos3_i2v_pipeline(
-                mesh,
-                dtype=torch.bfloat16,
-                shard_linear=True,
-                weight_dtype=weight_dtype,
-                native_joint_attn=native_joint_attn,
-            )
+        pipe = build_cosmos3_i2v_native_cfg_pipeline(
+            mesh,
+            dtype=torch.bfloat16,
+            use_tt_vae=not args.no_tt_vae,
+            num_links=args.num_links,
+            flow_shift=args.flow_shift,
+            trunk_weight_dtype=weight_dtype,
+            vae_decoder_t_chunk_size=args.vae_decoder_t_chunk_size,
+            vae_encoder_t_chunk_size=args.vae_encoder_t_chunk_size,
+            serial_dispatch=args.cfg_serial_dispatch,
+        )
         print(f"[generate] pipeline built and weights placed in {time.time() - t0:.1f}s", flush=True)
 
         t1 = time.time()
@@ -331,12 +306,10 @@ def main(argv: list[str] | None = None) -> int:
             f"guidance_scale={args.guidance_scale}",
             flush=True,
         )
-        from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_omni_native import _make_release_callback
+        from models.tt_dit.experimental.cosmos3_i2v.pipelines.cosmos3_mode import run_cosmos3
+        from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native import _make_release_callback
 
-        kwargs = dict(
-            image=ref_image,
-            prompt=args.prompt,
-            num_frames=args.frames,
+        call_kwargs = dict(
             height=args.height,
             width=args.width,
             num_inference_steps=args.steps,
@@ -346,8 +319,15 @@ def main(argv: list[str] | None = None) -> int:
             callback_on_step_end_tensor_inputs=[],
         )
         if generator is not None:
-            kwargs["generator"] = generator
-        result = pipe(**kwargs)
+            call_kwargs["generator"] = generator
+        result = run_cosmos3(
+            pipe,
+            prompt=args.prompt,
+            negative_prompt=args.negative_prompt,
+            image=ref_image,
+            num_frames=args.frames,
+            **call_kwargs,
+        )
         print(f"[generate] denoise + decode in {time.time() - t1:.1f}s", flush=True)
 
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -368,6 +348,13 @@ def main(argv: list[str] | None = None) -> int:
             latent_path = args.out.with_suffix(args.out.suffix + ".latent.pt")
             torch.save(tensor.detach().cpu(), latent_path)
             print(f"[generate] wrote {latent_path} ({latent_path.stat().st_size / 1024:.1f} KB)")
+        elif args.frames == 1:
+            # text2image: the pipeline returns a one-frame clip; write it as a still
+            # rather than muxing a degenerate single-frame MP4.
+            image_path = args.out.with_suffix(".png") if args.out.suffix.lower() == ".mp4" else args.out
+            result.video[0].save(image_path)
+            size_kb = image_path.stat().st_size / 1024
+            print(f"[generate] wrote {image_path} ({size_kb:.1f} KB)")
         else:
             export_to_video(result.video, str(args.out), fps=args.fps)
             size_kb = args.out.stat().st_size / 1024

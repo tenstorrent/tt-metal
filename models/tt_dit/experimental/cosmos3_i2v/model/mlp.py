@@ -72,6 +72,8 @@ class Cosmos3VLTextMLP(Module):
 
         tp_factor = parallel_config.tensor_parallel.factor
         tp_axis = parallel_config.tensor_parallel.mesh_axis
+        sp_factor = parallel_config.sequence_parallel.factor
+        sp_axis = parallel_config.sequence_parallel.mesh_axis
 
         if intermediate_size % tp_factor != 0:
             msg = f"intermediate_size ({intermediate_size}) must be divisible by tp_factor ({tp_factor})"
@@ -86,10 +88,19 @@ class Cosmos3VLTextMLP(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
+        # `TT_COSMOS3_FSDP_ON_SP=1` shards Linear weights along the sp_axis too;
+        # trades an extra all_gather per Linear for halving per-chip weight footprint.
+        # Cache-invalidating: use a distinct cache_namespace when this is set.
+        import os as _os_fsdp
+
+        _use_fsdp = _os_fsdp.environ.get("TT_COSMOS3_FSDP_ON_SP") in ("1", "true", "True") and sp_factor > 1
+        fsdp_axis = sp_axis if _use_fsdp else None
+
         col_kw = {
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
+            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }
@@ -97,6 +108,7 @@ class Cosmos3VLTextMLP(Module):
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
+            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }

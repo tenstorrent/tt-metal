@@ -54,6 +54,7 @@ import torch.nn as nn
 
 import ttnn
 from models.tt_dit.experimental.cosmos3_i2v.model_config import HF_REPO
+from models.tt_dit.experimental.cosmos3_i2v.pipelines.cosmos3_prompt import install_json_prompt_parsing
 
 if TYPE_CHECKING:
     from models.tt_dit.experimental.cosmos3_i2v.model.transformer import Cosmos3OmniTransformer as NativeTransformer
@@ -218,6 +219,22 @@ class NativeLayerProxy(nn.Module):
         sp_axis = self._sp_axis
         gen_seq_multiple = self._gen_seq_multiple
 
+        # The ring SDPA masks the padded gen boundary only at k_chunk granularity, so a
+        # gen sequence whose length isn't a multiple of k_chunk_size corrupts attention
+        # (the boundary chunk mixes real and padded rows) and the decoded video is noise.
+        # gen_seq = latent_t * patch_h * patch_w, so this rejects num_frames / resolution
+        # combinations that don't land on the boundary rather than emit silent garbage.
+        if sp_factor > 1:
+            k_chunk = gen_seq_multiple // sp_factor
+            if gen_seq.shape[0] % k_chunk != 0:
+                msg = (
+                    f"gen sequence length {gen_seq.shape[0]} is not a multiple of k_chunk_size "
+                    f"{k_chunk}; the sp={sp_factor} ring SDPA would corrupt attention (noise). "
+                    f"Pick a num_frames/resolution whose vision-token count is a multiple of {k_chunk} "
+                    f"(e.g. at 720x1280: 61, 125, 189 frames)."
+                )
+                raise ValueError(msg)
+
         if sp_factor > 1:
             gen_tt, pad_n_gen = self._to_tile_ttnn_sharded(gen_seq, mesh_device, sp_axis, gen_seq_multiple)
         else:
@@ -351,7 +368,7 @@ def build_cosmos3_i2v_native_pipeline(
     use_tt_vae: bool = True,
     vae_encoder_t_chunk_size: int | None = None,
     vae_decoder_t_chunk_size: int | None = None,
-    flow_shift: float = 5.0,
+    flow_shift: float = 6.0,
     cache_namespace: str = "cosmos3-i2v",
     enable_device_proj_out: bool = False,
     enable_device_proj_in: bool = False,
@@ -849,5 +866,37 @@ def build_cosmos3_i2v_native_pipeline(
     pipe.transformer.norm = nn.Identity()
     pipe.transformer.norm_moe_gen = nn.Identity()
 
+    # JSON-object prompts carry the generation specs inline and must be reformatted
+    # (not tokenized as free text). The native-cfg builder reuses this builder, so
+    # installing here covers both pipelines.
+    install_json_prompt_parsing(pipe)
+
     torch.set_grad_enabled(False)
     return pipe
+
+
+def _release_native_trunks(pipe) -> None:
+    layers = getattr(pipe.transformer, "layers", None)
+    if not layers:
+        return
+    proxy = layers[0]
+    trunks = []
+    if hasattr(proxy, "_proxy_a") and hasattr(proxy, "_proxy_b"):
+        trunks.append(proxy._proxy_a._native_trunk)
+        trunks.append(proxy._proxy_b._native_trunk)
+    elif hasattr(proxy, "_native_trunk"):
+        trunks.append(proxy._native_trunk)
+    for trunk in trunks:
+        if hasattr(trunk, "deallocate_weights"):
+            trunk.deallocate_weights()
+
+
+def _make_release_callback(num_steps: int):
+    # Free the on-device trunk weights after the final denoise step so the VAE
+    # decode has DRAM headroom.
+    def cb(pipe_ref, step, timestep, callback_kwargs):  # noqa: ARG001
+        if step == num_steps - 1:
+            _release_native_trunks(pipe_ref)
+        return callback_kwargs
+
+    return cb
