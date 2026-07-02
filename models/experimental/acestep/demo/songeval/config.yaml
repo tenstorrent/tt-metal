@@ -1,0 +1,6 @@
+generator:
+  _target_: model.Generator
+  in_features: 1024
+  ffd_hidden_size: 4096
+  num_classes: 5
+  attn_layer_num: 4
