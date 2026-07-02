@@ -74,6 +74,11 @@ void kernel_main() {
                         src_addr, dst_data_mcast_addr, k_subblock_size_bytes, num_cores_c_dim, true);
 
                     uint64_t dst_receiver_sem_mcast_addr = row_mcast_base | receiver_sem_addr;
+#ifdef ARCH_BLACKHOLE
+                    // Separate cmd-buffer FIFOs can reorder payload vs flag on Blackhole; flush
+                    // the payload multicast before signaling so receivers don't read stale data.
+                    noc_async_writes_flushed();
+#endif
                     noc_semaphore_set_multicast_loopback_src(
                         sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
                 } else {
