@@ -359,7 +359,10 @@ class TPGatedDeltaNet:
             None,
             self.K,
             self.mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # OPT (prefill): run the conv MAC in L1 ([1,T,2560]~=10.5MB @T=2048 -> ~95KB/core). The conv
+            # output is freed before the chunk kernel, so no CB clash. _causal_conv1d_fir lands new_state
+            # (which IS alive across the kernel) in DRAM internally to avoid the clash. Was DRAM.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             conv_state=self.conv_carry if carry else None,
             weight_taps=tw["conv_taps"],
             bias_dev=None,
@@ -367,6 +370,10 @@ class TPGatedDeltaNet:
         )
         ttnn.deallocate(qkv)
 
+        # NOTE: q/k/v (and beta/g below) must stay DRAM — they are held by this frame's locals and
+        # passed into the adapter, so they are ALIVE across the gated_delta_attn_seq kernel call. Putting
+        # them in L1 clashes with the kernel's static circular buffers (verified OOM). Unlike out_f, there
+        # is no transient tail here: the relayout OUTPUT itself must survive to the kernel.
         kd = self.key_dim_tp
         q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
@@ -376,6 +383,7 @@ class TPGatedDeltaNet:
         # L2-norms + transforms them at Nk and expands to Nv AFTER (a cheap dim-0 block-repeat),
         # doing ~3x less q/k transform work than pre-expanding to Nv before the L2-norm + permute.
 
+        # beta/g are also adapter inputs held across the kernel -> keep DRAM (same reason as q/k/v).
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
         g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"]))), (1, T, Nv))
@@ -427,11 +435,15 @@ class TPGatedDeltaNet:
                 ttnn.copy(src, self.conv_states[j + 1])
         ttnn.deallocate(conv_new_state)
         # o: [1, T, Nv, Dv] -> gated RMSNorm over Dv + SiLU(z) gate
-        out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
+        # OPT (prefill): run the post-kernel norm + the head-flatten reshape (~1.4ms, the biggest single
+        # relayout) in L1. These are freed before the out-proj, so no GDN-kernel CB clash. But LAND
+        # `gated` in DRAM: it's the out-proj matmul's activation, alive across that matmul's CBs.
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
         ttnn.deallocate(o)
-        out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp))
+        out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
         ttnn.deallocate(out_n)
-        gated = ttnn.multiply(out_f, ttnn.silu(z))
+        gated = ttnn.multiply(out_f, ttnn.silu(z, memory_config=_L1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
         partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -449,6 +461,7 @@ class TPGatedDeltaNet:
 
     def forward_decode(self, x):
         tw, B, Nk, Nv, Dk, Dv = self.tw, self.B, self.Nk, self.Nv, self.Dk, self.Dv
+        _L1 = ttnn.L1_MEMORY_CONFIG  # OPT (decode): keep the conv->recurrence->norm/gate chain L1-resident
         if self.conv_states is None:
             self.reset_state()
         if len(x.shape) == 4:
@@ -462,10 +475,10 @@ class TPGatedDeltaNet:
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
         ttnn.deallocate(qkv)
-        conv = ttnn.multiply(st[0], tw["conv_taps"][0])
+        conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
         for j in range(1, self.K):
             conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
-        conv = ttnn.silu(conv)
+        conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
         q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
@@ -481,9 +494,9 @@ class TPGatedDeltaNet:
         k = ttnn.reshape(k, (B, 1, Nv, Dk))
         v = ttnn.reshape(v, (B, 1, Nv, Dv))
 
-        beta = ttnn.reshape(ttnn.sigmoid(b), (B, 1, Nv))
+        beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])))
+        g = ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])), memory_config=_L1)
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
@@ -512,11 +525,13 @@ class TPGatedDeltaNet:
             self.rec_state = new_rec
 
         out_r = ttnn.reshape(o, (B, Nv, Dv))
-        out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6)  # gated norm: weight only (no +1)
+        out_n = ttnn.rms_norm(
+            out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1
+        )  # gated norm: weight only (no +1)
         ttnn.deallocate(out_r)
         out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
         ttnn.deallocate(out_n)
-        gated = ttnn.multiply(out_f, ttnn.silu(z))
+        gated = ttnn.multiply(out_f, ttnn.silu(z, memory_config=_L1), memory_config=_L1)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 

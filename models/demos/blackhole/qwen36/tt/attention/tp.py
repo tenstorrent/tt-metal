@@ -304,27 +304,28 @@ class TPAttention:
 
     def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
         tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
+        _L1 = ttnn.L1_MEMORY_CONFIG  # OPT (decode): keep head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
         if not use_paged and self.k_caches is None:
             self.reset_state()
 
         qg, kp, vp = self._qkv(x)
 
-        qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2))
+        qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2), memory_config=_L1)
         ttnn.deallocate(qg)
-        q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD))
-        gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2))
+        q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD), memory_config=_L1)
+        gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2), memory_config=_L1)
         ttnn.deallocate(qg_r)
-        k = ttnn.reshape(kp, (1, B, NKV, HD))
+        k = ttnn.reshape(kp, (1, B, NKV, HD), memory_config=_L1)
         ttnn.deallocate(kp)
-        v = ttnn.reshape(vp, (1, B, NKV, HD))
+        v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
         ttnn.deallocate(vp)
 
         # QK RMSNorm — raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill retrieves the
         # long context; flat decode averages over keys so the per-step decode noise cannot flip
         # retrieval (the loop/junk failure mode).
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm_flat"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm_flat"])
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm_flat"], memory_config=_L1)
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm_flat"], memory_config=_L1)
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
@@ -358,6 +359,9 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
+                # SDPA-decode output stays DRAM: it's the kernel's native path and it feeds the
+                # DRAM-weight wo matmul, so forcing L1 here only adds an L1<->DRAM boundary copy
+                # (attention decode is bound by the DRAM KV-cache read, not these tiny intermediates).
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
@@ -395,11 +399,14 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
+                # SDPA-decode output stays DRAM: it's the kernel's native path and it feeds the
+                # DRAM-weight wo matmul, so forcing L1 here only adds an L1<->DRAM boundary copy
+                # (attention decode is bound by the DRAM KV-cache read, not these tiny intermediates).
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
 
-        gated = ttnn.multiply(attn_out, ttnn.sigmoid(gate))
+        gated = ttnn.multiply(attn_out, ttnn.sigmoid(gate, memory_config=_L1), memory_config=_L1)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate)
 

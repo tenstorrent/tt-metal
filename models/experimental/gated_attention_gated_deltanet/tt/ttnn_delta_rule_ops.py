@@ -351,14 +351,17 @@ def fused_decay_and_write_ttnn(
     # beta: [B, H] -> [B, H, 1, 1]
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
+    # OPT (decode): keep the state-write operands + intermediates in L1 (were None->DRAM and an
+    # explicit to_memory_config(DRAM) below). Tiny at B=1: k_col [B,H,K,1], d_row [B,H,1,V].
+    _L1 = ttnn.L1_MEMORY_CONFIG
     # k_t: [B, H, K] -> [B, H, K, 1]
-    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=None)
+    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=_L1)
 
     # delta: [B, H, V] -> [B, H, 1, V]
-    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=None)
+    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=_L1)
 
-    k_col = ttnn.to_memory_config(k_col, ttnn.DRAM_MEMORY_CONFIG)
-    d_row = ttnn.to_memory_config(d_row, ttnn.DRAM_MEMORY_CONFIG)
+    k_col = ttnn.to_memory_config(k_col, _L1)
+    d_row = ttnn.to_memory_config(d_row, _L1)
 
     matmul_compute_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -370,7 +373,7 @@ def fused_decay_and_write_ttnn(
     outer = ttnn.matmul(
         k_col,
         d_row,
-        memory_config=None,
+        memory_config=_L1,
         compute_kernel_config=matmul_compute_cfg,
         program_config=None,
     )
@@ -379,15 +382,15 @@ def fused_decay_and_write_ttnn(
     outer = ttnn.multiply(
         outer,
         beta_expanded,
-        memory_config=None,
+        memory_config=_L1,
     )
 
     # fused-style update: decay * h + outer.
     # When apply_decay is False, h has already been decayed by the caller (canonical
     # decay -> read -> write order), so only the outer product is added here.
     if apply_decay:
-        h = ttnn.multiply(h, decay)
-    h = ttnn.add(h, outer)
+        h = ttnn.multiply(h, decay, memory_config=_L1)
+    h = ttnn.add(h, outer, memory_config=_L1)
 
     return h
 
@@ -547,8 +550,11 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # q and k need [B, H, 1, K] for matmul against h [B, H, K, V]
     # v needs [B, H, V] for subtract with v_read
     # Inputs are already TILE_LAYOUT from the caller, so skip redundant to_layout.
-    q_row = ttnn.reshape(q, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    k_row = ttnn.reshape(k, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # OPT (decode): q_row/k_row are the two operands of the recurrence matmuls (k·h, q·h). With the
+    # state h now in L1, keep these in L1 too so both matmuls have all-L1 inputs. Tiny at B=1
+    # ([B,H,1,K]). Were DRAM_MEMORY_CONFIG.
+    q_row = ttnn.reshape(q, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_row = ttnn.reshape(k, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     v_t = ttnn.reshape(v, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     beta_t = ttnn.reshape(beta, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
     g_t = ttnn.reshape(g, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -569,7 +575,11 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # Run single recurrent step
     # h is always TILE_LAYOUT: either from fused_decay_and_write_ttnn, ttnn.zeros with TILE_LAYOUT,
     # or _init_recurrent_state which uses ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT)
-    h = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
+    # OPT (decode): keep the [B,H,K,V] recurrent state in L1, not DRAM. It's re-read+written every
+    # decode step and feeds the h*decay multiply (a ~15us 128x128 binary when h is DRAM) and both
+    # recurrence matmuls (k·h, q·h). At B=1 the working state is tiny (H*K*V*4B ~= 0.8MB fp32) and
+    # fits L1 comfortably. Was DRAM_MEMORY_CONFIG.
+    h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
 
     read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -588,29 +598,32 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # Canonical gated-delta-rule order: DECAY the state BEFORE reading from it. The FLA
     # reference and the chunked prefill path both decay-then-read; reading the un-decayed
     # state makes the delta correction (v - k·h) use the wrong state.
-    decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-    h = ttnn.multiply(h, decay_bhkv)
+    # OPT (decode): keep the whole recurrence step L1-resident (was memory_config=None -> DRAM on
+    # every intermediate: the two matmul outputs, the reshapes, the delta subtract). B=1 so all are tiny.
+    _L1 = ttnn.L1_MEMORY_CONFIG
+    decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=_L1)
+    h = ttnn.multiply(h, decay_bhkv, memory_config=_L1)
 
     # Read from the DECAYED state: v_read = k @ h  (k_row already [B,H,1,K] TILE_LAYOUT)
     v_read = ttnn.matmul(
-        k_row, h, memory_config=None, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
+        k_row, h, memory_config=_L1, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
-    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=None)
+    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=_L1)
 
     # Delta and state update — write the outer product WITHOUT re-decaying (h already decayed).
-    delta = ttnn.subtract(v_t, v_read, memory_config=None)
-    k_t = ttnn.reshape(k_row, [B, H, K], memory_config=None)
+    delta = ttnn.subtract(v_t, v_read, memory_config=_L1)
+    k_t = ttnn.reshape(k_row, [B, H, K], memory_config=_L1)
     h = fused_decay_and_write_ttnn(
         h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device, apply_decay=False
     )
 
     # Query state: o = q @ h  (q_row already [B,H,1,K] TILE_LAYOUT)
     o_t = ttnn.matmul(
-        q_row, h, memory_config=None, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
+        q_row, h, memory_config=_L1, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
 
     # Reshape output to [B, 1, H, V]
-    o = ttnn.reshape(o_t, [B, 1, H, V], memory_config=None)
+    o = ttnn.reshape(o_t, [B, 1, H, V], memory_config=_L1)
 
     return o, h
 
