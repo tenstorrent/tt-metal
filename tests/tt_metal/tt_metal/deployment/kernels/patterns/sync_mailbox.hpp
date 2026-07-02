@@ -1,4 +1,9 @@
-#pragma once
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef _SYNC_MAILBOX_H
+#define _SYNC_MAILBOX_H
 
 #include <stdint.h>
 
@@ -180,3 +185,5 @@ enum DramSyncStage : uint32_t {
     MB_STAGE_REREAD,
     MB_STAGE_JOB_DONE,
 };
+
+#endif /* _SYNC_MAILBOX_H */

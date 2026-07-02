@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #ifndef _ETH_COMMON_HPP
 #define _ETH_COMMON_HPP
 
