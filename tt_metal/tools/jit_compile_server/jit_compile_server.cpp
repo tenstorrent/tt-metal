@@ -214,6 +214,12 @@ void compile_one(
     fs::remove(temp_d_path);
 }
 
+void publish_linked_elf(
+    const std::string& out_dir,
+    const std::string& elf_name,
+    const fs::path& temp_elf_path,
+    const fs::path& temp_hash_path);
+
 void link_one(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
@@ -237,22 +243,80 @@ void link_one(
     append_tokenized(args, target.extra_link_objs);
     args.insert(args.end(), link_obj_paths.begin(), link_obj_paths.end());
     std::string elf_name = out_dir + target.target_name + ".elf";
-    tt::jit_build::utils::FileRenamer elf_file(elf_name);
+    std::string temp_elf_name = tt::jit_build::utils::FileRenamer::generate_temp_path(elf_name);
     args.push_back("-o");
-    args.push_back(elf_file.path());
+    args.push_back(temp_elf_name);
 
     tt::jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
+        fs::remove(temp_elf_name);
         build_failure(target.target_name, "link", format_args(args), log_file.path());
     }
 
-    tt::jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
-    std::ofstream hash_file(dephash_file.path());
+    std::string temp_hash_name = tt::jit_build::utils::FileRenamer::generate_temp_path(elf_name + ".dephash");
+    std::ofstream hash_file(temp_hash_name);
     tt::jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
-        fs::remove(dephash_file.path());
+        fs::remove(temp_hash_name);
+    }
+    publish_linked_elf(out_dir, elf_name, temp_elf_name, temp_hash_name);
+}
+
+fs::path dependency_hash_path(const fs::path& path) {
+    fs::path hash_path = path;
+    hash_path += ".dephash";
+    return hash_path;
+}
+
+bool cache_entry_valid(const std::string& out_dir, const std::string& artifact) {
+    return fs::exists(fs::path(out_dir) / artifact) && tt::jit_build::dependencies_up_to_date(out_dir, artifact);
+}
+
+void remove_artifact_and_hash(const fs::path& path) {
+    fs::remove(path);
+    fs::remove(dependency_hash_path(path));
+}
+
+void publish_artifact_and_hash(const fs::path& src_path, const fs::path& dst_path) {
+    fs::rename(src_path, dst_path);
+
+    fs::path src_hash_path = dependency_hash_path(src_path);
+    fs::path dst_hash_path = dependency_hash_path(dst_path);
+    if (fs::exists(src_hash_path)) {
+        fs::rename(src_hash_path, dst_hash_path);
+    } else {
+        fs::remove(dst_hash_path);
+    }
+}
+
+void publish_compiled_object(
+    const std::string& out_dir, const std::string& obj, const fs::path& src_path, const fs::path& dst_path) {
+    if (cache_entry_valid(out_dir, obj)) {
+        remove_artifact_and_hash(src_path);
+        return;
+    }
+    publish_artifact_and_hash(src_path, dst_path);
+}
+
+void publish_linked_elf(
+    const std::string& out_dir,
+    const std::string& elf_name,
+    const fs::path& temp_elf_path,
+    const fs::path& temp_hash_path) {
+    if (cache_entry_valid(out_dir, elf_name)) {
+        fs::remove(temp_elf_path);
+        fs::remove(temp_hash_path);
+        return;
+    }
+
+    fs::rename(temp_elf_path, elf_name);
+    fs::path final_hash_path = dependency_hash_path(elf_name);
+    if (fs::exists(temp_hash_path)) {
+        fs::rename(temp_hash_path, final_hash_path);
+    } else {
+        fs::remove(final_hash_path);
     }
 }
 
@@ -321,8 +385,7 @@ void build_target(
         fs::path src_path = out_dir + temp_objs[i];
         fs::path dst_path = out_dir + target.objs[i];
         if (compiled[i]) {
-            fs::rename(src_path, dst_path);
-            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
+            publish_compiled_object(out_dir, target.objs[i], src_path, dst_path);
         } else if (fs::exists(src_path)) {
             fs::remove(src_path);
         }
@@ -360,8 +423,10 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             request.generated_files.size(),
             outstanding);
 
+        const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
+        tt::jit_build::utils::ScopedFileLock genfiles_lock(genfiles_dir / ".jit_genfiles.lock");
+
         if (!request.generated_files.empty()) {
-            const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
             fs::create_directories(genfiles_dir);
             for (const auto& file : request.generated_files) {
                 std::string target_path = (genfiles_dir / file.name).string();

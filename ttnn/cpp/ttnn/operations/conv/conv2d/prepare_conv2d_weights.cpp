@@ -7,6 +7,7 @@
 #include "conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
+#include "tt_metal/common/host_threading.hpp"
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
@@ -51,7 +52,7 @@ private:
         if (!threading_enabled) {
             return 1;
         }
-        uint32_t hw_concurrency = std::thread::hardware_concurrency();
+        uint32_t hw_concurrency = static_cast<uint32_t>(tt::tt_metal::detail::get_host_worker_threads());
         // Use sqrt to balance 2D parallelization: total threads = out_threads × in_threads ≈ sqrt(hw_concurrency - 1)²
         // This prevents oversubscription while maintaining good load distribution across both channel dimensions
         return std::max(1u, static_cast<uint32_t>(std::sqrt(hw_concurrency - 1)));
