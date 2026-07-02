@@ -106,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_config",
         type=str,
-        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_config.yaml",
+        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_configs/single_cards.yaml",
         help="Path to run_models_config.yaml",
     )
     parser.add_argument(
@@ -199,6 +199,13 @@ def main() -> int:
         if exclude_filenames:
             if model_filename in exclude_filenames:
                 continue
+        if "mgd" in model:
+            os.environ["TT_MESH_GRAPH_DESC_PATH"] = _verify_path(
+                os.path.expandvars(model["mgd"]), tt_metal_runtime_root
+            )
+        else:
+            # Since mgd is optional, clear env so previous iterations won't affect current
+            os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
 
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
