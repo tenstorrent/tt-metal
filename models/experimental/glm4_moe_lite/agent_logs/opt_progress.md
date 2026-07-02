@@ -167,6 +167,20 @@ attention+dense MLP; test_tt_moe_layer1 = MoE) at TP=1 vs torch to find which sh
 then fix the sharded-matmul partition or the CCL combine. Production needs TP=1 for perf, so this
 gates all optimization work.
 
+### TP=1 bug LOCALIZED (test_tt_decoder_layer0_prefill_update_cache_optional.py, mesh 1x4)
+Ran the built-in TP-vs-no-TP PCC checks (which compare TP=1 output to replicated no-TP, target 0.999):
+- **`test_..._tp_matches_no_tp` (layer 0 = attention + dense MLP): PASS, PCC ≥ 0.999.** → attention +
+  dense-MLP TP sharding is CORRECT.
+- **`test_layers_through_1_moe` (through first MoE layer): documented "first known TP divergence
+  ~PCC 0.95".** `test_incremental_per_layer_tp_pcc`: PASS (asserts the known divergence).
+- Conclusion: **the TP=1 accuracy bug is in the MoE-layer TP path** (shared-expert gate/up/down TP
+  sharding and/or the `_moe_all_reduce_across_mesh` combine), ~0.95 per MoE layer, compounding over
+  46 MoE layers → 0.65 full-model. It is a KNOWN, pre-existing divergence (documented in the test).
+- Fixed a real hazard while here: those TP localizer tests hardcoded `CCL_NUM_LINKS=2` (deadlocks on
+  T3K, 1 link/axis) — changed to respect an outer override, default 1, so they run on T3K.
+- **FIX SCOPE (not done): correct the MoE-layer TP sharded compute / all-reduce so TP=1 matches
+  no-TP to ~0.999 per layer; then production (TP=1) should reach the ~0.95 HF ceiling.**
+
 ## Reality note
 Each remaining iteration is deep fused-op code surgery + 10-min reprofile + PCC verify. This is the
 long autonomous grind the PLAN is built for; it is not flag-flipping. Batches 8/16/32 repeat this

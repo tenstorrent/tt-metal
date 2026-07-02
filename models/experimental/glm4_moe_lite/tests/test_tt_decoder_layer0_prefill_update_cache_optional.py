@@ -461,7 +461,8 @@ def _layer0_prefill_tp_pcc_check(
     if num_devices <= 1:
         pytest.skip("TP PCC check requires a multi-device mesh.")
 
-    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", "2")
+    # T3K has 1 CCL link/axis; num_links=2 deadlocks. Respect an outer override, default 1.
+    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1"))
     monkeypatch.setenv("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear")
     monkeypatch.setenv("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "1")
 
@@ -563,7 +564,8 @@ def _layers_moe_prefill_tp_pcc_check(
     if num_devices <= 1:
         pytest.skip("TP PCC check requires a multi-device mesh.")
 
-    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", "2")
+    # T3K has 1 CCL link/axis; num_links=2 deadlocks. Respect an outer override, default 1.
+    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1"))
     monkeypatch.setenv("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear")
     monkeypatch.setenv("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "1")
 
@@ -671,7 +673,8 @@ def _layers_moe_prefill_tp_only_run(
     if num_devices <= 1:
         pytest.skip("TP profiling requires a multi-device mesh.")
 
-    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", "2")
+    # T3K has 1 CCL link/axis; num_links=2 deadlocks. Respect an outer override, default 1.
+    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1"))
     monkeypatch.setenv("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear")
     monkeypatch.setenv("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "1")
     monkeypatch.setenv("GLM4_MOE_LITE_TP", "1")
@@ -787,7 +790,8 @@ def test_incremental_per_layer_tp_pcc_mesh_1x4(monkeypatch: pytest.MonkeyPatch) 
     if mesh_rows * mesh_cols <= 1:
         pytest.skip("Incremental TP PCC requires a multi-device mesh.")
 
-    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", "2")
+    # T3K has 1 CCL link/axis; num_links=2 deadlocks. Respect an outer override, default 1.
+    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1"))
     monkeypatch.setenv("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear")
     monkeypatch.setenv("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "1")
 
