@@ -111,10 +111,17 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect(mux_connection);
     }
 
+    // Stateful send headers (matches all_gather's mux usage): configure once with set_state, then update
+    // only the dst addr + payload size per packet with with_state. num_hops = unicast distance to the
+    // immediate W neighbor (dst_chip_id carries the hop count for the 1D line).
+    const uint8_t num_hops = static_cast<uint8_t>(unicast_route_info.dst_chip_id);
     auto pkt_hdr = PacketHeaderPool::allocate_header();
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
+    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+        pkt_hdr, num_hops, nullptr, static_cast<uint16_t>(W_COALESCE * stick_size));
     auto pkt_hdr_sem = PacketHeaderPool::allocate_header();
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem, unicast_route_info);
+    fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_size});
 
     // NOTE (bring-up): no separate W startup barrier here. barrier_sem is shared with the reader's H->W
     // barrier (same core), so a writer inc/reset would clobber the reader's count. H->W ordering is
@@ -136,17 +143,22 @@ void kernel_main() {
                 cb_wait_front(send_cb_id, g);
                 const uint32_t l1_read_addr = get_read_ptr(send_cb_id);
                 const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
-                pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, g * stick_size);
-                tt::tt_fabric::fabric_async_write(mux_connection, pkt_hdr, l1_read_addr, g * stick_size);
+                // Tail groups on a bank are shorter than W_COALESCE, so update PayloadSize too.
+                fabric_unicast_noc_unicast_write_with_state<
+                    UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                    &mux_connection,
+                    pkt_hdr,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr},
+                    static_cast<uint16_t>(g * stick_size));
                 cb_pop_front(send_cb_id, g);
                 r += g * NP_NUM_DRAM_BANKS;
             }
         }
         // ---- Raise the neighbor's W recv sem (deferred single inc of the full row count) ----
         uint64_t nb_recv = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, neighbor_sem, 0);
-        pkt_hdr_sem->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nb_recv, outer_dim_size});
-        tt::tt_fabric::fabric_atomic_inc(mux_connection, pkt_hdr_sem);
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &mux_connection, pkt_hdr_sem, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nb_recv, 0});
     }
 
     // ---- Disconnect + termination handshake (avoid mux-kernel hang) ----

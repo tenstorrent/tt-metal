@@ -191,25 +191,28 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         pad2_num_links,
         MAX_PAD2_NUM_LINKS);
 
-    // Fabric-mux worker count (reach link BW; see PLAN_NP_FABRIC_MUX_IMPL.md). One worker per link
-    // caps at ~1.4 GB/s; the eth link (~12.5 GB/s Linear) is only saturated by multiple workers feeding
-    // it through a mux core. Worker count follows tt-metal's all_gather heuristic by W data-moved per
-    // (link,direction): >256KB=>4, 4KB..256KB=>2, else 1. Env override TT_NP_W_WORKERS for bring-up.
+    // Fabric-mux worker count, auto-selected by W data-moved per (link,direction) like all_gather's
+    // default_workers: one worker caps at ~1.4 GB/s/link; multiple workers feeding the eth link through
+    // the mux reach the ~12.5 GB/s Linear ceiling. all_gather uses >256KB=>4, 4KB..256KB=>2, else 1.
+    // Capped at 2 here: the mux + 8-aligned split is validated at 2 workers (12.8 GB/s, PCC-exact);
+    // 4-worker mux is not yet validated. Zeros-only: the replicate-mode edge-outward mux path is unfixed,
+    // so replicate stays on the direct single-worker path. TT_NP_W_WORKERS overrides (matches all_gather's
+    // optional num_workers_per_direction).
+    constexpr uint32_t MAX_VALIDATED_W_WORKERS = 2;
     uint32_t num_w_workers = 1;
     {
         const uint32_t w_h_total_est = input_halo_dim_size + 2 * op.np_padding_h;
         const uint64_t w_rows_est = static_cast<uint64_t>(outer_dim_size) * w_h_total_est;  // W interior rows/dir
         const uint64_t w_bytes_per_link_dir =
             (pad2_num_links > 0) ? (w_rows_est * op.np_pad2_left * page_size / pad2_num_links) : 0;
-        // Heuristic (all_gather): >256KB=>4, 4KB..256KB=>2. NOT auto-applied: the multi-worker mux path
-        // is under bring-up (hangs on multi-worker sem coordination — barrier/recv sems are per-device
-        // singletons, N workers use them concurrently; needs per-worker sems). Opt-in via TT_NP_W_WORKERS
-        // until validated, so the shipping single-worker op stays safe on all shapes.
         uint32_t heuristic = 1;
         if (w_bytes_per_link_dir > 256u * 1024u) {
             heuristic = 4;
         } else if (w_bytes_per_link_dir > 4u * 1024u) {
             heuristic = 2;
+        }
+        if (is_padding_zeros) {
+            num_w_workers = std::min(heuristic, MAX_VALIDATED_W_WORKERS);
         }
         if (const char* e = std::getenv("TT_NP_W_WORKERS")) {
             num_w_workers = std::max(1, atoi(e));
