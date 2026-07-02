@@ -9,6 +9,7 @@
 #include "ckernel_sfpu.h"
 #include "llk_sfpu/ckernel_sfpu_add_top_row.h"
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_topk.h"
 
@@ -16,7 +17,10 @@
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
+#include "ckernel_sfpu_where.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
+#include "llk_sfpu/ckernel_sfpu_addcdiv.h"
+#include "llk_sfpu/ckernel_sfpu_addcmul.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
 // binop_with_unary.h references the ambient compute-kernel macro DST_ACCUM_MODE in
@@ -1082,6 +1086,115 @@ void call_binary_sfpu_operation(
     else
     {
         LLK_ASSERT(false, "Unsupported operation");
+    }
+}
+
+// To add a new metal ternary SFPU operation:
+// 1. Include the metal header above: #include "llk_sfpu/<operation>.h"
+// 2. Add the operation enum to SfpuType in llk_sfpu_types.h
+// 3. Add the if constexpr branches in call_ternary_sfpu_operation_init() and
+//    call_ternary_sfpu_operation() below.
+
+/**
+ * Calls only the init portion of a ternary SFPU operation.
+ * Must be paired with a subsequent call_ternary_sfpu_operation() for the calculate step.
+ * Delegates to the SFPU_TERNARY_INIT* macros (llk_math_eltwise_ternary_sfpu_macros.h),
+ * which run _llk_math_eltwise_ternary_sfpu_init_<OP>() and the optional per-op init.
+ */
+template <SfpuType OPERATION, bool APPROX_MODE, bool is_fp32_dest_acc_en>
+void call_ternary_sfpu_operation_init()
+{
+    if constexpr (OPERATION == SfpuType::where)
+    {
+        SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROX_MODE));
+    }
+    else if constexpr (OPERATION == SfpuType::addcmul)
+    {
+        // addcmul has no per-op init beyond the shared addrmod setup.
+        SFPU_TERNARY_INIT(addcmul);
+    }
+    else if constexpr (OPERATION == SfpuType::addcdiv)
+    {
+        // addcdiv uses sfpu_reciprocal internally; init_addcdiv forwards to sfpu_reciprocal_init.
+        SFPU_TERNARY_INIT_FN(addcdiv, sfpu::init_addcdiv, (APPROX_MODE));
+    }
+    else
+    {
+        SFPU_TERNARY_INIT(where);
+    }
+}
+
+/**
+ * Calls only the calculate portion of a ternary SFPU operation.
+ * Must be preceded by a call to call_ternary_sfpu_operation_init() for the same operation.
+ * Uses SFPU_TERNARY_CALL from llk_math_eltwise_ternary_sfpu_macros.h, which runs the
+ * ckernel::_sfpu_ternary_check_<DST_SYNC_MODE, DST_ACCUM_MODE> dst-bound LLK_ASSERTs and
+ * then dispatches to _llk_math_eltwise_ternary_sfpu_params_. The callable receives
+ * (dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out[, value]) forwarded from
+ * the params wrapper. Face-looping is driven by VectorMode::RC, so the per-call
+ * ITERATIONS must be 8 (one face's worth of rows), matching the production
+ * addcmul_tile/addcdiv_tile/where compute APIs.
+ */
+template <
+    DstSync DST_SYNC_MODE,
+    bool DST_ACCUM_MODE,
+    SfpuType OPERATION,
+    bool APPROX_MODE,
+    bool is_fp32_dest_acc_en,
+    DataFormat MATH_FORMAT,
+    int ITERATIONS = 8>
+void call_ternary_sfpu_operation(
+    const std::uint32_t dst_index_in0 = 0,
+    const std::uint32_t dst_index_in1 = 1,
+    const std::uint32_t dst_index_in2 = 2,
+    const std::uint32_t dst_index_out = 0,
+    const std::uint32_t value         = 0x40000000u /* 2.0f */,
+    ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
+{
+    if constexpr (OPERATION == SfpuType::where)
+    {
+        SFPU_TERNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_where_,
+            (APPROX_MODE, MATH_FORMAT, ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_in2,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::addcmul)
+    {
+        SFPU_TERNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_addcmul,
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_in2,
+            dst_index_out,
+            vector_mode,
+            value);
+    }
+    else if constexpr (OPERATION == SfpuType::addcdiv)
+    {
+        SFPU_TERNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_addcdiv,
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_in2,
+            dst_index_out,
+            vector_mode,
+            value);
+    }
+    else
+    {
+        LLK_ASSERT(false, "Unsupported ternary operation");
     }
 }
 

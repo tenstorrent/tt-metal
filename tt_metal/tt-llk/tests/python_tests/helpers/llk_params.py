@@ -176,6 +176,12 @@ class MathOperation(Enum):
     SfpuWhere = OpSpec("WHERE", MathOpType.SFPU_TERNARY)
     # Alias maintained for backward compatibility with older test cases
     TTNNWhere = SfpuWhere
+    # cpp_enum_value must exactly match the SfpuType enumerator name so that
+    # SFPU_TERNARY_OPERATION = SfpuType::{value} resolves in the C++ dispatch.
+    # addcmul: odst = idst0 + (value * idst1 * idst2)
+    # addcdiv: odst = idst0 + (value * idst1 / idst2)
+    SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
+    SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
 
     # =============================================================================
     # REDUCE OPERATIONS
@@ -218,6 +224,11 @@ class MathOperation(Enum):
         return cls._get_operations_by_type(MathOpType.SFPU_BINARY)
 
     @classmethod
+    def get_sfpu_ternary_operations(cls):
+        """Get all SFPU ternary operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_TERNARY)
+
+    @classmethod
     def get_reduce_operations(cls):
         """Get all reduce operations."""
         return cls._get_operations_by_type(MathOpType.REDUCE)
@@ -225,6 +236,7 @@ class MathOperation(Enum):
 
 SFPU_UNARY_OPERATIONS = MathOperation.get_sfpu_unary_operations()
 SFPU_BINARY_OPERATIONS = MathOperation.get_sfpu_binary_operations()
+SFPU_TERNARY_OPERATIONS = MathOperation.get_sfpu_ternary_operations()
 FPU_BINARY_OPERATIONS = MathOperation.get_fpu_binary_operations()
 REDUCE_OPERATIONS = MathOperation.get_reduce_operations()
 

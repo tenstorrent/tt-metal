@@ -216,6 +216,35 @@ class MATH_OP(TemplateParameter):
 
 
 @dataclass
+class SFPU_TERNARY_OP(TemplateParameter):
+    """Select the ternary SFPU op at compile time.
+
+    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
+    ``sfpu_operations.h``. ``mathop.cpp_enum_value`` must match the
+    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
+    """
+
+    mathop: MathOperation = None
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.mathop.cpp_enum_value};"
+
+
+@dataclass
+class SFPU_TERNARY_SCALAR(TemplateParameter):
+    """Scalar multiplier for addcmul/addcdiv, passed as a raw fp32 bit pattern.
+
+    The ternary addc kernels take a ``std::uint32_t value`` reinterpreted as float in
+    the SFPU. Emit the bit pattern so the C++ and torch golden agree exactly.
+    """
+
+    value_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.value_bits}u;"
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 

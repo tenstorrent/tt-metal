@@ -3808,3 +3808,44 @@ class WhereGolden:
         cond = operand1.flatten().to(torch.float32)
         mask = cond != 0.0
         return torch.where(mask, true_value.flatten(), false_value.flatten())
+
+
+@register_golden
+class TernarySFPUGolden:
+    """Golden for the ternary addc SFPU kernels (addcmul / addcdiv).
+
+    Both operate element-wise on three same-shaped operands (a, b, c) and a
+    scalar constant, so — like where — the result at each position depends only
+    on the same-position inputs. No tilize is needed: the kernel copies each
+    input tile into a Dest tile (layout-preserving) and the SFPU processes rows
+    in place, so a row-major element-wise reference matches the packed result.
+
+        addcmul: out = a + (value * b * c)
+        addcdiv: out = a + (value * b / c)
+    """
+
+    def __call__(
+        self,
+        operation: MathOperation,
+        operand_a,
+        operand_b,
+        operand_c,
+        value_bits: int,
+        data_format: DataFormat,
+    ):
+        # value is passed to the kernel as a raw fp32 bit pattern; decode it the
+        # same way (Converter::as_float / SFPLOADI) so the reference agrees.
+        value = struct.unpack("<f", struct.pack("<I", value_bits & 0xFFFFFFFF))[0]
+
+        a = operand_a.flatten().to(torch.float32)
+        b = operand_b.flatten().to(torch.float32)
+        c = operand_c.flatten().to(torch.float32)
+
+        if operation == MathOperation.SfpuAddcmul:
+            result = a + (value * b * c)
+        elif operation == MathOperation.SfpuAddcdiv:
+            result = a + (value * b / c)
+        else:
+            raise ValueError(f"Unsupported ternary SFPU operation: {operation}")
+
+        return result.to(format_dict[data_format]).flatten()
