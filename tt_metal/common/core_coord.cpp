@@ -167,6 +167,38 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
 CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords) {
+    // Fast path: a list of cores that fills a single solid rectangle (the common case — a full worker
+    // grid) merges to exactly one CoreRange. Detect that in O(N) and emit the range directly, skipping
+    // merge_ranges (which allocates a 2D grid and churns std::sets) that otherwise runs every dispatch.
+    if (!core_coords.empty()) {
+        size_t min_x = std::numeric_limits<size_t>::max(), min_y = std::numeric_limits<size_t>::max();
+        size_t max_x = 0, max_y = 0;
+        for (const auto& c : core_coords) {
+            min_x = std::min(min_x, c.x);
+            max_x = std::max(max_x, c.x);
+            min_y = std::min(min_y, c.y);
+            max_y = std::max(max_y, c.y);
+        }
+        const size_t w = max_x - min_x + 1, h = max_y - min_y + 1;
+        if (w * h == core_coords.size()) {
+            // count == bounding-box area; confirm no duplicates (a dup would mean a hole, not a solid
+            // rect) with a flat bitset over the bbox. If solid, the merge result is a single range.
+            std::vector<bool> seen(core_coords.size(), false);
+            bool solid = true;
+            for (const auto& c : core_coords) {
+                const size_t idx = (c.y - min_y) * w + (c.x - min_x);
+                if (seen[idx]) {
+                    solid = false;
+                    break;
+                }
+                seen[idx] = true;
+            }
+            if (solid) {
+                this->ranges_ = {CoreRange(CoreCoord(min_x, min_y), CoreCoord(max_x, max_y))};
+                return;
+            }
+        }
+    }
     std::vector<CoreRange> core_ranges;
     core_ranges.reserve(core_coords.size());
     for (const auto& core_coord : core_coords) {
