@@ -7,14 +7,14 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     const tt::CBIndex input_cb = tt::CBIndex::c_0;
     const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
 
-    CircularBuffer input_cb_obj(input_cb);
-    CircularBuffer final_output_cb_obj(final_output_cb);
+    DataflowBuffer input_cb_obj(input_cb);
+    DataflowBuffer final_output_cb_obj(final_output_cb);
 
     const int one_tile = 1;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);

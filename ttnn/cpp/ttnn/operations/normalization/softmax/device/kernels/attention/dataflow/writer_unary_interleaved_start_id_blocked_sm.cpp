@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "../../../../../../kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -29,8 +29,8 @@ void kernel_main() {
     // const uint32_t num_datum_padded = get_arg_val<uint32_t>(5);
 
     Noc noc;
-    CircularBuffer cb_id_out0_obj(cb_id_out0);
-    CircularBuffer cb_id_mask_obj(cb_id_mask);
+    DataflowBuffer cb_id_out0_obj(cb_id_out0);
+    DataflowBuffer cb_id_mask_obj(cb_id_mask);
 
     // Adds -inf padding. Note: the value is the uint16 representation of bfloat16's -inf
     constexpr uint16_t mask_val = 0xFF80;

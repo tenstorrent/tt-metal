@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -23,9 +23,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    CircularBuffer cb_in0(tt::CBIndex::c_0);
+    DataflowBuffer cb_in0(tt::CBIndex::c_0);
 
-    uint32_t input_tile_bytes = get_tile_size(cb_in0.get_cb_id());
+    uint32_t input_tile_bytes = get_tile_size(cb_in0.get_id());
     const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr);
 
     uint32_t read_tile_id_temp = (dim == 0) ? (start_id) : (start_id / HtWt * CHtWt) + (start_id % HtWt);

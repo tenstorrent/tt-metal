@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -17,7 +17,7 @@
  */
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // TODO: investigate moving to compile time (binary size is at risk)
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(1);
     CoreLocalMem<volatile uint32_t> ptr(cb.get_write_ptr());
     uint16_t wt_offset = wt << 5;
@@ -70,9 +70,9 @@ void kernel_main() {
     const auto s2 = TensorAccessor(s2_args, expert_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_topk(cb_topk_mask);
-    CircularBuffer cb_expert(cb_expert_mask);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_topk(cb_topk_mask);
+    DataflowBuffer cb_expert(cb_expert_mask);
 
     // Load all Wt expert mask tiles once, in a single burst, before the input stream loop.
     // The expert mask row is identical for every input row, so it is read once and the

@@ -12,7 +12,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -48,9 +48,9 @@ void kernel_main() {
     const auto src_a = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_inp_buf(cb_inp);
-    CircularBuffer cb_out_buf(cb_out);
-    CircularBuffer cb_x2_merge_buf(cb_x2_merge);
+    DataflowBuffer cb_inp_buf(cb_inp);
+    DataflowBuffer cb_out_buf(cb_out);
+    DataflowBuffer cb_x2_merge_buf(cb_x2_merge);
     Semaphore<> reducer_sem(reducer_semaphore_id);
 
 #if FUSE_PRE_ADD
@@ -59,7 +59,7 @@ void kernel_main() {
     const uint32_t src1_tile_bytes = get_tile_size(cb_res);
     constexpr auto res_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto src_b = TensorAccessor(res_args, res_addr);
-    CircularBuffer cb_res_buf(cb_res);
+    DataflowBuffer cb_res_buf(cb_res);
 #endif
 
     // Generate constant tiles for reduce scalar
@@ -118,7 +118,7 @@ void kernel_main() {
 
     UnicastEndpoint reduce_ep;
     noc.async_write(
-        use<CircularBuffer::AddrSelector::READ_PTR>(cb_out_buf),
+        cb_out_buf,
         reduce_ep,
         o_write_size,
         {.offset_bytes = 0},

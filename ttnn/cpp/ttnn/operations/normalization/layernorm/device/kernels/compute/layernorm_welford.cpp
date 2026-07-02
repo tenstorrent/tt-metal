@@ -16,7 +16,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace kutil = norm::kernel_util;
 namespace generic = kutil::generic;
@@ -48,20 +48,20 @@ void kernel_main() {
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = get_named_compile_time_arg_val("cb_fusion");            // stream gamma/beta
     constexpr auto cb_reciprocals = get_named_compile_time_arg_val("cb_reciprocals");  // Pre-computed reciprocals
-    CircularBuffer cb_eps_obj(cb_eps);
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_inb_obj(cb_inb);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_xmm_obj(cb_xmm);
-    CircularBuffer cb_ex_obj(cb_ex);
-    CircularBuffer cb_ex2_obj(cb_ex2);
-    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
-    CircularBuffer cb_fusion_obj(cb_fusion);
+    DataflowBuffer cb_eps_obj(cb_eps);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_inb_obj(cb_inb);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_beta_obj(cb_beta);
+    DataflowBuffer cb_xmm_obj(cb_xmm);
+    DataflowBuffer cb_ex_obj(cb_ex);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer cb_ex2pe_obj(cb_ex2pe);
+    DataflowBuffer cb_fusion_obj(cb_fusion);
 
     constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-    CircularBuffer cb_im_or_out_obj(cb_im_or_out);
+    DataflowBuffer cb_im_or_out_obj(cb_im_or_out);
 
     //  Either in or in + b if doing fused pre-add
     constexpr auto cb_x = []() -> auto {
@@ -71,7 +71,7 @@ void kernel_main() {
             return cb_in;
         }
     }();
-    CircularBuffer cb_x_obj(cb_x);
+    DataflowBuffer cb_x_obj(cb_x);
 
     // Welford-fp32 alias of cb_x. Shares SRAM with cb_x but has its own buffer index
     // configured with UnpackToDestFp32. Welford's transpose_tile reads
@@ -79,7 +79,7 @@ void kernel_main() {
     // cb_x via SrcA. When welford_fp32_alias is false, cb_x_welford == cb_x.
     constexpr auto cb_x_welford = get_named_compile_time_arg_val("cb_x_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    CircularBuffer cb_x_welford_obj(cb_x_welford);
+    DataflowBuffer cb_x_welford_obj(cb_x_welford);
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
@@ -364,7 +364,7 @@ void kernel_main() {
                 }
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
-                CircularBuffer cb_outg_obj(cb_outg);
+                DataflowBuffer cb_outg_obj(cb_outg);
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_gamma_obj.wait_front(
                     block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht

@@ -53,10 +53,10 @@ void kernel_main() {
     constexpr uint32_t cb_out_resharded = get_named_compile_time_arg_val("cb_out_resharded");
 
     Noc noc;
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_beta_obj(cb_beta);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_out_resharded_obj(cb_out_resharded);
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 

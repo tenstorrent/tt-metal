@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
@@ -30,8 +30,8 @@ void kernel_main() {
     const auto user_ids_tensor_dram = TensorAccessor(user_ids_tensor_accessor_args, user_ids_tensor_buffer_addr);
 
     Noc noc;
-    CircularBuffer user_ids_cb(user_ids_cb_index);
-    CircularBuffer kernel_communication_cb(kernel_communication_cb_index);
+    DataflowBuffer user_ids_cb(user_ids_cb_index);
+    DataflowBuffer kernel_communication_cb(kernel_communication_cb_index);
 
     // Read user_id from circular buffer
     user_ids_cb.reserve_back(one_tile);

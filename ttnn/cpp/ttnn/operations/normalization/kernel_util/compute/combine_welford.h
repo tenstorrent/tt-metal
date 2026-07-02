@@ -19,7 +19,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/reg_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 namespace norm::kernel_util::compute {
 /**
@@ -46,8 +46,8 @@ struct RSqrtPolicy {
  */
 template <typename NextSetSizeFn>
 inline void combine_welford_partials(
-    CircularBuffer& cb_partials,
-    CircularBuffer& cb_combined,
+    DataflowBuffer& cb_partials,
+    DataflowBuffer& cb_combined,
     uint32_t num_sets,
     NextSetSizeFn&& next_set_size_fn,
     RSqrtPolicy rsqrt_policy = RSqrtPolicy{}) {
@@ -62,8 +62,8 @@ inline void combine_welford_partials(
     constexpr uint32_t mean_cb_idx = 0;
     constexpr uint32_t var_cb_idx = 1;
 
-    reconfig_data_format(cb_partials.get_cb_id(), cb_partials.get_cb_id());
-    pack_reconfig_data_format(cb_combined.get_cb_id());
+    reconfig_data_format(cb_partials.get_id(), cb_partials.get_id());
+    pack_reconfig_data_format(cb_combined.get_id());
     tile_regs_acquire();
 
     // Make sure that the registers are zeroed out
@@ -84,8 +84,8 @@ inline void combine_welford_partials(
         const float n_b_norm = static_cast<float>(n_b) / (n_a + n_b);
 
         // Copy x_b to dst1
-        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
-        copy_tile(cb_partials.get_cb_id(), mean_cb_idx, tmp_dst1);
+        copy_tile_to_dst_init_short(cb_partials.get_id());
+        copy_tile(cb_partials.get_id(), mean_cb_idx, tmp_dst1);
 
         // Compute delta = x_b - x_a, store in dst0
         sub_binary_tile_init();
@@ -116,8 +116,8 @@ inline void combine_welford_partials(
         add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
         // Copy var_b into dst0
-        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
-        copy_tile(cb_partials.get_cb_id(), var_cb_idx, tmp_dst0);
+        copy_tile_to_dst_init_short(cb_partials.get_id());
+        copy_tile(cb_partials.get_id(), var_cb_idx, tmp_dst0);
 
         // Multiply var_b by n_b to get M2_b, store in dst0
         binop_with_scalar_tile_init();
@@ -150,8 +150,8 @@ inline void combine_welford_partials(
     tile_regs_commit();
     cb_combined.reserve_back(2);
     tile_regs_wait();
-    pack_tile(mean_acc_dst, cb_combined.get_cb_id());
-    pack_tile(m2_acc_dst, cb_combined.get_cb_id());
+    pack_tile(mean_acc_dst, cb_combined.get_id());
+    pack_tile(m2_acc_dst, cb_combined.get_id());
     tile_regs_release();
 }
 

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void process_and_sort_tiles(
     uint32_t input_cb_index,
@@ -15,10 +15,10 @@ void process_and_sort_tiles(
     bool switch_dir,
     bool& ascending,
     int end_phase) {
-    CircularBuffer input_cb(input_cb_index);
-    CircularBuffer index_cb(index_cb_index);
-    CircularBuffer input_transposed_cb(input_transposed_cb_index);
-    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+    DataflowBuffer input_cb(input_cb_index);
+    DataflowBuffer index_cb(index_cb_index);
+    DataflowBuffer input_transposed_cb(input_transposed_cb_index);
+    DataflowBuffer index_transposed_cb(index_transposed_cb_index);
 
     input_transposed_cb.reserve_back(Wt);
     index_transposed_cb.reserve_back(Wt);
@@ -207,8 +207,8 @@ void process_iteration(
     uint32_t logk,
     int& seq_per_2tiles,
     bool largest_param) {
-    CircularBuffer input_transposed_cb(input_transposed_cb_index);
-    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+    DataflowBuffer input_transposed_cb(input_transposed_cb_index);
+    DataflowBuffer index_transposed_cb(index_transposed_cb_index);
 
     input_transposed_cb.wait_front(Wt);
     index_transposed_cb.wait_front(Wt);
@@ -289,8 +289,8 @@ void process_iteration(
 }
 
 void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Kt, uint32_t Wt) {
-    CircularBuffer transposed_cb(transposed_cb_index);
-    CircularBuffer dest_cb(dest_cb_index);
+    DataflowBuffer transposed_cb(transposed_cb_index);
+    DataflowBuffer dest_cb(dest_cb_index);
 
     reconfig_data_format_srca(transposed_cb_index);
     transpose_init(transposed_cb_index);

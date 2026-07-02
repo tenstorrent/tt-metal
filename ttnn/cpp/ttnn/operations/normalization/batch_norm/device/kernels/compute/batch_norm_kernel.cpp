@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void batchnorm_bcast_tiles(
     uint32_t cb_bcast,
@@ -31,16 +31,16 @@ ALWI void batchnorm_bcast_tiles(
     auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
     auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
 
-    CircularBuffer cb_bcast_obj(cb_bcast);
-    CircularBuffer cb_other_obj(cb_other);
-    CircularBuffer cb_batch_var_obj(cb_batch_var);
-    CircularBuffer cb_den_obj(cb_den);
-    CircularBuffer cb_weight_obj(cb_weight);
-    CircularBuffer cb_bias_obj(cb_bias);
-    CircularBuffer cb_tmp_1_obj(cb_tmp_1);
-    CircularBuffer cb_output_0_obj(cb_output_0);
-    CircularBuffer cb_affine_or_out_obj(cb_affine_or_out);
-    CircularBuffer cb_scaled_output_obj(cb_scaled_output);
+    DataflowBuffer cb_bcast_obj(cb_bcast);
+    DataflowBuffer cb_other_obj(cb_other);
+    DataflowBuffer cb_batch_var_obj(cb_batch_var);
+    DataflowBuffer cb_den_obj(cb_den);
+    DataflowBuffer cb_weight_obj(cb_weight);
+    DataflowBuffer cb_bias_obj(cb_bias);
+    DataflowBuffer cb_tmp_1_obj(cb_tmp_1);
+    DataflowBuffer cb_output_0_obj(cb_output_0);
+    DataflowBuffer cb_affine_or_out_obj(cb_affine_or_out);
+    DataflowBuffer cb_scaled_output_obj(cb_scaled_output);
 
     // 1/(sqrt(batch_var + eps))
     cb_den_obj.reserve_back(onetile);
@@ -166,7 +166,7 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     constexpr uint32_t onetile = 1;
-    CircularBuffer cb_eps_obj(cb_eps);
+    DataflowBuffer cb_eps_obj(cb_eps);
     cb_eps_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {

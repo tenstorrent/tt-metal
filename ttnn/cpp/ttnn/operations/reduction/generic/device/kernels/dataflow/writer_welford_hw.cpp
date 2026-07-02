@@ -23,7 +23,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/numeric/bfloat16.h"
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
@@ -63,9 +63,9 @@ void kernel_main() {
     const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
 
     Noc noc;
-    CircularBuffer cb_partial_obj(cb_partial);
-    CircularBuffer cb_combined_obj(cb_combined);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_partial_obj(cb_partial);
+    DataflowBuffer cb_combined_obj(cb_combined);
+    DataflowBuffer cb_out_obj(cb_out);
 
     const auto tensor_out = TensorAccessor(dst_args, dst_addr);
 

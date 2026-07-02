@@ -8,7 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "api/debug/dprint.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -49,8 +49,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t cb_id_in2 = get_named_compile_time_arg_val("cb_in2");
 
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in2(cb_id_in2);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in2(cb_id_in2);
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;

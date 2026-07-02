@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 #include "../accumulation_common.hpp"
@@ -30,7 +30,7 @@ void kernel_main() {
     const auto output_addrg = TensorAccessor(output_addrg_args, output_base_addr);
 
     Noc noc;
-    CircularBuffer cb_out_obj(CB_OUT);
+    DataflowBuffer cb_out_obj(CB_OUT);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {

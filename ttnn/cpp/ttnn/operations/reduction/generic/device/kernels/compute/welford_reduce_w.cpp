@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
@@ -60,9 +60,9 @@ void kernel_main() {
     // and transpose operation can't take data from the DST register).
     constexpr auto cb_var = tt::CBIndex::c_19;
 
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_var_obj(cb_var);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_var_obj(cb_var);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:

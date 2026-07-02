@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -18,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 
     Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
 
     reduce_sender_sem.set(INVALID);
     cb_ex_global_obj.reserve_back(stats_tiles * block_h);

@@ -12,7 +12,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -123,7 +123,7 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(cb_id_in0);
     Semaphore<> sender_sem(get_compile_time_arg_val(15));
     Semaphore<> receiver_sem(get_compile_time_arg_val(16));
 
@@ -139,7 +139,7 @@ void kernel_main() {
     if constexpr (extract_shard_sub_blocks) {
         constexpr uint32_t cb_id_in2 =
             get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
-        CircularBuffer cb_in2(cb_id_in2);
+        DataflowBuffer cb_in2(cb_id_in2);
         noc_shard_read_start_addr = cb_in2.get_read_ptr();
     }
 
@@ -149,7 +149,7 @@ void kernel_main() {
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
-    CircularBuffer cb_sparsity(cb_id_sparsity);
+    DataflowBuffer cb_sparsity(cb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST

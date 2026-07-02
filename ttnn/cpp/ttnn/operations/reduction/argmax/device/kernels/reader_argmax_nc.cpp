@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /**
  * Reader kernel for register-based argmax over a non-HW dim (NC-style).
@@ -46,7 +46,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(input_tensor_args, input_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_in0);
+    DataflowBuffer cb(cb_in0);
     const uint32_t tile_bytes = get_tile_size(cb_in0);
 
     for (uint32_t out_i = 0; out_i < num_output_tiles; ++out_i) {

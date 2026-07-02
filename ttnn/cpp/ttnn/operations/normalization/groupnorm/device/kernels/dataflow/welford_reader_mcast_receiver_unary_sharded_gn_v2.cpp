@@ -7,7 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -42,12 +42,12 @@ void kernel_main() {
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
-    CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    CircularBuffer cb_ex_global(cb_ex_global_id);
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_repack(cb_repack_id);
-    CircularBuffer cb_repack_out(cb_repack_out_id);
-    CircularBuffer cb_out0(cb_out0_id);
+    DataflowBuffer cb_ex_partial(cb_ex_partial_id);
+    DataflowBuffer cb_ex_global(cb_ex_global_id);
+    DataflowBuffer cb_in0(cb_in0_id);
+    DataflowBuffer cb_repack(cb_repack_id);
+    DataflowBuffer cb_repack_out(cb_repack_out_id);
+    DataflowBuffer cb_out0(cb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
 

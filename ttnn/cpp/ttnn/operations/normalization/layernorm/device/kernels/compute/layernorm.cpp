@@ -24,7 +24,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "layernorm_compute_utils.h"
 
 namespace generic = norm::kernel_util::generic;
@@ -57,28 +57,28 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
 #endif
-    CircularBuffer cb_xmm(cb_xmm_id);
+    DataflowBuffer cb_xmm(cb_xmm_id);
     constexpr auto cb_ex_id = get_named_compile_time_arg_val("cb_ex");          // E[x]
     constexpr auto cb_ex2_id = get_named_compile_time_arg_val("cb_ex2");        // E[(x-E[x])^2]
     constexpr auto cb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");      // xmm^2
     constexpr auto cb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");    // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion_id = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
-    CircularBuffer cb_eps(cb_eps_id);
-    CircularBuffer cb_in(cb_in_id);
-    CircularBuffer cb_inb(cb_inb_id);
-    CircularBuffer cb_out(cb_out_id);
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_ex(cb_ex_id);
-    CircularBuffer cb_ex2(cb_ex2_id);
-    CircularBuffer cb_xmm2(cb_xmm2_id);
-    CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    CircularBuffer cb_fusion(cb_fusion_id);
-    CircularBuffer cb_scaler(cb_scaler_id);
+    DataflowBuffer cb_eps(cb_eps_id);
+    DataflowBuffer cb_in(cb_in_id);
+    DataflowBuffer cb_inb(cb_inb_id);
+    DataflowBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_ex(cb_ex_id);
+    DataflowBuffer cb_ex2(cb_ex2_id);
+    DataflowBuffer cb_xmm2(cb_xmm2_id);
+    DataflowBuffer cb_ex2pe(cb_ex2pe_id);
+    DataflowBuffer cb_fusion(cb_fusion_id);
+    DataflowBuffer cb_scaler(cb_scaler_id);
 
     constexpr auto cb_in_rm_id =
         get_named_compile_time_arg_val("cb_in_rm");  // input row-major (if row-major input, otherwise unused)
-    CircularBuffer cb_in_rm(cb_in_rm_id);
+    DataflowBuffer cb_in_rm(cb_in_rm_id);
 
     constexpr int onetile = 1;
     constexpr int dst0 = 0;
@@ -94,7 +94,7 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_x_id = cb_in_id;
 #endif
-    CircularBuffer cb_x(cb_x_id);
+    DataflowBuffer cb_x(cb_x_id);
 
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in_rm_id, cb_in_rm_id, cb_in_id);
@@ -109,7 +109,7 @@ void kernel_main() {
     cb_eps.wait_front(1);  // comes from the reader
 
     constexpr int cb_im_or_out_id = (do_gamma | do_beta) ? cb_fusion_id : cb_out_id;
-    CircularBuffer cb_im_or_out(cb_im_or_out_id);
+    DataflowBuffer cb_im_or_out(cb_im_or_out_id);
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
@@ -314,7 +314,7 @@ void kernel_main() {
                 }
                 reconfig_data_format_srcb(cb_ex2pe_id, cb_gamma_id);
                 uint32_t cb_outg_id = do_beta ? cb_fusion_id : cb_out_id;
-                CircularBuffer cb_outg(cb_outg_id);
+                DataflowBuffer cb_outg(cb_outg_id);
                 cb_gamma.wait_front(
                     block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
                 cb_fusion.wait_front(block.full_block_size());
@@ -391,7 +391,7 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
         constexpr auto cb_out_rm_id = get_named_compile_time_arg_val("cb_out_rm");
-        CircularBuffer cb_out_rm(cb_out_rm_id);
+        DataflowBuffer cb_out_rm(cb_out_rm_id);
         untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
 #endif
     }  // NCHt loop
@@ -400,5 +400,5 @@ void kernel_main() {
     // balance the CB. The reader pushes a second scaler tile only when the last column tile is
     // partial (W not a multiple of tile_width), matching row_wise_mean's wait count.
     constexpr uint32_t num_scaler_tiles = (W % tile_width > 0) ? 2 : 1;
-    CircularBuffer(cb_scaler).pop_front(num_scaler_tiles);
+    DataflowBuffer(cb_scaler).pop_front(num_scaler_tiles);
 }

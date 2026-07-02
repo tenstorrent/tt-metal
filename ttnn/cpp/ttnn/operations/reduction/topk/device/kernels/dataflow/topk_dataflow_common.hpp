@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 
 /**
@@ -29,7 +29,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     constexpr uint32_t one_tile = 1;
 
     // Reserve space
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(one_tile);
 
     // Writer config

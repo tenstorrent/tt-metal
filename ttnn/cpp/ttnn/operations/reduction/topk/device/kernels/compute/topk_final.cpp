@@ -8,7 +8,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "topk_common_funcs.hpp"
 
@@ -74,10 +74,10 @@ void kernel_main() {
     init_sfpu(input_cb_index, values_cb_index);
     ckernel::topk_tile_init();
 
-    CircularBuffer input_cb(input_cb_index);
-    CircularBuffer index_cb(index_cb_index);
-    CircularBuffer input_transposed_cb(input_transposed_cb_index);
-    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+    DataflowBuffer input_cb(input_cb_index);
+    DataflowBuffer index_cb(index_cb_index);
+    DataflowBuffer input_transposed_cb(input_transposed_cb_index);
+    DataflowBuffer index_transposed_cb(index_transposed_cb_index);
 
     // Aggregate results from all local cores for each height row
     for (uint32_t ht = 0; ht < Ht; ++ht) {

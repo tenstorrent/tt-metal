@@ -13,7 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
@@ -51,8 +51,8 @@ void kernel_main() {
     // Circular buffer where the final variance/std output tile is written.
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
