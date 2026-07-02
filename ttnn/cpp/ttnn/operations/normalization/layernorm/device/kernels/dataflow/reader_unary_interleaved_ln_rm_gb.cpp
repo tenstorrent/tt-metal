@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -77,8 +78,10 @@ void kernel_main() {
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
             /*compute_uses_reduce_tile=*/true>();
+        // Push count shared with the compute kernel's cb_scaler pop count (issue #48487).
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        if constexpr (partial_last_tile_cols > 0) {
+        constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tt::constants::TILE_WIDTH);
+        if constexpr (num_scaler_tiles == 2) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 cb_in_2,
                 ckernel::PoolType::SUM,
