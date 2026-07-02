@@ -377,7 +377,9 @@ Phase 2 (`resolve_dispatch_core_type()` + soc-based pool) and Phase 3b (DPRINT o
 |-------|---------|---------------|-----|--------|
 | **A. `dispatch_s` on Quasar 1CQ** | `TT_ASSERT prefetch.cpp:295 downstream_kernels_.size() == 2` during FD init | Default dispatch-engine FD (and any path using `DispatchQueryManager` reset) | Restore pre–Phase 2 guard: `dispatch_s_enabled_` requires `arch != QUASAR` for 1CQ (topology has no `DISPATCH_S` node) | ✅ Fixed (`dispatch_query_manager.cpp`) |
 | **B. Mesh id vs physical chip** | `Cannot access soc descriptor for 1 … Call initialize_device_driver(1)` during `ProgramImpl::compile` | **Both** paths when compiling via `MeshDevice` (e.g. `SingleDmL1Write`) | `validate_kernel_placement` must pass **`device->build_id()`** (physical chip), not **`device->id()`** (mesh id), to `resolve_dispatch_core_type()` / `is_service_core()` | ✅ Fixed (`program.cpp`) |
-| **C. Dispatch pool size (1 tile, 2 FD roles)** | `No more available dispatch cores on device 0 to assign` during `populate_fd_kernels` / device open | Default dispatch-engine FD (`TT_METAL_TENSIX_DISPATCH_CORES` **unset**) | One soc dispatch tile is correct; **1CQ** topology still consumes **two** pool pops (`PREFETCH_HD` + `DISPATCH_HD`). Mirror interim Tensix YAML (**duplicate** the same logical core in the pool) or teach `dispatch_core_manager` to reuse one tile without double-pop | ⏳ **Required for Phase 4b** |
+| **C. Dispatch pool size (1 tile, 2 FD roles)** | `No more available dispatch cores on device 0 to assign` during `populate_fd_kernels` / device open | Default dispatch-engine FD (`TT_METAL_TENSIX_DISPATCH_CORES` **unset**) | One soc dispatch tile is correct; **1CQ** topology still consumes **two** pool pops (`PREFETCH_HD` + `DISPATCH_HD`). Mirror interim Tensix YAML (**duplicate** the same logical core in the pool) in `expand_quasar_dispatch_engine_pool_for_fd_assignment()` | ✅ Fixed (`dispatch_engine_cores.cpp`) |
+| **E. FD program compile on dispatch-engine (`populate_dispatch_data`)** | `TT_ASSERT core_type == CoreType::ETH` during `DispatchTopology::compile_cq_programs()` | Default dispatch-engine FD after fix **C** | Dispatch HAL initially had `supports_receiving_multicast_cmds = false` but `get_core_kernel_stored_in_config_buffer(DISPATCH) = true` — wrong pairing. **Phase 4b DRAM parity** (unicast transport + direct per-DM kernel load) resolves this; see [Phase 4b — Dispatch-engine binary staging (DRAM parity)](#phase-4b--dispatch-engine-binary-staging-dram-parity) | ✅ Fixed (Phase 4b) |
+| **F. Dispatch HAL `fw_launch_addr_value` vs per-DM kernel slots** | **`TT_FATAL: Base FW address … should be below JAL max offset 524287`** at HAL init, **or** silent hang after DPRINT attach during device open (never reaches test body) | **Slow dispatch + default dispatch-engine path** (`TT_METAL_SLOW_DISPATCH_MODE=1`, env unset) | **`fw_launch_addr_value` is firmware boot, not cq-kernel link address.** Per-DM `fw_base_addr = MEM_DISPATCH_DMn_KERNEL_BASE` is correct for kernel staging, but **`fw_launch_addr_value` must be `generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE)` for every DM** — same as Tensix DM boot. Never `generate_risc_startup_addr(kernel_slot)` (slots are &gt;512 KiB) and never the kernel-slot absolute address. Firmware ELF is linked at **`MEM_DM_FIRMWARE_BASE`** via `main.ld` (`TYPE_FIRMWARE` + `COMPILE_FOR_DM`); `RiscFirmwareInitializer` loads it there regardless of per-DM `fw_base_addr`. Symptom without fix: **`wait_until_cores_done(..., RUN_MSG_INIT, dispatch_not_done_cores)`** never completes (`risc_firmware_initializer.cpp`). | ✅ Fixed (`qa_hal_tensix.cpp`) |
 | **D. DPRINT “all dispatch” on engine path** | Misleading success: FW prints from engine tile, then FD fails with **C** | Dispatch-engine path with `TT_METAL_DPRINT_CORES=dispatch` | DPRINT working proves **`dispatch:`** and Phase 3 FW are fine; FD failure is pool assignment, not missing soc cores | Documented (not a separate code fix) |
 
 **Regression test (2×3 emulator, fast dispatch):**
@@ -390,10 +392,24 @@ unset TT_METAL_SLOW_DISPATCH_MODE
 export TT_METAL_TENSIX_DISPATCH_CORES=1
 ./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
 
-# Default dispatch-engine path — blocked until fix **C**:
+# Default dispatch-engine path — requires fix **C** + Phase 4b DRAM parity (fix **E**):
 unset TT_METAL_TENSIX_DISPATCH_CORES
 ./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
 ```
+
+**Regression test (2×3 emulator, slow dispatch — default dispatch-engine path):**
+
+Slow dispatch still runs **`dispatch_dm.cc`** init via **`risc_firmware_initializer`** on every `CreateDevice` ( **`dispatch_kernel_initializer`** is skipped). Requires fix **F** in addition to Phase 4b HAL/mem-map changes:
+
+```bash
+export TT_METAL_SIMULATOR=/path/to/emu-quasar-2x3_DISPATCH/
+export TT_METAL_SLOW_DISPATCH_MODE=1
+unset TT_METAL_TENSIX_DISPATCH_CORES
+
+./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
+```
+
+Symptom before fix **F**: log ends at **`DPRINT Server attached device 0`** with no further output (hang in dispatch-engine FW init wait). **`log_info`** lines **`Waiting for dispatch-engine firmware init complete`** / **`Dispatch-engine firmware init complete`** in `risc_firmware_initializer.cpp` help localize stalls.
 
 ### A. `dispatch_s_enabled` on Quasar 1CQ
 
@@ -431,13 +447,11 @@ dispatch_s_enabled_ = (num_hw_cqs == 1 or resolved_dispatch_core_type == CoreTyp
 
 DPRINT output (`DE-DM*: DISPATCH DM0-FW: initialized`) confirms the soc **`dispatch:`** list and Phase 3 firmware are working; the failure is **pool sizing**, not missing hardware.
 
-**Required fix (pick one, prefer mirroring Tensix YAML):**
+**Fix (implemented — option 1):** In **`get_quasar_dispatch_cores_cached()`**, **`expand_quasar_dispatch_engine_pool_for_fd_assignment()`** duplicates the single soc dispatch-engine logical core to **`2 × num_hw_cqs`** entries when the soc lists exactly one core — matching interim YAML **`[[1,-1], [1,-1]]`** behavior.
 
-1. **Pool expansion (recommended, minimal):** In **`get_quasar_dispatch_cores_cached()`**, when the soc lists a **single** dispatch-engine core and FD needs multiple assignment slots, **duplicate** `(0,0)` in the returned vector — at minimum **`2 × num_hw_cqs`** entries for same-core 1CQ (prefetch + dispatch per CQ). Matches interim YAML behavior without changing assignment APIs.
+**Alternative (not taken):** In **`dispatch_core_manager`**, same-core reuse without a second pool pop (more invasive).
 
-2. **Same-core reuse (alternative):** In **`dispatch_core_manager`**, when Quasar + **`CoreType::DISPATCH`** + **`are_fd_kernels_on_same_core`**, **`dispatcher_core` / `completion_queue_writer_core`** reuse the core already assigned to **`prefetcher_core`** without a second pool pop (closer to hardware truth, more invasive).
-
-**Validation:** After fix **C**, **`SingleDmL1Write`** and full FD init must pass with **`TT_METAL_TENSIX_DISPATCH_CORES` unset** on `emu-quasar-2x3_DISPATCH`.
+**Validation:** After fix **C**, FD init proceeds past pool assignment; **`SingleDmL1Write`** still requires Phase 4b [DRAM parity](#phase-4b--dispatch-engine-binary-staging-dram-parity) (fix **E**).
 
 ### D. Preserving interim Tensix FD while landing Phase 4b
 
@@ -454,6 +468,30 @@ Requirements so **`TT_METAL_TENSIX_DISPATCH_CORES=1`** keeps working:
 | **FD topology** | **`DispatchMemMap(WORKER)`** + Tensix **`QuasarDataMovementConfig`** on interim path until Phase 4b replaces initializer wiring |
 
 Phase 4b must **not** remove or bypass the env override; default-path pool fix (**C**) must **not** break the YAML-backed pool when the env is set.
+
+### F. `fw_launch_addr_value` must not alias per-DM kernel slots (Phase 4b / slow dispatch)
+
+**Cause:** [Phase 4b DRAM parity](#phase-4b--dispatch-engine-binary-staging-dram-parity) sets **per-DM `HalJitBuildConfig.fw_base_addr = MEM_DISPATCH_DMn_KERNEL_BASE`** (~520 KiB into L1, after the scratch chain). It is easy to reuse that address (or `generate_risc_startup_addr` on it) for **`fw_launch_addr_value`**. That is wrong:
+
+| Field | Purpose on DISPATCH | Correct value |
+|-------|---------------------|---------------|
+| **`fw_base_addr`** | Per-DM **cq kernel** JIT link/load slot (DRAM parity) | **`MEM_DISPATCH_DMn_KERNEL_BASE`** |
+| **`fw_launch_addr_value`** | **Firmware reset / boot** (written by `RiscFirmwareInitializer` to `fw_launch_addr`) | **`generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE)`** for **all** DMs |
+
+**Why:**
+
+1. **`generate_risc_startup_addr()`** encodes a RISC-V **`JAL`** trampoline valid only when the target is **&lt; 524288** bytes (`jal_max_offset` in `hal.cpp`). Kernel slots start around **531984** on 2×3 — calling it on a slot address **`TT_FATAL`s at HAL init**.
+2. Even passing an **absolute kernel-slot address** as `fw_launch_addr_value` avoids the fatal but **firmware never boots**: dispatch **`dispatch_dm.cc`** firmware is **linked at `MEM_DM_FIRMWARE_BASE`** (`main.ld`: `TYPE_FIRMWARE` + `COMPILE_FOR_DM` → `TEXT_START MEM_DM_FIRMWARE_BASE`). Host load uses ELF VMAs via **`test_load_write_read_risc_binary`**, not `fw_base_addr`.
+3. All eight DMs share the same firmware image at **`MEM_DM_FIRMWARE_BASE`** (weakened target **`dispatch_dm0`**); **`hartid`** differentiates orchestrator vs subordinates inside **`dispatch_dm.cc`**.
+
+**Symptoms:**
+
+- **Fatal at `MetalContext` / HAL init:** `Base FW address 531984 should be below JAL max offset 524287` (backtrace through **`create_dispatch_mem_map()`** → **`generate_risc_startup_addr`**).
+- **Hang at device open (slow or fast dispatch):** last log line **`DPRINT Server attached device 0`**; test never prints. Blocked in **`initialize_and_launch_firmware`** → **`wait_until_cores_done(..., RUN_MSG_INIT, dispatch_not_done_cores)`** because cores never ran **`dispatch_dm.cc`** init handshake.
+
+**Fix (implemented):** In **`create_dispatch_mem_map()`**, keep per-DM **`fw_base_addr = MEM_DISPATCH_DMn_KERNEL_BASE`**, but set **`fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE)`** on every DM entry (same boot model as Tensix **`create_tensix_mem_map()`** DM rows).
+
+**Do not confuse with Blackhole DRAM:** BH **`DramKernel`** uses absolute **`fw_launch_addr_value = MEM_DRISC_FIRMWARE_BASE`** because DRISC has a **reset-PC register** path. Quasar dispatch DMs boot from **L1[0] + JAL**, like Tensix DMs.
 
 ---
 
@@ -523,6 +561,7 @@ SD tests must switch from Tensix worker placement to dispatch-engine placement:
 | `CreateKernel` config | `QuasarDataMovementConfig{num_threads_per_cluster=1}` with DM auto-assign by creation order | **`internal::CreateDispatchEngineKernel(...)`** with explicit **DM0** (prefetch) / **DM1** (dispatch) on `HalProgrammableCoreType::DISPATCH` |
 | Semaphores | `CreateSemaphore(..., CoreType::WORKER)` | `CreateSemaphore(..., CoreType::DISPATCH)` |
 | L1 memmap | `dispatch_mem_map(CoreType::WORKER)` | `dispatch_mem_map(CoreType::DISPATCH)` |
+| FD binary transport | Tensix **multicast** + config-ring staging | **Unicast** + **direct per-DM load** ([DRAM parity](#phase-4b--dispatch-engine-binary-staging-dram-parity)) |
 | `FD_CORE_TYPE` / `DISPATCH_KERNEL` | Tensix programmable index; `DISPATCH_KERNEL=1` on FD/cq kernels | `HalProgrammableCoreType::DISPATCH` index; **keep `DISPATCH_KERNEL=1`** on `cq_prefetch` / `cq_dispatch` (same define as WH/BH FD kernels — enables dispatch-kernel code paths in profiler/sanitize/device-print) |
 
 **Explicit DM pinning (confirmed):** use **`internal::CreateDispatchEngineKernel(device, core, dm_processor, ...)`** — do not rely on kernel creation order. SD tests and FD paths share this helper.
@@ -649,19 +688,148 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 - Port `test_prefetcher` / `test_dispatcher` SD paths: `cq_prefetch.cpp` + `cq_dispatch.cpp` on dispatch engine NOC0 `(0,2)`, DM0/DM1, core index 0
 - `CreateSemaphore` / memmap / coordinate lookup on `CoreType::DISPATCH`
 - Kernel placement validation allows dispatch-engine cores for cq kernels (`DISPATCH_KERNEL=1` unchanged)
-- **`DispatchEngineKernel::configure` must write binaries into the kernel-config ring buffer** via `llrt::write_binary_to_address(base_address + offsets[riscv_id])` — the same path as `DataMovementKernel` / `QuasarDataMovementKernel`. It must **not** use `test_load_write_read_risc_binary` (which loads to the JIT default address): SD `finalize_kernel_bins` places binaries in the kernel-config ring buffer and records `kernel_text_offset[]` accordingly, and `dispatch_dm.cc` jumps to `kernel_config_base + kernel_text_offset`. Loading to the wrong address makes the FW jump into empty/garbage memory after GO, so the kernels never complete and **`LaunchProgram` hangs** (no validation, no progress). *(Fixed during Phase 4a bringup.)*
+- **Phase 4a interim `DispatchEngineKernel::configure`:** initially used **`write_binary_to_address(base + offsets[riscv_id])`** into the kernel-config ring buffer so SD `LaunchProgram` matched `dispatch_dm.cc` (`kernel_config_base + kernel_text_offset`). That unblocked first SD bringup before per-DM load addresses existed. **Phase 4b supersedes this on the default dispatch-engine path** with [DRAM parity](#phase-4b--dispatch-engine-binary-staging-dram-parity) (`test_load_write_read_risc_binary` + absolute `kernel_text_offset` in FW). Interim Tensix path (`TT_METAL_TENSIX_DISPATCH_CORES=1`) is unchanged.
 - **`configure_static_tlbs` must map `CoreType::DISPATCH` cores** — SD `test_prefetcher` enqueues work by writing FetchQ slots through `get_static_tlb_window` on the prefetch physical core (dispatch engine `(0,2)` on 2×3). Extend `ll_api::configure_static_tlbs` in `tlb_config.cpp` to call `configure_tlb` for every `get_cores(DISPATCH, TRANSLATED)` entry, mirroring the existing TENSIX/ETH loops. Symptom without fix: `TLB window for core (0, 2) not found` (`tlb_manager.cpp`) in `SDPrefetchDRAMToL1TestFixture.TestTerminate`. *(Fixed during Phase 4a bringup.)*
 - **Recommended SD prefetcher bringup order:** `SDPrefetchDRAMToL1TestFixture.TestTerminate` (`use_exec_buf_disabled`) first, then `DRAMToL1PagedRead` same param variant; defer `SmokeTest`, `RandomTest`, `HostTest`, and `use_exec_buf_enabled` until the issue-queue path is stable
 - Confirm `test_dispatch` (dispatch_program) SD tests still pass with full Tensix compute grid
 
 ### Phase 4b — Full FD kernel integration
 
-- **`dispatch_kernel_initializer`:** Quasar path registers **`DispatchMemMap(CoreType::DISPATCH)`** (replaces today’s `DispatchMemMap(WORKER)`); compile/configure prefetch/dispatch execution kernels — WH/BH pattern
-- FDKernel processor assignment on dispatch-engine DMs (`configure_kernel_variant` → `CreateDispatchEngineKernel`)
-- Topology pool wiring via `dispatch_core_manager`
-- Remove Tensix-based Quasar dispatch YAML dependency for the **default** path only — keep YAML + **`TT_METAL_TENSIX_DISPATCH_CORES=1`** as interim fallback
-- **Dispatch pool for 1CQ same-core (fix **C**, required):** expand soc-based pool (duplicate synthetic `(0,0)` entries) **or** reuse one tile across prefetch + dispatch HD without double-pop — see [Bringup Regressions](#bringup-regressions-and-fixes-post-phase-23b)
-- **Regression gate:** `QuasarMeshDeviceSingleCardFixture.SingleDmL1Write` passes on 2×3 emulator **with and without** `TT_METAL_TENSIX_DISPATCH_CORES=1` after Phase 4b
+**Prerequisites:** bringup fixes **A–C, E–F** (see [Bringup Regressions](#bringup-regressions-and-fixes-post-phase-23b)); **C, E, F** implemented. [DRAM parity binary staging](#phase-4b--dispatch-engine-binary-staging-dram-parity) landed; **slow-dispatch `SingleDmL1Write`** passes on 2×3 emulator (default dispatch-engine path).
+
+- **`dispatch_kernel_initializer`:** Quasar default path registers **`DispatchMemMap(CoreType::DISPATCH)`** (not `WORKER`); compile/configure prefetch/dispatch execution kernels
+- **FDKernel:** `configure_kernel_variant` → **`CreateDispatchEngineKernel`** with explicit DM0/DM1 on `HalProgrammableCoreType::DISPATCH`
+- **DRAM parity (required):** dispatch-engine FD/SD use **unicast** program binary transfer and **direct per-DM kernel load** — same model as Blackhole **`CoreType::DRAM`**, not Tensix multicast + config-ring staging (see dedicated section below)
+- Topology pool wiring via `dispatch_core_manager`; remove Tensix YAML dependency for the **default** path only — keep YAML + **`TT_METAL_TENSIX_DISPATCH_CORES=1`** as interim fallback
+- **Regression gate (FD):** `QuasarMeshDeviceSingleCardFixture.SingleDmL1Write` passes on 2×3 emulator **with and without** `TT_METAL_TENSIX_DISPATCH_CORES=1`
+- **Regression gate (SD cq):** minimal slow-dispatch cq suite on dispatch-engine path (see [DRAM parity — SD regression gate](#sd-regression-gate))
+
+### Phase 4b — Dispatch-engine binary staging (DRAM parity)
+
+**Decision (confirmed):** On the **default dispatch-engine path** (`TT_METAL_TENSIX_DISPATCH_CORES` unset), Quasar dispatch-engine FD and SD cq kernels follow the **Blackhole DRAM** program-dispatch model — **not** the Tensix worker model (multicast + kernel-config ring binary packing).
+
+| Layer | Tensix / interim path | Dispatch-engine (DRAM parity) |
+|-------|----------------------|------------------------------|
+| **`supports_receiving_multicasts`** | `true` | **`false`** (unicast launch + binary writes) |
+| **`supports_cbs` / `supports_dfbs`** | `true` | **`true`** (cq kernels still need CB/DFB) |
+| **`get_core_kernel_stored_in_config_buffer(DISPATCH)`** | N/A (WORKER uses Tensix feature) | **`false`** via **`DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER`** |
+| **Binary staging** | Kernel-config ring at `MEM_MAP_END` | **Direct load** to per-DM kernel slot (`MEM_DISPATCH_DMn_KERNEL_BASE`) |
+| **`KERNEL_CONFIG` L1 region** | ~69 KiB ring (binary + RTA) | **RTA-only, 2 KiB** (like `MEM_DRISC_KERNEL_CONFIG_SIZE` on BH) |
+| **`kernel_text_offset` in launch msg** | Relative to `kernel_config_base` | **Absolute L1 address** (like `drisc.cc`) |
+| **FW jump** | `kernel_config_base + kernel_text_offset[i]` | **`kernel_text_offset[i]` only** |
+| **`DispatchEngineKernel::configure()`** | N/A on interim Tensix | **`test_load_write_read_risc_binary`** (like `DramKernel`) |
+| **`populate_dispatch_data` branch** | Multicast (Tensix) | **Unicast** — allow **`CoreType::DISPATCH`** (not ETH-only assert) |
+| **Firmware boot (`fw_launch_addr_value`)** | Tensix DM: JAL to **`MEM_DM_FIRMWARE_BASE`** | **Same** — independent of per-DM kernel slots (fix **F**) |
+
+**Interim Tensix path (`TT_METAL_TENSIX_DISPATCH_CORES=1`):** unchanged — still **`CoreType::WORKER`**, Tensix multicast + config ring, `QuasarDataMovementConfig` creation-order DM assign.
+
+#### 1. L1 memory map (`tt_metal/hw/inc/internal/tt-2xx/quasar/dev_mem_map.h`)
+
+Add **dispatch-tile-only** symbols at the end of the **reserved** L1 layout (after existing scratch chain, before user **`DEFAULT_UNRESERVED`** in dispatch HAL):
+
+```c
+#define MEM_DISPATCH_DM0_KERNEL_BASE  (aligned after MEM_LOGICAL_TO_VIRTUAL scratch chain)
+#define MEM_DISPATCH_DM1_KERNEL_BASE  (MEM_DISPATCH_DM0_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+// … DM2–DM7, each MEM_DM_KERNEL_SIZE (48 KiB)
+#define DISPATCH_MEM_MAP_END          (MEM_DISPATCH_DM7_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+```
+
+- **Eight slots × 48 KiB = 384 KiB** — one cq kernel text region per DM (v1 uses DM0 + DM1 only).
+- **`static_assert(DISPATCH_MEM_MAP_END <= MEM_L1_SIZE, …)`** in dev_mem_map or **`qa_hal_tensix_asserts`**.
+- Tensix worker tiles ignore these symbols; only **`dispatch_dm.cc`**, dispatch HAL, and host dispatch-engine paths reference them.
+
+#### 2. Dispatch HAL (`create_dispatch_mem_map()` in `qa_hal_tensix.cpp`)
+
+- **`supports_receiving_multicast_cmds = false`**
+- **`supports_cbs = true`**, **`supports_dfbs = true`** (unchanged capability flags)
+- **Per-DM `HalJitBuildConfig`:**
+  - **`fw_base_addr = MEM_DISPATCH_DMn_KERNEL_BASE`** for DM0–DM7 — **cq kernel** link/load slot only (not firmware)
+  - **`fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE)`** on **every** DM — **firmware boot** (see fix **F**; do **not** use kernel-slot address or `generate_risc_startup_addr` on slots &gt;512 KiB)
+- **`KERNEL_CONFIG` base:** remain at **`MEM_MAP_END`**; **size = 2 KiB** (`MEM_DISPATCH_KERNEL_CONFIG_SIZE`) — RTA/semaphore ring only; **no** kernel binary packing
+- **`DEFAULT_UNRESERVED` base:** recompute from **`DISPATCH_MEM_MAP_END`** (aligned), not `MEM_MAP_END + 69 KiB`
+- **`DEFAULT_UNRESERVED` size:** `MEM_L1_SIZE - DEFAULT_UNRESERVED_base` — must still satisfy **`DispatchMemMap`** cq L1 carve-out (prefetch Q, cmddat Q, dispatch CB, etc.). **Validate L1 budget before merge** (384 KiB kernel region + 2 KiB RTA ring + cq buffers ≤ 4 MiB).
+
+**`fw_base_addr` vs firmware link address:** Host **`HalJitBuildConfig.fw_base_addr`** on DISPATCH is the **intended cq-kernel L1 slot** for DRAM parity. Dispatch **firmware** link address comes from **`main.ld`** (`MEM_DM_FIRMWARE_BASE` for `TYPE_FIRMWARE`), independent of per-DM `fw_base_addr`. Only **`fw_launch_addr_value`** participates in firmware reset programming during **`RiscFirmwareInitializer::initialize_firmware(HalProgrammableCoreType::DISPATCH, …)`**.
+
+#### 3. `DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER` (`hal.hpp`, `qa_hal.cpp`)
+
+- Add enum value **`DISPATCH_KERNEL_CONFIG_BUFFER`**
+- Quasar: **`return false`** (binary staging is direct per-DM load, not config buffer)
+- **`get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType::DISPATCH)`** uses the new feature — **do not** alias `DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER`
+- WH/BH: unchanged
+
+#### 4. Host program dispatch
+
+| File | Change |
+|------|--------|
+| **`program.cpp`** `populate_dispatch_data` | Replace `TT_ASSERT(core_type == CoreType::ETH)` with **`CoreType::DISPATCH`** (v1 scope only; generalize to DRAM later if needed) |
+| **`program/dispatch.cpp`** | Unicast RTA/binary paths already keyed on `!get_supports_receiving_multicasts`; update stale “Ethernet only” comments |
+| **`finalize_kernel_bins`** | When config buffer **false**: `kernel_text_offset = binaries[i]->get_text_addr()` (absolute) — already implemented for DRAM |
+| **`DispatchEngineKernel::configure`** | **`test_load_write_read_risc_binary`** with `HalProgrammableCoreType::DISPATCH`, DM class, `riscv_id` |
+
+#### 5. Firmware (`dispatch_dm.cc`)
+
+Match **`drisc.cc`** jump semantics for user kernels:
+
+```cpp
+// Was: kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+kernel_lma = launch_msg->kernel_config.kernel_text_offset[index];  // absolute
+```
+
+- **Keep `kernel_config_base`** from `firmware_config_init()` for RTA/CB/semaphore/DFB offsets in launch message — only **kernel text address** becomes absolute.
+- Apply to **both** DM0 orchestration path and subordinate DM1–7 loop.
+
+#### 6. FD kernel wiring (already partially landed)
+
+- **`FDKernel::configure_kernel_variant`:** `CoreType::DISPATCH` → **`CreateDispatchEngineKernel`** (DM0 prefetch, DM1 dispatch)
+- **`dispatch_kernel_initializer` / `topology.cpp` / `fd_kernel.hpp`:** register **`DispatchMemMap(CoreType::DISPATCH)`**
+- **`MetalContext::dispatch_mem_map()`:** use **`resolve_dispatch_core_type()`** on Quasar (not `get_core_type_from_config` alone)
+- **Pool fix C:** `expand_quasar_dispatch_engine_pool_for_fd_assignment()` — duplicate synthetic core for 1CQ
+
+#### 7. Optional (include in Phase 4b implementation)
+
+- **Watcher / read-only boundary:** if reserved region grows past current **`MEM_MAP_END`**, extend **`MEM_MAP_READ_ONLY_END`** (or dispatch-specific watcher checks) so **`DISPATCH_MEM_MAP_END`** is covered — mirror how watcher treats reserved vs scratch on Tensix.
+- **`qa_hal_tensix_asserts` / static checks:** assert **`DISPATCH_MEM_MAP_END + minimum_unreserved ≤ MEM_L1_SIZE`** and minimum cq layout fits in remaining **`DEFAULT_UNRESERVED`** (catch L1 budget mistakes at compile time).
+
+#### SD regression gate
+
+Existing SD cq tests — no new test binaries required. Run with slow dispatch on **`emu-quasar-2x3_DISPATCH`**, **`TT_METAL_TENSIX_DISPATCH_CORES` unset**:
+
+```bash
+export TT_METAL_SIMULATOR=/path/to/emu-quasar-2x3_DISPATCH/
+unset TT_METAL_TENSIX_DISPATCH_CORES
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher --gtest_filter='*SlowDispatch*'
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher --gtest_filter='*SlowDispatch*'
+```
+
+**Minimal gate (fast feedback):**
+
+| Test | Why |
+|------|-----|
+| **`SDPrefetchDRAMToL1TestFixture.TestTerminate`** | FetchQ + static TLB on prefetch core `(0,2)` |
+| **`SDPrefetchDRAMToL1TestFixture.DRAMToL1PagedRead`** | Basic prefetch + dispatch SD path |
+| **`DispatchLinearWriteSDTestFixture.LinearWrite`** | Dispatcher SD smoke |
+
+Full `*SlowDispatch*` instantiations in `test_prefetcher.cpp` / `test_dispatcher.cpp` are the long-term gate (CI already runs them on WH/BH). SD fixtures use **`create_sd_cq_kernel()`** → **`CreateDispatchEngineKernel`** when `resolve_sd_cq_kernel_core_type() == DISPATCH`; skipped via **`sd_cq_kernel_tests_should_skip()`** when soc has no dispatch cores.
+
+#### FD regression gate
+
+```bash
+export TT_METAL_SIMULATOR=/path/to/emu-quasar-2x3_DISPATCH/
+
+# Fast dispatch
+unset TT_METAL_SLOW_DISPATCH_MODE
+unset TT_METAL_TENSIX_DISPATCH_CORES
+./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
+
+export TT_METAL_TENSIX_DISPATCH_CORES=1
+./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
+
+# Slow dispatch (default dispatch-engine — still loads dispatch_dm.cc; fix **F** required)
+export TT_METAL_SLOW_DISPATCH_MODE=1
+unset TT_METAL_TENSIX_DISPATCH_CORES
+./build/test/tt_metal/unit_tests_legacy --gtest_filter='QuasarMeshDeviceSingleCardFixture.SingleDmL1Write'
+```
 
 ### Phase 5 — Tooling and integration tests
 
@@ -682,8 +850,9 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | Coordinates | `llrt/tt_cluster.cpp`, `llrt/metal_soc_descriptor.{hpp,cpp}`, **`llrt/tlb_config.cpp`** (`configure_static_tlbs` for `CoreType::DISPATCH`) |
 | Device FW types | `hw/inc/internal/tt-2xx/quasar/core_config.h` (`ProgrammableCoreType::DISPATCH`) |
 | Type resolution | `dispatch_core_common.cpp`, `dispatch_core_manager.{hpp,cpp}`, `llrt/rtoptions.{hpp,cpp}` |
-| HAL | `hal_types.hpp`, **`qa_hal_dispatch.cpp`**, `qa_hal.cpp`, **`hal_2xx_common.cpp`**, `llrt/llrt.cpp` |
-| Dispatch FW | `hw/firmware/src/tt-2xx/dispatch_dm.cc` (new; based on `dm.cc`, TRISC removed) |
+| HAL | `hal_types.hpp`, **`qa_hal_dispatch.cpp`**, `qa_hal.cpp`, **`hal_2xx_common.cpp`**, `llrt/llrt.cpp`, **`qa_hal_tensix.cpp`** (`create_dispatch_mem_map`), **`qa_hal_tensix_asserts`** |
+| Dispatch FW | `hw/firmware/src/tt-2xx/dispatch_dm.cc` (new; based on `dm.cc`, TRISC removed); **Phase 4b:** absolute `kernel_text_offset` jump |
+| L1 map | **`hw/inc/internal/tt-2xx/quasar/dev_mem_map.h`** — `MEM_DISPATCH_DMn_KERNEL_BASE`, **`DISPATCH_MEM_MAP_END`**, **`MEM_DISPATCH_KERNEL_CONFIG_SIZE` (2 KiB)** |
 | FD | `fd_kernel.cpp`, `prefetch.cpp`, `dispatch.cpp`, `dispatch_mem_map.cpp`, `dispatch_settings.cpp` (DISPATCH core-type case), `topology.cpp`, `kernel.{hpp,cpp}` |
 | SD bringup tests | `tests/.../dispatch/common.h`, `test_prefetcher.cpp`, `test_dispatcher.cpp` |
 | Internal (required) | `tt_metal/api/internal/dispatch/dispatch_engine_cores.hpp` — **`CreateDispatchEngineKernel`**, coordinate helpers |
@@ -703,7 +872,7 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | **DM assignment (future)** | Full flexibility: multiple dispatch cores, multiple prefetcher/dispatcher kernels (e.g. per CQ), specialized blocks on other DMs; implementation must not hard-code v1 layout |
 | **SD bringup** | SD tests place `cq_prefetch.cpp` / `cq_dispatch.cpp` via **test/internal helpers only** — no public API for dispatch-engine locations |
 | **DMs per core** | 8 (DM0–DM7); all valid for FD |
-| **L1 / memory map** | **4 MiB** L1; reuse common Quasar **`dev_mem_map`** until a dispatch-specific difference is required |
+| **L1 / memory map** | **4 MiB** L1; shared Quasar **`dev_mem_map.h`** with **dispatch-tile extensions**: per-DM kernel slots (`MEM_DISPATCH_DMn_KERNEL_BASE`), **`DISPATCH_MEM_MAP_END`**, **2 KiB RTA-only `KERNEL_CONFIG`** — see [DRAM parity](#phase-4b--dispatch-engine-binary-staging-dram-parity) |
 | **Logical coordinates** | **No UMD logical dispatch grid**; tt-metal synthetic **`CoreCoord(index, 0)` → NOC0** only |
 | **Explicit DM pinning** | **`internal::CreateDispatchEngineKernel`** — DM0/DM1 explicit; no creation-order dependency |
 | **NOC coordinates (2×3)** | **`dispatch (0,2)`**, **`pcie (1,2)`** — aligned with Aether |
@@ -711,7 +880,10 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | **`dispatch_dm.cc` load** | **Every `CreateDevice`** on default dispatch-engine path via `risc_firmware_initializer` (slow + fast dispatch); required before Phase 4a SD `LaunchProgram` |
 | **DPRINT on dispatch engine** | **Phase 3b** — host DPrint server attaches to `CoreType::DISPATCH`; device-side buffers from Phase 3 HAL; end-to-end before Phase 4a debug |
 | **`dispatch_kernel_initializer`** | **Phase 4b only** — `DispatchMemMap(CoreType::DISPATCH)` + execution kernels; **skipped in slow dispatch / Phase 4a** (`!using_fast_dispatch()` early return) |
-| **`DispatchEngineKernel`** | Dedicated configure path (like `DramKernel`); used by SD, FDKernel, and `CreateDispatchEngineKernel`. **`configure` writes binaries into the kernel-config ring buffer** via `write_binary_to_address(base + offsets[riscv_id])` (same as `DataMovementKernel`), **not** `test_load_write_read_risc_binary` — otherwise SD `LaunchProgram` hangs (FW jumps to wrong L1 address). |
+| **`DispatchEngineKernel`** | **`CoreType::DISPATCH`** only. **Default dispatch-engine path (Phase 4b DRAM parity):** `configure` uses **`test_load_write_read_risc_binary`** to per-DM **`MEM_DISPATCH_DMn_KERNEL_BASE`**; FW jumps to **absolute** `kernel_text_offset`. **Interim Tensix (`TT_METAL_TENSIX_DISPATCH_CORES=1`):** unchanged WORKER path. Phase 4a used config-ring `write_binary_to_address` as a stopgap before per-DM bases existed. |
+| **FD binary model (dispatch engine)** | **DRAM parity** — unicast transport, **`DISPATCH_KERNEL_CONFIG_BUFFER = false`**, **`supports_receiving_multicast_cmds = false`**, **`supports_cbs/dfbs = true`**, per-DM direct kernel load, **2 KiB RTA-only `KERNEL_CONFIG`** |
+| **`HalJitBuildConfig` on DISPATCH (split roles)** | **`fw_base_addr`** = per-DM cq kernel slot (`MEM_DISPATCH_DMn_KERNEL_BASE`); **`fw_launch_addr_value`** = **`generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE)`** for firmware boot on all DMs — **never** kernel-slot address (fix **F**) |
+| **`DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER`** | New Quasar feature; **`false`** — DISPATCH does not stage kernel binaries in the config ring (unlike Tensix). RTA/semaphores still use the **`KERNEL_CONFIG`** L1 region. |
 | **Static TLB (dispatch engine)** | **`configure_static_tlbs`** maps `CoreType::DISPATCH` soc tiles (same as TENSIX/ETH) so `get_static_tlb_window` works for FetchQ writes on prefetch cores at NOC0 `(0,2)`; required for SD `test_prefetcher` and FD `system_memory_manager` |
 | **`kernel_config_base[]` index** | Dispatch-engine kernels use **`ProgrammableCoreType::DISPATCH`** slot (new enum index), not Tensix |
 | **`dispatch_engine_cores.hpp`** | **Required** internal header — coordinates, resolver helpers, `CreateDispatchEngineKernel` |
@@ -743,4 +915,4 @@ Implement **Phases 1 → 2 → 3 → 3b → 4a** as the **first runnable milesto
 4. **Phase 3b** — DPRINT host attach for **`CoreType::DISPATCH`** (FW + cq-kernel prints collectible before SD bringup)
 5. **Phase 4a** — SD `test_prefetcher` / `test_dispatcher` on dispatch engine `(0,2)`, DM0/DM1 (requires `dispatch_dm.cc` already loaded; no `dispatch_kernel_initializer`)
 
-**Phase 4b** wires full FD through `dispatch_core_manager` and **`dispatch_kernel_initializer`** (`DispatchMemMap(CoreType::DISPATCH)`). Complete **bringup regression fixes A–C** (see [Bringup Regressions](#bringup-regressions-and-fixes-post-phase-23b)) before declaring Phase 4b done. **`TT_METAL_TENSIX_DISPATCH_CORES=1`** always selects interim Tensix fallback from core descriptor YAML when set. Multi-CQ / multi-chip extensions follow the same core pool and DM model without public API changes.
+**Phase 4b** wires full FD through `dispatch_core_manager` and **`dispatch_kernel_initializer`** (`DispatchMemMap(CoreType::DISPATCH)`), and lands **[DRAM parity binary staging](#phase-4b--dispatch-engine-binary-staging-dram-parity)** (unicast FD transport, per-DM kernel bases, absolute FW jump, **2 KiB RTA-only `KERNEL_CONFIG`**, fix **F** firmware boot split). Complete **bringup regression fixes A–C, E–F** (see [Bringup Regressions](#bringup-regressions-and-fixes-post-phase-23b)). Regression: **`SingleDmL1Write`** (FD and slow dispatch, with/without env) + **SD cq minimal gate** (`TestTerminate`, `DRAMToL1PagedRead`, `LinearWrite`). **`TT_METAL_TENSIX_DISPATCH_CORES=1`** always selects interim Tensix fallback from core descriptor YAML when set. Multi-CQ / multi-chip extensions follow the same core pool and DM model without public API changes.

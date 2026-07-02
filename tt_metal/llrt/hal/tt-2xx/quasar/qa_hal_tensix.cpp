@@ -17,6 +17,7 @@ using namespace tt::tt_metal::quasar::tensix;
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
+#include "tt_align.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
@@ -298,7 +299,34 @@ dev_msgs::Factory create_tensix_dev_msgs_factory() { return tensix_dev_msgs::cre
 
 HalCoreInfoType create_dispatch_mem_map() {
     auto tensix_mem_map = create_tensix_mem_map();
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {tensix_mem_map.processor_classes()[0]};
+    uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+
+    static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
+        MEM_DISPATCH_DM0_KERNEL_BASE,
+        MEM_DISPATCH_DM1_KERNEL_BASE,
+        MEM_DISPATCH_DM2_KERNEL_BASE,
+        MEM_DISPATCH_DM3_KERNEL_BASE,
+        MEM_DISPATCH_DM4_KERNEL_BASE,
+        MEM_DISPATCH_DM5_KERNEL_BASE,
+        MEM_DISPATCH_DM6_KERNEL_BASE,
+        MEM_DISPATCH_DM7_KERNEL_BASE,
+    };
+    static_assert(std::size(dispatch_dm_kernel_bases) == NUM_DM_CORES);
+
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(1);
+    processor_classes[0].reserve(NUM_DM_CORES);
+    for (size_t dm = 0; dm < NUM_DM_CORES; ++dm) {
+        processor_classes[0].push_back({
+            .fw_base_addr = dispatch_dm_kernel_bases[dm],
+            .local_init_addr = UINT32_MAX,
+            .fw_launch_addr = 0x0,
+            // DM firmware is linked/loaded at MEM_DM_FIRMWARE_BASE (main.ld); per-DM fw_base_addr is the
+            // cq-kernel link/load slot only. Reset still boots via JAL from L1[0] into firmware.
+            .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+            .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+        });
+    }
+
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
         {{"DM0", "DM0"},
          {"DM1", "DM1"},
@@ -309,16 +337,15 @@ HalCoreInfoType create_dispatch_mem_map() {
          {"DM6", "DM6"},
          {"DM7", "DM7"}},
     };
+
     auto mem_map_bases = tensix_mem_map.mem_map_bases();
     auto mem_map_sizes = tensix_mem_map.mem_map_sizes();
-    // TENSIX leaves KERNEL_CONFIG size at 0 because its runtime-arg validation uses the hardcoded
-    // max_runtime_args constant. DISPATCH cores instead size runtime args from
-    // get_dev_size(DISPATCH, KERNEL_CONFIG), so populate it here with the real kernel-config region
-    // (the gap between the KERNEL_CONFIG base and DEFAULT_UNRESERVED base).
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
-        static_cast<uint32_t>(
-            mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] -
-            mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)]);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DISPATCH_KERNEL_CONFIG_SIZE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
+        tt::align(DISPATCH_MEM_MAP_END, max_alignment);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
+        MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
+
     return HalCoreInfoType(
         HalProgrammableCoreType::DISPATCH,
         CoreType::DISPATCH,
