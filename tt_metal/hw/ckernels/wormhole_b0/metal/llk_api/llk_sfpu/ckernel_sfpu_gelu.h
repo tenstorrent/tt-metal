@@ -312,17 +312,13 @@ inline void calculate_gelu() {
             sfpi::vFloat result = sfpi::vConst0;  // default 0 for x <= GELU_SAT
             v_if(x > GELU_SAT) {
                 sfpi::vFloat scaled = x * INV_SQRT2;
-                sfpi::vFloat threshold = 10.0f;
-                sfpi::vec_min_max(scaled, threshold);
+                scaled = sfpi::min(scaled, 10.0f);
                 sfpi::vFloat x2 = scaled * scaled;
                 sfpi::vFloat erf_n, erf_d;
                 piecewise_rational_eval_parity_numer_denom<16, 16>(
                     GELU_ERF_NUM, GELU_ERF_DEN, scaled, x2, erf_n, erf_d);
                 sfpi::vFloat erf_val = erf_n * sfpu_reciprocal<false>(erf_d);
-                sfpi::vFloat neg_one = sfpi::vConstNeg1;
-                sfpi::vFloat pos_one = sfpi::vConst1;
-                sfpi::vec_min_max(neg_one, erf_val);
-                sfpi::vec_min_max(erf_val, pos_one);
+                erf_val = sfpi::clamp(erf_val, -1.0f, 1.0f);
                 result = x * (0.5f + 0.5f * erf_val);
                 // Stuck-erff guard: when rational rounds erf to -1.0 inside computation zone,
                 // glibc/torch overestimates erfc → first stuck level = x * 2^-25.

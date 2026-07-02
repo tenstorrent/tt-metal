@@ -95,8 +95,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
 
     // For larger x, the continued fraction may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
-    sfpi::vFloat threshold_value = sfpi::vConst1;
-    sfpi::vec_min_max(result, threshold_value);
+    result = sfpi::min(result, 1.0f);
 
     // Preserve input sign, the SFPU multiply flushes negative zero to zero, but we want to preserve the sign.
     result = sfpi::copysgn(result, val);
@@ -125,8 +124,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
 
     // For larger x, the polynomial approximation may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
-    sfpi::vFloat threshold_value = sfpi::vConst1;
-    sfpi::vec_min_max(result, threshold_value);
+    result = sfpi::min(result, 1.0f);
 
     result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
 
