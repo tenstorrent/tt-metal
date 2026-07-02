@@ -134,8 +134,6 @@ public:
         return true;
     }
 
-    // TODO: Fix Eth Heartbeat Failures --> https://github.com/tenstorrent/tt-metal/issues/45740
-
     void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
         if (physical_mesh_config.has_value()) {
             initialize_and_validate_custom_physical_config(physical_mesh_config.value());
