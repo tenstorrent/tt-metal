@@ -15,6 +15,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from ..cache import cache_file
+
 
 class HunyuanTtMLP(LightweightModule):
     """
@@ -39,6 +41,7 @@ class HunyuanTtMLP(LightweightModule):
         state_dict: dict,
         prefix: str,
         weight_dtype=ttnn.bfloat16,
+        weight_cache_path=None,
     ):
         super().__init__()
         self.device = device
@@ -49,19 +52,21 @@ class HunyuanTtMLP(LightweightModule):
         self.inter2 = w_gu.shape[0]  # 2I
         self.inter = self.inter2 // 2  # I
 
-        self.w_gate_up = ttnn.from_torch(
+        self.w_gate_up = ttnn.as_tensor(
             w_gu.transpose(0, 1).contiguous(),  # [H, 2I]
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file(weight_cache_path, f"{prefix}.gate_and_up_proj.weight"),
         )
-        self.w_down = ttnn.from_torch(
+        self.w_down = ttnn.as_tensor(
             w_dn.transpose(0, 1).contiguous(),  # [I, H]
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file(weight_cache_path, f"{prefix}.down_proj.weight"),
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(

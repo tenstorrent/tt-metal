@@ -24,7 +24,9 @@
 # and fits comfortably. `layer_loader(i)` returns the state_dict for layer i,
 # keyed `model.layers.{i}.*`.
 
+import gc
 import os
+import time
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -32,6 +34,22 @@ from models.common.lightweightmodule import LightweightModule
 from .transformer_layer import HunyuanTtDecoderLayer
 from .attention.rms_norm import HunyuanTtRMSNorm
 from .parallel_utils import sp_gather, sp_shard
+from .cache import cache_file, resolve_transformer_cache
+
+
+def default_bf16_layers(num_layers: int) -> set[int]:
+    """Return the default mixed-precision boundary for a resident backbone.
+
+    Keep at most 3 bf16 layers at each end. A 4th *consecutive* bf16 layer during
+    device upload exhausts per-chip DRAM and hangs (bf8 layers are slow ~20s but OK).
+    """
+    n = max(0, num_layers)
+    if n <= 3:
+        return set(range(n))
+    head = {0, 1, 2}
+    if n <= 6:
+        return head
+    return head | {n - 3, n - 2, n - 1}
 
 
 class HunyuanTtModel(LightweightModule):
@@ -63,6 +81,8 @@ class HunyuanTtModel(LightweightModule):
         sp_axis: int = 0,
         sp_factor: int = 1,
         bf16_layers=None,
+        weight_cache_path=None,
+        model_cache_name: str = "hunyuan-image-3.0",
     ):
         """
         Args:
@@ -77,6 +97,12 @@ class HunyuanTtModel(LightweightModule):
                               apply_final_norm is True.
             apply_final_norm: apply ln_f at the end (LM backbone). Pass False to
                               match the image-generation call site.
+            weight_cache_path: Optional explicit cache directory for pre-tilized
+                              ``.tensorbin`` weights. When ``None`` and
+                              ``TT_DIT_CACHE_DIR`` is set, a path is derived from
+                              mesh shape, parallelism, dtype, and ``bf16_layers``.
+            model_cache_name: Subdirectory under ``TT_DIT_CACHE_DIR`` for this
+                              checkpoint variant (e.g. ``hunyuan-image-3.0-instruct``).
         """
         super().__init__()
         self.device = device
@@ -89,6 +115,24 @@ class HunyuanTtModel(LightweightModule):
         self.sp_axis = sp_axis
         self.sp_factor = sp_factor
 
+        bf16_layers = set(bf16_layers or [])
+        self.weight_cache_path = resolve_transformer_cache(
+            model_name=model_cache_name,
+            device=device,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            weight_dtype=weight_dtype,
+            num_layers=num_layers,
+            bf16_layers=bf16_layers,
+            weight_cache_path=weight_cache_path,
+        )
+        if self.weight_cache_path is not None:
+            self.weight_cache_path.mkdir(parents=True, exist_ok=True)
+            if os.environ.get("HY_VERBOSE", "1") != "0":
+                print(f"[backbone] TT_DIT cache dir: {self.weight_cache_path}", flush=True)
+
         # Token embedding table (ROW_MAJOR weight; ttnn.embedding emits TILE).
         # bf8/bf4 require TILE layout and cannot back a ROW_MAJOR embedding table.
         self.embed_weight = None
@@ -97,27 +141,26 @@ class HunyuanTtModel(LightweightModule):
             embed_dtype = weight_dtype
             if embed_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
                 embed_dtype = ttnn.bfloat16
-            self.embed_weight = ttnn.from_torch(
+            is_mesh = device.__class__.__name__ == "MeshDevice"
+            self.embed_weight = ttnn.as_tensor(
                 w,
                 dtype=embed_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+                cache_file_name=cache_file(self.weight_cache_path, "model.wte.weight"),
             )
 
         if layer_loader is None:
             raise ValueError("layer_loader is required")
-
-        # Per-layer mixed precision: layers in `bf16_layers` keep bf16 expert
-        # weights (more accurate, 2x memory); the rest use `weight_dtype` (bf8).
-        # Lets us trade DRAM headroom for accuracy on the most sensitive layers.
-        bf16_layers = set(bf16_layers or [])
 
         self.layers = []
         verbose = os.environ.get("HY_VERBOSE", "1") != "0"
         for i in range(num_layers):
             if verbose:
                 print(f"[backbone] loading layer {i + 1}/{num_layers} ...", flush=True)
+            t_layer = time.time()
             sd = layer_loader(i)
             layer_dtype = ttnn.bfloat16 if i in bf16_layers else weight_dtype
             self.layers.append(
@@ -143,16 +186,28 @@ class HunyuanTtModel(LightweightModule):
                     tp_factor=tp_factor,
                     sp_axis=sp_axis,
                     sp_factor=sp_factor,
+                    weight_cache_path=self.weight_cache_path,
                 )
             )
+            del sd
+            gc.collect()
             if verbose:
-                print(f"[backbone] layer {i + 1}/{num_layers} ready", flush=True)
+                dt = time.time() - t_layer
+                note = " (bf8 upload is slow; not stuck)" if layer_dtype != ttnn.bfloat16 and dt > 5 else ""
+                print(f"[backbone] layer {i + 1}/{num_layers} ready ({dt:.1f}s){note}", flush=True)
 
         self.ln_f = None
         if apply_final_norm:
             if norm_state_dict is None:
                 raise ValueError("norm_state_dict with 'model.ln_f.weight' is required when apply_final_norm=True")
-            self.ln_f = HunyuanTtRMSNorm(device, hidden_size, norm_state_dict, "model.ln_f", eps=rms_norm_eps)
+            self.ln_f = HunyuanTtRMSNorm(
+                device,
+                hidden_size,
+                norm_state_dict,
+                "model.ln_f",
+                eps=rms_norm_eps,
+                weight_cache_path=self.weight_cache_path,
+            )
 
     def embed(self, input_ids: ttnn.Tensor) -> ttnn.Tensor:
         """Embed input_ids ([B, S] uint32, ROW_MAJOR) -> [B, S, H] TILE."""
