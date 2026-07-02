@@ -14,7 +14,9 @@ gate's verdict and drives the subprocess. This module contains no gate logic.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -88,6 +90,37 @@ def gate_status(
     }
 
 
+def _resolve_agent_timeout_s(agent_timeout_s: int | None) -> int | None:
+    """Per-round wall-clock budget for one `claude -p` invocation. None/<=0 disables the watchdog.
+    Defaults generously (longer than any legitimate round, which can wrap a ~1800s device pytest) so it
+    only fires on a truly wedged agent, and is env-tunable via TT_HW_PLANNER_CC_AGENT_TIMEOUT_S."""
+    if agent_timeout_s is None:
+        try:
+            agent_timeout_s = int(os.environ.get("TT_HW_PLANNER_CC_AGENT_TIMEOUT_S", "3600"))
+        except ValueError:
+            agent_timeout_s = 3600
+    return agent_timeout_s if agent_timeout_s and agent_timeout_s > 0 else None
+
+
+def _kill_agent_tree(proc: subprocess.Popen) -> None:
+    """Kill a wedged `claude -p` and everything it spawned (its MCP server + any pytest) via the
+    process group, SIGTERM then SIGKILL — mirrors _run_focused_pytest's tree-kill."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, OSError):
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, OSError):
+            return
+        try:
+            proc.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def run_cc_loop(
     *,
     prompt: str,
@@ -99,13 +132,23 @@ def run_cc_loop(
     max_rounds: int = 1000,
     claude_bin: str = "claude",
     on_round: Callable[[int, dict], None] | None = None,
+    agent_timeout_s: int | None = None,
+    max_consecutive_timeouts: int = 2,
 ) -> dict:
     """The domain-agnostic driver loop, identical in shape to the optimize engine's per-pipeline loop:
     each round ask ``gate_fn()`` (the deterministic stop authority); stop on ``halt`` or ``can_stop``;
     otherwise re-invoke ``claude -p`` against the MCP server. Returns ``{rounds, can_stop, halted}``.
     The agent is re-invoked with the same prompt every round (the gate carries state), matching the
-    current optimize behavior."""
+    current optimize behavior.
+
+    Agent watchdog (parity with perf_automation's sdk_retry timeout->retry->abandon): each round is
+    bounded by ``agent_timeout_s``. If a ``claude -p`` invocation exceeds it, the whole agent tree is
+    killed and the round is retried (the gate carries state, so no progress is lost); after
+    ``max_consecutive_timeouts`` consecutive wedges the loop abandons (halted=True). A round that ends
+    on its own resets the counter. None/<=0 timeout disables the watchdog (prior behavior)."""
     rounds, can_stop, halted = 0, False, False
+    timeout_s = _resolve_agent_timeout_s(agent_timeout_s)
+    consecutive_timeouts = 0
     while rounds < max_rounds:
         st = gate_fn()
         if st.get("halt"):
@@ -114,7 +157,7 @@ def run_cc_loop(
         if st.get("can_stop"):
             can_stop = True
             break
-        subprocess.run(
+        proc = subprocess.Popen(
             [
                 claude_bin,
                 "-p",
@@ -130,7 +173,25 @@ def run_cc_loop(
             ],
             cwd=str(cwd),
             env=env,
+            start_new_session=True,
         )
+        try:
+            proc.wait(timeout=timeout_s)
+            consecutive_timeouts = 0
+        except subprocess.TimeoutExpired:
+            _kill_agent_tree(proc)
+            consecutive_timeouts += 1
+            print(
+                f"  [cc-watchdog] agent round exceeded {timeout_s}s with no completion "
+                f"(wedged agent); killed the agent tree. consecutive={consecutive_timeouts}/"
+                f"{max_consecutive_timeouts}.",
+                flush=True,
+            )
+            if consecutive_timeouts >= max_consecutive_timeouts:
+                print("  [cc-watchdog] abandoning — agent wedged repeatedly.", flush=True)
+                halted = True
+                break
+            continue
         rounds += 1
         if on_round is not None:
             on_round(rounds, st)
