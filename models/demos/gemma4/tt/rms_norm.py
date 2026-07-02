@@ -143,11 +143,18 @@ class RMSNorm(nn.Module):
             ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
-            # Decode fast path: single-tile-height (32 rows) activation with an
-            # interleaved layout → width-sharded rms_norm. Prefill (height > 32)
-            # and per-head norms keep the plain path; router norms are also
-            # weightless, but have a single logical head and benefit from this.
-            if len(x.shape) == 4 and x.shape[1] == 1 and 1 <= x.shape[-2] <= ttnn.TILE_SIZE and not x.is_sharded():
+            # Decode fast path: single-tile-height (32 rows) activation with a
+            # learned weight and an interleaved layout → width-sharded rms_norm.
+            # Prefill (height > 32) and the no-weight per-head norms keep the
+            # plain path. Sharded config is dim-specific, so rebuild if the
+            # activation width ever changes.
+            if (
+                self.with_scale
+                and self.tt_weight is not None
+                and len(x.shape) == 4
+                and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
+                and not x.is_sharded()
+            ):
                 dim = x.shape[-1]
                 if self._sharded_cfg is None or self._sharded_dim != dim:
                     self._sharded_dim = dim

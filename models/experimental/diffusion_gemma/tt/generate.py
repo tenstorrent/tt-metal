@@ -6,7 +6,7 @@
 This module owns the outer block-generation glue that is specific to
 DiffusionGemma. It starts with the commit step: once the denoise controller has
 chosen the clean argmax canvas, append those tokens to the frozen KV cache using
-Gemma4's decode path in ``COMMIT_APPEND`` phase.
+the DiffusionGemma-local commit decode path.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import ttnn
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
+from models.experimental.diffusion_gemma.tt.commit_decode import commit_decode_forward
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
 )
@@ -561,7 +562,8 @@ def commit_canvas_tokens(
         token = canvas_tokens[:, offset]
         position = torch.tensor([start_pos + offset], dtype=torch.int32)
         device_inputs = tt_model.prepare_inputs_decode(token, position, page_table=page_table)
-        logits, _ = tt_model.ttnn_decode_forward(
+        logits, _ = commit_decode_forward(
+            tt_model,
             device_inputs[0],
             device_inputs[1],
             device_inputs[2],

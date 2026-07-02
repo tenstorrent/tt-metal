@@ -95,36 +95,6 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True):
     """
     orig_shape = tensor.shape
     head_dim = orig_shape[-1]
-
-    def _decode_sharded_norm(flat_tensor):
-        tiles = head_dim // ttnn.TILE_SIZE
-        if head_dim % ttnn.TILE_SIZE != 0 or tiles % 8 != 0:
-            return None
-
-        input_memcfg = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim // 8),
-            core_grid=ttnn.CoreGrid(x=8, y=1),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 1],
-            subblock_w=min(tiles // 8, 4),
-            block_h=1,
-            block_w=tiles // 8,
-            inplace=False,
-        )
-        sharded = ttnn.to_memory_config(flat_tensor, input_memcfg)
-        if with_scale and weight is not None:
-            normed_sharded = ttnn.rms_norm(sharded, weight=weight, epsilon=eps, program_config=program_config)
-        else:
-            normed_sharded = ttnn.rms_norm(sharded, epsilon=eps, program_config=program_config)
-        sharded.deallocate(True)
-        normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.DRAM_MEMORY_CONFIG)
-        normed_sharded.deallocate(True)
-        return normed
-
     if len(orig_shape) == 4 and orig_shape[0] > 1:
         batch, num_heads, seq_len, _ = orig_shape
         flat = ttnn.reshape(tensor, (1, 1, batch * num_heads * seq_len, head_dim))
@@ -132,15 +102,10 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True):
         num_heads = orig_shape[1]
         seq_or_batch = orig_shape[2]
         flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
-
-    normed = None
-    if len(orig_shape) == 4 and orig_shape[0] == 1 and orig_shape[1] == 1 and orig_shape[2] <= ttnn.TILE_SIZE:
-        normed = _decode_sharded_norm(flat)
-    if normed is None:
-        if with_scale and weight is not None:
-            normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            normed = ttnn.rms_norm(flat, epsilon=eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if with_scale and weight is not None:
+        normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps)
+    else:
+        normed = ttnn.rms_norm(flat, epsilon=eps)
 
     return ttnn.reshape(normed, orig_shape)
 
@@ -202,23 +167,10 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
     are materialized over heads with ttnn.repeat before the same-shape multiply.
     """
     heads = tensor.shape[2]
-    repeated_cos_sin = False
     if cos_b.shape[2] != heads:
         cos_b = ttnn.repeat(cos_b, ttnn.Shape([1, 1, heads, 1]))
         sin_b = ttnn.repeat(sin_b, ttnn.Shape([1, 1, heads, 1]))
-        repeated_cos_sin = True
-
-    scaled = ttnn.mul(tensor, cos_b)
-    rotated = _rotate_half(tensor)
-    rotated_scaled = ttnn.mul(rotated, sin_b)
-    rotated.deallocate(True)
-    result = ttnn.add(scaled, rotated_scaled)
-    scaled.deallocate(True)
-    rotated_scaled.deallocate(True)
-    if repeated_cos_sin:
-        cos_b.deallocate(True)
-        sin_b.deallocate(True)
-    return result
+    return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
 
 
 def prefill_sdpa_program_config(head_dim, seq_len):

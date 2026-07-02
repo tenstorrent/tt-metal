@@ -178,6 +178,57 @@ def test_commit_canvas_tokens_rejects_invalid_token_ids_before_model_call(canvas
         commit_canvas_tokens(_FailModel(), canvas_tokens, start_pos=0)
 
 
+def test_commit_canvas_tokens_uses_diffusion_local_commit_decode(monkeypatch):
+    class _FakeLogits:
+        deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _Model:
+        def __init__(self):
+            self.prepared = []
+
+        def prepare_inputs_decode(self, token, position, page_table=None):
+            self.prepared.append((token.clone(), position.clone(), page_table))
+            return ("x", "current-pos", "rot-idxs", "page-table")
+
+        def ttnn_decode_forward(self, *args, **kwargs):
+            raise AssertionError("commit should not call shared Gemma4 decode")
+
+    calls = []
+    logits = []
+
+    def fake_commit_decode_forward(tt_model, *args, page_tables_per_layer=None, **kwargs):
+        logit = _FakeLogits()
+        logits.append(logit)
+        calls.append((tt_model, args, page_tables_per_layer, kwargs))
+        return logit, None
+
+    monkeypatch.setattr(G, "commit_decode_forward", fake_commit_decode_forward)
+    model = _Model()
+    page_tables_per_layer = ["layer-pages"]
+
+    commit_canvas_tokens(
+        model,
+        torch.tensor([[7, 8]], dtype=torch.long),
+        start_pos=5,
+        page_table="page",
+        page_tables_per_layer=page_tables_per_layer,
+    )
+
+    assert [token.item() for token, _, _ in model.prepared] == [7, 8]
+    assert [position.item() for _, position, _ in model.prepared] == [5, 6]
+    assert [page_table for _, _, page_table in model.prepared] == ["page", "page"]
+    assert [call[0] for call in calls] == [model, model]
+    assert [call[1] for call in calls] == [
+        ("x", "current-pos", "rot-idxs", "page-table"),
+        ("x", "current-pos", "rot-idxs", "page-table"),
+    ]
+    assert [call[2] for call in calls] == [page_tables_per_layer, page_tables_per_layer]
+    assert all(logit.deallocated for logit in logits)
+
+
 def test_generate_blocks_advances_position_and_concatenates_commits():
     calls = []
 
