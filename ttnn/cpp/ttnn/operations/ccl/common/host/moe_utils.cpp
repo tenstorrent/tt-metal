@@ -165,7 +165,12 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
                         fabric_node_id,
                         direction,
                         planes_in_direction);
-                    num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
+                    // Skip over planes_in_direction=0 to avoid collapsing the running min to 0.
+                    // This can happen when, for example, there's only 1 or 2 devices, a wrap-around can detect a
+                    // neighbor though there's no fabric link.
+                    if (planes_in_direction > 0) {
+                        num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
+                    }
                 }
             }
         }
@@ -173,8 +178,12 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     if (!is_mesh_mmio_capable && num_available_routing_planes > 1) {
         num_available_routing_planes -= 1;
     }
-    log_debug(tt::LogOp, "num_available_routing_planes without max logic: {}", num_available_routing_planes);
-    return std::max(num_available_routing_planes, 1ul);
+    log_debug(tt::LogOp, "num_available_routing_planes: {}", num_available_routing_planes);
+    if (num_available_routing_planes <= 0 || num_available_routing_planes == std::numeric_limits<size_t>::max()) {
+        log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+        num_available_routing_planes = 1;
+    }
+    return num_available_routing_planes;
 }
 
 }  // namespace ttnn::operations::ccl::common
