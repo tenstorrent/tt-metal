@@ -22,6 +22,7 @@ using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 namespace ttnn::prim {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Per-core runtime args for the reader + writer kernels. The work split uses
 // two parallel partitions (unpadded vs padded tile counts) so each core needs a
@@ -30,20 +31,17 @@ namespace {
 void emit_runtime_args_hc_tiled_interleaved(
     KernelDescriptor& reader_desc,
     KernelDescriptor& writer_desc,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
+    const MeshTensor& a,
+    const MeshTensor& c,
     const CoreRange& total_cores) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
-
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto tile_shape = a.tensor_spec().tile().get_tile_shape();
     auto tile_hw = tile_shape[0] * tile_shape[1];
-    uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
-    uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
-                                                           tile_shape[0]);  // only last row of Ct should have padding
+    uint32_t num_tensor_tiles = a.physical_volume() / tile_hw;
+    uint32_t num_output_tiles = c.physical_volume() / tile_hw;
+    uint32_t padded_num_tensor_tiles =
+        num_output_tiles / (c.padded_shape()[2] / tile_shape[0]);  // only last row of Ct should have padding
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = a.mutable_device().compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
     auto
@@ -84,27 +82,22 @@ void emit_runtime_args_hc_tiled_interleaved(
         uint32_t end_idx = start_idx + num_tiles_per_core;
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{input_buffer->address(), num_tiles_per_core, start_idx});
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{output_buffer->address(), start_idx, end_idx, padded_start_idx, padded_end_idx});
+        reader_desc.emplace_runtime_args(core, {a, num_tiles_per_core, start_idx});
+        writer_desc.emplace_runtime_args(core, {c, start_idx, end_idx, padded_start_idx, padded_end_idx});
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;
     }
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::create_descriptor(
     const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
+    const MeshTensor& input_tensor = tensor_args.input.mesh_tensor();
     // pad_value is always defined at API level; padding is decided purely by shape
     const float pad_value = operation_attributes.pad_value;
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     ProgramDescriptor desc;
     auto tile = input_tensor.tensor_spec().tile();
@@ -116,7 +109,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = input_tensor.mutable_device().compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -147,8 +140,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
         });
     }
 
-    Buffer* src_buffer = input_tensor.buffer();
-    uint32_t element_size = input_tensor.element_size();
+    uint32_t element_size = static_cast<uint32_t>(input_tensor.element_size());
     uint32_t padding_val_packed = 0;
     uint32_t num_writes = 0;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
@@ -189,7 +181,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
         {"tile_height", 1u},
         {"tile_width", 1u},
     };
-    TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    TensorAccessorArgs(input_tensor, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
 
     KernelDescriptor reader_desc;
@@ -203,7 +195,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
     reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
-    Buffer* dst_buffer = output_tensor.buffer();
     std::vector<uint32_t> writer_compile_time_args = {
         element_size,
         tt::CBIndex::c_0,
@@ -216,7 +207,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
         face_shape[1],
         static_cast<uint32_t>(needs_padding)};
     std::vector<uint32_t> writer_common_runtime_args;
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    TensorAccessorArgs(output_tensor.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     KernelDescriptor writer_desc;
@@ -229,7 +220,8 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
-    emit_runtime_args_hc_tiled_interleaved(reader_desc, writer_desc, input_tensor, output_tensor, total_cores);
+    CMAKE_UNIQUE_NAMESPACE::emit_runtime_args_hc_tiled_interleaved(
+        reader_desc, writer_desc, input_tensor, output_tensor.mesh_tensor(), total_cores);
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
