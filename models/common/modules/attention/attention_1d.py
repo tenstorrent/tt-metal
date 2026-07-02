@@ -795,6 +795,13 @@ class Attention1D(LightweightModule):
         k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
         v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
 
+        if k_fill_sliced.dtype != keys.dtype or v_fill_sliced.dtype != values.dtype:
+            raise ValueError(
+                "paged KV cache prefill requires K/V fill tensors to already match the cache dtype: "
+                f"k_fill={k_fill_sliced.dtype}, keys={keys.dtype}, "
+                f"v_fill={v_fill_sliced.dtype}, values={values.dtype}"
+            )
+
         ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
 

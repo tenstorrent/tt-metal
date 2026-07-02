@@ -697,6 +697,39 @@ def test_paged_fill_cache_legacy_no_override(device):
     )
 
 
+def test_paged_fill_cache_rejects_input_dtype_mismatch(device):
+    """paged_fill_cache is a raw tile-copy path; callers must cast to cache dtype first."""
+    torch.manual_seed(14)
+    cache_torch = torch.randn([8, 1, 32, 32]).bfloat16().float()
+    input_torch = torch.randn([1, 1, 32, 32]).bfloat16().float()
+    page_table_torch = torch.tensor([[1, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.int32)
+
+    cache_tt = ttnn.from_torch(cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    with pytest.raises(RuntimeError, match="must match cache tensor dtype"):
+        ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx=0)
+
+
+def test_paged_fill_cache_accepts_bfloat8_input_for_bfloat8_cache(device):
+    torch.manual_seed(15)
+    cache_torch = torch.randn([8, 1, 32, 32]).bfloat16().float()
+    input_torch = torch.randn([1, 1, 32, 32]).bfloat16().float()
+    page_table_torch = torch.tensor([[1, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.int32)
+
+    cache_tt = ttnn.from_torch(cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx=0)
+
+    got_cache = _read_paged_cache(cache_tt)
+    expected_input = input_tt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    eq, msg = comp_equal(got_cache[1:2], expected_input)
+    assert eq, f"bfloat8 paged_fill_cache raw copy mismatch: {msg}"
+
+
 @pytest.mark.parametrize("num_kv_heads", [1, 8])
 def test_paged_fill_cache_override_view_full_into_sliding_buffer(num_kv_heads, device):
     """Cache allocated as sliding ``(128, 256)``, filled via override with full
