@@ -286,7 +286,7 @@ Tensor from_flatbuffer(
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), spec, std::move(topology)));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), spec, std::move(topology)));
 }
 
 }  // namespace ttnn

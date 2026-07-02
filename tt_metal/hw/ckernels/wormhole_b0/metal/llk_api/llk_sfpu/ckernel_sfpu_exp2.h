@@ -46,7 +46,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
 
     // Exclude -NaN: abs(-NaN) remains negative.
     v_if(abs_x >= 0.0f) {
-        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
+        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased);
         e += i;
         // e < 255
         v_block {
@@ -93,7 +93,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     //   fractional_part  = (xlog2 - floor) * 2^23   (integer in [0, 2^23))
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+    sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
     sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);

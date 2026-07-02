@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 
 import ttnn
@@ -87,6 +89,20 @@ class Linear(Module):
         )
 
         return _apply_activation_fn(output, self.activation_fn)
+
+
+def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    # Use a single scratch buffer that's reused for every intermediate so peak
+    # DRAM is x + scratch (2x input) instead of the naive 6x.
+    sqrt_2 = math.sqrt(2.0)
+    tmp = ttnn.multiply(x, 1.0 / sqrt_2)
+    ttnn.erf(tmp, output_tensor=tmp)
+    ttnn.add(tmp, 1.0, output_tensor=tmp)
+    ttnn.multiply(x, tmp, output_tensor=tmp)
+    ttnn.multiply(tmp, 0.5, output_tensor=tmp)
+    return tmp
 
 
 class ColParallelLinear(Module):
@@ -437,6 +453,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t
     if activation_fn == "silu":
         return ttnn.silu(t)
+    if activation_fn == "decomposed_gelu":
+        return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":

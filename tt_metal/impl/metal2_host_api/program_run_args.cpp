@@ -481,7 +481,7 @@ void AttachBorrowedDFBBuffers(
 }
 
 // ============================================================================
-// PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs + GetProgramRunArgsView
+// PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
 // ============================================================================
 
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
@@ -1067,7 +1067,16 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             name);
     }
 
-    // DFB run overrides: same checks as the full path (duplicates; size overrides unimplemented).
+    // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides), plus a
+    // partial-path-only guard for borrowed-memory DFBs (below). A resized borrowed DFB must have its
+    // backing TensorParameter supplied in this same update, so AttachBorrowedDFBBuffers re-runs the
+    // per-bank fit check against the new size. The full Set path gets this for free (require_all=true);
+    // on the partial path an invariant backing tensor may be omitted, which would otherwise let a grown
+    // DFB overflow its borrowed buffer's per-bank region unchecked at execution.
+    std::unordered_map<uint32_t, std::string> borrowed_backing;  // dfb_id -> backing TensorParameter name
+    for (const auto& [dfb_id, tp_name] : program_impl.get_dfb_borrowed_bindings()) {
+        borrowed_backing.emplace(dfb_id, tp_name);
+    }
     std::unordered_set<DFBSpecName> dfbs_with_params;
     for (const auto& dfb_params : params.dfb_run_overrides) {
         auto [it, inserted] = dfbs_with_params.insert(dfb_params.dfb);
@@ -1075,10 +1084,36 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             inserted,
             "Duplicate DFB '{}' in ProgramRunArgs.dfb_run_overrides. Each DFB must appear at most once.",
             dfb_params.dfb);
-        TT_FATAL(
-            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented for DFB '{}'.",
-            dfb_params.dfb);
+        if (dfb_params.entry_size.has_value()) {
+            TT_FATAL(
+                dfb_params.entry_size.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has entry_size override = 0. entry_size must be set to a "
+                "non-zero value.",
+                dfb_params.dfb);
+        }
+        if (dfb_params.num_entries.has_value()) {
+            TT_FATAL(
+                dfb_params.num_entries.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has num_entries override = 0. num_entries must be set to a "
+                "non-zero value.",
+                dfb_params.dfb);
+        }
+        // A resized borrowed-memory DFB needs its backing tensor supplied here so the per-bank fit check
+        // in AttachBorrowedDFBBuffers re-runs against the new size (see the block comment above).
+        const bool resizes = dfb_params.entry_size.has_value() || dfb_params.num_entries.has_value();
+        if (resizes) {
+            if (auto b = borrowed_backing.find(program_impl.get_dfb_handle(dfb_params.dfb.get()));
+                b != borrowed_backing.end()) {
+                TT_FATAL(
+                    params.tensor_args.contains(TensorParamName{b->second}),
+                    "dfb_run_overrides resizes borrowed-memory DFB '{}', but its backing TensorParameter '{}' was "
+                    "not supplied in this UpdateProgramRunArgs. Resizing a borrowed DFB on the partial-update fast "
+                    "path requires supplying its backing tensor, so the per-bank fit check can re-validate against "
+                    "the new size (the full SetProgramRunArgs path enforces this by requiring all tensors).",
+                    dfb_params.dfb,
+                    b->second);
+            }
+        }
     }
 
     // Tensor args: non-invariant TensorParameters must be supplied; invariant ones may be omitted.
@@ -1183,6 +1218,20 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         }
     }
 
+    // ---- DFB size overrides (stateful: an unspecified DFB retains its current size) ----
+    // Apply BEFORE re-attaching borrowed buffers below, so the borrowed per-bank fit check sees the
+    // new size. Mirrors the SetProgramRunArgs path.
+    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    size_overrides.reserve(params.dfb_run_overrides.size());
+    for (const auto& dfb_params : params.dfb_run_overrides) {
+        if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+            continue;
+        }
+        size_overrides.push_back(
+            {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
+    }
+    program_impl.apply_dfb_size_overrides(size_overrides);
+
     // ---- Tensor bindings: patch CRTA address slots for SUPPLIED tensors only ----
     // (Invariant tensors omitted from params keep their previously-patched binding slots.)
     if (!params.tensor_args.empty()) {
@@ -1278,17 +1327,6 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
         }
     }
     return base;
-}
-
-ProgramRunArgsView& GetProgramRunArgsView(Program& program) {
-    (void)program;
-    TT_FATAL(false, "GetProgramRunArgsView is not yet implemented.");
-
-    // This is the fast path, power user API.
-    // Return type was changed to a reference to avoid copying the view.
-    // With this API, we will need to either:
-    //   - Create the view object on the first call and stash it in the Program object.
-    //   - Or, create the view object upon Program construction.
 }
 
 }  // namespace tt::tt_metal::experimental

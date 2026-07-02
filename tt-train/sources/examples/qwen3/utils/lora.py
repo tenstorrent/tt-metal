@@ -33,8 +33,8 @@ import torch
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
 
+from ttml.models.qwen3.weights import torch_to_ttml
 from .tensor_utils import (
-    torch_to_ttml,
     get_tp_size,
     make_dist_replicated_weight,
     make_dist_replicated_zeros,

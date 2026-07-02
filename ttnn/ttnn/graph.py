@@ -166,16 +166,20 @@ def _capture_python_stack_trace() -> list[str]:
     """
     frames = traceback.extract_stack()
     result = []
+
     for frame in frames:
-        path = pathlib.Path(frame.filename).resolve()
-        # Match against path relative to root so globs like **/_pytest/** work on absolute paths
         try:
-            path_for_match = path.relative_to(path.anchor)
-        except ValueError:
-            path_for_match = path
-        if any(path_for_match.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+            filename = str(frame.filename)
+            path = pathlib.PurePath(filename)
+
+            # Match without filesystem resolution to avoid fragile behavior during capture
+            if any(path.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+                continue
+
+            result.append(f'  File "{filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
+        except Exception:
+            # Never let stack-trace capture break graph capture
             continue
-        result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
 
     return result[::-1]
 
@@ -368,7 +372,10 @@ def record_python_operation(name, function_args, function_kwargs):
     }
 
     if _python_stack_traces_enabled:
-        record["python_stack_trace"] = _capture_python_stack_trace()
+        try:
+            record["python_stack_trace"] = _capture_python_stack_trace()
+        except Exception:
+            record["python_stack_trace"] = []
 
     _python_io_data.append(record)
 
