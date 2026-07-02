@@ -10,6 +10,7 @@
 
 namespace tt::tt_metal {
 class D2DStreamServiceSender;
+class D2HStreamService;
 }
 
 namespace ttnn::experimental {
@@ -31,5 +32,6 @@ Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2DStreamServiceSender& service,
     const Tensor& input,
     const std::optional<Tensor>& metadata = std::nullopt);
+Tensor outbound_socket_service_sync(const tt::tt_metal::D2HStreamService& service, const Tensor& record);
 
 }  // namespace ttnn::experimental

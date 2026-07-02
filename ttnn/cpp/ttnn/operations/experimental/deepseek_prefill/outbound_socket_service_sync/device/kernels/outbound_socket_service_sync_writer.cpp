@@ -41,9 +41,10 @@
 constexpr uint32_t page_size = get_compile_time_arg_val(0);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(2);  // 0 disables the metadata path
+constexpr uint32_t metadata_only = get_compile_time_arg_val(3);        // 1 no tensor copy
 // Shared input/backing TensorAccessorArgs (same per-shard spec); metadata accessor,
 // when enabled, is packed immediately after.
-constexpr auto tensor_accessor_args = TensorAccessorArgs<3>();
+constexpr auto tensor_accessor_args = TensorAccessorArgs<4>();
 
 // Metadata forward, factored into a template so the metadata-disabled case
 // (MetadataSize == 0) is never instantiated -- otherwise the trailing metadata
@@ -86,22 +87,24 @@ void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(5);
     const uint32_t end_page = get_arg_val<uint32_t>(6);
 
-    // Input (read source) and backing (write dest) share the per-shard spec: one set
-    // of accessor args, two base addresses.
-    auto input = TensorAccessor(tensor_accessor_args, input_tensor_addr);
-    auto backing = TensorAccessor(tensor_accessor_args, backing_tensor_addr);
-
     Noc noc;
     CircularBuffer scratch_cb(scratch_cb_index);
 
-    // 1. Copy this worker's slice input -> backing through the single-slot CB.
-    //    read_barrier before the write; write_barrier before reusing the slot (and, on
-    //    the last page, before we signal data_ready in step 3).
-    for (uint32_t p = start_page; p < end_page; ++p) {
-        noc.async_read(input, scratch_cb, page_size, {.page_id = p}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        noc.async_write(scratch_cb, backing, page_size, {.offset_bytes = 0}, {.page_id = p});
-        noc.async_write_barrier();
+    if constexpr (!metadata_only) {
+        // Input (read source) and backing (write dest) share the per-shard spec: one set
+        // of accessor args, two base addresses.
+        auto input = TensorAccessor(tensor_accessor_args, input_tensor_addr);
+        auto backing = TensorAccessor(tensor_accessor_args, backing_tensor_addr);
+
+        // 1. Copy this worker's slice input -> backing through the single-slot CB.
+        //    read_barrier before the write; write_barrier before reusing the slot (and, on
+        //    the last page, before we signal data_ready in step 3).
+        for (uint32_t p = start_page; p < end_page; ++p) {
+            noc.async_read(input, scratch_cb, page_size, {.page_id = p}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            noc.async_write(scratch_cb, backing, page_size, {.offset_bytes = 0}, {.page_id = p});
+            noc.async_write_barrier();
+        }
     }
 
     // 2. (Optional) forward inline metadata to the sender service core.
