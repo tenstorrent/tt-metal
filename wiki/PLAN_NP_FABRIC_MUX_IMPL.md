@@ -204,6 +204,18 @@ SHAPE GENERALITY (after H-mux): current mux gate needs pW==1 + 8-aligned W. k=5 
 shapes fall to direct 5.7 GB/s. Need a coalescing that still forms 4KB packets for those (per-stick is
 BW-death per golden). Audit each deployed NP-bound layer against the gate; non-eligible get no mux today.
 
+## TWO-AXIS MATCH COMPLETE (zeros/coalesce, default-on) — 2026-07-02
+H-mux landed. Root causes cracked via tt-triage (ttexalens 0.3.21, --skip-version-check; Watcher unusable
+on 2x4, DPRINT drain-starved): (1) np_h_mux_writer didn't drain c_in0 (reader's is_first local pad) +
+used raw not direction-adjusted is_first/is_last; (2) W-corner race — added an H startup barrier (1-hop
+pairwise via mux; 2-device H-axis fully syncs); (3) W-reader barrier_count must = H-mux worker count
+(links*dirs*workers). Both H and W axes now use the mux (stateful API, auto-workers, num_buffers=1,
+lifecycle) auto-engaged by default for zeros+coalesce.
+DEFAULT perf (both mux, no env) vs neighbor_pad_async: T8 64.5us 8.42x 32.8 GB/s; T32 174.5us 11.76x
+48.5 GB/s; T96 480.9us 12.79x 52.7 GB/s (send+recv). PCC 4/4 default suite. (W-only was T32 661us/3.10x.)
+REMAINING (not blocking the match on zeros): replicate-mode edge-outward W-section (pre-existing W-mux
+bug, Htop/Hbot correct) — replicate stays on the direct path; W=4 / H=4 workers unvalidated (golden +2%).
+
 ## CONFORMANCE to all_gather_matmul mux usage (2026-07-02)
 all_gather_matmul_async reuses build_all_gather_async_minimal_default_program_artifacts, so the
 reference mux impl IS all_gather_async_default_program_factory + minimal_default_writer.cpp.
