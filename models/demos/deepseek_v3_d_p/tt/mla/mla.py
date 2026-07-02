@@ -1072,7 +1072,7 @@ class ttMLA:
         # Single-shot: the live kvpe IS the whole sequence (natural order, contiguous SP shard).
         assert tt_kvpe is not None
         self._write_kvpe(kvpe_cache, tt_kvpe_b8, cache_layer_idx)
-        gathered = self._sp_all_gather(tt_kvpe, dim=2)  # [1,1,T,576] bf16 TILE, replicated, natural
+        gathered = self._all_gather(tt_kvpe, dim=2, cluster_axis=self.sp_axis)  # [1,1,T,576] bf16 TILE, repl, natural
         kvpe_dev = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
         if self.sp_factor > 1:
             ttnn.deallocate(gathered)
@@ -1204,20 +1204,30 @@ class ttMLA:
     # only sparse-specific gather/attention helpers live below.
     # ----------------------------------------------------------------------------------------
 
-    def _sp_all_gather(self, t, dim):
-        """All-gather across the SP axis (sequence) → full-S replicated on SP. sp=1: no-op."""
-        if self.sp_factor == 1:
+    def _all_gather(self, t, dim, cluster_axis):
+        """All-gather across a mesh cluster axis → replicated on that axis. factor==1: no-op.
+        cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor."""
+        factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
+        if factor == 1:
             return t
         return ttnn.experimental.all_gather_async(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=cluster_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=cluster_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.ccl_topology,
-            cluster_axis=self.sp_axis,
+            cluster_axis=cluster_axis,
         )
+
+    @property
+    def _needs_head_to_seq_reshard(self) -> bool:
+        """True when the per-chip MLA head shard is too thin for sparse_sdpa (needs H % 32 == 0 and
+        H >= 32). When the TP head shard is too thin (e.g. GLM's 64 heads at tp=4 → 16), _sparse_mla
+        transposes the TP sharding axis heads → sequence for the duration of the attention."""
+        heads_local = self.num_heads // self.tp_factor
+        return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
 
     def _sparse_mla(self, q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
@@ -1229,13 +1239,41 @@ class ttMLA:
         replicated (K = full 576, V = leading kv_lora_rank). indices: [1, 1, S_global, k] uint32 replicated,
         re-sharded onto SP (dim2) to match q when sp > 1 (or already SP-sharded → pass through)."""
         assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
-        sp = list(q.device().shape)[self.sp_axis]
-        q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
+        sp = self.sp_factor
+        seq_len_local = q.shape[2]  # per-chip query rows == S / sp
+
+        # sparse_sdpa requires per-chip heads H % 32 == 0 and H >= 32. When the TP head shard is too
+        # thin (e.g. GLM's 64 heads at tp=4 → 16), transpose the TP sharding axis from heads to sequence
+        # for the duration of the attention: all-gather q's heads over TP (each chip regains all H heads),
+        # then re-shard the sequence over TP so every chip attends a DISTINCT seq slice in parallel at full
+        # H. After the op we invert it (gather seq, re-shard heads) to restore the head-sharded layout the
+        # wkv_b2 / o_proj epilogue expects. No padded/wasted heads; tp=1 and already-fat shards are untouched.
+        # The SP indexer emits S/sp indices; we split them over TP below to match the resharded q rows.
+        transpose_head_to_seq = self._needs_head_to_seq_reshard
+
+        q_seq_sharded = q
+        if transpose_head_to_seq:
+            q_all_heads = self._all_gather(q, dim=1, cluster_axis=self.tp_axis)  # [1, H, S/sp, 576] repl on TP
+            q_seq_sharded = ttnn.mesh_partition(q_all_heads, dim=2, cluster_axis=self.tp_axis)  # [1,H,S/(sp·tp),576]
+            ttnn.deallocate(q_all_heads)
+
+        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
+        if q_seq_sharded is not q:
+            ttnn.deallocate(q_seq_sharded)
+
+        # indices must match q_rm's seq sharding. Incoming is replicated full-glob [1,1,S_global,k] or
+        # SP-sharded [1,1,S/sp,k]; under reshard the row count must drop to S/(sp·tp), so split over TP.
         idx = indices
-        if sp > 1 and indices.shape[2] == q.shape[2] * sp:
-            # Replicated full-glob indices → reshard rows onto the SP axis (inverse of all_gather), matching
-            # q's per-chip seq shard. Already-SP-sharded indices ([1,1,S/sp,k]) match q and pass through.
+        if sp > 1 and indices.shape[2] == seq_len_local * sp:
+            # Replicated full-glob indices → reshard rows onto the SP axis (inverse of all_gather).
             idx = ttnn.mesh_partition(indices, dim=2, cluster_axis=self.sp_axis)
+        if transpose_head_to_seq and idx.shape[2] != q_rm.shape[2]:
+            idx_seq_sharded = ttnn.mesh_partition(
+                idx, dim=2, cluster_axis=self.tp_axis
+            )  # split seq across TP to match q
+            if idx is not indices:
+                ttnn.deallocate(idx)
+            idx = idx_seq_sharded
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
         out = ttnn.transformer.sparse_sdpa(
@@ -1246,6 +1284,14 @@ class ttMLA:
             ttnn.deallocate(idx)
         ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
         ttnn.deallocate(out)
+
+        if transpose_head_to_seq:
+            # Invert the transpose: gather the per-TP seq slices back to S/sp, then re-shard heads onto TP
+            # so the result matches the head-sharded [1, H/tp, S/sp, v_dim] the epilogue consumes.
+            out_all_heads = self._all_gather(ret, dim=2, cluster_axis=self.tp_axis)  # [1, H, S/sp, v_dim] repl on TP
+            ttnn.deallocate(ret)
+            ret = ttnn.mesh_partition(out_all_heads, dim=1, cluster_axis=self.tp_axis)  # [1, H/tp, S/sp, v_dim]
+            ttnn.deallocate(out_all_heads)
         return ret
 
     def _gather_kvpe_prefix(self, kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx):
@@ -1256,7 +1302,9 @@ class ttMLA:
         all-gather to full-T (no-op at sp==1), select this user/layer slot, bf8→bf16, TILE→RM,
         un-rotate block-cyclic→natural, trim to end_pos. Returns [1, 1, end_pos, 576] bf16 RM."""
         cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
-        full = self._sp_all_gather(cache_i, dim=2)  # → [B, 1, seq_len_cache, 576] replicated, block-cyclic
+        full = self._all_gather(
+            cache_i, dim=2, cluster_axis=self.sp_axis
+        )  # → [B,1,seq_len_cache,576] repl, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         if full.shape[0] > 1:  # user-major slot select (no-op for the single-slot cache)
