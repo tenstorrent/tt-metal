@@ -226,6 +226,7 @@ int main(int argc, char** argv) {
     uint64_t sock_batch = 16;                // --batch: pages pushed per notify (amortizes reserve+notify)
     int sock_zones = 0;                      // --sockzones: push device-zone pages + emit them to Tracy
     int realzones = 0;                       // --realzones: real workload -> profzone pairs -> socket -> Tracy
+    int primeecc = 0;                        // --primeecc: one-time fresh-board L3 LIM ECC prime (then tt-smi -r)
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -270,6 +271,8 @@ int main(int argc, char** argv) {
             }
         } else if (a == "--realzones") {
             realzones = 1;
+        } else if (a == "--primeecc") {
+            primeecc = 1;
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -279,8 +282,11 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[warn] TT_METAL_DEVICE_PROFILER not set -- kernels won't emit markers.\n");
     }
 
-    auto bin = read_file(bin_path);
-    printf("[fw] %s (%zu bytes)\n", bin_path.c_str(), bin.size());
+    std::vector<uint8_t> bin;
+    if (!primeecc) {  // --primeecc only touches L3 cache regs; no firmware needed
+        bin = read_file(bin_path);
+        printf("[fw] %s (%zu bytes)\n", bin_path.c_str(), bin.size());
+    }
     if (!no_reset) {
         std::string cmd = "tt-smi -r " + std::to_string(device_id);
         printf("[boot] %s\n", cmd.c_str());
@@ -296,6 +302,36 @@ int main(int argc, char** argv) {
     auto mesh = MeshDevice::create_unit_mesh(device_id);
     Cluster& cluster = MetalContext::instance().get_cluster();
     const auto& hal = MetalContext::instance().hal();
+
+    if (primeecc) {
+        // One-time fresh-board L3 LIM ECC prime (mirrors tt-llm-engine loader.prime_lim_ecc /
+        // x280_tester.cpp): route L3 through the cache controller so it writes valid data+ECC
+        // into the physical SRAM backing LIM. WayEnable=0xF is irreversible until ASIC reset, so
+        // LIM is a cache (unusable) until the caller runs `tt-smi -r` AFTER this — the ECC then
+        // persists across that reset and LIM_BASE becomes valid SRAM. Run once per power cycle.
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        constexpr uint64_t L3_WAYENABLE = 0x02010008ULL;     // highest-enabled-way, increase-only
+        constexpr uint64_t L3_WAYMASK_BASE = 0x02010800ULL;  // WayMask0..37, stride 8
+        constexpr uint32_t L3_NUM_MASTERS = 38;
+        constexpr uint64_t ZERO_DEVICE_BASE = 0x0A000000ULL;  // safe-zero source lines
+        const uint64_t prime_bytes = 0x60000;                 // FW + mailboxes + profzone stacks/SP
+        x.reg_wr(l2, L3_WAYENABLE, 0xF);
+        for (uint32_t m = 0; m < L3_NUM_MASTERS; m++) {
+            x.reg_wr(l2, L3_WAYMASK_BASE + (uint64_t)m * 8, 0x8000);  // force alloc into Way 15
+        }
+        for (uint64_t off = 0; off < prime_bytes; off += 64) {
+            x.reg_wr(l2, ZERO_DEVICE_BASE + off, 0);  // touch each 64B line -> fetch+merge+writeback ECC
+        }
+        printf(
+            "[primeecc] primed 0x%llx bytes L3 LIM ECC on L2CPU %d (WayEnable=0xF). "
+            "NOW run: tt-smi -r %d  (ECC persists across that reset; LIM valid after)\n",
+            (unsigned long long)prime_bytes,
+            l2cpu,
+            device_id);
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
 
     if (derisk_socket) {
         // DE-RISK: can a tt-metal D2HSocket use the X280 L2CPU as its sender_core, and does

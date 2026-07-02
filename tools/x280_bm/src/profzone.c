@@ -72,6 +72,7 @@ int main(uint64_t hartid) {
             __asm__ volatile("wfi");
         }
     }
+    w64(RES(0x30), 0xB007ULL); /* heartbeat: main() entered on hart 0 */
     uint64_t cfg = r64(P_CONFIG_ADDR);
     uint64_t pcie_x = r64(P_PCIE_X), pcie_y = r64(P_PCIE_Y);
     uint64_t prof_l1 = r64(P_PROF_L1);
@@ -111,8 +112,9 @@ int main(uint64_t hartid) {
         w32(SP(cr), 0);
     }
     fence_();
+    w64(RES(0x38), 0x5E70ULL); /* heartbeat: setup complete, entering drain loop */
 
-    uint64_t total_zones = 0, loops = 0;
+    uint64_t total_zones = 0, loops = 0, stalls = 0;
     for (;;) {
         uint64_t progressed = 0;
         for (uint64_t cc = 0; cc < num_cores; cc++) {
@@ -150,12 +152,27 @@ int main(uint64_t hartid) {
                         sp--;
                         uint64_t st = r64(STK_TS(cr, sp));
                         uint32_t sid = r32(STK_ID(cr, sp));
+                        int stopped = 0;
                         for (;;) {
                             fence_();
                             uint32_t acked = r32(backed_addr);
                             if (fifo_total - (bytes_sent - acked) >= PAGE) {
                                 break;
                             }
+                            stalls++;
+                            if ((stalls & 0xFFFFF) == 0) {
+                                w64(RES(0x10), bytes_sent); /* live: FIFO fill (stuck if pinned) */
+                                w64(RES(0x20), stalls);
+                            }
+                            if (r64(P_STOP)) { /* shutdown: stop waiting for acks */
+                                stopped = 1;
+                                break;
+                            }
+                        }
+                        if (stopped) {
+                            w32(SP(cr), sp);
+                            w32(cbase + CTRL_HEAD(r) * 4, h);
+                            goto done;
                         }
                         uint64_t p = wbase + fifo_off + write_ptr;
                         w32(p + 0, (uint32_t)(st >> 32));
@@ -173,6 +190,7 @@ int main(uint64_t hartid) {
                         bytes_sent += PAGE;
                         w32(wbase + bsent_off, bytes_sent);
                         total_zones++;
+                        w64(RES(0x00), total_zones); /* live counter */
                     }
                 }
                 w32(SP(cr), sp);
@@ -180,13 +198,17 @@ int main(uint64_t hartid) {
             }
         }
         loops++;
+        w64(RES(0x08), loops); /* live counter */
         if (r64(P_STOP) && !progressed) {
             break;
         }
     }
+done:
     fence_();
     w64(RES(0x00), total_zones);
     w64(RES(0x08), loops);
+    w64(RES(0x10), bytes_sent);
+    w64(RES(0x20), stalls);
     fence_();
     w64(RES(RES_DONE), DONE_MAGIC);
     for (;;) {

@@ -152,6 +152,7 @@ public:
     }
 
     tt_cxy_pair l2() const { return l2_; }
+    tt_cxy_pair arc() const { return arc_; }
 
 private:
     tt_cxy_pair virt(CoreCoord phys) const {

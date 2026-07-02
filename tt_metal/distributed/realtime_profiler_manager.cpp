@@ -703,17 +703,49 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 zx.set_reset_vectors(profiler::X280_LIM_BASE);
                 zx.set_pll(kX280PllMhz);
                 zx.release_reset();
-                dev_state.x280_active = true;
-                log_info(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {}: booted X280 kernel-zone drainer (l2cpu {}, {} cores, "
-                    "prof_l1=0x{:x}, pcie=({},{}))",
-                    device_id,
-                    kL2CpuIndex,
-                    num_cores,
-                    prof_l1,
-                    pc.x,
-                    pc.y);
+
+                // Fast-fail liveness check: poll profzone's main()-entry heartbeat (RES @ params+0x30
+                // == params+0x70) for a few ms. If the core never writes it, the X280 isn't executing
+                // — on a fresh board this is almost always because the L3 LIM ECC was never primed, so
+                // profzone's stores fault silently. Rather than leave a half-booted drainer that never
+                // drains (and lets a filling SPSC ring deadlock a producing RISC), skip it here with an
+                // actionable message. One-time per power cycle: `tt x280-prime <target>` then rerun.
+                constexpr uint64_t kX280HbMainMagic = 0xB007ULL;
+                uint64_t hb = 0;
+                for (int i = 0; i < 300 && hb != kX280HbMainMagic; i++) {
+                    hb = zx.lim_rd_u64(dev_state.x280_params_addr + 0x70);
+                    if (hb != kX280HbMainMagic) {
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    }
+                }
+                if (hb != kX280HbMainMagic) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: X280 drainer FW did not start (l2cpu {}, "
+                        "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is likely not primed on this board — "
+                        "run `tt x280-prime {}` once after each cold power cycle, then rerun. Continuing "
+                        "without X280 kernel-zone capture.",
+                        device_id,
+                        kL2CpuIndex,
+                        hb,
+                        device_id);
+                    zx.assert_reset();
+                    dev_state.x280_socket.reset();
+                    dev_state.x280_driver.reset();
+                    dev_state.x280_active = false;
+                } else {
+                    dev_state.x280_active = true;
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: booted X280 kernel-zone drainer (l2cpu {}, "
+                        "{} cores, prof_l1=0x{:x}, pcie=({},{}))",
+                        device_id,
+                        kL2CpuIndex,
+                        num_cores,
+                        prof_l1,
+                        pc.x,
+                        pc.y);
+                }
             }
         } catch (const std::exception& e) {
             dev_state.x280_active = false;
@@ -1119,6 +1151,16 @@ void RealtimeProfilerManager::shutdown() {
     for (auto& dev_state : devices_) {
         if (dev_state.x280_active && dev_state.x280_driver) {
             try {
+                // Telemetry: profzone's result mailbox (results base = params_addr + 0x40).
+                // total_zones@+0x00 = device zones paired+pushed; loops@+0x08 = drain-loop passes.
+                uint64_t total_zones = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x40);
+                uint64_t loops = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x48);
+                log_info(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: X280 drainer paired {} device zones ({} drain passes)",
+                    dev_state.chip_id,
+                    total_zones,
+                    loops);
                 dev_state.x280_driver->assert_reset();
             } catch (const std::exception& e) {
                 log_warning(
