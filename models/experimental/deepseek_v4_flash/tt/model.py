@@ -592,9 +592,24 @@ class DeepSeekV4Model(DeepSeekV4Module):
             for cr in crs:
                 n_win_cap = self._cr_caps[cr][1]
                 cw, sw = make_rope_table(rope["win"][cr][0][:n_win_cap], rope["win"][cr][1][:n_win_cap])
+                # Store the compressor RoPE tables DRAM-interleaved -- the layout the fused
+                # ``_apply_rope`` op consumes for cos/sin (only X is sharded). The static path
+                # uses the full ``n_win_cap`` rows, matching the compressed input rows.
                 sm["win_rope"][cr] = (
-                    ttnn.from_torch(cw, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-                    ttnn.from_torch(sw, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+                    ttnn.from_torch(
+                        cw,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
+                    ttnn.from_torch(
+                        sw,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
                 )
             if k == 0:
                 # The only per-step host-written state: submesh 0's tiny fused packet
