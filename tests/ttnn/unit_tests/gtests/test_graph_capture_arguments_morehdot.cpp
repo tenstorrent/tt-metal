@@ -55,7 +55,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_TRUE(operation0.arguments[1].find("Tensor(") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("Shape([1, 1, 1, 32])") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("DataType::BFLOAT16") != std::string::npos);
-    EXPECT_TRUE(operation0.arguments[1].find("TilePageConfig") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("Layout::TILE") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("DeviceStorage()") != std::string::npos);
 
     // operations[1]: tt::tt_metal::create_device_tensor (output tensor creation)

@@ -52,7 +52,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_TRUE(operation0.arguments[1].find("Tensor(") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("Shape([1, 1, 2048, 512])") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("DataType::BFLOAT16") != std::string::npos);
-    EXPECT_TRUE(operation0.arguments[1].find("RowMajorPageConfig") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("Layout::ROW_MAJOR") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("DeviceStorage()") != std::string::npos);
 
     // Find tt::tt_metal::create_device_tensor operation (output tensor creation)

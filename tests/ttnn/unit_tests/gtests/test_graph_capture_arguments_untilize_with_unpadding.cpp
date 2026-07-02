@@ -64,7 +64,7 @@ TEST_F(TestGraphCaptureArgumentsUntilizeWithUnpadding, UntilizeWithUnpadding) {
     EXPECT_TRUE(tensor_args.find("Tensor(") != std::string::npos);
     EXPECT_TRUE(tensor_args.find("Shape([1, 10240, 32])") != std::string::npos);
     EXPECT_TRUE(tensor_args.find("DataType::BFLOAT16") != std::string::npos);
-    EXPECT_TRUE(tensor_args.find("TilePageConfig") != std::string::npos);
+    EXPECT_TRUE(tensor_args.find("Layout::TILE") != std::string::npos);
     EXPECT_TRUE(tensor_args.find("DeviceStorage()") != std::string::npos);
 }
 
