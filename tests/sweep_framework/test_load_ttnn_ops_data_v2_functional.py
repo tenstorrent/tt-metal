@@ -887,18 +887,17 @@ class TestSnowflakeLoadReconstructIntegration:
     Snowflake-only, so those mocks no longer apply). It is GATED on Snowflake
     credentials and skipped otherwise, so the default local/CI run stays offline.
 
-    A committed fixture (``fixtures/ttnn_ops_sample_master.json``, reconstructed
-    from a small real V6 trace) is the test input, so no live-DB data is read at
-    test time. Each test builds an empty throwaway schema from the v6 DDL, loads
-    the fixture, reconstructs it, and drops the schema in teardown. The live
-    ``SELF_SERVE.TTNN_OPS_V6`` schema is NEVER touched.
+    Test input is generated at runtime by reconstructing the smallest real V6
+    trace (read-only) into a temp file — no data fixture is committed to the repo
+    and the input never drifts from the schema. Each test builds an empty
+    throwaway schema from the v6 DDL, loads that JSON, reconstructs it, and drops
+    the schema in teardown. ``SELF_SERVE.TTNN_OPS_V6`` is only read, never written.
     """
 
     # Provenance/aggregation keys added by load+reconstruct that are not part of
     # the config body we assert equality on.
     _PROVENANCE_KEYS = {"executions", "trace_run_ids", "pytest_args", "pytest_args_seen"}
 
-    FIXTURE_PATH = str(Path(__file__).parent / "fixtures" / "ttnn_ops_sample_master.json")
     # Fixed throwaway schema (unqualified name; the loader qualifies + uppercases
     # it to SELF_SERVE.TTNN_OPS_PYTEST_INTEG). It is DROP+CREATEd per test so
     # counts are deterministic and no state leaks between runs.
@@ -928,6 +927,35 @@ class TestSnowflakeLoadReconstructIntegration:
             finally:
                 conn.close()
 
+    @pytest.fixture
+    def sample_master(self, tmp_path):
+        """Reconstruct the smallest real V6 trace into a temp master JSON.
+
+        Generated at runtime (V6 read-only) so no data fixture lives in the repo
+        and the input always matches the current schema. Returns (path, doc).
+        """
+        import tests.sweep_framework.load_ttnn_ops_data_v2 as _ldr
+
+        conn = _ldr._get_read_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT trace_run_id FROM SELF_SERVE.TTNN_OPS_V6.TRACE_RUN "
+                "WHERE config_count IS NOT NULL ORDER BY config_count ASC, trace_run_id ASC LIMIT 1"
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        assert row is not None, "no traces in SELF_SERVE.TTNN_OPS_V6 to sample"
+
+        doc = reconstruct_from_trace_run(int(row[0]), schema="ttnn_ops_v6")
+        assert doc and doc.get("operations"), f"empty reconstruct for trace {row[0]}"
+        doc.setdefault("metadata", {})["trace_uid"] = "PYTEST_INTEG_SAMPLE"
+
+        path = tmp_path / "sample_master.json"
+        path.write_text(json.dumps(doc))
+        return str(path), doc
+
     # ── helpers ──────────────────────────────────────────────────────────
 
     def _config_bodies(self, doc):
@@ -949,15 +977,15 @@ class TestSnowflakeLoadReconstructIntegration:
 
     # ── tests ────────────────────────────────────────────────────────────
 
-    def test_load_reconstruct_roundtrip(self, sf_schema):
+    def test_load_reconstruct_roundtrip(self, sf_schema, sample_master):
         """load_data -> reconstruct_from_trace_run preserves ops/configs/counts."""
         schema, conn = sf_schema
-        fixture = json.loads(Path(self.FIXTURE_PATH).read_text())
+        sample_path, fixture = sample_master
 
         # Loading appends a draft to model_tracer/trace_selection_registry.yaml;
         # no-op it so the working tree stays clean.
         with patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts"):
-            load_data(json_path=self.FIXTURE_PATH, tt_metal_sha="pytest-integ", dry_run=False, schema=schema)
+            load_data(json_path=sample_path, tt_metal_sha="pytest-integ", dry_run=False, schema=schema)
 
         # Fresh schema -> the loaded trace is trace_run_id 1.
         result = reconstruct_from_trace_run(1, schema=schema)
@@ -989,25 +1017,27 @@ class TestSnowflakeLoadReconstructIntegration:
         )
         assert cur.fetchone()[0] == 0
 
-    def test_dry_run_persists_nothing(self, sf_schema):
+    def test_dry_run_persists_nothing(self, sf_schema, sample_master):
         """dry_run=True rolls back every write — the schema stays empty."""
         schema, conn = sf_schema
+        sample_path, _ = sample_master
 
         with patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts"):
-            load_data(json_path=self.FIXTURE_PATH, tt_metal_sha="pytest-integ", dry_run=True, schema=schema)
+            load_data(json_path=sample_path, tt_metal_sha="pytest-integ", dry_run=True, schema=schema)
 
         cur = conn.cursor()
         cur.execute(f"SELECT COUNT(*) FROM SELF_SERVE.{schema.upper()}.TTNN_CONFIGURATION")
         assert cur.fetchone()[0] == 0
 
-    def test_emit_id_file_written(self, sf_schema, tmp_path):
+    def test_emit_id_file_written(self, sf_schema, sample_master, tmp_path):
         """A real (non-dry-run) load writes the new trace_run_id to emit_id_file."""
         schema, _conn = sf_schema
+        sample_path, _ = sample_master
         emit_path = tmp_path / "trace_run_id.txt"
 
         with patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts"):
             load_data(
-                json_path=self.FIXTURE_PATH,
+                json_path=sample_path,
                 tt_metal_sha="pytest-integ",
                 dry_run=False,
                 schema=schema,
