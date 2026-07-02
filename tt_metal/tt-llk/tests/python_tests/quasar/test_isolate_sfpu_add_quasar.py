@@ -52,13 +52,13 @@ SFPU_ADD_FORMATS = input_output_formats(
 )
 
 SFPU_ADD_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, input_dimensions)
+    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
     for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_ADD_FORMATS)
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
 
-_COMPILE, _RUNTIME = split_combinations(SFPU_ADD_COMBINATIONS, {3})
+_COMPILE, _RUNTIME = split_combinations(SFPU_ADD_COMBINATIONS)
 
 
 @pytest.mark.quasar

@@ -100,10 +100,10 @@ def generate_eltwise_unary_datacopy_combinations(
                                         fmt,
                                         dest_acc,
                                         data_copy_type,
-                                        dimensions,
+                                        runtime(dimensions),
                                         dest_sync,
-                                        edgecase_dest_index,
-                                        tile_dims,
+                                        runtime(edgecase_dest_index),
+                                        runtime(tile_dims),
                                     )
                                 )
 
@@ -123,7 +123,7 @@ DATACOPY_FORMATS = input_output_formats(
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS
 )
-_COMPILE, _RUNTIME = split_combinations(ALL_DATACOPY_COMBINATIONS, {3, 5, 6})
+_COMPILE, _RUNTIME = split_combinations(ALL_DATACOPY_COMBINATIONS)
 
 
 @pytest.mark.quasar

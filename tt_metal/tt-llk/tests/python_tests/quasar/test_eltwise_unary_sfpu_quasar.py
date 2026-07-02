@@ -687,15 +687,14 @@ def generate_sfpu_unary_combinations():
                                     dest_acc,
                                     dest_sync,
                                     implied_math_format,
-                                    input_dimensions,
+                                    runtime(input_dimensions),
                                 )
                             )
 
     return combinations
 
 
-_ALL_SFPU_UNARY_COMBINATIONS = generate_sfpu_unary_combinations()
-_COMPILE, _RUNTIME = split_combinations(_ALL_SFPU_UNARY_COMBINATIONS, {5})
+_COMPILE, _RUNTIME = split_combinations(generate_sfpu_unary_combinations())
 
 
 @pytest.mark.quasar

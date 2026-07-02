@@ -147,9 +147,9 @@ def generate_qsr_pack_combinations(
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        dimensions,
-                                        relu_type,
-                                        tile_dims,
+                                        runtime(dimensions),
+                                        runtime(relu_type),
+                                        runtime(tile_dims),
                                     )
                                 )
 
@@ -173,8 +173,7 @@ PACK_FORMATS = input_output_formats(
 )
 
 
-_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
-_COMPILE, _RUNTIME = split_combinations(_PACK_COMBINATIONS, {3, 4, 5})
+_COMPILE, _RUNTIME = split_combinations(generate_qsr_pack_combinations(PACK_FORMATS))
 
 
 @pytest.mark.quasar

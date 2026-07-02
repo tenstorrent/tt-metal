@@ -80,14 +80,15 @@ def generate_sfpu_square_combinations(formats_list):
                                 dest_acc,
                                 dest_sync,
                                 implied_math_format,
-                                input_dimensions,
+                                runtime(input_dimensions),
                             )
                         )
     return combinations
 
 
-_TRISC3_COMBINATIONS = generate_sfpu_square_combinations(SFPU_SQUARE_FORMATS)
-_COMPILE, _RUNTIME = split_combinations(_TRISC3_COMBINATIONS, {4})
+_COMPILE, _RUNTIME = split_combinations(
+    generate_sfpu_square_combinations(SFPU_SQUARE_FORMATS)
+)
 
 
 @pytest.mark.quasar

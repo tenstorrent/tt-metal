@@ -33,12 +33,15 @@ def runtime(value):
     return _RuntimeMarker(value)
 
 
-def split_combinations(combos, runtime_indices):
+def split_combinations(combos):
+    runtime_indices = {
+        i for i, v in enumerate(combos[0]) if isinstance(v, _RuntimeMarker)
+    }
     compile_keys = []
     runtime_lookup = {}
     for combo in combos:
         key = tuple(v for i, v in enumerate(combo) if i not in runtime_indices)
-        rt = tuple(v for i, v in enumerate(combo) if i in runtime_indices)
+        rt = tuple(v.value for i, v in enumerate(combo) if i in runtime_indices)
         key_repr = repr(key)
         if key_repr not in runtime_lookup:
             compile_keys.append(key)

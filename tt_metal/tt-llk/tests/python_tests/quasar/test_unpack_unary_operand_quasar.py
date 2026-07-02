@@ -126,8 +126,8 @@ def generate_unpack_unary_operand_combinations(
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
-                                        dimensions,
-                                        tile_dims,
+                                        runtime(dimensions),
+                                        runtime(tile_dims),
                                     )
                                 )
 
@@ -148,7 +148,7 @@ UNPACK_FORMATS = input_output_formats(
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS
 )
-_COMPILE, _RUNTIME = split_combinations(ALL_UNPACK_UNARY_OPERAND_COMBINATIONS, {5, 6})
+_COMPILE, _RUNTIME = split_combinations(ALL_UNPACK_UNARY_OPERAND_COMBINATIONS)
 
 
 @pytest.mark.quasar

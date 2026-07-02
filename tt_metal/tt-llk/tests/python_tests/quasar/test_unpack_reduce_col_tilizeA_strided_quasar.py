@@ -123,7 +123,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                         if pool_type == ReducePool.Average and in_fmt.is_integer():
                             continue
                         combinations.append(
-                            (fmt, acc, dest_sync, dimensions, pool_type)
+                            (fmt, acc, dest_sync, runtime(dimensions), pool_type)
                         )
 
     return combinations
@@ -145,7 +145,7 @@ ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
     )
 )
 _COMPILE, _RUNTIME = split_combinations(
-    ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS, {3}
+    ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS
 )
 
 

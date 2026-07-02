@@ -103,9 +103,9 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
                             dest_acc,
                             dest_sync,
                             implied_math_format,
-                            exp_input_dimensions,
-                            input_A_dimensions,
-                            input_B_dimensions,
+                            runtime(exp_input_dimensions),
+                            runtime(input_A_dimensions),
+                            runtime(input_B_dimensions),
                         )
                     )
     return combinations
@@ -114,7 +114,7 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
     SFPU_UNARY_FORMATS
 )
-_COMPILE, _RUNTIME = split_combinations(PARALLEL_MATMUL_EXP_COMBINATIONS, {4, 5, 6})
+_COMPILE, _RUNTIME = split_combinations(PARALLEL_MATMUL_EXP_COMBINATIONS)
 
 
 @pytest.mark.quasar

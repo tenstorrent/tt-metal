@@ -79,7 +79,7 @@ def generate_sfpu_fill_combinations(
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
             for input_dimensions in [[32, 32], [64, 64]]:
                 combinations.append(
-                    (fmt, dest_acc, implied_math_format, input_dimensions)
+                    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
                 )
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
@@ -89,7 +89,9 @@ def generate_sfpu_fill_combinations(
         in_fmt = fmt.input_format
         dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
         for input_dimensions in [[32, 32], [64, 64]]:
-            combinations.append((fmt, dest_acc, ImpliedMathFormat.No, input_dimensions))
+            combinations.append(
+                (fmt, dest_acc, ImpliedMathFormat.No, runtime(input_dimensions))
+            )
 
     return combinations
 
@@ -123,10 +125,9 @@ SFPU_FILL_INT_FORMATS = input_output_formats(
 )
 
 
-_FILL_COMBINATIONS = generate_sfpu_fill_combinations(
-    SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
+_COMPILE, _RUNTIME = split_combinations(
+    generate_sfpu_fill_combinations(SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS)
 )
-_COMPILE, _RUNTIME = split_combinations(_FILL_COMBINATIONS, {3})
 
 
 @pytest.mark.quasar

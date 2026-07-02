@@ -121,7 +121,7 @@ def generate_qsr_transpose_dest_combinations(
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    dimensions,
+                                    runtime(dimensions),
                                 )
                             )
 
@@ -142,10 +142,9 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
     ],
 )
 
-_ALL_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
-    TRANSPOSE_DEST_FORMATS
+_COMPILE, _RUNTIME = split_combinations(
+    generate_qsr_transpose_dest_combinations(TRANSPOSE_DEST_FORMATS)
 )
-_COMPILE, _RUNTIME = split_combinations(_ALL_TRANSPOSE_DEST_COMBINATIONS, {4})
 
 
 @pytest.mark.quasar
