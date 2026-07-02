@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
@@ -43,10 +44,32 @@ namespace tt::tt_metal {
 
 enum class DFBPorCType : uint8_t { DM, TENSIX };
 
-class DFBImplicitSyncParamFixture : public MeshDeviceFixture, public ::testing::WithParamInterface<bool> {};
-
+class DFBImplicitSyncParamFixture : public UnitMeshCQSingleCardFixture, public ::testing::WithParamInterface<bool> {
+protected:
+    void SetUp() override {
+        this->DetectDispatchMode();
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->create_devices();
+        if (devices_.empty()) {
+            GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
+        }
+        init_max_cbs();
+    }
+};
+    
 static std::string ImplicitSyncParamName(const ::testing::TestParamInfo<bool>& info) {
     return info.param ? "ImplicitSyncTrue" : "ImplicitSyncFalse";
+}
+
+distributed::MeshCoordinateRange mesh_workload_device_range(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    return distributed::MeshCoordinateRange(mesh_device->shape());
+}
+
+void launch_program_on_mesh(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Program&& program) {
+    distributed::MeshWorkload workload;
+    workload.add_program(mesh_workload_device_range(mesh_device), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
 }
 
 // expected_output, when set, is compared against the device output instead of input.
@@ -74,9 +97,7 @@ void execute_program_and_verify(
         EXPECT_EQ(rdback_dram, input);
     }
 
-    // Execute using slow dispatch (DFBs not yet supported in MeshWorkload path)
-    IDevice* device = mesh_device->get_devices()[0];
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    launch_program_on_mesh(mesh_device, std::move(program));
 
     std::vector<uint32_t> output;
     detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
@@ -483,7 +504,7 @@ void run_single_dfb_program(
         }
     }
 
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    launch_program_on_mesh(mesh_device, std::move(program));
 
     if (verify_output) {
         std::vector<uint32_t> output;
@@ -911,8 +932,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         detail::WriteToDeviceL1(device, core, dfb_l1_addr, slice);
     }
 
-    // Launch program (slow dispatch; DFBs not yet supported in MeshWorkload path).
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    launch_program_on_mesh(mesh_device, std::move(program));
 
     // Verify: each out_tensor must match its DFB's L1 pre-fill slice.
     for (uint32_t i = 0; i < num_dfbs; ++i) {
@@ -966,7 +986,6 @@ void run_sequential_dfbs_program(
 
     const CoreCoord core(0, 0);
     const CoreRangeSet core_range_set(CoreRange(core, core));
-    IDevice* device = mesh_device->get_devices()[0];
 
     // Separate in_tensor and out_tensor per DFB.
     std::vector<MeshTensor> in_tensors, out_tensors;
@@ -1135,7 +1154,7 @@ void run_sequential_dfbs_program(
     }
     experimental::SetProgramRunArgs(program, run_params);
 
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    launch_program_on_mesh(mesh_device, std::move(program));
 
     // Verify: out_tensor[i] should equal in_tensor[i] (strided and all alike).
     for (uint32_t i = 0; i < num_dfbs; ++i) {
@@ -1744,6 +1763,11 @@ static void run_dfb_size_override_test(
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
+    const distributed::MeshCoordinateRange device_range = mesh_workload_device_range(mesh_device);
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(device_range, std::move(program));
+    Program& program_ref = mesh_workload.get_programs().at(device_range);
+
     const auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
 
@@ -1778,10 +1802,10 @@ static void run_dfb_size_override_test(
             run_params.dfb_run_overrides.push_back(
                 {.dfb = DFB_NAME, .entry_size = step.entry_size, .num_entries = step.num_entries});
         }
-        experimental::SetProgramRunArgs(program, run_params);
+        experimental::SetProgramRunArgs(program_ref, run_params);
 
         // Overrides are reflected in host-side state immediately.
-        auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_NAME));
+        auto dfb = program_ref.impl().get_dataflow_buffer(program_ref.impl().get_dfb_handle(*DFB_NAME));
         EXPECT_EQ(dfb->config.entry_size, eff_entry_size);
         EXPECT_EQ(dfb->config.num_entries, eff_num_entries);
 
@@ -1794,7 +1818,7 @@ static void run_dfb_size_override_test(
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
-        detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
         std::vector<uint32_t> output;
         detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
