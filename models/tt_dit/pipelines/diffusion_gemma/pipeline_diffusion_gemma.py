@@ -28,6 +28,7 @@ import torch
 
 import ttnn
 
+from ...models.transformers.diffusion_gemma._state_utils import per_layer_moe_substates
 from ...models.transformers.diffusion_gemma.encoder_model import DiffusionGemmaEncoderModel
 from ...models.transformers.diffusion_gemma.model import DiffusionGemmaForBlockDiffusion, DiffusionGemmaModel
 from ...models.transformers.diffusion_gemma.text_decoder import DiffusionGemmaDecoderModel
@@ -78,7 +79,7 @@ class DiffusionGemmaPipeline:
         model_id: str,
         *,
         config: DiffusionGemmaPipelineConfig,
-        torch_dtype: torch.dtype = torch.float32,
+        torch_dtype: torch.dtype = torch.bfloat16,
     ) -> "DiffusionGemmaPipeline":
         """Build the pipeline from an HF checkpoint.
 
@@ -121,21 +122,7 @@ class DiffusionGemmaPipeline:
         hf_state = hf_model.state_dict()
 
         def _per_layer_moe(prefix: str) -> list[dict]:
-            n = text_cfg.num_hidden_layers
-            substates = [{} for _ in range(n)]
-            full_prefix = f"{prefix}layers."
-            for k, v in hf_state.items():
-                if not k.startswith(full_prefix):
-                    continue
-                rest = k[len(full_prefix) :]
-                try:
-                    i_str, sub = rest.split(".", 1)
-                    i = int(i_str)
-                except ValueError:
-                    continue
-                if sub.startswith("router.") or sub.startswith("experts."):
-                    substates[i][sub] = v
-            return substates
+            return per_layer_moe_substates(hf_state, num_layers=text_cfg.num_hidden_layers, prefix=prefix)
 
         text_kwargs = dict(
             vocab_size=text_cfg.vocab_size,
@@ -449,8 +436,15 @@ class DiffusionGemmaPipeline:
             decoder_attention_masks=tt_decoder_masks,
             self_conditioning_signal=tt_self_cond_signal,
         )
-        # Bring to host, fp32 for the sampler math.
-        return local_device_to_torch(out).squeeze(0).to(torch.float32)
+        # Bring to host as fp32 for the sampler math. local_device_to_torch returns the
+        # single-device replica with its on-device shape preserved — typically [B, canvas, vocab].
+        # The HF sampler expects exactly that shape; do NOT squeeze (otherwise we lose the
+        # batch dim and Categorical treats `canvas` as batch).
+        out_host = local_device_to_torch(out).to(torch.float32)
+        # Defensive: handle the edge case where the upload added a leading mesh dim.
+        if out_host.ndim == 4 and out_host.shape[0] == 1:
+            out_host = out_host.squeeze(0)
+        return out_host
 
     def _sequence_finished(self, canvas: torch.LongTensor, text_cfg) -> bool:
         eos = text_cfg.eos_token_id

@@ -24,6 +24,7 @@ import ttnn
 
 from ....encoders.gemma4.vision_model import Gemma4VisionModel
 from ....layers.module import Module
+from ....utils.tensor import local_device_to_torch
 from .multimodal_embedder import DiffusionGemmaMultimodalEmbedder
 from .text_encoder import DiffusionGemmaEncoderTextModel
 
@@ -124,8 +125,14 @@ class DiffusionGemmaEncoderModel(Module):
 
             # 3. Scatter the soft tokens into the image-token slots.
             #    Done host-side for simplicity (one image-substitute op per forward).
-            embeds_host = ttnn.to_torch(inputs_embeds).squeeze(0).to(torch.float32)
-            soft_host = ttnn.to_torch(tt_soft_projected).squeeze(0).to(torch.float32)
+            #    Use local_device_to_torch so we get a single-device replica (not a mesh stack).
+            embeds_host = local_device_to_torch(inputs_embeds).to(torch.float32)
+            soft_host = local_device_to_torch(tt_soft_projected).to(torch.float32)
+            # If the result still has a leading mesh dim (rare), squeeze it.
+            if embeds_host.ndim == 4 and embeds_host.shape[0] == 1:
+                embeds_host = embeds_host.squeeze(0)
+            if soft_host.ndim == 3 and soft_host.shape[0] == 1:
+                soft_host = soft_host.squeeze(0)
             # image_mask is [B, S]; flatten to [B*S], same for embeds.
             assert (
                 image_mask.sum().item() == soft_host.shape[0]
@@ -136,12 +143,8 @@ class DiffusionGemmaEncoderModel(Module):
             embeds_host = flat_embeds.reshape(*embeds_host.shape)
 
             # Upload merged embeds; bypass embed_tokens by feeding the language_model's layer stack directly.
-            # The text encoder model takes input_ids and embeds inside. Here we'd want a forward-from-embeds
-            # entry. For minimum code, re-upload merged ids unchanged plus override via host scatter; the
-            # text_encoder we already wrote starts with input_ids → embed_tokens. To honour the merge, we
-            # call the language_model's stack manually instead.
             tt_merged_embeds = ttnn.from_torch(
-                embeds_host.unsqueeze(0).to(torch.bfloat16),
+                embeds_host.to(torch.bfloat16),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,

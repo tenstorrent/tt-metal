@@ -16,6 +16,7 @@ from loguru import logger
 
 import ttnn
 
+from ....models.transformers.diffusion_gemma._state_utils import per_layer_moe_substates
 from ....models.transformers.diffusion_gemma.layer import DiffusionGemmaLayer
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -55,8 +56,11 @@ def _build_tiny_config(num_layers: int = 6, hidden: int = 256):
 
 
 def _moe_substate(layer_state: dict) -> dict:
-    """Pluck router/experts entries from a flat HF layer state_dict."""
-    return {k: v for k, v in layer_state.items() if k.startswith("router.") or k.startswith("experts.")}
+    """Pluck router/experts entries from a flat single-layer HF state-dict."""
+    # Wraps per_layer_moe_substates for the single-layer case: pretend this layer is
+    # ``layers.0.*`` so we can reuse the same helper used by the multi-layer paths.
+    rekeyed = {f"layers.0.{k}": v for k, v in layer_state.items()}
+    return per_layer_moe_substates(rekeyed, num_layers=1)[0]
 
 
 @pytest.mark.parametrize(

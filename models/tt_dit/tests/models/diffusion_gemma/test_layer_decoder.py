@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 
+from ....models.transformers.diffusion_gemma._state_utils import per_layer_moe_substates
 from ....models.transformers.diffusion_gemma.layer import DiffusionGemmaLayer
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -55,7 +56,8 @@ def _build_tiny_config(num_layers: int = 6):
 
 
 def _moe_substate(layer_state: dict) -> dict:
-    return {k: v for k, v in layer_state.items() if k.startswith("router.") or k.startswith("experts.")}
+    rekeyed = {f"layers.0.{k}": v for k, v in layer_state.items()}
+    return per_layer_moe_substates(rekeyed, num_layers=1)[0]
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 
+from ....models.transformers.diffusion_gemma._state_utils import per_layer_moe_substates
 from ....models.transformers.diffusion_gemma.text_encoder import DiffusionGemmaEncoderTextModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -25,21 +26,6 @@ from ....utils.test import line_params, ring_params
 PCC_THRESHOLD = 0.99
 ALLCLOSE_ATOL = 5e-2
 ALLCLOSE_RTOL = 5e-2
-
-
-def _per_layer_moe_substate(model_state: dict, num_layers: int) -> list[dict]:
-    """Extract per-layer router/experts substates from a flat encoder state_dict
-    (HF prefixes layer keys with ``layers.{i}.``)."""
-    substates = [{} for _ in range(num_layers)]
-    for k, v in model_state.items():
-        for i in range(num_layers):
-            prefix = f"layers.{i}."
-            if k.startswith(prefix):
-                rest = k[len(prefix) :]
-                if rest.startswith("router.") or rest.startswith("experts."):
-                    substates[i][rest] = v
-                break
-    return substates
 
 
 @pytest.mark.parametrize(
@@ -131,7 +117,7 @@ def test_encoder_text_model(
     )
 
     hf_state = hf_encoder.state_dict()
-    moe_state_dicts = _per_layer_moe_substate(hf_state, hf_config.num_hidden_layers)
+    moe_state_dicts = per_layer_moe_substates(hf_state, num_layers=hf_config.num_hidden_layers)
 
     tt_encoder = DiffusionGemmaEncoderTextModel(
         vocab_size=hf_config.vocab_size,

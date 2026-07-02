@@ -167,10 +167,21 @@ class DiffusionGemmaDecoderModel(Module):
         ), f"encoder_kv_cache has {len(encoder_kv_cache)} entries, expected {self.num_hidden_layers}"
 
         inputs_embeds = self.embed_tokens(decoder_input_ids)
+        # First denoising step has no prior logits → use a zero soft-embedding signal.
+        # Build host-side and upload (rather than ttnn.zeros_like, which doesn't reliably
+        # produce a tile-laid-out replicated tensor on all builds).
+        owned_signal = False
         if self_conditioning_signal is None:
-            self_conditioning_signal = ttnn.zeros_like(inputs_embeds)
+            B, S = decoder_input_ids.shape[0], decoder_input_ids.shape[1]
+            zero_signal = torch.zeros(B, S, self.hidden_size, dtype=torch.bfloat16)
+            self_conditioning_signal = ttnn.from_torch(
+                zero_signal, device=inputs_embeds.device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+            owned_signal = True
         h = self.self_conditioning(inputs_embeds, self_conditioning_signal)
         ttnn.deallocate(inputs_embeds)
+        if owned_signal:
+            ttnn.deallocate(self_conditioning_signal)
 
         # Decoder positions continue after the encoder cache, so use them directly.
         cos_sin = {

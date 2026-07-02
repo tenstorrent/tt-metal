@@ -143,6 +143,23 @@ class Gemma4Attention(Module):
             mesh_device=mesh_device,
         )
 
+        # SDPA + compute kernel configs (matches gemma3 / Wan conventions).
+        # ``q_chunk_size`` / ``k_chunk_size`` are starting values; tune per mesh shape after first
+        # hardware run (see Wan's ``sdpa_chunk_size_map`` for an example of per-mesh tuning).
+        self.sdpa_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def _prepare_torch_state(self, state: dict) -> None:
         """When TP > num_kv_heads, replicate each K/V head ``kv_replication`` times along the
         head axis so the per-rank slice has exactly one (replicated) KV head."""
@@ -246,6 +263,8 @@ class Gemma4Attention(Module):
             is_causal=(attention_mask is None),
             attn_mask=attention_mask,
             scale=1.0,
+            program_config=self.sdpa_config,
+            compute_kernel_config=self.compute_config,
         )
 
         # 8. (B, H_local, S, D) → (B, S, H_local * D), then o_proj (row-parallel → replicated).

@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 
+from ....models.transformers.diffusion_gemma._state_utils import per_layer_moe_substates
 from ....models.transformers.diffusion_gemma.text_decoder import DiffusionGemmaDecoderModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -28,25 +29,6 @@ from ....utils.test import line_params, ring_params
 PCC_THRESHOLD = 0.99
 ALLCLOSE_ATOL = 5e-2
 ALLCLOSE_RTOL = 5e-2
-
-
-def _per_layer_moe_substate(model_state: dict, num_layers: int, prefix: str = "") -> list[dict]:
-    """Pull router/experts substates per layer from a flat state_dict (under ``{prefix}layers.{i}.``)."""
-    substates = [{} for _ in range(num_layers)]
-    for k, v in model_state.items():
-        full_prefix = f"{prefix}layers."
-        if not k.startswith(full_prefix):
-            continue
-        rest = k[len(full_prefix) :]
-        # rest starts with "{i}.xxx"
-        try:
-            i_str, sub = rest.split(".", 1)
-            i = int(i_str)
-        except ValueError:
-            continue
-        if sub.startswith("router.") or sub.startswith("experts."):
-            substates[i][sub] = v
-    return substates
 
 
 @pytest.mark.parametrize(
@@ -165,7 +147,7 @@ def test_decoder_text_model(
     )
 
     hf_dec_state = hf_decoder.state_dict()
-    moe_state_dicts = _per_layer_moe_substate(hf_dec_state, text_config.num_hidden_layers)
+    moe_state_dicts = per_layer_moe_substates(hf_dec_state, num_layers=text_config.num_hidden_layers)
 
     tt_decoder = DiffusionGemmaDecoderModel(
         vocab_size=text_config.vocab_size,

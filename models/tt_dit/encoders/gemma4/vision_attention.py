@@ -110,6 +110,21 @@ class Gemma4VisionAttention(Module):
             mesh_device=mesh_device,
         )
 
+        # SDPA + compute kernel configs (matches gemma3 / Wan conventions).
+        self.sdpa_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Pad HF projections + Q/K norm weights along the head_dim axis."""
         H = self.num_attention_heads
@@ -255,6 +270,8 @@ class Gemma4VisionAttention(Module):
             is_causal=False,
             attn_mask=attention_mask,
             scale=1.0,
+            program_config=self.sdpa_config,
+            compute_kernel_config=self.compute_config,
         )
 
         # (B, H_local, P, Dp) → (B, P, H_local * Dp) → o_proj → (B, P, hidden_size).
