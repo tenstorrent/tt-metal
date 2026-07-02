@@ -923,10 +923,15 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     }
 
     const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::NOC0);
+    const std::vector<tt::umd::CoreCoord> dispatch_cores =
+        (cluster_.arch() == ARCH::QUASAR && hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH))
+            ? soc_d.get_cores(CoreType::DISPATCH, CoordSystem::NOC0)
+            : std::vector<tt::umd::CoreCoord>{};
 
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= core_info.non_worker_cores().size(),
-        "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() + dispatch_cores.size() <=
+            core_info.non_worker_cores().size(),
+        "Detected more pcie/dram/eth/dispatch cores than fit in the device mailbox.");
     TT_ASSERT(
         eth_cores.size() <= core_info.virtual_non_worker_cores().size(),
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
@@ -962,6 +967,10 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
         for (tt::umd::CoreCoord core : eth_cores) {
             set_addressable_core(
                 core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
+        }
+        for (tt::umd::CoreCoord core : dispatch_cores) {
+            set_addressable_core(
+                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
         }
     }
 

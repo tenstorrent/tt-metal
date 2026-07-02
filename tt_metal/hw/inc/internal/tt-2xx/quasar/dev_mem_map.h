@@ -221,6 +221,12 @@
 #define MEM_DISPATCH_DM7_KERNEL_BASE (MEM_DISPATCH_DM6_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 #define DISPATCH_MEM_MAP_END (MEM_DISPATCH_DM7_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 
+// Dispatch-engine firmware/kernels use an extended reserved L1 layout; protect it in watcher NOC sanitize.
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+#undef MEM_MAP_READ_ONLY_END
+#define MEM_MAP_READ_ONLY_END DISPATCH_MEM_MAP_END
+#endif
+
 /////////////
 // Stack info
 // Stack and globals share the same piece of memory, one grows at the

@@ -675,6 +675,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     // Dispatch data / testing
     RT(dispatch_data_collection_enabled);
     RT(test_mode_enabled);
+    RT(use_quasar_tensix_dispatch_cores);
 
     // DispatchCoreConfig
     {

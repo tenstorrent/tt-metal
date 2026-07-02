@@ -30,6 +30,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
+#include <internal/dispatch/dispatch_engine_cores.hpp>
 #include "hal_types.hpp"
 #include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
@@ -133,6 +134,13 @@ tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& 
         return tt::CoreType::DRAM;
     }
 
+    const std::vector<tt::umd::CoreCoord>& translated_dispatch_cores =
+        soc_desc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::TRANSLATED);
+    if (std::find(translated_dispatch_cores.begin(), translated_dispatch_cores.end(), virtual_coord) !=
+        translated_dispatch_cores.end()) {
+        return tt::CoreType::DISPATCH;
+    }
+
     tt::CoreType core_type =
         soc_desc.translate_coord_to(virtual_coord, tt::CoordSystem::NOC0, tt::CoordSystem::NOC0).core_type;
     if (core_type == tt::CoreType::TENSIX) {
@@ -179,6 +187,7 @@ string get_noc_target_str(
         }
         switch (core_type) {
             case tt::CoreType::DRAM: return {"DRAM", "DRAM"};
+            case tt::CoreType::DISPATCH: return {"Dispatch", "L1"};
             case tt::CoreType::ETH: return {"Ethernet", "L1"};
             case tt::CoreType::PCIE: return {"PCIe", "PCIE"};
             case tt::CoreType::WORKER: return {"Tensix", "L1"};
@@ -436,6 +445,18 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
     }
 
+    // Dump dispatch-engine cores (Quasar only)
+    {
+        const auto& hal = env.get_hal();
+        if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+            const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
+            for (const auto& logical_dispatch_core : tt::tt_metal::internal::get_quasar_soc_dispatch_engine_logical_cores(
+                     soc_d)) {
+                Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
+            }
+        }
+    }
+
     for (auto k_id : dump_data.used_kernel_names) {
         fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
     }
@@ -544,6 +565,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         core_type_str = "idleth";
     } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
         core_type_str = "dram";
+    } else if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
+        core_type_str = "dispatch";
     } else {
         core_type_str = "worker";
     }
@@ -588,6 +611,7 @@ void WatcherDeviceReader::Core::Dump() const {
         (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
     bool is_dram_core = (programmable_core_type_ == HalProgrammableCoreType::DRAM);
+    bool is_dispatch_core = (programmable_core_type_ == HalProgrammableCoreType::DISPATCH);
 
     ValidateKernelIDs();
 
@@ -610,8 +634,8 @@ void WatcherDeviceReader::Core::Dump() const {
             DumpWaypoints();
         }
         // DumpL1Status() is TENSIX-specific: it asserts programmable_core_type_ == TENSIX and
-        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM).
-        if (!is_eth_core && !is_dram_core) {
+        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM, DISPATCH).
+        if (!is_eth_core && !is_dram_core && !is_dispatch_core) {
             DumpL1Status();
         }
         if (!rtoptions.watcher_noc_sanitize_disabled()) {
