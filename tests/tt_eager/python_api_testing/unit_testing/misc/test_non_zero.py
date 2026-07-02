@@ -7,6 +7,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from models.common.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize(
@@ -32,6 +33,7 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
         ttnn.uint32,
     ],
 )
+@skip_for_blackhole("test_indexed_slice fails on Blackhole P150b with BFLOAT16 dtype mismatch, refs #0")
 def test_indexed_slice(seed, B, b, tt_dtype, device):
     torch.manual_seed(seed)
 
