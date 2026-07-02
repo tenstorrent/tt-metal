@@ -101,18 +101,15 @@ LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t t
     return LayoutMode::KRowMajor;
 }
 
-// Receiver enumeration order for a streaming (receiver-contiguous) weight: how the host maps a
-// receiver's (bank, bank-local slab index) to a global receiver position when slicing the rotation
-// table. This is the consumer's concept (a ring matmul calls it a "ring position"), derived from
-// the tensor's shard distribution — the GCB stays order-agnostic (see receiver_slab_indices).
-enum class ReceiverOrder : uint8_t {
-    Strided,     // ROUND_ROBIN_1D: global = bank + slab_idx * num_banks
-    Contiguous,  // CONTIGUOUS_1D:  global = bank * receivers_per_bank + slab_idx
-};
-
-// Map a streaming weight's shard distribution to its ReceiverOrder. TT_FATALs on a non-recv-contig
-// (no BDS) tensor or an unsupported distribution strategy.
-ReceiverOrder receiver_order_for_streaming_tensor(const MeshTensor& t, uint32_t tensor_idx) {
+// Validate a streaming (receiver-contiguous) weight and return the shard distribution strategy that
+// governs how the host maps a receiver's (bank, bank-local slab index) to a global receiver position
+// when slicing the rotation table. This is the consumer's concept (a ring matmul calls it a "ring
+// position") — the GCB stays order-agnostic (see receiver_slab_indices). TT_FATALs on a
+// non-recv-contig (no BDS) tensor or an unsupported distribution strategy; only the two strategies
+// below reach the packing loop:
+//   ROUND_ROBIN_1D (strided):    global = bank + slab_idx * num_banks
+//   CONTIGUOUS_1D  (contiguous): global = bank * receivers_per_bank + slab_idx
+ShardDistributionStrategy shard_strategy_for_streaming_tensor(const MeshTensor& t, uint32_t tensor_idx) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto& bds_opt = ref_buffer->buffer_distribution_spec();
     TT_FATAL(
@@ -127,7 +124,7 @@ ReceiverOrder receiver_order_for_streaming_tensor(const MeshTensor& t, uint32_t 
         "ROUND_ROBIN_1D (strided) and CONTIGUOUS_1D (contiguous) receiver-contiguous weights are supported.",
         tensor_idx,
         static_cast<int>(strategy));
-    return strategy == ShardDistributionStrategy::CONTIGUOUS_1D ? ReceiverOrder::Contiguous : ReceiverOrder::Strided;
+    return strategy;
 }
 
 // Address-independent per-tensor geometry for the K-row-major DRAM layout — see
@@ -706,10 +703,10 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     struct Slot {
         TensorPrefetcherTensorLayout geom;
         std::vector<uint32_t> rotation;  // caller's global rotation (total_receivers entries), or empty == batched
-        // Enumeration used to slice `rotation` per receiver; only meaningful when streaming. Part of
-        // slot identity: two tensors with the same geometry+rotation but different orders pack
+        // Shard distribution used to slice `rotation` per receiver; only meaningful when streaming. Part
+        // of slot identity: two tensors with the same geometry+rotation but different strategies pack
         // different per-sender rotation bytes, so they must not dedup together.
-        ReceiverOrder order = ReceiverOrder::Strided;
+        ShardDistributionStrategy strategy = ShardDistributionStrategy::ROUND_ROBIN_1D;
     };
     struct PlanEntry {
         uint32_t bank_local_base = 0;
@@ -720,7 +717,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         std::vector<Slot> slots;
     };
     auto slot_equal = [](const Slot& a, const Slot& b) {
-        return layout_equal(a.geom, b.geom) && a.rotation == b.rotation && a.order == b.order;
+        return layout_equal(a.geom, b.geom) && a.rotation == b.rotation && a.strategy == b.strategy;
     };
     std::vector<PagePlan> plans(1);
 
@@ -797,7 +794,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
                 "K-row-major.",
                 tensor_idx);
             slot.rotation = input.rotation;
-            slot.order = receiver_order_for_streaming_tensor(input.tensor.get(), static_cast<uint32_t>(tensor_idx));
+            slot.strategy = shard_strategy_for_streaming_tensor(input.tensor.get(), static_cast<uint32_t>(tensor_idx));
         }
 
         // Find this slot in the current page (dedup), or decide it needs adding.
@@ -878,12 +875,13 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
                     // Map each receiver's (bank, bank-local slab index) to its global receiver
                     // position, then gather this sender's slice of the caller's global rotation. The
                     // topology guard above makes both formulas a bijection onto [0, total_receivers),
-                    // so no inner-loop range check is needed.
-                    const ReceiverOrder order = plan.slots[i].order;
+                    // so no inner-loop range check is needed. Only ROUND_ROBIN_1D (strided) and
+                    // CONTIGUOUS_1D reach here (see shard_strategy_for_streaming_tensor).
+                    const bool strided = plan.slots[i].strategy == ShardDistributionStrategy::ROUND_ROBIN_1D;
                     auto* rot = reinterpret_cast<uint32_t*>(page.data() + slot_start + kLayoutBytes);
                     for (uint32_t r = 0; r < slab.size(); ++r) {
-                        const uint32_t g = (order == ReceiverOrder::Strided) ? (bank + slab[r] * num_banks_)
-                                                                             : (bank * receivers_per_bank + slab[r]);
+                        const uint32_t g =
+                            strided ? (bank + slab[r] * num_banks_) : (bank * receivers_per_bank + slab[r]);
                         rot[r] = plan.slots[i].rotation[g];
                     }
                 }
