@@ -5,6 +5,7 @@
 #include "untilize_multi_core_parallelize_column_program_factory.hpp"
 
 #include <filesystem>
+#include <functional>
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -110,7 +111,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
             .dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
     };
 
     // ---- Writer (Metal 2.0 fork of writer_..._interleaved_parallel_columns) ----
@@ -125,7 +131,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_core", "tile_width_size", "start_stick_id", "offset_within_stick"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::WRITER);
+        }),
     };
 
     // ---- Compute (Metal 2.0 fork of untilize; full + cliff) ----

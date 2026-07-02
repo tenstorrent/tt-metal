@@ -81,7 +81,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
     };
 
     // -- Writer kernel --
@@ -95,7 +100,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::WRITER);
+        }),
     };
 
     // -- Compute kernel --

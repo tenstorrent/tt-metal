@@ -6,6 +6,7 @@
 #include "move_sharded_program_factory.hpp"
 
 #include <cmath>
+#include <functional>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -99,8 +100,12 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
         // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
-        .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}},
+        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return m2::DataMovementGen2Config{};
+            }
+            return m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        }),
     };
 
     reader.runtime_arg_schema.runtime_arg_names = m2::Group<std::string>{"total_size_bytes"};

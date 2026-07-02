@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <filesystem>
+#include <functional>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -168,7 +169,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     reader.unique_id = READER;
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}};
-    reader.hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)};
+    reader.hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+        if (device->arch() == tt::ARCH::QUASAR) {
+            return DataMovementGen2Config{};
+        }
+        return create_from_role(DataMovementRoleHint::READER);
+    });
     if (use_block_reader) {
         reader.source = kdir / "reader_unary_sharded_blocks_metal2.cpp";
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
@@ -206,7 +212,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                   "num_unpadded_cols_per_input_block",
                   "width_wise_output_block_start_index",
                   "num_cols_already_processed_in_first_output_block"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::WRITER);
+        }),
     };
 
     // ---- Compute KernelSpec(s) (common; full + optional interleaved cliff) ----

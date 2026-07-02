@@ -1021,7 +1021,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .tensor_bindings = make_reader_tensor_bindings(false),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
     };
 
     std::optional<KernelSpec> reader1;
@@ -1034,7 +1039,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .tensor_bindings = make_reader_tensor_bindings(true),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return DataMovementGen2Config{};
+                }
+                return create_from_role(DataMovementRoleHint::WRITER);
+            }),
         };
     }
 
