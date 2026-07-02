@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Parallel FPU matmul (TRISC0-2 -> buffer_C) + isolated SrcS SFPU exp (TRISC3 -> buffer_Res).
+// Parallel FPU matmul (TRISC0-2 -> buffer_C) + isolated SrcS SFPU add (TRISC3 -> buffer_Res).
 // FPU path uses Dest dvalid {FPU, PACK}. SFPU path uses UNP_S/SrcS/PACK1 only (no Dest).
 
 #include <cstdint>
@@ -102,7 +102,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_srcs.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -122,24 +121,38 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t PARAM_SRCS_SLICE_COUNT      = srcs_dims::slice_count(PARAM_SRCS_32BIT_MODE);
     constexpr std::uint32_t PARAM_SRCS_INSTRN_COUNT = 1;
 
-    constexpr std::uint32_t buf_desc_id_unpack = 0;
-    constexpr std::uint32_t buf_desc_id_pack   = 8;
+    constexpr std::uint32_t buf_desc_id_unpack_0 = 0;
+    constexpr std::uint32_t buf_desc_id_unpack_1 = 1;
+    constexpr std::uint32_t buf_desc_id_pack     = 8;
 
-    buffer_descriptor_u bd_unpack = {0};
-    tdma_descriptor_t td_unpack;
+    buffer_descriptor_u bd_unpack_0 = {0};
+    tdma_descriptor_t td_unpack_0;
+    buffer_descriptor_u bd_unpack_1 = {0};
+    tdma_descriptor_t td_unpack_1;
     buffer_descriptor_u bd_pack = {0};
     tdma_descriptor_t td_pack;
 
-    bd_unpack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_S[0]);
-    bd_unpack.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_unpack.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_unpack.buf_desc        = bd_unpack;
-    td_unpack.buf_desc_id     = buf_desc_id_unpack;
-    td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
-    _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
+    bd_unpack_0.f.l1_addr_16B   = L1_ADDRESS(params.buffer_S[0]);
+    bd_unpack_0.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack_0.f.x_dim         = PARAM_SRCS_XDIM;
+    bd_unpack_0.f.y_dim         = PARAM_SRCS_YDIM;
+    bd_unpack_0.f.z_dim         = PARAM_SRCS_ZDIM;
+    td_unpack_0.buf_desc        = bd_unpack_0;
+    td_unpack_0.buf_desc_id     = buf_desc_id_unpack_0;
+    td_unpack_0.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    _configure_buf_desc_table_(td_unpack_0.buf_desc_id, td_unpack_0.buf_desc);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_0);
+
+    bd_unpack_1.f.l1_addr_16B   = L1_ADDRESS(params.buffer_T[0]);
+    bd_unpack_1.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack_1.f.x_dim         = PARAM_SRCS_XDIM;
+    bd_unpack_1.f.y_dim         = PARAM_SRCS_YDIM;
+    bd_unpack_1.f.z_dim         = PARAM_SRCS_ZDIM;
+    td_unpack_1.buf_desc        = bd_unpack_1;
+    td_unpack_1.buf_desc_id     = buf_desc_id_unpack_1;
+    td_unpack_1.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    _configure_buf_desc_table_(td_unpack_1.buf_desc_id, td_unpack_1.buf_desc);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_1);
 
     bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
     bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
@@ -154,39 +167,65 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
-    _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
+    const int in0_base = ckernel::math::SFPU_SRCS_BASE_ADDR;
+    const int in1_base = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
+    const int out_base = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
+
+    const int num_sfpu_iterations      = PARAM_SRCS_YDIM >> 1;
+    const std::uint32_t replay_buf_len = num_sfpu_iterations * 4;
+    load_replay_buf( // TODO: Replace with SFPI call (#1637)
+        0,
+        replay_buf_len,
+        false,
+        0,
+        0,
+        [in0_base, in1_base, out_base, num_sfpu_iterations]
+        {
+#pragma GCC unroll 4
+            for (int d = 0; d < num_sfpu_iterations; d++)
+            {
+                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_base + (d << 1));
+                TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
+                TT_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, out_base + (d << 1));
+            }
+        });
+
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 
-    const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
-    const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int store_base_addr     = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
-    // One-time setup: program the exp LOADMACRO sequence and record the per-slice
-    // instruction stream (load+exp via SFPLOADMACRO, then explicit store to the output slice).
-    _exp_init_loadmacro_(load_base_addr, store_base_addr, num_sfpu_iterations);
-    const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
-
-    // Full TRISC3 path: UNP_S -> SFPU exp (SFPLOADMACRO replay) -> PACK1.
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
-        _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
+
         _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
 
-        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
+        constexpr int preload_count = 3;
+#pragma GCC unroll preload_count
+        for (std::uint32_t j = 0; j < preload_count; j++)
         {
-            TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
-            // Drain the LOADMACRO pipeline before clearing the SrcS valids so PACK1 reads the
-            // exp result, not a store still in flight.
-            TTI_SFPNOP(0, 0, 0);
-            TTI_SFPNOP(0, 0, 1);
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+        }
 
+        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT - preload_count; slice++)
+        {
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+            TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+        }
+
+#pragma GCC unroll preload_count
+        for (std::uint32_t j = 0; j < preload_count; j++)
+        {
+            TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
             _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
         }
     }
 
-    wait_unpack_idle();
     wait_sfpu_idle();
+    wait_unpack_idle();
     wait_pack_idle();
 }
 
