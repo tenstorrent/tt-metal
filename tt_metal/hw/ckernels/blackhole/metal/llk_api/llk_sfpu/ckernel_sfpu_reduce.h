@@ -1240,6 +1240,13 @@ inline void init_reduce_max_min_int32() {
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, bool clear_high_bits>
 inline void init_reduce_max_min(std::uint32_t num_cols) {
+#ifdef DISABLE_SFPLOADMACRO
+    if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP && !clear_high_bits) {
+        init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
+        return;
+    }
+#endif
+
     // Initialize SFPU config and set swap direction before defining LOADMACRO sequences
     _init_sfpu_config_reg();
 
