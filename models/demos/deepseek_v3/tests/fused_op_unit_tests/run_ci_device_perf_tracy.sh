@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Run DeepSeek fused-op device perf cases using direct Tracy commands.
 # Intended for CI and local debug parity.
