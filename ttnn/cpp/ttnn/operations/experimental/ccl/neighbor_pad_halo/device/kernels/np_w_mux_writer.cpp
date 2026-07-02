@@ -114,18 +114,13 @@ void kernel_main() {
     auto pkt_hdr_sem = PacketHeaderPool::allocate_header();
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem, unicast_route_info);
 
-    // ---- Startup barrier (1-hop unicast atomic-inc to the immediate W neighbor, through the mux) ----
-    if (has_neighbor && mux_connection_valid) {
-        uint64_t nb_sem = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr_sem->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nb_sem, 1u});
-        tt::tt_fabric::fabric_atomic_inc(mux_connection, pkt_hdr_sem);
-    }
-    // Wait for a barrier inc from each existing adjacent W device.
-    uint32_t barrier_wait = (is_first_chip ? 0u : 1u) + (is_last_chip ? 0u : 1u);
-    if (barrier_wait > 0) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_wait);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
-    }
+    // NOTE (bring-up): no separate W startup barrier here. barrier_sem is shared with the reader's H->W
+    // barrier (same core), so a writer inc/reset would clobber the reader's count. H->W ordering is
+    // provided by the reader's barrier wait; buffers are fresh in a single standalone dispatch.
+    (void)barrier_sem;
+    (void)barrier_sem_noc0_x;
+    (void)barrier_sem_noc0_y;
+    (void)is_first_chip;
 
     // ---- Coalesced W send through the mux (bank-major; lockstep with np_phase2_w_reader) ----
     if (has_neighbor && mux_connection_valid) {

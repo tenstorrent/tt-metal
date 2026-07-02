@@ -657,6 +657,17 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             for (const auto& c : mux_mux_cores) mux_crs.insert(CoreRange(c));
             CoreRangeSet worker_crset(worker_crs), mux_crset(mux_crs);
 
+            // Send CB (c_in0) on the mux WORKER cores — the base cb_w_sender_config was created only on
+            // the standard column-0 W cores, so the relocated workers had no CB (reader/writer would
+            // block on cb_reserve/cb_wait_front). Sized to hold coalesce groups deep for pipelining.
+            {
+                const uint32_t w_mux_cb_pages = 16 * w_coalesce_n;
+                CircularBufferConfig cb_mux_w(
+                    w_mux_cb_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}});
+                cb_mux_w.set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
+                CreateCircularBuffer(program, worker_crset, cb_mux_w);
+            }
+
             w_reader_kernel_id = CreateKernel(program, kdir + "np_phase2_w_reader.cpp", worker_crset, mux_reader_cfg);
             w_writer_kernel_id = CreateKernel(program, kdir + "np_w_mux_writer.cpp", worker_crset, mux_writer_cfg);
             SetCommonRuntimeArgs(
@@ -701,6 +712,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     const uint32_t section_base = w_dir ? w_section_wright_base : w_section_wleft_base;
                     for (uint32_t wk = 0; wk < num_w_workers; wk++) {
                         CoreCoord wc = mux_worker_cores[s * num_w_workers + wk];
+                        CoreCoord wc_vc = mux_worker_virtual[s * num_w_workers + wk];
                         const uint32_t wk_start = base_link_start + wk * per_wk + std::min(wk, extra_wk);
                         const uint32_t wk_count = per_wk + (wk < extra_wk ? 1 : 0);
                         // Reader RT args (same layout as the standard W reader).
@@ -713,9 +725,11 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                             outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim, 0u};
                         SetRuntimeArgs(program, w_reader_kernel_id, {wc}, r_rt);
                         // Writer RT args: per-core (base,rows,sem xy,dir,route) then mux conn (0..16).
+                        // sem targets = the neighbor's reader worker core (NOC coords are device-independent),
+                        // NOT the mux core: the recv-sem + startup-barrier incs land on the reader that waits them.
                         std::vector<uint32_t> w_rt = {
                             section_base + wk_start * pw, wk_count,
-                            mux_vc.x, mux_vc.y, mux_vc.x, mux_vc.y,
+                            wc_vc.x, wc_vc.y, wc_vc.x, wc_vc.y,
                             static_cast<uint32_t>(is_first_w_device), static_cast<uint32_t>(is_last_w_device), w_dir,
                             0u, static_cast<uint32_t>(w_dir ? w_backward_device_offset : w_forward_device_offset)};
                         ttnn::ccl::fabric_mux_connection_rt_args(
