@@ -47,7 +47,6 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE>
 inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
-#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result = calculate_erfinv_body<false>(in);
