@@ -185,9 +185,12 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
     "input_shape",
     [
         [1, 2, 8, 16, 16],  # per-stick W path (wright_base not 8-aligned -> W_COALESCE off)
-        [1, 4, 16, 32, 16],  # coalesce-eligible (bases 8-aligned -> W_COALESCE on, middle W devices)
+        [1, 4, 16, 32, 16],  # coalesce-eligible, 8-aligned rows + W_dev
+        [1, 3, 16, 24, 16],  # coalesce, NON-8-aligned rows (w_outer=30) + W_dev (6): exercises the relaxed gate
+        [1, 7, 32, 64, 32],  # mid-size, NON-8-aligned rows (63/link), W_dev=16 (s4-like ratio)
+        [1, 7, 32, 48, 32],  # mid-size, NON-8-aligned rows + W_dev=12 (s3-like non-aligned W)
     ],
-    ids=["perstick", "coalesce"],
+    ids=["perstick", "coalesce", "coalesce_nonalign", "mid_wdev16", "mid_wdev12"],
 )
 def test_neighbor_pad_halo_2d(mesh_device, device_params, padding_mode, input_shape):
     # [B, T, H, W, C]; H sharded over axis 0 (2 dev), W over axis 1 (4 dev). k333 halo (pH=pW=1).
@@ -328,6 +331,26 @@ def test_neighbor_pad_halo_perf(mesh_device, device_params, T):
     # The op already uses both, so "more fabric links" is not a lever here.
     run_halo_vs_async_perf(
         mesh_device, input_shape=[1, T, 272, 480, 128], h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
+    )
+
+
+# Production LTX 1080p 2x4 decoder NP-bound layers, as full [B,T,H,W,C] (per-device = H/2, W/4). All k333
+# (pH=pW=1). Verifies the mux speedup holds on the real deployed shapes, not just the synthetic sweep.
+_LTX_PROD_2x4 = [
+    ([1, 147, 272, 480, 128], "s4_res_out_C128"),  # per-dev 136x120, C_in=128 (s4_res / s4_out)
+    ([1, 147, 136, 240, 256], "s3_res_chg_C256"),  # per-dev  68x60,  C_in=256 (s3_res / s3_chg)
+]
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112 * 64}], indirect=True
+)
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+def test_neighbor_pad_halo_prod_perf(mesh_device, device_params, input_shape, shape_id):
+    run_halo_vs_async_perf(
+        mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
     )
 
 

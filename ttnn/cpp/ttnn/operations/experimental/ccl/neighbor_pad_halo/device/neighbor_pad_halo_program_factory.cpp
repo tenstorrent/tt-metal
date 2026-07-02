@@ -158,10 +158,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // path unnecessary, so an eligible H exchange uses the simpler straight-to-DRAM path
     // (use_l1_intermediate=0, whole H-halo row -> neighbor H-section DRAM; corners land in DRAM where the
     // W-reader reads them) AND ships each row bank-major coalesced (h_coalesce_n same-bank sticks per 4KB
-    // packet). Eligible when padding_h==1 and W_dev (num_sticks_per_halo_dim) is 8-aligned so every row
-    // base is 8-aligned. BH: 8 interleaved DRAM banks.
+    // packet). Eligible when padding_h==1: the row's w=j,j+8,... land same-bank/next-offset at
+    // base_row+j (valid for any base_row / W_dev, reader gathers in the same order). BH: 8 DRAM banks.
     uint32_t h_coalesce_n = 0;
-    if (op.np_padding_h == 1 && (num_sticks_per_halo_dim % 8u == 0)) {
+    if (op.np_padding_h == 1) {
         h_coalesce_n = std::min(16u, 4096u / page_size);
         if (h_coalesce_n < 2) {
             h_coalesce_n = 0;
@@ -217,6 +217,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         if (const char* e = std::getenv("TT_NP_W_WORKERS")) {
             num_w_workers = std::max(1, atoi(e));
         }
+        // Clamp to available 8-row bank-units per link so no worker gets 0 rows (the 8-aligned split
+        // gives worker0 zero rows when rows_per_link < 8*num_w_workers -> degenerate/incorrect).
+        const uint32_t w_units_per_link = (pad2_num_links > 0) ? (w_rows_est / pad2_num_links / 8u) : 0u;
+        num_w_workers = std::max(1u, std::min<uint32_t>(num_w_workers, std::max(1u, w_units_per_link)));
         log_debug(
             tt::LogOp,
             "np_halo mux: W bytes/(link,dir)={}, heuristic={}, num_w_workers={}",
@@ -343,15 +347,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         w_extra_rows = w_outer_dim_size % pad2_num_links;
 
         // W-send bank-major coalescing (BH: 8 interleaved DRAM banks). Sticks base+r, base+r+8, ...,
-        // base+r+8*(N-1) are contiguous on bank (base+r)%8, so N of them ship as ONE N*page fabric
-        // write straight to the neighbor's interleaved DRAM (no L1-recv, no receiver changes). Eligible
-        // only when every W-core's base stick-id is 8-aligned (so rel%8 == bank) and pw==1, on the
-        // halo-only (progress==0) path. Middle devices only (edge devices keep the per-stick path).
-        constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
-        const bool w_coalesce_ok = (progress_t_batch_size == 0) && (op.np_pad2_left == 1) && (op.np_pad2_right == 1) &&
-                                   (w_section_wleft_base % NP_NUM_DRAM_BANKS == 0) &&
-                                   (w_section_wright_base % NP_NUM_DRAM_BANKS == 0) &&
-                                   (w_rows_per_link % NP_NUM_DRAM_BANKS == 0) && (w_extra_rows == 0);
+        // base+r+8*(N-1) land on bank (base+r)%8 at consecutive page offsets, so N ship as ONE N*page
+        // fabric write to get_noc_addr(base+r) — valid for ANY base (the N sticks differ by 8, hence same
+        // bank / next offset), and the reader gathers rel=r,r+8,... in the same order the writer sends. So
+        // only pw==1 + halo-only (progress==0) are required; base/row-count alignment is NOT needed.
+        const bool w_coalesce_ok =
+            (progress_t_batch_size == 0) && (op.np_pad2_left == 1) && (op.np_pad2_right == 1);
         if (w_coalesce_ok) {
             w_coalesce_n = std::min(16u, 4096u / page_size);  // sticks per <=4KB packet
             if (w_coalesce_n < 2) {
@@ -410,7 +411,16 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // Auto-engage like W-mux: 2 H workers for zeros+coalesce (validated 8/8 PCC). Replicate stays on the
     // direct path (pre-existing W-mux edge-outward bug). TT_NP_H_MUX forces on; TT_NP_H_WORKERS overrides.
     const bool h_force_mux = std::getenv("TT_NP_H_MUX") != nullptr;
-    uint32_t num_h_workers = (is_padding_zeros && h_coalesce_n > 0) ? 2u : 1u;  // capped at the validated 2
+    // H bytes per (link,dir): 2 workers only when large enough to be bandwidth-bound (mirrors W's 4KB
+    // gate) and each worker gets >=1 frame — tiny shapes stay on the correct direct path.
+    const uint64_t h_bytes_per_link = (num_links > 0) ? (static_cast<uint64_t>(outer_dim_size) * op.np_padding_h *
+                                                         num_sticks_per_halo_dim * page_size / num_links)
+                                                      : 0;
+    const uint32_t h_frames_per_link = (num_links > 0) ? (outer_dim_size / num_links) : 0;
+    uint32_t num_h_workers = 1;
+    if (is_padding_zeros && h_coalesce_n > 0 && h_bytes_per_link > 4u * 1024u && h_frames_per_link >= 2u) {
+        num_h_workers = 2;
+    }
     if (const char* e = std::getenv("TT_NP_H_WORKERS")) {
         num_h_workers = std::max(1, atoi(e));
     }
@@ -904,13 +914,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     // Split this (link,dir)'s W rows across workers.
                     const uint32_t rows_this_link = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
                     const uint32_t base_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
-                    // 8-aligned split: give each worker a whole number of 8-row (bank) units so its coalesce
-                    // base stays bank-aligned (bank-major coalesce needs base % 8 == 0). rows_this_link is
-                    // 8-aligned (w_coalesce_ok). Last workers absorb the remainder units.
+                    // 8-aligned per-worker split: each worker's start is a whole number of 8-row (bank)
+                    // units so its coalesce base stays bank-consistent with the receiver's read; the LAST
+                    // worker absorbs the non-8 remainder (its coalesce handles the partial tail group).
+                    // Even (non-8) splits corrupt the W-section at ~0.996 PCC on non-aligned shapes.
                     constexpr uint32_t BANKS = 8;
                     const uint32_t units = rows_this_link / BANKS;
                     const uint32_t units_per_wk = units / num_w_workers;
-                    const uint32_t extra_units = units % num_w_workers;
                     const uint32_t pw = w_dir ? op.np_pad2_right : op.np_pad2_left;
                     const uint32_t section_base = w_dir ? w_section_wright_base : w_section_wleft_base;
                     // recv-sem target = the SAME-direction worker core (matches the standard W writer,
@@ -919,10 +929,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     for (uint32_t wk = 0; wk < num_w_workers; wk++) {
                         CoreCoord wc = mux_worker_cores[s * num_w_workers + wk];
                         CoreCoord wc_vc = mux_worker_virtual[s * num_w_workers + wk];
-                        const uint32_t prior_units = wk * units_per_wk + std::min(wk, extra_units);
-                        const uint32_t wk_units = units_per_wk + (wk < extra_units ? 1 : 0);
-                        const uint32_t wk_start = base_link_start + prior_units * BANKS;
-                        const uint32_t wk_count = wk_units * BANKS;
+                        const uint32_t wk_start = base_link_start + wk * units_per_wk * BANKS;
+                        const bool last_wk = (wk == num_w_workers - 1);
+                        const uint32_t wk_count =
+                            last_wk ? (rows_this_link - wk * units_per_wk * BANKS) : (units_per_wk * BANKS);
                         // Reader RT args (same layout as the standard W reader). barrier_count = number of
                         // H workers that signal the H->W barrier (H-mux: links*dirs*workers; else H cores).
                         const uint32_t h_signal_count =
