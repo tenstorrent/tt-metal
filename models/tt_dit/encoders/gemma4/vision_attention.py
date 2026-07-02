@@ -60,6 +60,7 @@ class Gemma4VisionAttention(Module):
         self.head_dim_padded = head_dim_padded
         self.parallel_config = parallel_config
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
 
         tp_factor = parallel_config.tensor_parallel.factor
         assert num_attention_heads % tp_factor == 0
@@ -68,9 +69,12 @@ class Gemma4VisionAttention(Module):
 
         self.num_local_heads = num_attention_heads // tp_factor
 
-        # Pre-compute the V-norm correction factor: sqrt(head_dim_padded / head_dim).
-        # Applied multiplicatively on v_norm's output to undo the larger denominator from padded zeros.
-        self._v_scale = math.sqrt(head_dim_padded / head_dim)
+        # Pre-compute the V-norm correction factor: sqrt(head_dim / head_dim_padded).
+        # RMSNorm over head_dim_padded sees ``sum(x^2) / Dp``; HF sees ``sum(x^2) / D`` (no zeros
+        # to dilute). Since Dp > D and the sums are equal (zeros contribute nothing), our rms
+        # is smaller by sqrt(D/Dp), which makes our normalized-output *larger* than HF's by
+        # sqrt(Dp/D) at every real position. Shrink by sqrt(D/Dp) to match HF.
+        self._v_scale = math.sqrt(head_dim / head_dim_padded)
 
         col_kwargs = dict(
             bias=False,
@@ -149,7 +153,11 @@ class Gemma4VisionAttention(Module):
         if Dp == D:
             return  # No head_dim padding needed.
 
-        scale = math.sqrt(Dp / D)
+        # RMSNorm-over-padded weight correction: our output-per-real-position is larger than
+        # HF's by sqrt(Dp/D) (see _v_scale for the derivation). Baking the correction into the
+        # learned scale is equivalent to a post-norm multiply — the divide by ``scale`` here
+        # is what shrinks our result back to HF's.
+        scale = math.sqrt(D / Dp)
 
         # Q/K/V projections: HF weight is [num_heads * head_dim, hidden_size]. Pad output dim per head.
         for name in ("q_proj", "k_proj", "v_proj"):
