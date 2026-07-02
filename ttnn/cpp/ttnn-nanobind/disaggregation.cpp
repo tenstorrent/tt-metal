@@ -19,6 +19,7 @@ namespace tt::tt_metal::internal::disaggregation {
 // compiled into the `impl` target). Forward-declared here to bind without the impl header.
 std::string export_to_protobuf(const KvChunkAddressTable& table);
 void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path);
+KvChunkAddressTable import_from_protobuf_file(const std::string& path);
 }  // namespace tt::tt_metal::internal::disaggregation
 
 namespace ttnn::disaggregation {
@@ -222,6 +223,11 @@ void bind_disaggregation_api(nb::module_& mod) {
         nb::arg("table"),
         nb::arg("path"),
         "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
+    mod.def(
+        "import_from_protobuf_file",
+        &import_from_protobuf_file,
+        nb::arg("path"),
+        "Deserialize a KvChunkAddressTable from a protobuf file at `path`.");
 }
 
 }  // namespace ttnn::disaggregation
