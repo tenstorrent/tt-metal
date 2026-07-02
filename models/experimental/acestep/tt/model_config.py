@@ -336,6 +336,61 @@ def build_condition_encoder(args: AceStepModelConfig, mesh_device) -> AceStepCon
     )
 
 
+def _text_encoder_layer_config(rl, args, device):
+    """AceStepEncoderLayerConfig for a Qwen3 text-encoder layer (full attention, causal via mask)."""
+    a = rl.self_attn
+    dt = args.weight_dtype
+    return AceStepEncoderLayerConfig(
+        input_layernorm_weight=lazy_norm(rl.input_layernorm.weight, device, dt),
+        post_attention_layernorm_weight=lazy_norm(rl.post_attention_layernorm.weight, device, dt),
+        wq=lazy_wT(a.q_proj.weight, device, dt),
+        wk=lazy_wT(a.k_proj.weight, device, dt),
+        wv=lazy_wT(a.v_proj.weight, device, dt),
+        wo=lazy_wT(a.o_proj.weight, device, dt),
+        q_norm_weight=lazy_norm(a.q_norm.weight, device, dt),
+        k_norm_weight=lazy_norm(a.k_norm.weight, device, dt),
+        w1=lazy_wT(rl.mlp.gate_proj.weight, device, dt),
+        w2=lazy_wT(rl.mlp.down_proj.weight, device, dt),
+        w3=lazy_wT(rl.mlp.up_proj.weight, device, dt),
+        n_heads=a.config.num_attention_heads,
+        n_kv_heads=a.config.num_key_value_heads,
+        head_dim=a.head_dim,
+        eps=rl.input_layernorm.variance_epsilon,
+        sliding_window=None,
+    )
+
+
+def build_text_encoder(mesh_device, *, dtype=None):
+    """Build the TT AceStepTextEncoder (Qwen3-Embedding-0.6B) from the pipeline bundle.
+
+    The 28-layer causal Qwen3 text encoder turns tokenized prompt text into text_hidden_states
+    that the ConditionEncoder's text_projector consumes. Reuses AceStepEncoderLayer + RMSNorm1D.
+    """
+    import ttnn as _ttnn
+    from transformers import AutoModel
+    from models.experimental.acestep.reference.weight_utils import pipeline_dir
+    from models.experimental.acestep.tt.text_encoder import AceStepTextEncoder, AceStepTextEncoderConfig
+
+    dt = dtype or _ttnn.bfloat16
+    text_dir = str(pipeline_dir() / "Qwen3-Embedding-0.6B")
+    hf_te = AutoModel.from_pretrained(text_dir, dtype=torch.float32).eval()
+
+    prev = args_weight_dtype = None  # noqa: F841 (clarity: builder-local dtype only)
+
+    class _A:  # tiny arg carrier so the layer helper can read weight_dtype
+        weight_dtype = dt
+
+    args = _A()
+    cfg = AceStepTextEncoderConfig(
+        embed_tokens=hf_te.embed_tokens.weight.detach(),
+        norm_weight=lazy_norm(hf_te.norm.weight, mesh_device, dt),
+        layer_configs=[_text_encoder_layer_config(rl, args, mesh_device) for rl in hf_te.layers],
+        hidden_size=hf_te.config.hidden_size,
+        eps=hf_te.config.rms_norm_eps,
+    )
+    return AceStepTextEncoder(cfg), hf_te
+
+
 def build_vae_decoder(mesh_device, *, dtype=None):
     """Build the TT Oobleck VAE decoder (latents -> 48kHz waveform) from the genuine checkpoint.
 

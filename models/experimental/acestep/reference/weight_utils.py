@@ -29,6 +29,14 @@ _HF_HUB = Path.home() / ".cache/huggingface/hub/models--ACE-Step--acestep-v15-ba
 PIPELINE_REPO_ID = "ACE-Step/Ace-Step1.5"
 
 
+def _is_complete_pipeline(root: Path) -> bool:
+    """A dir is a usable pipeline root only if the actual weight files are present (not just
+    configs). HF snapshots can be partial (config-only) if a download was interrupted."""
+    return (root / "vae" / "diffusion_pytorch_model.safetensors").is_file() and (
+        root / "Qwen3-Embedding-0.6B" / "model.safetensors"
+    ).is_file()
+
+
 def _resolve_pipeline_dir() -> Path | None:
     """Resolve the pipeline checkpoint root generically, in priority order:
 
@@ -36,18 +44,26 @@ def _resolve_pipeline_dir() -> Path | None:
     2. The HuggingFace cache snapshot for ``ACE-Step/Ace-Step1.5`` (the portable default:
        works for anyone who ran ``huggingface_hub.snapshot_download('ACE-Step/Ace-Step1.5')``).
 
-    Returns None if neither is available (tests skip rather than hard-fail).
+    Only returns a dir whose weight files are actually present (partial/config-only snapshots are
+    rejected). Returns None if none is complete (tests skip rather than hard-fail).
     """
     env = _os.environ.get("ACESTEP_PIPELINE_DIR")
-    if env and Path(env).is_dir():
+    if env and Path(env).is_dir() and _is_complete_pipeline(Path(env)):
         return Path(env)
     try:
         from huggingface_hub import snapshot_download
 
         # local_files_only: resolve from cache without hitting the network during tests.
-        return Path(snapshot_download(PIPELINE_REPO_ID, local_files_only=True))
+        cached = Path(snapshot_download(PIPELINE_REPO_ID, local_files_only=True))
+        if _is_complete_pipeline(cached):
+            return cached
     except Exception:
-        return None
+        pass
+    # Env dir even if only partially complete (e.g. VAE present, text encoder pending) is still
+    # useful for VAE-only tests; fall back to it last.
+    if env and Path(env).is_dir():
+        return Path(env)
+    return None
 
 
 def pipeline_dir() -> Path:
