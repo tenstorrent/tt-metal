@@ -23,13 +23,8 @@ from ....utils.tensor import bf16_tensor, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
 PCC_THRESHOLD = 0.9995
-# Module is small (RMSNorm + Linear) — visible diffs land at 1e-3 per cell — but bf16
-# accumulation across the 1152→2816 projection can put a single outlier cell up to ~3e-2
-# after the compute config knobs are exhausted (HiFi4 + fp32_dest_acc + packer_l1_acc=False
-# applied in the module). Threshold covers observed outliers with a bit of headroom for
-# run-to-run rounding variation.
-ALLCLOSE_ATOL = 5e-2
-ALLCLOSE_RTOL = 5e-2
+ALLCLOSE_ATOL = 2e-2
+ALLCLOSE_RTOL = 2e-2
 
 
 @pytest.mark.parametrize(

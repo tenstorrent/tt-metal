@@ -126,13 +126,14 @@ class DiffusionGemmaMoE(Module):
     def forward(self, router_input: ttnn.Tensor, expert_input: ttnn.Tensor) -> ttnn.Tensor:
         """
         Args:
-            router_input:  replicated ``[B, S, hidden_size]`` (raw residual, no pre-norm).
-            expert_input:  replicated ``[B, S, hidden_size]`` (already pre_feedforward_layernorm_2'd).
+            router_input:  replicated ``[1, B, S, hidden_size]`` (raw residual, no pre-norm).
+            expert_input:  replicated ``[1, B, S, hidden_size]`` (already pre_feedforward_layernorm_2'd).
 
         Returns:
-            replicated ``[B, S, hidden_size]``.
+            replicated ``[1, B, S, hidden_size]`` (matches the tt_dit ``1BND`` convention).
         """
-        B, S = router_input.shape[0], router_input.shape[1]
+        # Read batch/seq from the trailing 3 dims so both 3D and 4D 1BND inputs work.
+        B, S = router_input.shape[-3], router_input.shape[-2]
         H = self.hidden_size
         assert (B * S) % TILE == 0, f"B*S = {B}*{S} = {B * S} must be tile-aligned for the prefill MoE path."
 
@@ -141,4 +142,5 @@ class DiffusionGemmaMoE(Module):
         expert_in_1_1_M_H = ttnn.reshape(expert_input, (1, 1, B * S, H))
 
         out_1_1_M_H = self._moe(router_in_1_1_M_H, expert_in_1_1_M_H)
-        return ttnn.reshape(out_1_1_M_H, (B, S, H))
+        # Return as 4D 1BND to match the caller convention (layer.py + tests upload 4D inputs).
+        return ttnn.reshape(out_1_1_M_H, (1, B, S, H))
