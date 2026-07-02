@@ -309,6 +309,9 @@ void kernel_main() {
     // (x - E[x]) * 1/sqrt(var+eps); that padding output is discarded). Mask tile index tracks wt
     // (the tile's position across the width). cb_col_mask_packed was waited on once near the top of
     // the kernel and is read by tile index here (never popped).
+    // SrcA already holds the (x - E[x]) tiles' format; only SrcB changes for this multiply, to read the
+    // mask in its own data format (the mask format need not match the compute tiles).
+    reconfig_data_format_srcb(cb_col_mask_packed_id);
     mul_tiles_init(cb_xmm_id, cb_col_mask_packed_id);
     for (uint32_t t = 0; t < num_tiles_per_block; t++) {
         const uint32_t wt = t % block_w;
@@ -324,11 +327,13 @@ void kernel_main() {
         tile_regs_release();
     }
     cb_xmm.wait_front(num_tiles_per_block);
+    // The masking above reads the column mask on SrcB, leaving SrcB configured for the mask's data format,
+    // which need not match the (x - E[x]) tiles. Restore SrcB to their format for the squaring below.
+    reconfig_data_format_srcb(cb_xmm_id);
 #endif
-    constexpr uint32_t cb_sq_input = cb_xmm_id;
 
-    // (x - E[x])^2, cb_mm2 <-- cb_sq_input
-    mul_tiles_init(cb_sq_input, cb_sq_input);
+    // (x - E[x])^2, cb_mm2 <-- cb_xmm_id
+    mul_tiles_init(cb_xmm_id, cb_xmm_id);
     index_h_offset = 0;
     cb_xmm2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -337,7 +342,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles(cb_sq_input, cb_sq_input, index, index, w);
+                mul_tiles(cb_xmm_id, cb_xmm_id, index, index, w);
             }
             tile_regs_commit();
             tile_regs_wait();

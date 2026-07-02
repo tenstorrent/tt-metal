@@ -424,13 +424,11 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     kernel_config.welford_fp32_alias =
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
     if (do_col_mask) {
-        // The writer generates the CB 19 mask on-device with generate_mask_w<T>; compute applies it at
-        // every masking site. Pass the logical width and the data format the mask tiles must match (that
-        // of the tiles the mask multiplies) so the writer can size and type the generated tiles.
+        // The writer generates the CB 19 mask on-device with generate_mask_w; compute applies it at
+        // every masking site. Pass the logical width so the writer knows where the padding columns begin.
         kernel_config.compute_defines.emplace_back("DO_COL_MASK", "1");
         kernel_config.writer_defines.emplace_back("DO_COL_MASK", "1");
         kernel_config.logical_K = logical_K;
-        kernel_config.mask_fp32 = (cb_data_format == tt::DataFormat::Float32);
     }
 
     add_kernel_descriptors(program_descriptor, core_ranges, workers, grid, std::move(kernel_config));
@@ -501,9 +499,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.is_pre_all_gather = is_pre_all_gather;
     cb_config.is_post_all_gather = is_post_all_gather;
     cb_config.skip_write_back = skip_write_back;
-    // CB 19 is the writer-generated column mask; size it to block_wt tiles (one tile-row).
+    // CB 19 is the writer-generated column mask; size it to block_wt tiles (one tile-row). The mask holds
+    // only 1.0 or 0.0 in bfloat16.
     cb_config.do_col_mask = do_col_mask;
-    cb_config.col_mask_gen_CB_size_bytes = block_wt * single_tile_size;
+    cb_config.col_mask_gen_CB_size_bytes = block_wt * bfloat16_tile_size;
     cb_config.do_legacy_layernorm_col_mask = do_legacy_layernorm_col_mask;
     // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
     // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
