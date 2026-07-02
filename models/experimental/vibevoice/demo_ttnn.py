@@ -180,6 +180,14 @@ def main() -> int:
         "vs eager and the largest single decode cost (~6x on the LM step); leaves the "
         "diffusion/post-diffusion blocks eager. Reserves the trace region & 2 command queues.",
     )
+    ap.add_argument(
+        "--trace-frame",
+        action="store_true",
+        help="ttnn-trace the WHOLE steady-state speech-diffusion frame as ONE graph "
+        "(VV_TRACE_FRAME=1): neg-LM + diffusion + post-diffusion + pos-LM fused and replayed "
+        "per frame — the only config with the diffusion block traced bit-exactly in-loop "
+        "(~7 tok/s target). Supersedes --trace/--trace-lm. Reserves a large trace region & 2 CQs.",
+    )
     args = ap.parse_args()
 
     if args.debug:
@@ -188,8 +196,11 @@ def main() -> int:
         print("[demo_ttnn] debug enabled (VV_DEBUG=1 VV_PROFILE=1)", flush=True)
 
     if args.trace:
-        os.environ["VV_TRACE_POSTDIFF"] = "1"
-        os.environ["VV_TRACE_DIFFUSION"] = "1"
+        # setdefault so a pre-set env var can independently disable one sub-trace
+        # (e.g. VV_TRACE_DIFFUSION=0 to trace only post-diffusion) — used to isolate
+        # the trace-coexistence corruptor.
+        os.environ.setdefault("VV_TRACE_POSTDIFF", "1")
+        os.environ.setdefault("VV_TRACE_DIFFUSION", "1")
         print(
             "[demo_ttnn] trace enabled: post-diffusion (VV_TRACE_POSTDIFF=1) + "
             "diffusion-head (VV_TRACE_DIFFUSION=1)",
@@ -199,6 +210,10 @@ def main() -> int:
     if args.trace_lm:
         os.environ["VV_TRACE_LM"] = "1"
         print("[demo_ttnn] trace enabled: LM decode step (VV_TRACE_LM=1, bit-exact)", flush=True)
+
+    if args.trace_frame:
+        os.environ["VV_TRACE_FRAME"] = "1"
+        print("[demo_ttnn] trace enabled: fused steady-state frame (VV_TRACE_FRAME=1)", flush=True)
 
     if args.text:
         text_path = Path(args.text)
@@ -310,11 +325,13 @@ def main() -> int:
     import time as _time
 
     _open_kwargs = dict(device_id=0, l1_small_size=32768)
-    if args.trace or args.trace_lm:
+    if args.trace or args.trace_lm or args.trace_frame:
         # Reserve a trace buffer + a 2nd command queue.  --trace holds the diffusion-head
         # and post-diffusion captures; --trace-lm holds the positive AND negative 28-layer
-        # LM decode captures simultaneously (two live traces).
-        _open_kwargs.update(trace_region_size=700_000_000, num_command_queues=2)
+        # LM decode captures simultaneously (two live traces); --trace-frame holds one large
+        # fused-frame capture (neg-LM + diffusion + post-diff + pos-LM) — needs the most room.
+        _size = 1_400_000_000 if args.trace_frame else 700_000_000
+        _open_kwargs.update(trace_region_size=_size, num_command_queues=2)
     mesh = ttnn.open_device(**_open_kwargs)
     try:
         if args.debug:
@@ -363,12 +380,20 @@ def main() -> int:
         tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
         tt_gen = tt_out.sequences[0, prefill_len:]
         _ar_tokens = int(tt_gen.numel())
-        _decode_tps = _ar_tokens / tt_out.decode_wall_s if tt_out.decode_wall_s > 0 else 0.0
         _prefill_tps = prefill_len / tt_out.prefill_wall_s if tt_out.prefill_wall_s > 0 else 0.0
+        # Decode throughput: when the fused-frame trace is active, report the STEADY-STATE rate
+        # (trace-replay frames only, excluding warmup+capture) — apples-to-apples with the
+        # tt_transformers/llama demos.  Otherwise fall back to the whole-loop rate.
+        if tt_out.steady_decode_frames > 0:
+            _decode_wall = tt_out.steady_decode_s
+            _decode_tps = tt_out.steady_decode_frames / tt_out.steady_decode_s
+        else:
+            _decode_wall = tt_out.decode_wall_s
+            _decode_tps = _ar_tokens / tt_out.decode_wall_s if tt_out.decode_wall_s > 0 else 0.0
         print(
             f"[demo_ttnn] prefill_tokens={prefill_len}  "
             f"TTFT={tt_out.prefill_wall_s:.2f}s  "
-            f"decode={tt_out.decode_wall_s:.2f}s  "
+            f"decode={_decode_wall:.2f}s  "
             f"decode={_decode_tps:.1f} tok/s  "
             f"prefill={_prefill_tps:.0f} tok/s",
             flush=True,
@@ -401,8 +426,9 @@ def main() -> int:
         "prefill_tokens": prefill_len,
         "ar_tokens_generated": int(tt_gen.numel()),
         "ttft_s": round(tt_out.prefill_wall_s, 3),
-        "decode_wall_s": round(tt_out.decode_wall_s, 3),
-        "decode_toks_per_s": round(_decode_tps, 2),
+        "decode_wall_s": round(_decode_wall, 3),  # steady-state (replay) when traced, else whole-loop
+        "decode_toks_per_s": round(_decode_tps, 2),  # steady-state (replay only) when --trace-frame
+        "decode_frames": tt_out.steady_decode_frames,  # # of timed replay frames (0 if not traced)
         "prefill_toks_per_s": round(_prefill_tps, 1),
         "generate_wall_s": round(_generate_wall, 3),
         "max_length_times": args.max_length_times,
