@@ -172,15 +172,18 @@ class TPAttention:
         )
 
     def _make_heads(self, qg, kp, vp, S):
-        """Split qg into heads; returns (q, gate, k, v). Uses fused nlp_create_qkv_heads."""
+        """Split qg into heads; returns (q, gate_flat, k, v) via fused nlp_create_qkv_heads.
+
+        gate_flat stays flat [1,1,S,NH*HD] (col h*HD+d = head h, dim d), matching nlp_concat_heads'
+        column order. Gate is applied AFTER concat_heads (see forward_prefill*), so no head-major
+        reshape/transpose is needed; bit-identical to per-head gating, saves ~1 ms/attn-layer at S=2048.
+        """
         NH, NKV, HD = self.NH, self.NKV, self.HD
         if self._qg_deint:
-            # De-interleaved qg: contiguous q/gate slices (gate still needs transpose)
+            # De-interleaved qg: contiguous q/gate slices; gate stays flat (applied post-concat).
             q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD))
             gate_flat = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, S, 2 * NH * HD))
             ttnn.deallocate(qg)
-            gate = ttnn.transpose(ttnn.reshape(gate_flat, (1, S, NH, HD)), 1, 2)
-            ttnn.deallocate(gate_flat)
             kv = ttnn.concat([kp, vp], dim=-1)
             ttnn.deallocate(kp)
             ttnn.deallocate(vp)
@@ -194,12 +197,12 @@ class TPAttention:
             )
             ttnn.deallocate(q_flat)
             ttnn.deallocate(kv)
-            return q, gate, k, v
-        # Interleaved qg: split [q;gate] per head
+            return q, gate_flat, k, v
+        # Interleaved qg: split [q;gate] per head; gate flattened to [1,1,S,NH*HD] (applied post-concat).
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
         q_part, gate_part = ttnn.chunk(qg, 2, dim=-1)
         ttnn.deallocate(qg)
-        gate = ttnn.transpose(gate_part, 1, 2)
+        gate_flat = ttnn.reshape(gate_part, (1, 1, S, NH * HD))
         ttnn.deallocate(gate_part)
         q_flat = ttnn.reshape(q_part, (1, 1, S, NH * HD))
         ttnn.deallocate(q_part)
@@ -216,7 +219,7 @@ class TPAttention:
         )
         ttnn.deallocate(q_flat)
         ttnn.deallocate(kv)
-        return q, gate, k, v
+        return q, gate_flat, k, v
 
     def _concat_heads(self, gated):
         """Prefill concat-heads via nlp_concat_heads (post-gate)."""
@@ -242,7 +245,7 @@ class TPAttention:
 
         qg, kp, vp = self._qkv(x)
 
-        q, gate, k, v = self._make_heads(qg, kp, vp, S)
+        q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
@@ -278,10 +281,12 @@ class TPAttention:
         ttnn.deallocate(k8)
         ttnn.deallocate(v8)
 
-        gated = ttnn.multiply(attn, ttnn.sigmoid(gate))
+        # Concat heads first, then gate: concat col h*HD+d == gate_flat col h*HD+d, so this is
+        # bit-identical to per-head gating but skips the gate reshape+transpose to head-major.
+        attn = self._concat_heads(attn)
+        gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
         ttnn.deallocate(attn)
-        ttnn.deallocate(gate)
-        gated = self._concat_heads(gated)
+        ttnn.deallocate(gate_flat)
         partial = ttnn.linear(
             gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -448,7 +453,7 @@ class TPAttention:
 
         qg, kp, vp = self._qkv(x)
 
-        q, gate, k, v = self._make_heads(qg, kp, vp, S)
+        q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
@@ -534,10 +539,11 @@ class TPAttention:
             ttnn.deallocate(sdpa_page_table)
         ttnn.deallocate(q8)
 
-        gated = ttnn.multiply(attn, ttnn.sigmoid(gate))
+        # Concat heads first, then gate (flat gate matches concat column order); see forward_prefill.
+        attn = self._concat_heads(attn)
+        gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
         ttnn.deallocate(attn)
-        ttnn.deallocate(gate)
-        gated = self._concat_heads(gated)
+        ttnn.deallocate(gate_flat)
         partial = ttnn.linear(
             gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
