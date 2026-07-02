@@ -105,9 +105,14 @@ void kernel_main() {
                 }
                 // Fabric-forward the seed to the neighbour's identical output page.
                 writer.write_page(src, out_page, output_accessor);
-                if constexpr (is_forward) {
-                    noc_async_write_barrier();  // local self-copy done before slot reuse
-                }
+                // Flush BEFORE popping: the fabric payload send is NON_BLOCKING (it leaves an
+                // async noc_async_write reading from `src` in flight — edm_fabric_utils.hpp
+                // send_chunk_from_address), and the self-copy (forward) is likewise async. The
+                // reader (NCRISC) refills this slot as soon as it is popped, so without this
+                // barrier the refill races the still-in-flight read of `src` (WAR hazard). A
+                // plain noc_async_write_barrier() covers the fabric payload NoC — this is exactly
+                // what the helper's own drain() relies on (ccl_helpers_dataflow.inl:162).
+                noc_async_write_barrier();
                 cb_pop_front(cb_relay_pages, 1);
             }
             counter.inc(counting_target_noc);  // one counting inc per block
@@ -121,6 +126,9 @@ void kernel_main() {
                 cb_wait_front(cb_relay_pages, 1);
                 const uint32_t src = get_read_ptr(cb_relay_pages);
                 writer.write_page(src, base + p, output_accessor);
+                // Flush the NON_BLOCKING fabric payload's in-flight read of `src` before the
+                // reader can refill this slot (WAR hazard — see the seed loop above).
+                noc_async_write_barrier();
                 cb_pop_front(cb_relay_pages, 1);
             }
             counter.inc(counting_target_noc);
