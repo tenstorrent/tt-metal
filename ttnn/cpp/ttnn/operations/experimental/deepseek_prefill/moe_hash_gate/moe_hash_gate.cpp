@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moe_grouped_topk.hpp"
+#include "moe_hash_gate.hpp"
 
 #include <cstdint>
 #include <string>
 
 #include <tt_stl/assert.hpp>
-#include "device/moe_grouped_topk_device_operation.hpp"
+#include "device/moe_hash_gate_device_operation.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
+namespace ttnn::operations::experimental::deepseek_prefill::moe_hash_gate {
 
 namespace {
 ScoreFunc parse_score_func(const std::string& score_func) {
@@ -24,32 +24,26 @@ ScoreFunc parse_score_func(const std::string& score_func) {
 }
 }  // namespace
 
-std::array<Tensor, 2> moe_grouped_topk(
+std::array<Tensor, 2> moe_hash_gate(
     const Tensor& scores,
-    const Tensor& bias,
-    uint32_t n_groups,
-    uint32_t summed_experts_per_group,
-    uint32_t topk_groups,
+    const Tensor& input_ids,
+    const Tensor& tid2eid,
     uint32_t n_activated_experts,
     float route_scale,
     float epsilon,
-    bool stable_sort,
     const std::string& score_func,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& padding_config) {
-    return ttnn::prim::moe_grouped_topk(
+    return ttnn::prim::moe_hash_gate(
         scores,
-        bias,
-        n_groups,
-        summed_experts_per_group,
-        topk_groups,
+        input_ids,
+        tid2eid,
         n_activated_experts,
         route_scale,
         epsilon,
-        stable_sort,
         parse_score_func(score_func),
         output_mem_config,
         padding_config);
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk
+}  // namespace ttnn::operations::experimental::deepseek_prefill::moe_hash_gate

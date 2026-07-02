@@ -9,32 +9,26 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+// Reuse the router-affinity activation enum from moe_grouped_topk (no duplication).
+#include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/moe_grouped_topk_device_operation.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
+namespace ttnn::operations::experimental::deepseek_prefill::moe_hash_gate {
 
-// Router affinity activation applied to the gate logits before bias-add / top-k.
-// Sigmoid is DeepSeek-V3 / Kimi; SqrtSoftplus (== sqrt(softplus(x))) is DeepSeek-V4.
-enum class ScoreFunc : uint32_t {
-    Sigmoid = 0,
-    SqrtSoftplus = 1,
-};
+using ScoreFunc = ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc;
 
-struct MoeGroupedTopkDeviceOperation {
+struct MoeHashGateDeviceOperation {
     struct operation_attributes_t {
-        uint32_t n_groups;
-        uint32_t summed_experts_per_group;
-        uint32_t topk_groups;
         uint32_t n_activated_experts;
         float route_scale;
         float epsilon;
-        bool stable_sort;
         ScoreFunc score_func;
         tt::tt_metal::MemoryConfig output_mem_config;
     };
 
     struct tensor_args_t {
         const Tensor& scores;
-        const Tensor& bias;
+        const Tensor& input_ids;
+        const Tensor& tid2eid;
         std::optional<Tensor> padding_config;
     };
 
@@ -75,23 +69,20 @@ struct MoeGroupedTopkDeviceOperation {
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk
+}  // namespace ttnn::operations::experimental::deepseek_prefill::moe_hash_gate
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::MoeGroupedTopkDeviceOperation::tensor_return_value_t
-moe_grouped_topk(
+ttnn::operations::experimental::deepseek_prefill::moe_hash_gate::MoeHashGateDeviceOperation::tensor_return_value_t
+moe_hash_gate(
     const Tensor& scores,
-    const Tensor& bias,
-    uint32_t n_groups,
-    uint32_t summed_experts_per_group,
-    uint32_t topk_groups,
+    const Tensor& input_ids,
+    const Tensor& tid2eid,
     uint32_t n_activated_experts,
     float route_scale,
     float epsilon,
-    bool stable_sort = false,
-    ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc score_func =
-        ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc::Sigmoid,
+    ttnn::operations::experimental::deepseek_prefill::moe_hash_gate::ScoreFunc score_func =
+        ttnn::operations::experimental::deepseek_prefill::moe_hash_gate::ScoreFunc::SqrtSoftplus,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& padding_config = std::nullopt);
 
