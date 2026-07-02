@@ -14,7 +14,7 @@ from __future__ import annotations
 from .analyzer import LlkAnalyzer
 from .extractor import ExtractorConfig
 from .model import ApiCall, ApiLayer, ComputeThread, KernelAnalysis, RunAnalysis
-from .report import render_text, to_json
+from .report import collapse_rows, render_csv, render_table, render_text, to_json
 from .runner import ModelRunner, RunResult
 
 __all__ = [
@@ -29,4 +29,7 @@ __all__ = [
     "ComputeThread",
     "render_text",
     "to_json",
+    "render_table",
+    "render_csv",
+    "collapse_rows",
 ]

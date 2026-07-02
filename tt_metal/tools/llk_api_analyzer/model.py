@@ -112,6 +112,14 @@ class RuntimeArg:
         }
 
 
+def format_function_display(name: str, template_args: list[TemplateArg] | None = None) -> str:
+    """Render a function name (with optional template args) in backticks."""
+    if not template_args:
+        return f"`{name}`"
+    templates = ", ".join(f"{t.name}={t.display_value}" for t in template_args)
+    return f"`{name}<{templates}>`"
+
+
 def _format_int_set(values: tuple[int, ...]) -> str:
     """Render a set of ints compactly, collapsing contiguous runs to ``a..b``."""
     if not values:
@@ -148,10 +156,7 @@ class ApiCall:
     @property
     def display_header(self) -> str:
         """The ``name<param=value, ...>`` header (enum/bool values resolved)."""
-        if not self.template_args:
-            return self.name
-        templates = ", ".join(f"{t.name}={t.display_value}" for t in self.template_args)
-        return f"{self.name}<{templates}>"
+        return format_function_display(self.name, self.template_args)
 
     @property
     def call_site(self) -> str | None:

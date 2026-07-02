@@ -12,7 +12,7 @@ from pathlib import Path
 from .analyzer import LlkAnalyzer
 from .extractor import ExtractorConfig
 from .model import ApiLayer
-from .report import render_text, to_json
+from .report import render_csv, render_table, render_text, to_json
 from .runner import ModelRunner
 
 _DEFAULT_CACHE = Path.home() / ".cache" / "tt-metal-cache"
@@ -75,9 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-f",
         "--format",
-        choices=("text", "json"),
+        choices=("text", "json", "table", "csv"),
         default="text",
-        help="Output format (default: text).",
+        help=("Output format (default: text). 'table'/'csv' collapse the run into a " "single row-per-LLK-call table."),
     )
     parser.add_argument(
         "-o",
@@ -147,7 +147,13 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
 
-        output = to_json(analysis) if args.format == "json" else render_text(analysis)
+        renderers = {
+            "json": to_json,
+            "table": render_table,
+            "csv": render_csv,
+            "text": render_text,
+        }
+        output = renderers[args.format](analysis)
 
         if args.output:
             Path(args.output).write_text(output)

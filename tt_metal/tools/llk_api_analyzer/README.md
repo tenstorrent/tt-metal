@@ -51,7 +51,7 @@ occurrences each), followed by any arguments that stay dynamic at runtime:
 
 ```
   -- pack / llk_api --
-   llk_pack<is_fp32_dest_acc_en=false, out_of_order_output=false, pack_mode=Default>  (op: pack_tile)
+   `llk_pack<is_fp32_dest_acc_en=false, out_of_order_output=false, pack_mode=Default>`  (op: `pack_tile`)
       @ pack.h:90:5    (1 call, 1 distinct arg-combo)
         (x1)  tile_index={0..7}, output=4, output_tile_index=0
 ```
@@ -112,6 +112,10 @@ python_env/bin/python -m tt_metal.tools.llk_api_analyzer ~/.cache/tt-metal-cache
 # JSON output, written to a file
 python_env/bin/python -m tt_metal.tools.llk_api_analyzer <path> -f json -o report.json
 
+# Collapse the whole run into one flat table (Markdown or CSV)
+python_env/bin/python -m tt_metal.tools.llk_api_analyzer <path> -f table
+python_env/bin/python -m tt_metal.tools.llk_api_analyzer <path> -f csv -o llk_calls.csv
+
 # Include the user-facing compute-API layer too
 python_env/bin/python -m tt_metal.tools.llk_api_analyzer <path> -l llk_core,llk_api,compute_api
 ```
@@ -128,9 +132,34 @@ the kernels must have been built with `TT_METAL_RISCV_DEBUG_INFO=1`.)
 | `--cache-dir DIR` | `TT_METAL_CACHE` to use for `--run` (default: a fresh temp dir). |
 | `--run-cwd DIR` | Working directory for the `--run` command. |
 | `--keep-cache` | Keep the temporary `--run` cache after analysis. |
-| `-f, --format {text,json}` | Output format (default `text`). |
+| `-f, --format {text,json,table,csv}` | Output format (default `text`). `table`/`csv` collapse the run into one row per LLK call. |
 | `-o, --output FILE` | Write to a file instead of stdout. |
 | `-l, --layers L1,L2,...` | Layers to collect from `llk_core,llk_api,compute_api,other` (default `llk_core,llk_api`). |
+
+### Collapsed table (`-f table` / `-f csv`)
+
+Flattens the whole run into a single table with one row per distinct LLK call
+(rows identical except for the TTNN op are merged, listing all contributing
+ops). Columns:
+
+| Column | Source |
+|--------|--------|
+| LLK API | Call name + template args (`name<param=value, ...>`). |
+| TTNN Ops | Enclosing compute-API op(s) that use this call. |
+| Op Args | The call's runtime args (constants shown as values, dynamic as `name=?`). |
+| Input Data Formats | Formats of the circular buffers this call reads (`operand*` args). |
+| Output Data Formats | Formats of the circular buffers this call writes (`output` / `pack_output`). |
+| Tile Dims | Tile `RxC` for the circular buffers this call references (`operand*` / `output` args). |
+| Math Fidelity | `MATH_FIDELITY` from `chlkc_descriptors.h`. |
+| Math Approx | `APPROX`. |
+| FP32 Dest Accum | `DST_ACCUM_MODE`. |
+| Dst Sync Mode | `DST_SYNC_MODE`. |
+
+Input/output CBs are taken from **this call's** static runtime arguments when
+present (e.g. `operandA=5, operandB=3` → `cb3` and `cb5` only). A direction
+with no static CB index on the call is shown as `-`. When the call names no CBs
+at all (fully dynamic operands), the columns fall back to the kernel-wide union,
+then to all configured CBs.
 
 ## Programmatic API
 
