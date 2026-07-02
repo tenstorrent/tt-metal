@@ -1,5 +1,59 @@
 # point_to_point — changelog
 
+## 2026-07-02 — On-device acceptance verification (Mode 1, resolves verification debt)
+
+The Phase-0 implementation had **never run on device** — the prior host had a single
+Blackhole and the multi-device sim's fabric bring-up reportedly deadlocked. This run
+executed the full acceptance suite on the 8-device craq-sim, closing that gap.
+
+### What was done
+- Ran `tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py` via
+  `scripts/run_multidevice_sim_pytest.py --topology bh_8xP150_p2p` (the pinned
+  `(2, 4)` mesh + `FABRIC_1D`, `required=True` for this op). Fabric now initializes
+  cleanly on all 8 devices — the prior "Fabric Router Sync: Timeout" blocker is **not
+  present in this environment**.
+- **No op code was changed.** The committed kernels / descriptor / entry point were
+  already correct by static analysis; this run only supplied the missing on-device signal.
+
+### Result — 18 / 18 acceptance tests PASS
+- `test_point_to_point` — **10/10**: every `(dtype × layout × topology)` cell:
+  `{bfloat16, float32, bfloat8_b} × {TILE, ROW_MAJOR}` (bf8b TILE-only) × `{Linear, Ring}`.
+- `test_point_to_point_shapes` — **5/5**: single-tile `(1,1,32,32)`, multi-tile
+  `(1,1,64,128)`, non-square `(1,1,96,64)`, multi-batch `(2,1,32,64)`, and
+  **non-tile-aligned** `(1,1,48,64)`.
+- `test_point_to_point_output_tensor` — **2/2**: bf16 TILE and f32 ROW_MAJOR
+  (preallocated-output path; same handle returned).
+- `test_point_to_point_program_cache` — **1/1**: second call is a program-cache hit —
+  confirms the `GlobalSemaphore` survives (created once) and the cache-reuse
+  `noc_semaphore_set(sem, 0)` re-arm ordering is correct (the "green run 1, hang run 2"
+  footgun the verifier flagged as highest-risk).
+
+### Accuracy
+- Identity byte copy → **PCC = 1.0 in practice** for every dtype (the tests gate at the
+  per-dtype safety bands PCC ≥ 0.995 bf16 / 0.999 f32 / 0.99 bf8b, all satisfied). The
+  oracle is strict (receiver shard == sender shard AND every other shard unchanged), so a
+  no-op could not pass — these are genuine transfer confirmations, not vacuous passes.
+
+### Paths de-risked (previously review-only, now observed)
+- **bf8b / uint32-intermediate framing** (bf8b TILE Linear+Ring) — the
+  `intermediate-as-uint32` design that sidesteps `element_size` for block-float. ✔
+- **float32 + ROW_MAJOR** end-to-end (both regimes of the coalesce path). ✔
+- **Ring routing** (`ccl_dm_route` short-way) vs Linear — both correct on FABRIC_1D. ✔
+- **program-cache reuse** — the semaphore reset ordering. ✔
+- **non-tile-aligned** `(1,1,48,64)` — confirms the pure-byte-mover claim (no tilize). ✔
+
+### Environment note (for future runs)
+`run_multidevice_sim_pytest.py` launches pytest with `sys.executable` (the python that
+started it). If invoked with the **base** `/localdev/wransom/tt-metal` python (whose older
+ttnn build lacks `ttnn.fp8_e4m3`), collection dies at import of the shared
+`tests/ttnn/utils_for_testing.py:33`. Fix: `source python_env/bin/activate` in **this
+clone** before invoking the runner, so it uses the clone's ttnn (which has `fp8_e4m3`).
+This is an infra/env issue, not an op defect.
+
+### Tests added
+- None (the immutable acceptance suite is the spec). Breadcrumbs written to
+  `agent_logs/ttnn-implementer_breadcrumbs.jsonl`.
+
 ## 2026-06-24 — Initial implementation (Mode 1, fresh op)
 
 Self-contained Python `generic_op` + `MeshProgramDescriptor` implementation of the
