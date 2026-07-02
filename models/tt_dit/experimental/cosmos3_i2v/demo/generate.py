@@ -153,11 +153,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--vae-decoder-t-chunk-size",
         type=int,
-        default=4,
+        default=1,
         help=(
-            "Temporal chunk size for the TT VAE decoder. Default 4 fits the cfg-parallel submesh "
-            "(half the SP factor); full-T (0/None) OOMs there at 720p/189f. Chunk caps harmlessly "
-            "below T, so 4 is safe at any frame count."
+            "Temporal chunk size for the TT VAE decoder. 1 (default) is faster than larger chunks "
+            "at 720p/189f on the 2x8 submesh (63s vs 67s measured). Full-T (0/None) OOMs at 720p/189f."
         ),
     )
     p.add_argument(
