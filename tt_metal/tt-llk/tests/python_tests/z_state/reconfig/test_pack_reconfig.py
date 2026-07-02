@@ -32,7 +32,11 @@ _IGNORED_GROUPS = ("address_counters", "register_window_counters")
 
 
 def _exp_section_size_required(dst: DataFormat) -> bool:
-    return dst in _BFP_FORMATS or dst in {DataFormat.Int8, DataFormat.UInt8} or dst in _FP8_FORMATS
+    return (
+        dst in _BFP_FORMATS
+        or dst in {DataFormat.Int8, DataFormat.UInt8}
+        or dst in _FP8_FORMATS
+    )
 
 
 def _drop_key(state, key):
