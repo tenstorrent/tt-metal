@@ -921,21 +921,19 @@ def test_tensor_prefetcher_streaming_matmul(
         dst_full_sync_en=True,
     )
 
-    ttnn.experimental.start_tensor_prefetcher(device)
-    # Identity rotation (rotation[r] = r) = natural topology ring order; the consuming ring matmul streams FIFO.
-    ttnn.experimental.queue_tensor_prefetcher_request(
-        device, [(tt_weight, ring_size, list(range(ring_size)))], global_cb=gcb
-    )
-    tt_out = ttnn.linear(
-        tt_act,
-        tt_weight,
-        program_config=program_config,
-        memory_config=output_mem_config,
-        compute_kernel_config=compute_kernel_config,
-        dtype=ttnn.bfloat16,
-        global_cb=gcb,
-    )
-    ttnn.experimental.stop_tensor_prefetcher(device)
+    # program_config.stream_in1 selects streaming, so prefetch_and_linear queues the
+    # matching identity-rotation request (natural ring order) and runs the consuming
+    # matmul itself -- the test never spells out the rotation table or block_count.
+    with tensor_prefetcher_session(device):
+        tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            tt_act,
+            tt_weight,
+            global_cb=gcb,
+            program_config=program_config,
+            memory_config=output_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
 
     out_torch = ttnn.to_torch(tt_out)
     expected = pt_act.float() @ pt_weight.float()
