@@ -1478,8 +1478,8 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
 ::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
     TT_FATAL(
         drisc_l1_arena_ != nullptr,
-        "DriscL1Arena not constructed; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 before "
-        "initializing the MeshDevice");
+        "DriscL1Arena not constructed; programmable DRAM cores auto-enable on Blackhole with firmware "
+        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
     return *drisc_l1_arena_;
 }
 
