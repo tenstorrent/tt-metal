@@ -20,6 +20,7 @@ file(
     create_qkv_heads/device/kernels/*.cpp
     create_qkv_heads_from_separate_tensors/device/kernels/*.cpp
     fused_distributed_rmsnorm/device/kernels/*.cpp
+    fused_partial_rope/device/kernels/*
     nlp_concat_heads/device/kernels/*.cpp
     nlp_concat_heads_boltz/device/kernels/*.cpp
     nlp_concat_heads_decode/device/kernels/*.cpp
