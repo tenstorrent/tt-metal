@@ -30,6 +30,12 @@ struct RSqrtPolicy {
     bool compute = false;  // Specifies if the computation should be performed
     uint32_t eps = 0;      // If compute is true, this is the epsilon value
                            // to add to the variance
+    // Select the SFPU rsqrt approximation. Must match whatever the comparison
+    // baseline uses, or the two diverge on low-variance rows (large 1/std), where
+    // the legacy vs non-legacy approximations differ enough to matter. The DiT
+    // composite LayerNorm (dit_layernorm_post_allgather) uses legacy=true; default
+    // stays false so existing callers are unchanged.
+    bool legacy = false;
 };
 
 /**
@@ -141,9 +147,16 @@ inline void combine_welford_partials(
         binop_with_scalar_tile_init();
         add_unary_tile(m2_acc_dst, rsqrt_policy.eps);
 
-        // Compute 1/sqrt(Var[x] + eps)
-        rsqrt_tile_init();
-        rsqrt_tile(m2_acc_dst);
+        // Compute 1/sqrt(Var[x] + eps). legacy_compat must match the baseline's rsqrt
+        // (the DiT composite LN uses legacy); both variants are instantiated and the
+        // runtime flag picks one.
+        if (rsqrt_policy.legacy) {
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(m2_acc_dst);
+        } else {
+            rsqrt_tile_init();
+            rsqrt_tile(m2_acc_dst);
+        }
     }
 
     // Pack the results into the combined CB
