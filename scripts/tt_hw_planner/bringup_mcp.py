@@ -128,12 +128,22 @@ def _is_shard_graduated(component: str) -> bool:
     return _snap(component, ".py.last_good_sharded").is_file()
 
 
+_FABRIC_FAILURE_SIGNATURES = (
+    "Fabric Router Sync: Timeout",
+    "fabric_firmware_initializer.cpp",
+    "fabric_unavailable",
+    "Ethernet handshake likely failed",
+)
+
+
+def _is_fabric_failure(text: str) -> bool:
+    return bool(text) and any(s in text for s in _FABRIC_FAILURE_SIGNATURES)
+
+
 def _pending_shard_component(comps: list[str]) -> str | None:
-    """First single-device-graduated, shard-eligible component that has no shard snapshot yet AND has
-    not exhausted the shard-attempt cap, or None. Only consulted when the shard phase is enabled AND
-    every component finished single-device bring-up. The cap stops an autonomous run from looping on a
-    component whose shard scheme won't converge."""
     st = _load_state()
+    if st.get("fabric_unhealthy"):
+        return None
     attempts = st.get("shard_attempts", {}) or {}
     for c in comps:
         if _is_graduated(c) and _shard.is_shard_eligible(c) and not _is_shard_graduated(c):
@@ -359,6 +369,8 @@ def run_component(component: str, mode: str = "single") -> dict:
             cls = _classify_loop(res["summary"], res["details"])
             st.setdefault("last_failure_class", {})[component] = cls
             st.setdefault("last_failure_text", {})[component] = (res["summary"] + "\n" + res["details"])[:4000]
+    if mode == "shard" and _is_fabric_failure(res.get("summary", "") + "\n" + res.get("details", "")):
+        st["fabric_unhealthy"] = True
     _save_state(st)
     return {
         "ok": bool(res["passed"]),
@@ -722,7 +734,8 @@ def termination_check() -> dict:
                 "reason": f"component '{c}' exhausted its attempt cap — call fall_back_to_cpu('{c}') to "
                 f"retire it to CPU (mixed execution) so the pipeline still works.",
             }
-    if can_stop and _shard_enabled():
+    fabric_unhealthy = bool(st.get("fabric_unhealthy"))
+    if can_stop and _shard_enabled() and not fabric_unhealthy:
         sc = _pending_shard_component(comps)
         if sc is not None:
             can_stop = False
