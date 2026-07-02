@@ -94,14 +94,14 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshInvalidConfig) {
 TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
     EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
-    EXPECT_TRUE(mesh_device_->is_parent_mesh());
+    EXPECT_TRUE(mesh_device_->impl().is_parent_mesh());
     EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
 
     auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
     EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
     EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
     EXPECT_THAT(submesh->get_devices(), SizeIs(2));
-    EXPECT_FALSE(submesh->is_parent_mesh());
+    EXPECT_FALSE(submesh->impl().is_parent_mesh());
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
     // Verify coordinates are correct.
