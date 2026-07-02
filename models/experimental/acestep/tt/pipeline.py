@@ -201,10 +201,13 @@ class AceStepPipeline:
         infer_steps: int = 30,
         shift: float = 1.0,
         seed: int = 0,
+        use_trace: bool = False,
     ):
         """Text -> 48 kHz stereo song in one call. Returns torch waveform [1, 2, samples].
 
         prompt:  style / caption text.  lyrics: optional lyric text.  seconds: song length.
+        use_trace: capture the DiT denoise step as a ttnn trace and replay it each ODE step,
+        removing the per-step host dispatch (numerically identical to eager).
         Tokenization, text encoding, conditioning, denoise (infer_steps ODE) and VAE decode are
         all handled internally. Requires the pipeline built with text/condition encoders
         (create_tt_pipeline(..., with_encoders=True), the default).
@@ -223,7 +226,7 @@ class AceStepPipeline:
         context = torch.cat([torch.zeros(1, 1, seq_len, hidden_ch), torch.ones(1, 1, seq_len, hidden_ch)], dim=-1)
         noise_tt = ttnn.from_torch(noise, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         context_tt = ttnn.from_torch(context, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        latents = self.generate(noise_tt, context_tt, enc_hs, infer_steps=infer_steps, shift=shift)
+        latents = self.generate(noise_tt, context_tt, enc_hs, infer_steps=infer_steps, shift=shift, use_trace=use_trace)
         return self.decode(latents)
 
     def _latent_len(self, seconds: float) -> int:
