@@ -20,7 +20,7 @@ from models.tt_dit.models.transformers.wan2_2.transformer_wan import WanCheckpoi
 from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
+from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import UniPCSolver, UniPCVariant
@@ -687,6 +687,7 @@ class WanPipeline(PipelineAPIMixin):
                 )
 
                 progress_bar.update()
+                on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=float(t)))
 
         self._current_timestep = None
 
