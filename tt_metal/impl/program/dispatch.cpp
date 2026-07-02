@@ -35,6 +35,7 @@
 #include "circular_buffer.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
+#include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
@@ -331,6 +332,69 @@ uint32_t finalize_cbs(
     cb_size = total_cb_size;
 
     return tt::align(base_offset + total_cb_size, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+}
+
+// Compute remote_cross_node_dfb_offset for all kernel groups and return the new base offset.
+// CrossNodeDFBs occupy num_cross_node_dfbs * 2 uint32_t words (dense slots 0..num-1).
+// If no CrossNodeDFBs are attached, remote_cross_node_dfb_offset stays 0 in all kernel groups.
+uint32_t finalize_cross_node_dfbs(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    tt::stl::Span<ProgramImpl*> programs,
+    uint32_t base_offset) {
+    // Collect merged per_core_cross_node_dfbs from all programs.
+    using AttachmentMap = std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::CrossNodeDFBAttachment>>;
+    AttachmentMap merged;
+    for (ProgramImpl* program : programs) {
+        for (const auto& [core, attachments] : program->get_per_core_cross_node_dfbs()) {
+            auto& v = merged[core];
+            v.insert(v.end(), attachments.begin(), attachments.end());
+        }
+    }
+
+    const bool any_cross_node_dfbs = !merged.empty() && !kernel_groups.empty();
+
+    if (!any_cross_node_dfbs) {
+        // No CrossNodeDFBs: remote_cross_node_dfb_offset stays 0 in all kernel groups.
+        return base_offset;
+    }
+
+    uint8_t max_num_cross_node_dfbs = 0;
+    for (const auto& [core, attachments] : merged) {
+        max_num_cross_node_dfbs =
+            std::max(max_num_cross_node_dfbs, static_cast<uint8_t>(attachments.size()));
+    }
+
+    // CrossNodeDFB region follows immediately after the CB/DFB config region.
+    const uint32_t remote_cross_node_dfb_offset = base_offset;
+    const uint32_t cross_node_dfb_region_words =
+        cross_node_dfb_config_region_words(max_num_cross_node_dfbs);
+    const uint32_t cross_node_dfb_region_bytes = cross_node_dfb_region_words * sizeof(uint32_t);
+
+    TT_FATAL(
+        remote_cross_node_dfb_offset <= std::numeric_limits<uint16_t>::max(),
+        "CrossNodeDFB config offset {} overflows uint16_t launch-msg field",
+        remote_cross_node_dfb_offset);
+
+    for (auto& kg : kernel_groups) {
+        uint8_t num_cross_node_dfbs = 0;
+        for (const CoreRange& cr : kg->core_ranges.ranges()) {
+            for (const auto& core : cr) {
+                auto it = merged.find(core);
+                if (it != merged.end()) {
+                    num_cross_node_dfbs = std::max(
+                        num_cross_node_dfbs, static_cast<uint8_t>(it->second.size()));
+                }
+            }
+        }
+
+        auto kernel_config = kg->launch_msg.view().kernel_config();
+        kernel_config.num_cross_node_dfbs() = num_cross_node_dfbs;
+        if (num_cross_node_dfbs > 0) {
+            kernel_config.remote_cross_node_dfb_offset() = static_cast<uint16_t>(remote_cross_node_dfb_offset);
+        }
+    }
+
+    return tt::align(base_offset + cross_node_dfb_region_bytes, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 }
 
 void finalize_dfb_masks(
@@ -1510,6 +1574,84 @@ private:
     std::vector<HostMemDeviceCommand> kernel_bins_unicast_cmds;
 };
 
+// Generates multicast write commands for CrossNodeDFB kernel-config entries.
+// Each entry is 2 uint32_t words: [config_page_addr, entry_size], densely packed at
+// slot index == remote_dfb_id (0 .. num_cross_node_dfbs-1).
+// The region starts at remote_cross_node_dfb_offset within the kernel config.
+class CrossNodeDFBCommandGenerator {
+public:
+    void construct_commands(
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers) {
+        const auto& per_core_cross_node_dfbs = program.get_per_core_cross_node_dfbs();
+        if (per_core_cross_node_dfbs.empty()) {
+            return;
+        }
+
+        const auto& hal = MetalContext::instance().hal();
+        const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const auto& kernel_groups = program.get_kernel_groups(index);
+        const uint32_t remote_cross_node_dfb_offset = program.get_program_config(index).remote_cross_node_dfb_offset;
+
+        for (const auto& kg : kernel_groups) {
+            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                // Use the first core's attachments as representative for the range.
+                // In typical usage, all cores in a kernel group have identical CrossNodeDFB attachments.
+                const CoreCoord& first_core = core_range.start_coord;
+                auto it = per_core_cross_node_dfbs.find(first_core);
+                if (it == per_core_cross_node_dfbs.end() || it->second.empty()) {
+                    continue;
+                }
+
+                const uint32_t num_cross_node_dfbs = static_cast<uint32_t>(it->second.size());
+                const uint32_t payload_words = cross_node_dfb_config_region_words(num_cross_node_dfbs);
+                const uint32_t payload_bytes = payload_words * sizeof(uint32_t);
+
+                // Allocate payload buffer (one per range to keep lifetimes alive).
+                payloads_.emplace_back(payload_words, 0u);
+                auto& payload = payloads_.back();
+
+                for (uint32_t slot = 0; slot < num_cross_node_dfbs; ++slot) {
+                    const auto& attachment = it->second[slot];
+                    TT_FATAL(
+                        attachment.remote_dfb_id == slot,
+                        "CrossNodeDFB slot {} expected dense remote_dfb_id {}, got {}",
+                        slot,
+                        slot,
+                        attachment.remote_dfb_id);
+                    const uint32_t base = slot * CROSS_NODE_DFB_CONFIG_WORDS;
+                    payload[base + 0] = attachment.config_page_addr;
+                    payload[base + 1] = attachment.entry_size |
+                        (attachment.auto_commit ? CROSS_NODE_DFB_AUTO_COMMIT_BIT : 0u);
+                }
+
+                const CoreCoord virtual_start =
+                    device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+                const CoreCoord virtual_end =
+                    device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+                CoreRange virtual_range(virtual_start, virtual_end);
+                auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                // remote_cross_node_dfb_offset is an absolute offset from kernel_config_base,
+                // same as cb_offset / rta_offset are absolute offsets from the slot start.
+                const uint32_t start_addr = remote_cross_node_dfb_offset;
+
+                batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
+                    std::vector<Transfer>{
+                        {.start = start_addr,
+                         .data = tt::stl::Span<const uint8_t>(
+                             reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes),
+                         .cbs = {}}};
+            }
+        }
+    }
+
+private:
+    // Payload buffers kept alive until batched_transfers is consumed.
+    std::vector<std::vector<uint32_t>> payloads_;
+};
+
 class BatchedTransferGenerator {
 public:
     // Construct and optimal set of CQDispatchWritePackedLargeSubCmds from the
@@ -2043,6 +2185,9 @@ void assemble_device_commands(
 
     DataflowBufferCommandGenerator dfb_command_generator;
     dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
+
+    CrossNodeDFBCommandGenerator cross_node_dfb_command_generator;
+    cross_node_dfb_command_generator.construct_commands(device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);

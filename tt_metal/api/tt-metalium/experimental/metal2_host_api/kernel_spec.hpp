@@ -164,7 +164,7 @@ struct KernelSpec {
     //  - Scratchpad bindings (Program-local memory resource)
     //  - Buffer bindings (User-managed memory resource)
     //  - GlobalSemaphore bindings (User-managed resource)
-    //  - GlobalDataflowBuffer bindings (User-managed resource)
+    //  - CrossNodeDFB bindings (User-managed resource)
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments

@@ -14,6 +14,8 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/cross_node_dfb_interface.h"
+#include "internal/cross_node_dfb_init.h"
 #include "internal/hw_thread.h"
 #include "tdma_xmov.h"
 
@@ -40,6 +42,11 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+// CrossNodeDFB interface arrays (kernel symbols, shared with kernel code).
+CrossNodeSenderDFBInterface   g_cross_node_sender_dfb_interface[MAX_CROSS_NODE_DFBS] __attribute__((used));
+CrossNodeReceiverDFBInterface g_cross_node_receiver_dfb_interface[MAX_CROSS_NODE_DFBS] __attribute__((used));
+CrossNodeDFBMetadata          g_cross_node_dfb_metadata[MAX_CROSS_NODE_DFBS] __attribute__((used));
 
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
@@ -168,6 +175,12 @@ int main(int argc, char* argv[]) {
         uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
         // NOC argument is unused
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+        if (launch_msg->kernel_config.num_cross_node_dfbs) {
+            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(
+                kernel_config_base + launch_msg->kernel_config.remote_cross_node_dfb_offset);
+            experimental::setup_cross_node_dfb_interfaces<false>(
+                dfb_l1_base, launch_msg->kernel_config.num_cross_node_dfbs, 0, 0, 0, 0);
+        }
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
@@ -186,6 +199,14 @@ int main(int argc, char* argv[]) {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 #endif
         record_stack_usage(stack_free);
+
+        // Auto-commit: write back fifo_wr/rd_ptr for any CrossNodeDFBs with auto_commit set.
+        if (launch_msg->kernel_config.num_cross_node_dfbs) {
+            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(
+                kernel_config_base + launch_msg->kernel_config.remote_cross_node_dfb_offset);
+            experimental::commit_auto_dfbs(dfb_l1_base, launch_msg->kernel_config.num_cross_node_dfbs);
+        }
+
         WAYPOINT("D");
         DEVICE_PRINT_KERNEL_FINISHED();
 

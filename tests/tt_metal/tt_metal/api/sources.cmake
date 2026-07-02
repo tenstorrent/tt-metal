@@ -44,6 +44,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
+    test_cross_node_dfb.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
