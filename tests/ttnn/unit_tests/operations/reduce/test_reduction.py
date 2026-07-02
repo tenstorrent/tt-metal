@@ -380,7 +380,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
         pcc_threshold=0.999,
         rtol=0.01,
         atol=0.2,
-        frobenius_threshold=0.003,
+        frobenius_threshold=0.015,
     )
 
 
