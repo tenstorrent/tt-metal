@@ -377,42 +377,28 @@ class RowParallelLinear(Module):
             weight = self.weight.data
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        core_grid = get_matmul_core_grid(self.mesh_device)
+        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        output = ttnn.experimental.minimal_matmul(
+            input_tensor=x,
+            weight_tensor=weight,
+            bias_tensor=self.bias.data if self.bias is not None else None,
+            config=matmul_config,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+            dtype=dtype,
+        )
 
         if self._mesh_axis_size > 1:
-            # Fused MM+RS: RS begins writing as MM output blocks become ready,
-            # eliminating the standalone RS launch and overlapping CCL with compute.
-            core_grid = self.mesh_device.compute_with_storage_grid_size()
-            needs_reshape = len(x.shape) <= 3
+            needs_reshape = len(output.shape) <= 3
             if needs_reshape:
-                x = ttnn.unsqueeze(x, 0)
-            _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
-                input_tensor=x,
-                weight_tensor=weight,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
-                **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
-                bias=self.bias.data if self.bias is not None else None,
-                memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-                rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.mesh_axis,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
-                dtype=dtype,
+                output = ttnn.unsqueeze(output, 0)
+
+            output = self.ccl_manager.reduce_scatter(
+                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
+
             if needs_reshape:
                 output = ttnn.squeeze(output, 0)
-        else:
-            core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=self.bias.data if self.bias is not None else None,
-                config=matmul_config,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-            )
 
         return output
 
