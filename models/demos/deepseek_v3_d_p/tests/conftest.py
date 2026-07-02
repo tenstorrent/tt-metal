@@ -477,6 +477,9 @@ def _resolve_state_dict(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_tokenizer(variant_name: str, padding_side: str):
     v = TEST_VARIANTS[variant_name]
+    # Only variants that ship custom tokenizer code (e.g. Kimi) need trust_remote_code; DeepSeek-V3
+    # uses a stock fast tokenizer and turns it off to avoid the flat-config custom-import path.
+    trust_remote_code = v.tokenizer_trust_remote_code
     candidates = [
         os.getenv(v.env_var),
         str(v.default_local_path) if v.default_local_path is not None else None,
@@ -488,7 +491,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
         p = Path(candidate)
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
-            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)
             tok.padding_side = padding_side
             return tok
 
@@ -496,7 +499,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(v, cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
-    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=trust_remote_code)
     tok.padding_side = padding_side
     return tok
 
