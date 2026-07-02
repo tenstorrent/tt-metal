@@ -38,7 +38,10 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
+from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
+    get_num_blocks_and_num_tiles_in_block,
+)
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -1317,14 +1320,6 @@ CASES = [
         spec=StimuliSpec.uniform(intervals=[(-10.0, -0.01), (0.01, 10.0)]),
     ),
     # exhaustive demo: every bf16 value in [0.01, 10] (auto-sized to whole tiles).
-    # Unlike the sampled cases above it can't miss a worst-case input, e.g. 1/1.0.
-    Case(
-        op=MathOperation.Reciprocal,
-        spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0),
-        name="Reciprocal-bf16-exhaustive",
-    ),
-    # same exhaustive sweep but on the approximate (LUT-only) SFPU path, which is
-    # where the larger ULP errors live (e.g. the Tensix-reported 1/1.0 case).
     Case(
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0),
@@ -1336,34 +1331,43 @@ CASES = [
 ]
 
 
-# One 32x32 tile = 1024 elements; the dest register holds at most 8 tiles.
+# One 32x32 tile = 1024 elements. A ulp_sweep is bounded by L1, not dest.
 _TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
-_MAX_DEST_TILES = 8
+_MAX_SWEEP_TILES = 64
 
 
 def _ulp_sweep_dims(
     stimuli_format: DataFormat,
     low: float,
     high: float,
-    max_tiles: int = _MAX_DEST_TILES,
+    dest_acc: DestAccumulation,
+    dest_sync: DestSync = DestSync.Half,
 ) -> List[int]:
-    """Count how many bf16/fp16 values exist in [low, high], then return
-    input_dimensions ([rows, cols]) with enough 32x32 tiles to hold them all,
-    capped at max_tiles."""
+    """Return input_dimensions ([rows, cols]) with enough tiles to hold every
+    bf16/fp16 value in [low, high].
+
+    Rounds up to a whole number of dest blocks (needed once the sweep spans more
+    than one block) and caps at _MAX_SWEEP_TILES."""
+    capacity_divisor = (
+        2 if (dest_acc == DestAccumulation.Yes or stimuli_format.is_32_bit()) else 1
+    )
+    block_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+
     n = int(_enumerate_representable(stimuli_format, low, high).numel())
     tiles = max(1, math.ceil(n / _TILE_ELEMENTS))
+    if tiles > block_tiles:
+        # multi-block: round up to a whole number of dest blocks
+        tiles = math.ceil(tiles / block_tiles) * block_tiles
+
+    max_tiles = (_MAX_SWEEP_TILES // block_tiles) * block_tiles
     if tiles > max_tiles:
         logger.warning(
-            "[ulp_sweep] [{}, {}] has {} {} values ({} tiles), but dest holds only "
-            "{} tiles ({} slots) — sweep will CLIP to the {} smallest values and "
-            "miss the rest. Narrow the range to keep it exhaustive.",
+            "[ulp_sweep] [{}, {}] needs {} tiles (> {} max) — truncating to the "
+            "lowest {} values. Narrow the range to keep it exhaustive.",
             low,
             high,
-            n,
-            stimuli_format.name,
             tiles,
             max_tiles,
-            max_tiles * _TILE_ELEMENTS,
             max_tiles * _TILE_ELEMENTS,
         )
         tiles = max_tiles
@@ -1394,7 +1398,7 @@ def run_case(case: Case) -> bool:
         input_dimensions = case.input_dimensions
     elif case.spec.distribution == DistributionKind.ULP_SWEEP:
         input_dimensions = _ulp_sweep_dims(
-            formats.input_format, case.spec.low, case.spec.high
+            formats.input_format, case.spec.low, case.spec.high, dest_acc
         )
     else:
         input_dimensions = [32, 32]

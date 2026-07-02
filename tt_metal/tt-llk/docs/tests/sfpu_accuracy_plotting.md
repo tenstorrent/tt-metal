@@ -66,7 +66,7 @@ For BF16 or FP16, `StimuliSpec.ulp_sweep(low, high)` tests *every* representable
 Case(op=MathOperation.Reciprocal, spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0))
 ```
 
-`input_dimensions` is set automatically and should be left unset. Coverage is limited to 8 tiles (8192 values); if the range exceeds this, only the lowest values are swept and a warning is logged. FP32 is not currently supported.
+`input_dimensions` is set automatically and should be left unset — the harness sizes it to hold every value in the range and streams it through the destination register in blocks. Coverage extends to roughly 64 tiles, which spans all of bf16/fp16; a range that needs more is truncated to the lowest values with a warning. FP32 is not currently supported.
 
 ## Optional Case fields
 
@@ -74,7 +74,7 @@ Sensible defaults cover the common cases, so override only when needed.
 
 - `expect_pass` — set to `False` to keep the run green while exploring a known-inaccurate op.
 - `name` — custom test ID or output filename. The default is `<Op>-<fmt>`.
-- `approx_mode`
+- `approx_mode` — the default is the accurate path. Set to `ApproximationMode.Yes` to test the fast, less accurate SFPU path.
 - `clamp_negative` — enable the kernel's negative-input clamp.
 - `dest_acc` and `unpack_to_dest` — override the format-derived accumulator defaults.
 - `input_dimensions` — set how many points sample the domain (see below).
