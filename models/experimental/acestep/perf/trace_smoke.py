@@ -102,6 +102,58 @@ def main():
         )
         sys.stdout.flush()
 
+        # ---- Stage: DiT denoise step (the hot loop body; timestep now device-side) ----
+        # Everything device-side: xt, context_latents, encoder_hidden_states, rope, and the timestep
+        # as a device tensor [1,1,1,1]. Warmup builds lazy weights outside capture.
+        Tlat = 256  # T'=128 target
+        xt = ttnn.from_torch(
+            torch.randn(1, 1, Tlat, pipe.args.audio_acoustic_hidden_dim),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ctxl = ttnn.from_torch(
+            torch.randn(1, 1, Tlat, pipe.args.audio_acoustic_hidden_dim * 2),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        enc = ttnn.from_torch(
+            torch.randn(1, 1, 128, 2048),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        tp = Tlat // PATCH
+        dcos, dsin = pipe._rope_tables(tp)
+        dmask = pipe._sliding_mask(tp)  # None at T'=128 (sliding==full)
+        ts_dev = ttnn.from_torch(
+            torch.tensor([[[[0.7]]]], dtype=torch.float32),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        # zero delta timestep buffer (generate uses same scalar for t and t_r -> diff 0)
+        ts_r_dev = ttnn.from_torch(
+            torch.tensor([[[[0.0]]]], dtype=torch.float32),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        def _dit_step(hidden, ctx, ts, tsr, cos, sin, ehs):
+            return pipe.dit.forward(hidden, ctx, ts, tsr, cos, sin, ehs, sliding_mask=dmask)
+
+        _try_stage(
+            "dit_step",
+            device,
+            eager_fn=_dit_step,
+            tracer_fn=_dit_step,
+            inputs={"hidden": xt, "ctx": ctxl, "ts": ts_dev, "tsr": ts_r_dev, "cos": dcos, "sin": dsin, "ehs": enc},
+            gate=0.99,
+        )
+        sys.stdout.flush()
+
         # ---- Stage: VAE decode (fixed shape, single forward, already pure ttnn) ----
         T = 256  # T'=128 target
         lat = ttnn.from_torch(
