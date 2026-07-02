@@ -134,7 +134,12 @@ inline __attribute__((always_inline)) uint32_t get_id(uint32_t id, PacketTypes t
 inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
     // outstanding = tail - head (monotonic, unsigned). Room iff outstanding <= CAP - nwords.
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_CAPACITY - nwords)) {
-        invalidate_l1_cache();  // re-read the X280-updated head
+        invalidate_l1_cache();  // re-read the X280-updated head (and the terminate flag)
+        // Terminate phase (device teardown / X280 consumer stopping): stop blocking so this RISC
+        // can reach "done". We drop the marker instead of stalling forever on a ring nobody drains.
+        if (profiler_control_buffer[PROFILER_TERMINATE]) {
+            return;
+        }
     }
 }
 

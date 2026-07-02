@@ -56,6 +56,7 @@
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "tools/profiler/x280_driver.hpp"
+#include "hostdevcommon/profiler_common.h"
 
 namespace tt::tt_metal::distributed {
 
@@ -1103,6 +1104,44 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 RealtimeProfilerManager::~RealtimeProfilerManager() { shutdown(); }
 
 void RealtimeProfilerManager::shutdown() {
+    // Enter the profiler TERMINATE phase FIRST: broadcast PROFILER_TERMINATE=1 into every profiled
+    // core's control vector so a producing RISC blocked on a full SPSC ring (in ring_ensure_room)
+    // stops waiting and proceeds. The X280 drainer is about to stop; without this a core with a
+    // full ring stays blocked and close_devices()->wait_until_cores_done() spins forever. Must run
+    // before the X280 is P_STOP'd/reset below.
+    {
+        auto& mctx = MetalContext::instance(context_id_);
+        auto& cluster = mctx.get_cluster();
+        const uint64_t prof_l1 = mctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+        const uint64_t terminate_addr =
+            prof_l1 + static_cast<uint64_t>(kernel_profiler::PROFILER_TERMINATE) * sizeof(uint32_t);
+        const uint32_t one = 1;
+        for (auto& dev_state : devices_) {
+            if (!dev_state.device) {
+                continue;
+            }
+            try {
+                // FULL logical worker grid (not just compute_with_storage) so DISPATCH cores —
+                // which are profiled when PROFILER_OPT_DO_DISPATCH_CORES is set and are the ones
+                // wait_for_dispatch_cores() waits on — also get the terminate flag.
+                CoreCoord grid = dev_state.device->logical_grid_size();
+                for (uint32_t ly = 0; ly < static_cast<uint32_t>(grid.y); ly++) {
+                    for (uint32_t lx = 0; lx < static_cast<uint32_t>(grid.x); lx++) {
+                        CoreCoord v = cluster.get_virtual_coordinate_from_logical_coordinates(
+                            dev_state.chip_id, CoreCoord{lx, ly}, CoreType::WORKER);
+                        cluster.write_core(&one, sizeof(one), tt_cxy_pair(dev_state.chip_id, v), terminate_addr);
+                    }
+                }
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: failed to broadcast PROFILER_TERMINATE: {}",
+                    dev_state.chip_id,
+                    e.what());
+            }
+        }
+    }
+
     // Re-write ring_buffer->terminate as a safety net (dispatch_s already set it via the
     // profiler core's TERMINATE), then give the push kernel time to deliver the last PCIe page.
     for (auto& dev_state : devices_) {

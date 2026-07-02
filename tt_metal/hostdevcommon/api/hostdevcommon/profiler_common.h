@@ -58,6 +58,11 @@ enum ControlBuffer {
     DROPPED_ZONES,
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
+    // Host->kernel terminate signal (SPSC/X280 backend): set at teardown when the X280 consumer
+    // is stopping. While clear, a producing RISC BLOCKS on a full ring (lossless). While set, the
+    // producer stops blocking and proceeds (drops), so a dispatch core cannot get stuck in
+    // ring_ensure_room and wedge wait_until_cores_done() during device close.
+    PROFILER_TERMINATE,
     // Used for device debug dump mode. Needs to come last in the control buffer
     // because we first update the host buffer end index and then the DRAM buffer address
     DRAM_PROFILER_ADDRESS_BR_ER_0,
