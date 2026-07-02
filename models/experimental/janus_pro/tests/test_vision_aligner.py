@@ -34,9 +34,9 @@ from models.experimental.janus_pro.tt.model_config import ModelArgs
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_aligner_inference(batch, num_chunks, mesh_device, reset_seeds):
+def test_aligner_inference(batch, num_chunks, mesh_device, reset_seeds, dummy_weights):
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     state_dict_prefix = "model.aligner."
