@@ -82,9 +82,12 @@ def run_one(
         "--enable-trace",
         "--trace-mode",
         "sampling",
+        "--warmup",
     ]
     env = os.environ.copy()
-    env["GLM4_MOE_LITE_PREFILL_MATMUL_TUNED"] = "1"
+    # PREFILL_MATMUL_TUNED selects Blackhole-only matmul grids (e.g. 10x4) that exceed
+    # Wormhole's 8x8 grid. Use setdefault so WH/T3K can override to "0" via the environment.
+    env.setdefault("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED", "1")
     env["GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES"] = "1"
     env["GLM4_MOE_LITE_FUSE_QKV_A"] = "1"
     env["GLM4_MOE_LITE_FUSE_SHARED_GATE_UP"] = "1"
@@ -96,7 +99,9 @@ def run_one(
     env["GLM4_MOE_LITE_DECODE_L1_ACT"] = "1"
     env["GLM4_MOE_LITE_EP_L1"] = "1"
     env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
-    env["GLM4_MOE_LITE_CCL_NUM_LINKS"] = "2"
+    # T3K/LoudBox has only 1 CCL link per axis (tt_ccl.py "T3K":(1,1)); num_links=2 deadlocks
+    # the collectives. setdefault so T3K can override to "1" via the environment.
+    env.setdefault("GLM4_MOE_LITE_CCL_NUM_LINKS", "2")
     env["GLM4_MOE_LITE_CCL_TOPOLOGY"] = "linear"
     env["GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"] = "1"
     env["GLM4_MOE_LITE_SKIP_TYPECAST"] = "1"

@@ -372,21 +372,30 @@ class Glm4MoeLiteDenseOnlyTT:
             num_devices = int(device.shape[0]) * int(device.shape[1])
         if tp_enabled and num_devices > 1:
             vocab = int(hparams.vocab_size)
-            if vocab % int(num_devices) != 0:
+            # Shard the vocab across the TP axis ONLY (cols preferred), replicating across
+            # the other (DP) axis. Sharding across *all* devices is wrong on a 2D (DP>1)
+            # mesh: the final hidden state lives on a single DP row, so only that row's
+            # vocab shards get computed and the logits come back short (vocab/2 on 2x4,
+            # which reshaped to the full vocab and raised). Matching the per-axis sharding
+            # every other TP weight uses keeps the shard count equal to what the gather
+            # (across the TP axis) expects, on both 1D and 2D meshes.
+            mesh_rows_lh, mesh_cols_lh = int(device.shape[0]), int(device.shape[1])
+            if mesh_cols_lh > 1:
+                lh_axis, lh_tp = 1, mesh_cols_lh
+            else:
+                lh_axis, lh_tp = 0, mesh_rows_lh
+            if vocab % int(lh_tp) != 0:
                 raise ValueError(
-                    f"LM head TP requires vocab divisible by num_devices. Got vocab={vocab} num_devices={num_devices}. "
+                    f"LM head TP requires vocab divisible by TP size. Got vocab={vocab} tp_size={lh_tp}. "
                     "Disable GLM4_MOE_LITE_TP or add vocab padding support."
                 )
-            # Shard vocab across all mesh devices.
-            #
-            # NOTE: we intentionally use a 1D mesh sharding mapper here to avoid
-            # sub-grid write patterns that can hang during warmup on some meshes.
-            lm_head_mapper = ttnn.ShardTensorToMesh(device, dim=3)
-            lm_head_variant = f"shard{num_devices}_v1"
+            shard_dims = (None, 3) if lh_axis == 1 else (3, None)
+            lm_head_mapper = ttnn.ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=[mesh_rows_lh, mesh_cols_lh])
+            lm_head_variant = f"shardaxis{lh_axis}_tp{lh_tp}_v2"
             lm_head_sharded_vocab = True
-            lm_head_tp_axis = None
-            lm_head_tp_size = int(num_devices)
-            lm_head_vocab_per_shard = vocab // int(num_devices)
+            lm_head_tp_axis = lh_axis
+            lm_head_tp_size = int(lh_tp)
+            lm_head_vocab_per_shard = vocab // int(lh_tp)
         lm_head_dtype = _env_lm_head_weight_dtype()
         if lm_head_dtype == ttnn.bfloat4_b:
             lm_head_dtype_tag = "bf4"
