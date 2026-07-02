@@ -68,6 +68,14 @@ void kernel_main() {
         slices_expected = direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
     }
 
+    // Split-forwarding: on an even ring the diametric slice arrives split across both links, so the
+    // upstream writer fabric-increments this direction's per-worker sems only for its half. Mirror
+    // the reader's receive accounting exactly so event_target tracks what the writer actually sends.
+    bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    if (split_forwarding_enabled && direction == 1) {
+        slices_expected++;
+    }
+
     uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
     uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
     uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
@@ -78,7 +86,19 @@ void kernel_main() {
             uint32_t slices_received = 0;
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
-                for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
+                uint32_t num_chunks = device_k_block_counts[actual_sender_chip_id];
+                // The diametric slice (last one received) lands split across both links; wait on only
+                // this direction's half (direction 0 = first half, direction 1 = second half).
+                bool is_split_received_slice =
+                    split_forwarding_enabled && (slices_received == slices_expected - 1) && (num_chunks >= 2);
+                uint32_t first_half_chunks = num_chunks / 2;
+                for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; chunk_idx++) {
+                    bool receive_this_chunk =
+                        !is_split_received_slice ||
+                        (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
+                    if (!receive_this_chunk) {
+                        continue;
+                    }
                     event_target++;
                     // Wait for all N workers' portions of this k-block to land.
                     {

@@ -224,6 +224,16 @@ void kernel_main() {
         }
     }
 
+    // On an even ring the diametric device's slice is the last one relayed and would otherwise
+    // traverse the full half-ring on one link while the other idles. Relay its first half on
+    // direction 0 and its second half on direction 1 so both links share the final hop; direction 1
+    // gains one relay to carry that second half. Gated to the reader-signaled path: the
+    // writer-signals aggregator expects whole per-sender slices per direction.
+    bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    if (split_forwarding_enabled && direction == 1) {
+        writes_expected++;
+    }
+
     uint32_t batch_output_tile_offset = output_worker_tile_offset;
     uint32_t global_tile_index = 0;
     uint32_t output_tiles_per_batch = output_tensor_Wt * output_tensor_Ht;
@@ -291,12 +301,28 @@ void kernel_main() {
             uint32_t slice_writes = 0;
             while (slice_writes < writes_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
+                uint32_t num_chunks = device_k_block_counts[actual_sender_chip_id];
+                bool is_split_forwarded_slice =
+                    split_forwarding_enabled && (slice_writes == writes_expected - 1) && (num_chunks >= 2);
+                uint32_t first_half_chunks = num_chunks / 2;
                 input_chunk_start_tile = global_tile_index;
-                for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
-                    DeviceZoneScopedN("AG-FWD-SEND");
+                for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; chunk_idx++) {
                     uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                     uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                         input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+
+                    // Direction 0 relays the first half of a split slice, direction 1 the second;
+                    // each walks past the half it does not relay.
+                    bool relay_this_chunk =
+                        !is_split_forwarded_slice ||
+                        (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
+                    if (!relay_this_chunk) {
+                        advance_chunk_start_tile(
+                            input_chunk_start_tile, actual_chunk_w, actual_chunk_h, input_tensor_Wt);
+                        continue;
+                    }
+
+                    DeviceZoneScopedN("AG-FWD-SEND");
                     uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
 
                     write_chunk(

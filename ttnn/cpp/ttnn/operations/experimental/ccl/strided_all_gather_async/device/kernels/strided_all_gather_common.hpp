@@ -88,6 +88,21 @@ FORCE_INLINE uint32_t next_mm_aligned_chunk_height(
     }
 }
 
+// Advance chunk_start_tile past one chunk without moving data. Mirrors the
+// tile-advance tail of read_chunk/write_chunk so a direction that relays only
+// half of a split slice lands on the same M-block boundary a full traversal would.
+FORCE_INLINE void advance_chunk_start_tile(
+    uint32_t& chunk_start_tile, uint32_t chunk_width, uint32_t subchunk_height, uint32_t input_tensor_Wt) {
+    uint32_t chunk_start_row = chunk_start_tile / input_tensor_Wt;
+    uint32_t new_chunk_start_tile = chunk_start_tile + chunk_width;
+    uint32_t new_chunk_row = new_chunk_start_tile / input_tensor_Wt;
+    if (new_chunk_row != chunk_start_row) {
+        chunk_start_tile = (chunk_start_row + subchunk_height) * input_tensor_Wt;
+    } else {
+        chunk_start_tile = new_chunk_start_tile;
+    }
+}
+
 template <typename AddrGenType>
 FORCE_INLINE uint32_t read_chunk(
     uint32_t& chunk_start_tile,
