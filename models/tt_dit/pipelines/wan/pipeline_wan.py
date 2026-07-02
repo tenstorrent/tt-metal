@@ -363,6 +363,9 @@ class WanPipeline(PipelineAPIMixin):
         self._scheduler = UniPCMultistepScheduler.from_pretrained(
             self.checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
+        # Construction-time default, restored whenever a call omits flow_shift so a
+        # per-request value never persists into a later request (see __call__).
+        self._default_flow_shift = self._scheduler.config.flow_shift
         self._solver = UniPCSolver(
             order=self._scheduler.config.solver_order,
             variant=UniPCVariant(self._scheduler.config.solver_type),
@@ -457,6 +460,14 @@ class WanPipeline(PipelineAPIMixin):
             timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
         )
 
+        # guidance_scale is passed as a 1-element device tensor (broadcast via ttnn.lerp's
+        # tensor-weight overload) so it can be updated in place between traced executions,
+        # mirroring how `timestep` above is threaded through the captured trace.
+        guidance_scale_tt = float32_tensor(
+            torch.tensor(ts.guidance_scale, dtype=torch.float32).reshape(1, 1, 1, 1),
+            device=(None if traced else self.mesh_device),
+        )
+
         permuted_velocity_pred_tt = ts.model.combined_step(
             do_classifier_free_guidance=cfg_enabled,
             spatial_1BNI=permuted_model_input,
@@ -465,7 +476,7 @@ class WanPipeline(PipelineAPIMixin):
             N=latents_sequence_length,
             timestep=timestep,
             **rope_args,
-            guidance_scale=ts.guidance_scale,
+            guidance_scale=guidance_scale_tt,
             traced=traced,
             gather_output=False,
         )
@@ -520,6 +531,8 @@ class WanPipeline(PipelineAPIMixin):
         num_inference_steps: int,
         guidance_scale: float = 4.0,
         guidance_scale_2: float | None = 3.0,
+        flow_shift: float | None = None,
+        boundary_ratio: float | None = None,
         num_videos_per_prompt: int | None = 1,
         seed: int = 0,
         output_type: str | None = "uint8",
@@ -535,6 +548,10 @@ class WanPipeline(PipelineAPIMixin):
         width = self._width
         num_frames = self._num_frames
 
+        # Per-request boundary_ratio overrides the construction-time default. It only affects
+        # host-side expert selection (no captured trace depends on it).
+        effective_boundary_ratio = boundary_ratio if boundary_ratio is not None else self._boundary_ratio
+
         if guidance_scale > 1 and not self._cfg_enabled:
             msg = "guidance_scale > 1 requires CFG to be enabled"
             raise ValueError(msg)
@@ -546,8 +563,11 @@ class WanPipeline(PipelineAPIMixin):
             msg = f"`height` and `width` have to be divisible by 16 but are {height} and {width}."
             raise ValueError(msg)
 
-        if self._boundary_ratio is None and guidance_scale_2 is not None:
-            msg = "`guidance_scale_2` is only supported when the pipeline's `boundary_ratio` is not None."
+        if effective_boundary_ratio is None and guidance_scale_2 is not None:
+            msg = (
+                "`guidance_scale_2` is only supported when `boundary_ratio` is not None. "
+                "Set it per-request (pass `boundary_ratio=...` to this call) or at construction time."
+            )
             raise ValueError(msg)
 
         if num_frames % self.vae_scale_factor_temporal != 1:
@@ -558,7 +578,7 @@ class WanPipeline(PipelineAPIMixin):
             num_frames = num_frames // self.vae_scale_factor_temporal * self.vae_scale_factor_temporal + 1
         num_frames = max(num_frames, 1)
 
-        if self._boundary_ratio is not None and guidance_scale_2 is None:
+        if effective_boundary_ratio is not None and guidance_scale_2 is None:
             guidance_scale_2 = guidance_scale
 
         self.transformer_states[0].guidance_scale = guidance_scale
@@ -581,6 +601,12 @@ class WanPipeline(PipelineAPIMixin):
         on_event(SectionEnd("encoder"))
 
         # 4. Prepare schedule
+        # flow_shift is host-side only (it reshapes the sigma schedule); set it on the
+        # scheduler config before set_timesteps so the new schedule is recomputed. No
+        # captured trace depends on it. Always assign so a per-request value never
+        # persists into a later request — fall back to the construction-time default
+        # when omitted, mirroring effective_boundary_ratio above.
+        self._scheduler.config.flow_shift = flow_shift if flow_shift is not None else self._default_flow_shift
         self._scheduler.set_timesteps(num_inference_steps)
         self._solver.set_schedule(self._scheduler.sigmas.tolist())
         timesteps = self._scheduler.timesteps
@@ -604,8 +630,8 @@ class WanPipeline(PipelineAPIMixin):
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
 
         # 6. Denoising loop
-        if self._boundary_ratio is not None:
-            boundary_timestep = self._boundary_ratio * 1000
+        if effective_boundary_ratio is not None:
+            boundary_timestep = effective_boundary_ratio * 1000
         else:
             boundary_timestep = -1  # Always use transformer (no transformer_2)
 
