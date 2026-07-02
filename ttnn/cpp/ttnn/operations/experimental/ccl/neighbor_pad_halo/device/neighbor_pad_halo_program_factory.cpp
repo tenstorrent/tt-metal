@@ -660,8 +660,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             program, h_reader_kernel_id,
             {input_buffer->address(), halo_buffer->address(), op.h_neighbor_semaphore.address()});
 
-        // H-mux writer on worker cores.
-        std::vector<uint32_t> hw_ct = {hsend_cb_index, page_size};
+        // H-mux writer on worker cores. CT: is_padding_zeros, c_in0 (is_first local pad), hsend, stick.
+        std::vector<uint32_t> hw_ct = {is_padding_zeros, sender_cb_index, hsend_cb_index, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(hw_ct);
         hw_ct.push_back(h_coalesce_n);
         ttnn::ccl::fabric_mux_connection_ct_args(num_h_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, hmux_cfg, hw_ct);
@@ -734,7 +734,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         num_sticks_per_halo_dim,  // num_sticks_to_read (W_dev)
                         num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
                         wc_vc.x, wc_vc.y,         // recv-sem target = same-dir worker
-                        static_cast<uint32_t>(is_first_device), static_cast<uint32_t>(is_last_device), dir,
+                        // is_first/is_last direction-adjusted (match np_h_reader + np_writer).
+                        static_cast<uint32_t>(dir ? is_last_device : is_first_device),
+                        static_cast<uint32_t>(dir ? is_first_device : is_last_device), dir,
                         0u, h_dev_off};  // route mesh, distance-in-hops
                     ttnn::ccl::fabric_mux_connection_rt_args(
                         sends, /*is_termination_master=*/wk == 0, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_vc, wk,

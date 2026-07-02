@@ -24,9 +24,11 @@ using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
 
 // ---- Compile-time args ----
-constexpr uint32_t send_cb_id = get_compile_time_arg_val(0);
-constexpr uint32_t stick_size = get_compile_time_arg_val(1);
-constexpr auto dst_ct_args = TensorAccessorArgs<2>();
+constexpr bool is_padding_zeros = get_compile_time_arg_val(0);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);  // c_in0: reader's is_first local-pad output
+constexpr uint32_t send_cb_id = get_compile_time_arg_val(2);    // hsend: coalesced fabric-send ring
+constexpr uint32_t stick_size = get_compile_time_arg_val(3);
+constexpr auto dst_ct_args = TensorAccessorArgs<4>();
 constexpr uint32_t ct_after_dst = dst_ct_args.next_compile_time_args_offset();
 constexpr uint32_t H_COALESCE = get_compile_time_arg_val(ct_after_dst);
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
@@ -93,7 +95,9 @@ void kernel_main() {
     }
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
-    const bool has_neighbor = direction ? !is_first_chip : !is_last_chip;
+    // is_first_chip/is_last_chip are direction-adjusted by the factory (match np_h_reader + np_writer):
+    // a worker sends iff !is_last_chip; it fills its own outward padding locally iff is_first_chip.
+    const bool has_neighbor = !is_last_chip;
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     if (mux_connection_valid) {
@@ -117,10 +121,43 @@ void kernel_main() {
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_count});
 
-    if (has_neighbor && mux_connection_valid) {
-        // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame. h_base
-        // already includes this worker's outer_dim_start offset + the h_top/h_bot section base.
-        for (uint32_t od = 0; od < outer_dim_count; od++) {
+    // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame. h_base already
+    // includes this worker's outer_dim_start offset + the h_top/h_bot section base. Per frame the reader
+    // produces (in order): the is_first local-pad row into c_in0 (edge devices only), then the coalesced
+    // send rows into hsend. Drain in the same order.
+    for (uint32_t od = 0; od < outer_dim_count; od++) {
+        if (is_first_chip) {
+            // Local outward padding for this device's edge H-halo (no fabric): write c_in0 to the compact
+            // H-section. Replicate: reader pushed one stick per W col -> broadcast each to all padding rows.
+            // Zeros: reader pushed one stick -> broadcast to all padding rows x W cols.
+            const uint32_t frame_base = h_base + od * padding * num_sticks_per_halo_dim;
+            if (!is_padding_zeros) {
+                for (uint32_t col = 0; col < num_sticks_to_read; col++) {
+                    cb_wait_front(cb_output_id, 1);
+                    const uint32_t l1 = get_read_ptr(cb_output_id);
+                    for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
+                        noc_async_write(
+                            l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+                            stick_size);
+                    }
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_output_id, 1);
+                }
+            } else {
+                cb_wait_front(cb_output_id, 1);
+                const uint32_t l1 = get_read_ptr(cb_output_id);
+                for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
+                    for (uint32_t col = 0; col < num_sticks_to_read; col++) {
+                        noc_async_write(
+                            l1, get_noc_addr(frame_base + pad_id * num_sticks_per_halo_dim + col, dst_accessor),
+                            stick_size);
+                    }
+                }
+                noc_async_write_barrier();
+                cb_pop_front(cb_output_id, 1);
+            }
+        }
+        if (has_neighbor && mux_connection_valid) {
             for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                 const uint32_t base_row = h_base + (od * padding + pad_id) * num_sticks_per_halo_dim;
                 cb_wait_front(send_cb_id, num_sticks_to_read);
@@ -146,6 +183,9 @@ void kernel_main() {
                 cb_pop_front(send_cb_id, num_sticks_to_read);
             }
         }
+    }
+    if (has_neighbor && mux_connection_valid) {
+        // Single deferred recv-sem inc of the full frame count (set_state configured Val=outer_dim_count).
         uint64_t nb_recv = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, neighbor_sem, 0);
         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             &mux_connection, pkt_hdr_sem, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nb_recv, 0});
