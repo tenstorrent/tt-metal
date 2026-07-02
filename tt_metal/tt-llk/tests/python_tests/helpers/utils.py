@@ -3,6 +3,7 @@
 
 import math
 import os
+import shlex
 import subprocess
 from collections import namedtuple
 from pathlib import Path
@@ -146,10 +147,14 @@ def print_faces(operand1, tile_shape=None):
 def run_shell_command(
     command: str, cwd: str | None = None, stdin_data: str | bytes = None, text=True
 ):
+    # No call site relies on shell features (pipes, redirects, globbing,
+    # chaining) — every command here is a flat "program arg arg ..." string,
+    # so we tokenize it ourselves and exec the program directly. This avoids
+    # spawning an extra /bin/sh per call, which matters at the ~400k
+    # invocation scale of the Quasar compile-producer run.
     result = subprocess.run(
-        command,
+        shlex.split(command),
         cwd=cwd,
-        shell=True,
         text=text,
         input=stdin_data,
         stdout=subprocess.DEVNULL,
