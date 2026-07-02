@@ -116,6 +116,15 @@ def test_model_for_block_diffusion(
     hf_decoder.norm.weight = hf_encoder.norm.weight
     hf_model.lm_head.weight = hf_decoder.embed_tokens.weight
 
+    # Boost router.proj.weight per layer so softmax is peaked (avoids bf16-vs-fp32 topk
+    # divergence with default random init that would compound across 6 layers). Real trained
+    # routing is peaked. Applied to BOTH encoder and decoder layers.
+    with torch.no_grad():
+        for layer in hf_encoder.layers:
+            layer.router.proj.weight.normal_(0, 1.0)
+        for layer in hf_decoder.layers:
+            layer.router.proj.weight.normal_(0, 1.0)
+
     # ---- Inputs ----------------------------------------------------------------------------
     input_ids = torch.randint(low=1, high=text_config.vocab_size, size=(B, encoder_len), dtype=torch.long)
     decoder_input_ids = torch.randint(low=1, high=text_config.vocab_size, size=(B, canvas_len), dtype=torch.long)

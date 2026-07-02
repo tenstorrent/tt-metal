@@ -86,6 +86,15 @@ def test_encoder_text_model(
     # HF reference encoder.
     hf_encoder = HFEncoderTextModel(hf_config).to(dtype).eval()
 
+    # Boost router.proj.weight in each layer so softmax is peaked. Default init N(0, 0.02)
+    # gives near-uniform softmax → bf16 vs fp32 disagree on near-tie topk selections. Different
+    # experts get picked, and MoE outputs diverge significantly. This is a random-init
+    # artifact — real trained Gemma4 routing is peaked. Same trick as
+    # models/demos/gemma4/tests/unit/test_moe.py:51 and models/tt_dit/tests/models/diffusion_gemma/test_moe.py.
+    with torch.no_grad():
+        for layer in hf_encoder.layers:
+            layer.router.proj.weight.normal_(0, 1.0)
+
     # Inputs.
     input_ids = torch.randint(low=1, high=hf_config.vocab_size, size=(B, seq_len), dtype=torch.long)
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
@@ -222,8 +231,30 @@ def test_encoder_text_model(
             tt_h_i = tt_h_i.squeeze(0)
         hf_h_i = hf_hidden_all[i + 1].float()
         logger.info(
-            f"[layer {i} type={lt}] TT shape={tuple(tt_h_i.shape)}, HF shape={tuple(hf_h_i.shape)}, PCC={_pcc_pair(hf_h_i, tt_h_i)*100:.4f}%"
+            f"[chained layer {i} type={lt}] TT shape={tuple(tt_h_i.shape)}, HF shape={tuple(hf_h_i.shape)}, PCC={_pcc_pair(hf_h_i, tt_h_i)*100:.4f}%"
         )
+
+    # Intrinsic per-layer PCC: feed each TT layer with HF's ideal input (isolates each layer's
+    # forward from compounding drift). If intrinsic PCC stays high, the chained drift is
+    # "natural" bf16 compounding; if intrinsic PCC decays, there's a genuine per-layer bug.
+    from ....utils.tensor import bf16_tensor
+
+    for i in range(tt_encoder.num_hidden_layers):
+        lt = tt_encoder.layer_types[i]
+        cos, sin = cos_sin[lt]
+        tt_ideal_input = bf16_tensor(hf_hidden_all[i].unsqueeze(0), device=mesh_device)
+        tt_out, _, _ = tt_encoder.layers[i](
+            tt_ideal_input,
+            cos,
+            sin,
+            attention_mask=tt_masks.get(lt),
+            encoder_kv=None,
+        )
+        tt_out_torch = local_device_to_torch(tt_out).float()
+        if tt_out_torch.ndim == 4:
+            tt_out_torch = tt_out_torch.squeeze(0)
+        hf_out_i = hf_hidden_all[i + 1].float()
+        logger.info(f"[intrinsic layer {i} type={lt}] PCC={_pcc_pair(hf_out_i, tt_out_torch)*100:.4f}%")
 
     logger.info(f"hf_last: {hf_last.shape}, tt_h: {tt_h_torch.shape}")
     assert_quality(hf_last, tt_h_torch, pcc=PCC_THRESHOLD)

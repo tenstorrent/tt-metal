@@ -102,6 +102,15 @@ def test_decoder_text_model(
 
     hf_encoder = HFEncoderTextModel(text_config).to(dtype).eval()
     hf_decoder = HFDecoderModel(hf_config).to(dtype).eval()
+
+    # Boost router.proj.weight per layer so softmax is peaked (avoids bf16-vs-fp32 topk
+    # divergence with default random init). Real trained routing is peaked. See
+    # models/tt_dit/tests/models/diffusion_gemma/test_moe.py for the same trick.
+    with torch.no_grad():
+        for layer in hf_encoder.layers:
+            layer.router.proj.weight.normal_(0, 1.0)
+        for layer in hf_decoder.layers:
+            layer.router.proj.weight.normal_(0, 1.0)
     # Tie encoder ↔ decoder layer weights as HF does (`DiffusionGemmaModel._tied_weights_keys`).
     hf_decoder.embed_tokens.weight = hf_encoder.embed_tokens.weight
     for li in range(text_config.num_hidden_layers):
