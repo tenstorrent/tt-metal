@@ -185,6 +185,7 @@ def denoise_loop(
     timestep_r_emb=None,  # host ref TimestepEmbedder for gen_timestep_r_scatter_index (meanflow)
     cfg_distilled: bool = False,
     use_meanflow: bool = False,
+    device_step_embeds: bool = False,  # timestep_emb/guidance_emb/timestep_r_emb are TTNN embedders
     mesh_device=None,  # pass the MeshDevice when the backbone is mesh-resident
 ):
     """Run the diffusion denoise loop, returning the final latent (torch NCHW).
@@ -207,6 +208,12 @@ def denoise_loop(
     (``cfg_distilled``), also scatters ``guidance`` at ``1000 * guidance_scale``.
     For meanflow (``use_meanflow``), scatters ``timestep_r`` from
     ``scheduler.get_timestep_r(t)`` each step.
+
+    When ``device_step_embeds`` is True, ``timestep_emb`` / ``guidance_emb`` /
+    ``timestep_r_emb`` are TTNN ``HunyuanTtTimestepEmbedder`` modules instead of host
+    ref embedders: the base sequence is uploaded ONCE (resident) and the continuous
+    tokens are embedded and scattered ON DEVICE each step (no per-step host scatter +
+    ``[B,S,H]`` re-upload). Off by default so the host path (demo_i2i.py) is unchanged.
 
     Latent representation: the scheduler operates on device NHWC-flat tensors,
     but UNetDown's entry only accepts torch NCHW, so the (small) latent makes one
@@ -246,8 +253,61 @@ def denoise_loop(
             return out[:1]  # one replica (flat leading dim is 1)
         return ttnn.to_torch(t_dev)
 
+    def _embed_row(module, scalar, ref_dtype):
+        """One continuous token embedded on device -> [B=1, 1, H] (matching ref_dtype).
+
+        Feeds the embedder a replicated device timestep [1,1,1,1] (like te1/te2 above),
+        so its output is replicated across the mesh."""
+        tv = _up(torch.tensor([float(scalar)], dtype=torch.float32).reshape(1, 1, 1, 1), ttnn.float32)
+        e = module.forward(tv)  # [1,1,1,H] TILE (replicated)
+        ttnn.deallocate(tv)
+        r = ttnn.reshape(e, [1, 1, e.shape[-1]])  # [B,1,H]
+        if r is not e:
+            ttnn.deallocate(e)
+        if r.dtype != ref_dtype:
+            r2 = ttnn.typecast(r, ref_dtype)
+            ttnn.deallocate(r)
+            r = r2
+        return r
+
+    def _scatter_device(base_dev, c, t_scalar):
+        """Scatter the per-step continuous tokens into the resident device base_embeds.
+
+        The tokens (gen_timestep [+ guidance] [+ timestep_r]) sit at CONSECUTIVE indices
+        starting at ``gen_timestep_scatter_index`` (the tokenizer's canonical order — see
+        gen_special_token_indices), forming one contiguous block. Reuses the vision
+        injector's on-device rebuild (``scatter_cond_vision_embeddings_multi``): those
+        indices are NOT tile-aligned (they sit just before the TILE-aligned gen span), so
+        it does a ROW_MAJOR concat and converts back to TILE — no host round-trip.
+        Returns a fresh per-step sequence; ``base_dev`` is preserved (freed after the loop)."""
+        from models.experimental.hunyuan_image_3_0.tt.vision.inject import scatter_cond_vision_embeddings_multi
+
+        gi = int(c["gen_timestep_scatter_index"][0, 0])
+        rows = [_embed_row(timestep_emb, t_scalar, base_dev.dtype)]
+        if cfg_distilled and c.get("guidance_scatter_index") is not None and guidance_emb is not None:
+            rows.append(_embed_row(guidance_emb, distill_guidance, base_dev.dtype))
+        if use_meanflow and c.get("gen_timestep_r_scatter_index") is not None and timestep_r_emb is not None:
+            rows.append(_embed_row(timestep_r_emb, float(scheduler.get_timestep_r(t_scalar)), base_dev.dtype))
+        block = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=1)  # [B, n_special, H]
+        n_special = block.shape[1]
+        seq = scatter_cond_vision_embeddings_multi(base_dev, [(slice(gi, gi + n_special), block)])
+        if len(rows) > 1:
+            for r in rows:
+                ttnn.deallocate(r)
+        ttnn.deallocate(block)  # for len==1, block is rows[0]
+        return seq
+
     def _prepare_base_embeds(c, t_scalar):
         host = c.get("base_embeds_host")
+        # Device path: continuous tokens embedded + scattered ON DEVICE; the base
+        # sequence is uploaded ONCE (resident) instead of re-scattered on host and
+        # re-uploaded every step.
+        if device_step_embeds and host is not None:
+            base_dev = c.get("_base_dev")
+            if base_dev is None:
+                base_dev = _up(host, ttnn.bfloat16)  # resident upload, once
+                c["_base_dev"] = base_dev
+            return _scatter_device(base_dev, c, t_scalar)
         if host is not None:
             emb = host
             idx = c.get("gen_timestep_scatter_index")
@@ -337,6 +397,12 @@ def denoise_loop(
                 f"({time.time() - step_t0:.1f}s, total {time.time() - loop_t0:.0f}s)",
                 flush=True,
             )
+
+    if device_step_embeds:  # free the resident device base_embeds
+        for c in (cond, uncond):
+            if c is not None and c.get("_base_dev") is not None:
+                ttnn.deallocate(c["_base_dev"])
+                c["_base_dev"] = None
 
     return latent  # torch [B, C, h, w] — feed to VAE decode
 
