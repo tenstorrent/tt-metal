@@ -398,7 +398,7 @@ void SDMeshCommandQueue::reset_worker_state(
     const std::vector<std::pair<CoreRangeSet, uint32_t>>&,
     tt::stl::Span<const uint32_t>) {}
 
-void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
+void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&, TracePolicy) {
     TT_THROW("Not supported for slow dispatch");
 }
 

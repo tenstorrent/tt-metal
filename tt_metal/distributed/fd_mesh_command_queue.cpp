@@ -1160,7 +1160,8 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     }
 }
 
-void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
+void FDMeshCommandQueue::record_begin(
+    const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx, TracePolicy policy) {
     auto lock = lock_api_function_();
     trace_dispatch::reset_host_dispatch_state_for_trace(
         mesh_device_->num_sub_devices(),
@@ -1172,6 +1173,7 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
         config_buffer_mgr_reset_);
 
     trace_id_ = trace_id;
+    trace_policy_ = policy;
     trace_ctx_ = ctx;
     for (auto* device : mesh_device_->get_devices()) {
         device->sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
@@ -1504,6 +1506,7 @@ void FDMeshCommandQueue::record_end() {
     trace_nodes_.clear();
 
     trace_id_ = std::nullopt;
+    trace_policy_ = TracePolicy::NONE;
     trace_ctx_ = nullptr;
 
     trace_dispatch::load_host_dispatch_state(

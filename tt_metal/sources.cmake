@@ -149,6 +149,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tensor_accessor_args.hpp
     api/tt-metalium/tile.hpp
     api/tt-metalium/tilize_utils.hpp
+    api/tt-metalium/trace_policy.hpp
     api/tt-metalium/tt_align.hpp
     api/tt-metalium/tt_backend_api_types.hpp
     api/tt-metalium/tt_metal.hpp

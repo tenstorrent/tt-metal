@@ -24,6 +24,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/trace_policy.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -75,6 +76,8 @@ public:
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
     virtual std::optional<MeshTraceId> trace_id() const = 0;
+    // The trace policy active for the current capture region (NONE when not capturing).
+    virtual TracePolicy trace_policy() const = 0;
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
 
@@ -145,7 +148,10 @@ public:
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual void enqueue_wait_for_event(const MeshEvent& sync_event) = 0;
     virtual void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
+    virtual void record_begin(
+        const MeshTraceId& trace_id,
+        const std::shared_ptr<MeshTraceDescriptor>& ctx,
+        TracePolicy policy = TracePolicy::NONE) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
 };
