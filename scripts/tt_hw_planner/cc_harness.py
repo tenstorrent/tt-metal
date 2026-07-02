@@ -13,12 +13,67 @@ gate's verdict and drives the subprocess. This module contains no gate logic.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Callable
+
+
+_HB_EVERY_S = 45
+
+
+def _verbose() -> bool:
+    return os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
+
+
+def _fmt_tool(name: str, inp: dict) -> str:
+    """One-line summary of an agent tool call, matching commands/emit_e2e.py's _fmt_tool format so
+    cc bring-up output reads identically to the emit-e2e builder's clean stream."""
+    inp = inp or {}
+    if name == "Bash":
+        return "Bash: " + str(inp.get("command", ""))[:150]
+    if name in ("Read", "Edit", "Write", "NotebookEdit"):
+        return f"{name} {inp.get('file_path') or inp.get('notebook_path') or inp.get('path') or ''}"
+    if name in ("Grep", "Glob"):
+        return f"{name} {inp.get('pattern', '')} {inp.get('path', '')}".rstrip()
+    if name in ("Task", "Agent"):
+        return f"{name}: {str(inp.get('description') or inp.get('prompt') or '')[:120]}"
+    return f"{name} {json.dumps(inp)[:120]}"
+
+
+def _render_cc_event(line: str):
+    """Parse one `claude -p --output-format stream-json` line into a clean rendering, mirroring
+    emit_e2e._render_stream_event. Returns (rendered_or_None, n_tool_use). System/user/result frames
+    render to nothing on a clean screen (framework chatter stays off-screen, exactly like fsm)."""
+    line = (line or "").strip()
+    if not line or not line.startswith("{"):
+        return (("  · " + line) if (_verbose() and line) else None, 0)
+    try:
+        ev = json.loads(line)
+    except Exception:
+        return (None, 0)
+    t = ev.get("type")
+    if t in ("system", "result"):
+        return (None, 0)
+    if t == "user":
+        return (None, 0)
+    if t == "assistant":
+        msg = ev.get("message") or {}
+        parts, n = [], 0
+        for b in msg.get("content") or []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text" and b.get("text"):
+                parts.append("  " + b["text"].replace("\n", "\n  "))
+            elif b.get("type") == "tool_use":
+                parts.append("  → " + _fmt_tool(b.get("name", ""), b.get("input")))
+                n += 1
+        return ("\n".join(parts) if parts else None, n)
+    return (None, 0)
 
 
 def build_mcp_config(python_bin: str, server_path: str | Path, env: dict, server_name: str) -> dict:
@@ -58,7 +113,9 @@ def gate_status(
         "print('HALT=' + str(bool(r.get('halt'))))\n"
         "print('HALTREASON=' + str(r.get('halt_reason') or ''))\n"
         "print('NEXTOP=' + str(nt.get('op') or nt.get('unit') or ''))\n"
-        "print('NEXTRUNG=' + str(nt.get('rung') or ''))"
+        "print('NEXTRUNG=' + str(nt.get('rung') or ''))\n"
+        "print('GRAD=' + ','.join(r.get('graduated') or []))\n"
+        "print('SHARDGRAD=' + ','.join(r.get('shard_graduated') or []))"
     )
     env = dict(os.environ)
     env.update(mcp_env)
@@ -87,6 +144,8 @@ def gate_status(
         "reason": pick("HALTREASON="),
         "next_op": pick("NEXTOP="),
         "next_rung": pick("NEXTRUNG="),
+        "graduated": [c for c in pick("GRAD=").split(",") if c],
+        "shard_graduated": [c for c in pick("SHARDGRAD=").split(",") if c],
     }
 
 
@@ -132,6 +191,7 @@ def run_cc_loop(
     max_rounds: int = 1000,
     claude_bin: str = "claude",
     on_round: Callable[[int, dict], None] | None = None,
+    pre_round: Callable[[int, dict], None] | None = None,
     agent_timeout_s: int | None = None,
     max_consecutive_timeouts: int = 2,
 ) -> dict:
@@ -141,14 +201,23 @@ def run_cc_loop(
     The agent is re-invoked with the same prompt every round (the gate carries state), matching the
     current optimize behavior.
 
+    Terminal output matches the fsm loop's clean style rather than dumping raw stream-json: the agent's
+    stdout is piped through `_render_cc_event`, so a clean screen shows only a throttled heartbeat
+    (`· round R working… Ns, N tool calls`) while full tool/text lines appear under TT_HW_PLANNER_VERBOSE
+    (framework chatter stays off-screen). Domain callers print fsm-style banners via ``pre_round`` (fired
+    with the gate state before each agent invocation) and progress via ``on_round`` (after).
+
     Agent watchdog (parity with perf_automation's sdk_retry timeout->retry->abandon): each round is
-    bounded by ``agent_timeout_s``. If a ``claude -p`` invocation exceeds it, the whole agent tree is
-    killed and the round is retried (the gate carries state, so no progress is lost); after
-    ``max_consecutive_timeouts`` consecutive wedges the loop abandons (halted=True). A round that ends
-    on its own resets the counter. None/<=0 timeout disables the watchdog (prior behavior)."""
+    bounded by ``agent_timeout_s``; a `claude -p` that exceeds it has its whole tree killed and the round
+    retried (the gate carries state, so no progress is lost); after ``max_consecutive_timeouts``
+    consecutive wedges the loop abandons (halted=True). A round that ends on its own resets the counter.
+    None/<=0 timeout disables the watchdog."""
+    import threading
+
     rounds, can_stop, halted = 0, False, False
     timeout_s = _resolve_agent_timeout_s(agent_timeout_s)
     consecutive_timeouts = 0
+    verbose = _verbose()
     while rounds < max_rounds:
         st = gate_fn()
         if st.get("halt"):
@@ -157,6 +226,8 @@ def run_cc_loop(
         if st.get("can_stop"):
             can_stop = True
             break
+        if pre_round is not None:
+            pre_round(rounds + 1, st)
         proc = subprocess.Popen(
             [
                 claude_bin,
@@ -174,12 +245,43 @@ def run_cc_loop(
             cwd=str(cwd),
             env=env,
             start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
+        _start = time.monotonic()
+        _tool_calls = [0]
+        _last_hb = [_start]
+
+        def _pump(p=proc, tc=_tool_calls, hb=_last_hb, rnd=rounds + 1):
+            try:
+                for raw in p.stdout:
+                    try:
+                        rendered, n = _render_cc_event(raw)
+                    except Exception:
+                        rendered, n = (None, 0)
+                    tc[0] += n
+                    if verbose and rendered:
+                        sys.stdout.write(rendered + "\n")
+                        sys.stdout.flush()
+                    now = time.monotonic()
+                    if not verbose and (now - hb[0]) >= _HB_EVERY_S:
+                        hb[0] = now
+                        sys.stdout.write(f"  · round {rnd} working… {int(now - _start)}s, {tc[0]} tool calls\n")
+                        sys.stdout.flush()
+            except Exception:
+                pass
+
+        pump = threading.Thread(target=_pump, daemon=True)
+        pump.start()
         try:
             proc.wait(timeout=timeout_s)
+            pump.join(timeout=5)
             consecutive_timeouts = 0
         except subprocess.TimeoutExpired:
             _kill_agent_tree(proc)
+            pump.join(timeout=5)
             consecutive_timeouts += 1
             print(
                 f"  [cc-watchdog] agent round exceeded {timeout_s}s with no completion "
