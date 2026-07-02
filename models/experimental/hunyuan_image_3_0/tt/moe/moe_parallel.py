@@ -15,12 +15,16 @@
 # gives each device the GLOBAL ids of its local experts, so the combine-weight
 # selection (topk_idx == global_id) picks the right column per device.
 
+import os
+import time
+
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from .gate import HunyuanTtTopKGate
 from .mlp import HunyuanTtMLP
+from ..cache import cache_file
 from ..parallel_utils import sp_gather, sp_shard
 
 
@@ -43,6 +47,7 @@ class HunyuanTtMoEParallel(LightweightModule):
         gate_dtype=ttnn.float32,
         sp_axis: int = 0,
         sp_factor: int = 1,
+        weight_cache_path=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -77,6 +82,9 @@ class HunyuanTtMoEParallel(LightweightModule):
 
         # --- stacked expert weights, sharded along the expert dim ------------
         # gate_and_up: [E, H, 2I]  down: [E, I, H]  (transposed for ttnn.linear)
+        verbose = os.environ.get("HY_VERBOSE", "1") != "0"
+        if verbose:
+            print(f"[backbone]   stacking {num_experts} expert weights on host ...", flush=True)
         wgu = torch.stack(
             [
                 state_dict[f"{prefix}.experts.{e}.gate_and_up_proj.weight"].transpose(0, 1).contiguous()
@@ -90,22 +98,34 @@ class HunyuanTtMoEParallel(LightweightModule):
             ]
         )
         self.inter2 = wgu.shape[-1]  # 2I
-        self.w_gate_up = ttnn.from_torch(
+        if verbose:
+            print(
+                f"[backbone]   uploading {num_experts} experts ({weight_dtype}) to mesh ...",
+                flush=True,
+            )
+        t_upload = time.time()
+        expert_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        self.w_gate_up = ttnn.as_tensor(
             wgu,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=expert_mapper,
+            cache_file_name=cache_file(weight_cache_path, f"{prefix}.experts.gate_and_up_stacked"),
         )  # per-device [epd, H, 2I]
-        self.w_down = ttnn.from_torch(
+        self.w_down = ttnn.as_tensor(
             wdn,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=expert_mapper,
+            cache_file_name=cache_file(weight_cache_path, f"{prefix}.experts.down_stacked"),
         )  # per-device [epd, I, H]
+        del wgu, wdn
+        if verbose:
+            print(f"[backbone]   expert upload done ({time.time() - t_upload:.1f}s)", flush=True)
 
         # Per-device GLOBAL expert ids: arange(E) sharded along the mesh axis.
         # bf16 so it compares against the (bf16-cast) topk indices; ids <= 63 exact.
@@ -130,11 +150,20 @@ class HunyuanTtMoEParallel(LightweightModule):
             f"{prefix}.gate.wg",
             norm_topk_prob=norm_topk_prob,
             weight_dtype=gate_dtype,
+            weight_cache_path=weight_cache_path,
         )
         self.shared_mlp = None
         if use_mixed_mlp_moe:
+            mlp_dtype = weight_dtype
+            if mlp_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                mlp_dtype = ttnn.bfloat16
             self.shared_mlp = HunyuanTtMLP(
-                mesh_device, hidden_size, state_dict, f"{prefix}.shared_mlp", weight_dtype=weight_dtype
+                mesh_device,
+                hidden_size,
+                state_dict,
+                f"{prefix}.shared_mlp",
+                weight_dtype=mlp_dtype,
+                weight_cache_path=weight_cache_path,
             )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
