@@ -61,12 +61,12 @@ static std::string ImplicitSyncParamName(const ::testing::TestParamInfo<bool>& i
     return info.param ? "ImplicitSyncTrue" : "ImplicitSyncFalse";
 }
 
-distributed::MeshCoordinateRange mesh_workload_device_range(
+static distributed::MeshCoordinateRange mesh_workload_device_range(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     return distributed::MeshCoordinateRange(mesh_device->shape());
 }
 
-void launch_program_on_mesh(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Program&& program) {
+static void launch_program_on_mesh(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Program program) {
     distributed::MeshWorkload workload;
     workload.add_program(mesh_workload_device_range(mesh_device), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
@@ -77,7 +77,7 @@ void launch_program_on_mesh(const std::shared_ptr<distributed::MeshDevice>& mesh
 // unique ring slots than entries_per_core, so output != input by design.
 void execute_program_and_verify(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    Program& program,
+    Program program,
     MeshTensor& in_tensor,
     MeshTensor& out_tensor,
     std::vector<uint32_t>& input,
@@ -755,7 +755,7 @@ void run_concurrent_dfbs_program(
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 100, total_buf_size / sizeof(uint32_t));
-    execute_program_and_verify(mesh_device, program, in_tensor, out_tensor, input);
+    execute_program_and_verify(mesh_device, std::move(program), in_tensor, out_tensor, input);
 }
 
 // =====================================================================================
@@ -1360,7 +1360,7 @@ void run_in_dfb_out_dfb_program(
 
     auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, num_entries * entry_size / sizeof(uint32_t));
-    execute_program_and_verify(mesh_device, program, in_tensor, out_tensor, input);
+    execute_program_and_verify(mesh_device, std::move(program), in_tensor, out_tensor, input);
 }
 
 // =====================================================================================
