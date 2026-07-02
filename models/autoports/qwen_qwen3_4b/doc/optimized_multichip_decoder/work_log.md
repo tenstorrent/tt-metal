@@ -314,7 +314,7 @@ Checkpoint commit:
 - Repo: `/home/ubuntu/tt-metal`
 - Branch: `agentic-research/fast-models-fast`
 - Stage checkpoint SHA: `bfa8d3c1bedd3ba1832122ab10bc58f8e24283ba`
-- Final optimized checkpoint SHA: `PENDING_FINAL_COMMIT_SHA`
+- Final optimized evidence checkpoint SHA: `7a14908339bd9dd8e765ae21d72e9ab27a8913e38`
 
 ## Final State
 
