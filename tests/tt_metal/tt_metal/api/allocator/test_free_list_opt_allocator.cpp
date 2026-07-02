@@ -329,6 +329,55 @@ TEST(FreeListOptTest, FirstFit) {
     ASSERT_EQ(f.value(), 1_KiB);
 }
 
+TEST(FreeListOptTest, FirstFitTopDownCanFragmentFutureLargeAllocations) {
+    // Two allocators with identical geometry but different search policies.
+    // We create two free blocks: 8KiB at low address and 16KiB at high address, separated by live allocations.
+    // Under top-down allocation:
+    // - FIRST-fit may consume the 16KiB block to satisfy an 8KiB request, preventing a future 16KiB request.
+    // - BEST-fit will consume the exact 8KiB block and preserve the 16KiB block.
+    constexpr size_t pool = 32_KiB;
+    auto first_fit = tt::tt_metal::allocator::FreeListOpt(
+        pool, 0, 1_KiB, 1_KiB, tt::tt_metal::allocator::FreeListOpt::SearchPolicy::FIRST);
+    auto best_fit = tt::tt_metal::allocator::FreeListOpt(
+        pool, 0, 1_KiB, 1_KiB, tt::tt_metal::allocator::FreeListOpt::SearchPolicy::BEST);
+
+    auto setup = [](auto& alloc) {
+        auto a = alloc.allocate(8_KiB);
+        auto b = alloc.allocate(1_KiB);
+        auto c = alloc.allocate(7_KiB);
+        auto d = alloc.allocate(16_KiB);
+        ASSERT_TRUE(a.has_value());
+        ASSERT_TRUE(b.has_value());
+        ASSERT_TRUE(c.has_value());
+        ASSERT_TRUE(d.has_value());
+        // Free the low 8KiB and the high 16KiB, leaving the middle 8KiB allocated as a separator.
+        alloc.deallocate(a.value());
+        alloc.deallocate(d.value());
+    };
+
+    setup(first_fit);
+    setup(best_fit);
+
+    {
+        auto x = first_fit.allocate(8_KiB, /*bottom_up=*/false);
+        ASSERT_TRUE(x.has_value());
+        // Under FIRST-fit + top-down, the allocator prefers the highest-address free block.
+        // Here, it consumes the 16KiB block by carving out its top 8KiB: [24KiB, 32KiB).
+        ASSERT_EQ(x.value(), 24_KiB);
+        auto y = first_fit.allocate(16_KiB, /*bottom_up=*/false);
+        ASSERT_FALSE(y.has_value());
+    }
+
+    {
+        auto x = best_fit.allocate(8_KiB, /*bottom_up=*/false);
+        ASSERT_TRUE(x.has_value());
+        // Under BEST-fit, the allocator consumes the exact 8KiB block at [0, 8KiB), preserving the 16KiB block.
+        ASSERT_EQ(x.value(), 0);
+        auto y = best_fit.allocate(16_KiB, /*bottom_up=*/false);
+        ASSERT_TRUE(y.has_value());
+    }
+}
+
 TEST(FreeListOptTest, FirstFitAllocateAtAddressInteractions) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB, tt::tt_metal::allocator::FreeListOpt::SearchPolicy::FIRST);
     allocator.allocate_at_address(32_KiB, 1_KiB);
