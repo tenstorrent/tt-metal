@@ -67,8 +67,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             tile_width,
             src0_cb_data_format,
             dst_cb_data_format,
-            operation_attributes.math_op,
-            ReduceOpDim::W);
+            operation_attributes.math_op);
     }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
