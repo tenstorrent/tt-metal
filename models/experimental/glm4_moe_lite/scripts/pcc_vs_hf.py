@@ -126,6 +126,9 @@ def main() -> int:
     ap.add_argument("--cache-dir", default="~/.cache/ttnn/models/glm4_moe_lite/vllm")
     ap.add_argument("--hf-cache-dir", default=DEFAULT_HF_CACHE_DIR)
     ap.add_argument("--min-pcc", type=float, default=0.97)
+    ap.add_argument(
+        "--shard-probe", type=int, default=4, help="Report PCC split into this many vocab shards (TP size)."
+    )
     args = ap.parse_args()
 
     os.environ["GLM4_MOE_LITE_ENABLE_MOE"] = "1"
@@ -203,6 +206,30 @@ def main() -> int:
         )
         print(f"[PCC vs HF] threshold    : {args.min_pcc}", flush=True)
         print(f"[PCC vs HF] RESULT       : {'PASS' if passing else 'FAIL'}", flush=True)
+
+        # --- Per-vocab-shard PCC breakdown (diagnose lm_head TP vocab-sharding assembly). ---
+        # lm_head is split across the TP columns; a mis-assembled shard shows as one bad chunk.
+        def _pcc(a, b):
+            a = a.flatten().double() - a.flatten().double().mean()
+            b = b.flatten().double() - b.flatten().double().mean()
+            d = (a.norm() * b.norm()).item()
+            return (torch.dot(a, b).item() / d) if d > 0 else 1.0
+
+        hf_v = hf_logits.flatten()
+        tt_v = tt_cmp.flatten()
+        for nshards in (int(args.shard_probe), 8):
+            if nshards <= 1 or vocab % nshards != 0:
+                continue
+            w = vocab // nshards
+            parts = [f"{i}:{_pcc(hf_v[i*w:(i+1)*w], tt_v[i*w:(i+1)*w]):.4f}" for i in range(nshards)]
+            print(f"[PCC vs HF] per-{nshards}-shard PCC (width {w}): {' '.join(parts)}", flush=True)
+        # also report max-abs-diff location to see if error is localized
+        diff = (hf_v - tt_v).abs()
+        print(
+            f"[PCC vs HF] global max|diff|={diff.max().item():.3f} at idx {int(torch.argmax(diff))}; "
+            f"mean|diff|={diff.mean().item():.4f}",
+            flush=True,
+        )
         print("=" * 64, flush=True)
         return 0 if passing else 1
     finally:

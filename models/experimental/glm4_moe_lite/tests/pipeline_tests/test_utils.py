@@ -189,6 +189,29 @@ def apply_correctness_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLM4_MOE_LITE_ATTN_DP", "0")
 
 
+def apply_wh_correctness_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reference-precision runtime flags that FIT the Wormhole LoudBox (T3K).
+
+    The Blackhole ``apply_correctness_env`` uses bf16 experts, which OOM WH DRAM
+    (~7 GB/chip for experts alone, even EP-sharded). On WH the highest expert
+    precision that fits is **bf8**, which reaches ~0.954 prefill-logits PCC vs HF
+    (bf4=0.935, bf8=0.954; bf16≈0.97 but OOMs -> Blackhole-only).
+
+    Like the Blackhole env this uses TP=0 (replicated, no tensor-parallel): the
+    production TP=1 path currently drops PCC to ~0.65 (a separate accuracy bug),
+    so the correctness reference deliberately isolates it with TP=0.
+
+    Do NOT add MOE_SPARSE_FP32_ACC / MOE_SPARSE_FIDELITY / MOE_SPARSE_APPROX=0
+    here: measured, they REGRESS PCC (0.954 -> 0.54), i.e. those precision paths
+    are currently buggy.
+    """
+    monkeypatch.setenv("GLM4_MOE_LITE_ENABLE_MOE", "1")
+    monkeypatch.setenv("GLM4_MOE_LITE_EXPERTS_TT_DTYPE", "bf8")  # bf16 OOMs WH; bf8 is the fitting max
+    monkeypatch.setenv("GLM4_MOE_LITE_MOE_FP32_ACC", "1")
+    monkeypatch.setenv("GLM4_MOE_LITE_TP", "0")
+    monkeypatch.setenv("GLM4_MOE_LITE_ATTN_DP", "0")
+
+
 def apply_single_layer_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLM4_MOE_LITE_DEBUG_ALLOW_PARTIAL_LAYERS", "1")
     monkeypatch.setenv("GLM4_MOE_LITE_NUM_LAYERS", "1")
