@@ -96,10 +96,34 @@ exclude_patterns = []
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
+import subprocess as _sp
+
+def _git_tags() -> list:
+    try:
+        out = _sp.check_output(
+            ["git", "tag", "-l", "v*", "--sort=-version:refname"],
+            stderr=_sp.DEVNULL,
+        ).decode().strip()
+        return [t for t in out.split("\n") if t]
+    except Exception:
+        return []
+
+_METAL_BASE = "https://firdovsimammedovk.github.io/tt-metal-sandbox/"
+_GLOBAL_CSS = "https://firdovsimammedovk.github.io/tenstorrent-sandbox/_static/tt_theme.css"
+_pkg = metal_sphinx_config.shortname
+_current_version = os.environ.get("DOCS_VERSION", "latest")
+
+_all_versions = ["latest"] + [t for t in _git_tags() if t != "latest"]
+_version_urls = [
+    (v, f"{_METAL_BASE}{_pkg}/{v}/")
+    for v in _all_versions
+]
+
 html_theme = "sphinx_rtd_theme"
 html_logo = "images/tt_logo.svg"
 html_favicon = "images/favicon.png"
-html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_config.shortname}"
+html_baseurl = f"{_METAL_BASE}{_pkg}/{_current_version}/"
+version = _current_version
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -107,7 +131,14 @@ html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_con
 html_static_path = ["_static"]
 html_js_files = ["posthog.js"]
 
-html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
+# Load global CSS from CDN first; local tt_theme.css provides API-specific overrides
+html_css_files = [_GLOBAL_CSS]
+
+html_context = {
+    "versions": _version_urls,
+    "current_version": _current_version,
+    "logo_link_url": "https://firdovsimammedovk.github.io/tenstorrent-sandbox/",
+}
 
 
 def setup(app):
