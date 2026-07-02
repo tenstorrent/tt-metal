@@ -25,7 +25,7 @@ ttnn::Tensor repeat_interleave(
     const auto& input_a_shape = input_a.logical_shape();
     uint32_t input_rank = input_a_shape.rank();
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
-    if (normalized_dim == input_rank - 1) {
+    if (input_rank >= 2 && normalized_dim == input_rank - 1) {
         auto transposed_input = ttnn::transpose(input_a, -1, -2, mem_config);
         auto repeated_input = ttnn::repeat_interleave(transposed_input, repeat, -2, mem_config);
         return ttnn::transpose(repeated_input, -1, -2, mem_config);
