@@ -1537,11 +1537,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"kernel_width", filter_w},
             {"coalesce_kw_reads", (uint32_t)coalesce_1d_depthwise_kw_reads},
         };
-        // OUT self-loop (dest-reuse accumulate) + ACT_TILIZED self-loop.
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_OUT, m2::DFBSelfLoopConnectivity::INTRA});
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_ACT_TILIZED, m2::DFBSelfLoopConnectivity::INTRA});
     } else {
         compute_kernel_spec.compile_time_args = {
             {"in0_block_w", act_block_w_ntiles},
@@ -1589,17 +1584,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             compute_kernel_spec.compile_time_args.insert({"tilized_cb_second_reader_offset", 0u});
         }
         compute_kernel_spec.compile_time_args.insert({"split_reader_cb_shared", 0u});
-
-        // MATMUL_PARTIALS self-loop (resolution #2) and OUT degenerate self-loop (resolution #1).
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_MATMUL_PARTIALS, m2::DFBSelfLoopConnectivity::INTRA});
-        compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_OUT, m2::DFBSelfLoopConnectivity::INTRA});
-        if (!block_sharded) {
-            // Height-sharded: ACT_TILIZED is a compute-internal tilize->matmul self-loop.
-            compute_kernel_spec.advanced_options.dfb_self_loop_connectivities.insert(
-                {DFB_ACT_TILIZED, m2::DFBSelfLoopConnectivity::INTRA});
-        }
 
         if (has_bias) {
             compute_kernel_spec.compiler_options.defines.insert({"FUSE_BIAS", "1"});

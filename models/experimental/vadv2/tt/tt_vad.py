@@ -5,7 +5,6 @@
 import torch
 import copy
 import ttnn
-import os
 from scipy.optimize import linear_sum_assignment
 from models.experimental.vadv2.tt.tt_backbone import TtResnet50
 from models.experimental.vadv2.reference.planning_metric import PlanningMetric
@@ -283,20 +282,7 @@ class TtVAD:
         x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
 
-        outs["bev_embed"] = ttnn.to_torch(outs["bev_embed"]).float()
-        outs["all_cls_scores"] = ttnn.to_torch(outs["all_cls_scores"]).float()
-        outs["all_bbox_preds"] = ttnn.to_torch(outs["all_bbox_preds"]).float()
-        outs["all_traj_preds"] = ttnn.to_torch(outs["all_traj_preds"]).float()
-        outs["all_traj_cls_scores"] = ttnn.to_torch(outs["all_traj_cls_scores"]).float()
-        outs["map_all_cls_scores"] = ttnn.to_torch(outs["map_all_cls_scores"]).float()
-        outs["map_all_bbox_preds"] = ttnn.to_torch(outs["map_all_bbox_preds"]).float()
-        outs["map_all_pts_preds"] = ttnn.to_torch(outs["map_all_pts_preds"]).float()
-        outs["ego_fut_preds"] = ttnn.to_torch(outs["ego_fut_preds"]).float()
-
-        save_path = "models/experimental/vadv2/tt/dumps"
-        os.makedirs(save_path, exist_ok=True)
-
-        keys_to_save = [
+        _keys9 = [
             "bev_embed",
             "all_cls_scores",
             "all_bbox_preds",
@@ -307,10 +293,19 @@ class TtVAD:
             "map_all_pts_preds",
             "ego_fut_preds",
         ]
+        for _k in _keys9:
+            _tensor = outs[_k]
+            # bev_embed is (10000, 1, 256) in TILE layout: the size-1 second-to-last
+            # dim pads up to a full 32-row tile, so a host-side untilize during
+            # to_torch wastes ~32x the work (~240 ms). Untilize on device first
+            # (a few ms) so the transfer is a plain row-major copy.
+            if _tensor.layout == ttnn.TILE_LAYOUT and _tensor.shape[-2] == 1:
+                _tensor = ttnn.to_layout(_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            outs[_k] = ttnn.to_torch(_tensor).float()
 
-        for key in keys_to_save:
-            tensor = outs[key]
-            torch.save(tensor, os.path.join(save_path, f"{key}.pt"))
+        # Expose the host-side outputs for the PCC test instead of round-tripping
+        # them through torch.save/torch.load to disk on every (timed) forward.
+        self._last_outs = {_k: outs[_k] for _k in _keys9}
 
         bbox_results = self.post_process_with_metrics(
             outs,

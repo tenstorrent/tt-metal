@@ -22,9 +22,12 @@ namespace ckernel::sfpu {
 // invocation of the matching _{quant,requant,dequant}_int32_ kernel. The
 // two SIGN_MAGNITUDE_FORMAT variants of a given kernel safely share its
 // slot - the init writes whichever variant it was templated for and the
-// kernel uses the matching REPLAY_LEN. Distinct slots between kernels are
-// required so a single compute kernel can mix all three ops without each
-// init clobbering the others' recordings.
+// kernel uses the matching REPLAY_LEN. The OUTPUT_FORMAT == UInt8 (uint8 output)
+// quant/requant variant safely shares the slot for the same reason: it only swaps
+// the STOCH_RND rounding mode (FP32_TO_UINT8 vs FP32_TO_INT8), which does not
+// change the body length. Distinct slots between kernels are required so a single compute
+// kernel can mix all three ops without each init clobbering the others'
+// recordings.
 //
 // Body content (see the inits for the exact emission order). No SFPNOPs are
 // emitted: on Blackhole the SFPU implicitly stalls on read-after-write
@@ -77,8 +80,18 @@ inline void _quant_kernels_configure_dest_incr_addrmod_() {
         .set(ADDR_MOD_6);
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false>
+// OUTPUT_FORMAT selects the quantized output tensor dtype. Only the two dtypes
+// ttnn exposes for quantize output are supported: Int32 (the default) and UInt8.
+// Int32 rounds via FP32_TO_INT8 - i.e. int8-range values [-128, 127] held in an
+// int32 container - while UInt8 rounds via FP32_TO_UINT8 into [0, 255].
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
 void quant_init(const uint zero_point) {
+    static_assert(
+        OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8,
+        "quant_init OUTPUT_FORMAT must be Int32 or UInt8");
     // One-time setup for calculate_quant_int32:
     //   1. load the fp32 zero-point constant into LREG2;
     //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
@@ -99,30 +112,55 @@ void quant_init(const uint zero_point) {
         // implicitly stalls SFP_STOCH_RND below until SFPMAD's LREG0 write
         // retires, so no explicit pipeline-bubble TTI_SFPNOP is needed here.
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
-        // fp32 -> int sign-magnitude. LCONST_0 (LREG9) is the HW-provided 0.0
-        // used as the zero descale.
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN,
-            0 /*imm8*/,
-            p_sfpu::LCONST_0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        // fp32 -> int. LCONST_0 (LREG9) is the HW-provided 0.0 used as the zero
+        // descale. For unsigned (uint8) output, round into the full [0, 255]
+        // range, else clamp to signed int8 [-128, 127].
+        if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+        } else {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        }
         if constexpr (!SIGN_MAGNITUDE_FORMAT) {
-            // STOCH_RND output above is in sign-magnitude form; convert to
-            // 2's-complement so the trailing INT32_2S_COMP SFPSTORE writes
-            // out 2's-complement bits (on BH the store mode itself is a
-            // no-op, so the bits in LREG0 are what land in memory). LREG4
-            // is the helper's scratch destination; LREG0 receives the
-            // sign-fixed result. See INT_REPR_SWAP_CAST above for why the
-            // cast mode constant is direction-neutral.
+            // Convert STOCH_RND's sign-magnitude output to 2's-complement so the
+            // trailing INT32_2S_COMP SFPSTORE writes out 2's-complement bits
+            // (on BH the store mode itself is a no-op, so the bits in LREG0 are
+            // what land in memory). LREG4 is the helper's scratch destination;
+            // LREG0 receives the sign-fixed result. See INT_REPR_SWAP_CAST above
+            // for why the cast mode constant is direction-neutral.
+            //
+            // Signed (FP32_TO_INT8) output is sign-magnitude here, so the
+            // conversion is meaningful. Unsigned (UInt8, FP32_TO_UINT8)
+            // output is already in [0, 255] with bit 31 clear, where
+            // sign-magnitude and 2's-complement are bit-identical, so this is a
+            // no-op for uint8. It runs unconditionally so both paths share
+            // QUANT_REPLAY_LEN_2S_COMP; gating it off for unsigned would need a
+            // dedicated REPLAY_LEN. Revisit if apply_sign_magnitude_conversion
+            // stops being a no-op for bit-31-clear inputs.
             apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
         }
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false>
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
 void requant_init(const uint zero_point) {
+    static_assert(
+        OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8,
+        "requant_init OUTPUT_FORMAT must be Int32 or UInt8");
     // One-time setup for requant_int32; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2, programs
     // ADDR_MOD_6 with dest+=2, then records the register-only compute into
@@ -151,18 +189,39 @@ void requant_init(const uint zero_point) {
         // stalls STOCH_RND below until SFPMAD's LREG0 write retires, so no
         // explicit pipeline-bubble TTI_SFPNOP is needed here.
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
-        // fp32 -> int sign-magnitude. LCONST_0 (LREG9) provides the 0.0 descale.
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN,
-            0 /*imm8*/,
-            p_sfpu::LCONST_0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        // fp32 -> int. LCONST_0 (LREG9) provides the 0.0 descale. For unsigned
+        // (uint8) output, round into the full [0, 255] range; otherwise clamp to
+        // signed int8 [-128, 127].
+        if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+        } else {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        }
         if constexpr (!SIGN_MAGNITUDE_FORMAT) {
-            // STOCH_RND output is sign-magnitude; convert to 2's-complement
-            // for the trailing INT32_2S_COMP SFPSTORE. Same cast+SETSGN
-            // combo as the input side; see INT_REPR_SWAP_CAST above.
+            // Convert STOCH_RND's output to 2's-complement for the trailing
+            // INT32_2S_COMP SFPSTORE. Same cast+SETSGN combo as the input side;
+            // see INT_REPR_SWAP_CAST above.
+            //
+            // Signed (FP32_TO_INT8) output is sign-magnitude here, so the
+            // conversion is meaningful. Unsigned (UInt8, FP32_TO_UINT8)
+            // output is already in [0, 255] with bit 31 clear, where
+            // sign-magnitude and 2's-complement are bit-identical, so this is a
+            // no-op for uint8. It runs unconditionally for the same
+            // replay-length reason documented in quant_init's output-side
+            // conversion above; revisit if apply_sign_magnitude_conversion
+            // stops being a no-op for bit-31-clear inputs.
             apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INT_REPR_SWAP_CAST);
         }
     }

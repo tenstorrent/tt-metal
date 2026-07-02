@@ -56,6 +56,8 @@ void kernel_main() {
     const uint32_t tok_count = get_arg_val<uint32_t>(4);
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(5);
+    // Block-cyclic remap (BC_ENABLE): all its constants are compile-time defines (the cache length T is hashed
+    // for this path), so there is no runtime arg to read here. See sparse_sdpa_gather.hpp for the remap.
 
     constexpr uint32_t q_row_bytes = k_dim * q_elem_bytes;     // Q row (bf16)
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;    // K row (native dtype: fp8 or bf16)
