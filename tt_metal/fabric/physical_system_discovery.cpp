@@ -70,12 +70,13 @@ TrayID get_tray_id_for_chip(
     static const std::vector<uint16_t> sienad8_canonical_bus_ids = {0xc1, 0x01, 0x41, 0x42};
     static const std::vector<uint16_t> sienad8_bus_0x43_variant_bus_ids = {0xc1, 0x01, 0x43, 0x41};
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
+        {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
         {"SIENAD8-2L2T", sienad8_canonical_bus_ids},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
         {"H13DSG-O-CPU", {0x21, 0x01, 0x41, 0x61, 0xa1, 0x81, 0xc1, 0xe1}},
     };
 
-    if (using_mock_cluster_desc) {
+    if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
         return TrayID{0};
     }
     if (!mobo_to_bus_ids.contains(mobo_name)) {
