@@ -1,0 +1,1697 @@
+{
+  "metadata": {
+    "board_type": "Wormhole",
+    "card_count": 1,
+    "device_series": "n300",
+    "models": [
+      "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo"
+    ],
+    "pytest_args": null,
+    "total_configurations": 20,
+    "trace_run_id": 81,
+    "traced_at": "2026-05-23 03:56:59.312225+00:00",
+    "tt_firmware": "19.7.1.0",
+    "tt_kmd": "TT-KMD 2.8.0",
+    "tt_metal_sha": "75ad1dc18e69d5cb54fe223e34954ab9ed69f787",
+    "tt_smi": "4.0.0",
+    "unique_operations": 9,
+    "trace_uid": "PYTEST_INTEG_SAMPLE"
+  },
+  "operations": {
+    "ttnn.add": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                1,
+                1,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "5ab007db09a0d86458bda1bcd06f233001ab20892c785889625050a4612f7ae2",
+          "config_id": 2687,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "66a7ffbe979541ca3043800c425d9224d73c9ff6fe7d947de029d0f78fcaa465",
+          "config_id": 2693,
+          "executions": [
+            {
+              "count": 6,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.embedding": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.UINT32",
+              "original_shape": [
+                8,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                2,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "16b0cd664031c1c6c2b264418e51df8a7823605c79835da27e4ff7014fd643ea",
+          "config_id": 2699,
+          "executions": [
+            {
+              "count": 1,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.UINT32",
+              "original_shape": [
+                8,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                512,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "6e028d77405fb810d542bc15a5ffc63ddb23bdc2685c6b47d6ed1abdf642867c",
+          "config_id": 2700,
+          "executions": [
+            {
+              "count": 1,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.UINT32",
+              "original_shape": [
+                8,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                30522,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "8701fde162adbf469776847d7e3fc819c5a0840141110d44bf27b4041e59b7fd",
+          "config_id": 2698,
+          "executions": [
+            {
+              "count": 1,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.layer_norm": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "bias": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                1,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "compute_kernel_config": {
+              "dst_full_sync_en": false,
+              "fp32_dest_acc_en": false,
+              "math_approx_mode": "True",
+              "math_fidelity": "MathFidelity.HiFi4",
+              "packer_l1_acc": false,
+              "throttle_level": "ThrottleLevel.NO_THROTTLE"
+            },
+            "epsilon": 1e-12,
+            "memory_config": {
+              "buffer_type": "BufferType.L1",
+              "hash": 46082544170029282,
+              "interleaved": true,
+              "is_sharded": false,
+              "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+              "shard_spec": null
+            },
+            "weight": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                1,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "4b9b3612bf0d79f42bc675e6a34d6095d1e3d2408233fd7025f7e759bfdbdad2",
+          "config_id": 2694,
+          "executions": [
+            {
+              "count": 5,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.linear": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                512
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                512,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "bias": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                1,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "core_grid": {
+              "type": "CoreGrid",
+              "value": "ttnn.CoreGrid(x=8, y=8)"
+            },
+            "dtype": {
+              "repr": "DataType.BFLOAT16",
+              "type": "DataType"
+            },
+            "memory_config": {
+              "buffer_type": "BufferType.L1",
+              "hash": 46082544170029282,
+              "interleaved": true,
+              "is_sharded": false,
+              "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+              "shard_spec": null
+            }
+          },
+          "config_hash": "0d6108609dcb8b508f093bc0b8c18cebef28104446e1ea940fd094d8150b2524",
+          "config_id": 2696,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "activation": "gelu",
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                128,
+                512
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "bias": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                1,
+                512
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "core_grid": {
+              "type": "CoreGrid",
+              "value": "ttnn.CoreGrid(x=8, y=8)"
+            },
+            "dtype": {
+              "repr": "DataType.BFLOAT16",
+              "type": "DataType"
+            },
+            "memory_config": {
+              "buffer_type": "BufferType.L1",
+              "hash": 46082544170029282,
+              "interleaved": true,
+              "is_sharded": false,
+              "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+              "shard_spec": null
+            }
+          },
+          "config_hash": "363ef235c7a860153a5d00107489526b7fbdc5b83d0ad8cf89d86b9f42bba0a1",
+          "config_id": 2695,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "bias": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                1,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "core_grid": {
+              "type": "CoreGrid",
+              "value": "ttnn.CoreGrid(x=8, y=8)"
+            },
+            "dtype": {
+              "repr": "DataType.BFLOAT16",
+              "type": "DataType"
+            },
+            "memory_config": {
+              "buffer_type": "BufferType.L1",
+              "hash": 46082544170029282,
+              "interleaved": true,
+              "is_sharded": false,
+              "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+              "shard_spec": null
+            }
+          },
+          "config_hash": "3bc7cd0aed09b2a45e62a21cf395fca799ae02d60abd7b5a402c9299a3a87f5f",
+          "config_id": 2683,
+          "executions": [
+            {
+              "count": 6,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                128,
+                2
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "bias": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                1,
+                2
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "core_grid": {
+              "type": "CoreGrid",
+              "value": "ttnn.CoreGrid(x=8, y=8)"
+            },
+            "dtype": {
+              "repr": "DataType.BFLOAT16",
+              "type": "DataType"
+            },
+            "memory_config": {
+              "buffer_type": "BufferType.L1",
+              "hash": 46082544170029282,
+              "interleaved": true,
+              "is_sharded": false,
+              "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+              "shard_spec": null
+            }
+          },
+          "config_hash": "5bf3b6cf21af731dabccc09cc25bfe1da001108092fd8a2983f7e098961b39f7",
+          "config_id": 2697,
+          "executions": [
+            {
+              "count": 1,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "bias": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                1,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementReplicate']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "core_grid": {
+              "type": "CoreGrid",
+              "value": "ttnn.CoreGrid(x=8, y=8)"
+            },
+            "dtype": {
+              "repr": "DataType.BFLOAT16",
+              "type": "DataType"
+            },
+            "memory_config": {
+              "buffer_type": "BufferType.L1",
+              "hash": 46082544170029282,
+              "interleaved": true,
+              "is_sharded": false,
+              "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+              "shard_spec": null
+            }
+          },
+          "config_hash": "f1bdff3f4124a23b2996443e82be3a352607c8d14378e39e9237cb291760e268",
+          "config_id": 2692,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.matmul": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                128,
+                64
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                64,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "8aaa2f6211723ee7e26c22173bbd76f857d35d5d060d5e264a6a38f084fc4f55",
+          "config_id": 2685,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                128,
+                64
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            }
+          },
+          "config_hash": "e39e78ac9a10210a703ca3285f0d4d876d61b82f9d169f6ee294885b72a85adb",
+          "config_id": 2689,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.multiply": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": 0.125
+          },
+          "config_hash": "e5e0ff2b849f58718b1dabe2e59ccad364eecd473481385d276eade1092059c2",
+          "config_id": 2686,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.permute": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                2,
+                64
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": [
+              0,
+              2,
+              3,
+              1
+            ]
+          },
+          "config_hash": "05871f97784350daaa74dacf772ac6c8284b0264e8b9cb7b7d726484137b92b7",
+          "config_id": 2682,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                128,
+                64
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": [
+              0,
+              2,
+              1,
+              3
+            ]
+          },
+          "config_hash": "79a929ac62cc8db21d534b3c4fa8f2ecaf56c1e7d59a6d087f25dd4619dbd9dd",
+          "config_id": 2690,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                2,
+                64
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": [
+              0,
+              2,
+              1,
+              3
+            ]
+          },
+          "config_hash": "d2a5cca4fb3c8d49a23d5a5ff2fc6cd106a18107ce5178683ea224f6d34e7f5e",
+          "config_id": 2684,
+          "executions": [
+            {
+              "count": 4,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.reshape": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.L1",
+                "hash": 46082544170029282,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.HOST",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": [
+              8,
+              128,
+              2,
+              64
+            ]
+          },
+          "config_hash": "05cdb6a1cfb0a68ab721482c0977a90d69396e134a8faae6158e9e94f9ae90c1",
+          "config_id": 2681,
+          "executions": [
+            {
+              "count": 6,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        },
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.ROW_MAJOR",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                128,
+                2,
+                64
+              ],
+              "storage_type": "StorageType.HOST",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "arg1": [
+              8,
+              128,
+              128
+            ]
+          },
+          "config_hash": "d9030a5c5f0f41ccfceaf707131292ed35634d819514051ef4dee7048f6d5647",
+          "config_id": 2691,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ttnn.softmax": {
+      "configurations": [
+        {
+          "arguments": {
+            "arg0": {
+              "layout": "Layout.TILE",
+              "memory_config": {
+                "buffer_type": "BufferType.DRAM",
+                "hash": 46082544174525093,
+                "interleaved": true,
+                "is_sharded": false,
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "shard_spec": null
+              },
+              "original_dtype": "DataType.BFLOAT16",
+              "original_shape": [
+                8,
+                2,
+                128,
+                128
+              ],
+              "storage_type": "StorageType.DEVICE",
+              "tensor_placement": {
+                "distribution_shape": "[2]",
+                "mesh_device_shape": "[1, 2]",
+                "placement": "['PlacementShard(0)']"
+              },
+              "type": "ttnn.Tensor"
+            },
+            "dim": -1
+          },
+          "config_hash": "2723ed5dc5cd900d5d6265021fd3a26afa6c7384d0507e5f520a3ff207159caf",
+          "config_id": 2688,
+          "executions": [
+            {
+              "count": 2,
+              "machine_info": {
+                "board_type": "Wormhole",
+                "card_count": 1,
+                "device_count": 2,
+                "device_series": "n300",
+                "mesh_device_shape": [
+                  1,
+                  2
+                ],
+                "tt_firmware": "19.7.1.0",
+                "tt_kmd": "TT-KMD 2.8.0",
+                "tt_smi": "4.0.0"
+              },
+              "pytest_args": null,
+              "source": "models/demos/wormhole/bert_tiny/demo/demo.py::test_demo",
+              "trace_run_ids": [
+                81
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

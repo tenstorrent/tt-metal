@@ -20,11 +20,9 @@ import json
 import os
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
-os.environ.setdefault("TTNN_OPS_DATABASE_URL", "postgresql://test:test@localhost/testdb")
 
 from tests.sweep_framework.load_ttnn_ops_data_v2 import (
     _append_registry_entries,
@@ -37,7 +35,6 @@ from tests.sweep_framework.load_ttnn_ops_data_v2 import (
     resolve_manifest,
     verify_reconstruction,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -96,25 +93,6 @@ def _make_master_json(
     p = tmp_path / filename
     p.write_text(json.dumps(data, indent=2))
     return str(p)
-
-
-def _mock_db_for_reconstruct(mock_pg, trace_configs):
-    """Set up a mock psycopg2 connection for reconstruct_from_trace_run.
-
-    Args:
-        trace_configs: dict with keys: tr_meta (tuple), trace_models (list),
-                       config_rows (list).
-    """
-    mock_conn = MagicMock()
-    mock_cur = MagicMock()
-    mock_pg.connect.return_value = mock_conn
-    mock_conn.cursor.return_value = mock_cur
-    mock_cur.fetchone.return_value = trace_configs["tr_meta"]
-    mock_cur.fetchall.side_effect = [
-        trace_configs["trace_models"],
-        trace_configs["config_rows"],
-    ]
-    return mock_conn, mock_cur
 
 
 # =====================================================================
@@ -885,184 +863,160 @@ class TestLoadToDraftToPromotePipeline:
         assert resolve_manifest(str(manifest_file)) == []
 
 
-class TestLoadDataWithMockedDB:
-    """load_data end-to-end with mocked DB — GUIDE.md §Step 2."""
+# =====================================================================
+# §4b  Snowflake load -> reconstruct integration (GATED)
+#      Real round-trip against a throwaway schema; replaces the removed
+#      mocked-psycopg2 DB tests. Skipped unless Snowflake creds are set.
+# =====================================================================
 
-    def _setup_mock_db(self, mock_pg):
-        mock_conn = MagicMock()
-        mock_cur = MagicMock()
-        mock_pg.connect.return_value = mock_conn
-        mock_conn.cursor.return_value = mock_cur
-        return mock_conn, mock_cur
+_HAS_SF_CREDS = bool(
+    os.environ.get("SNOWFLAKE_ACCOUNT")
+    and os.environ.get("SNOWFLAKE_USER")
+    and (os.environ.get("SNOWFLAKE_PRIVATE_KEY") or os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH"))
+)
 
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts")
-    def test_multi_op_multi_config_load(self, mock_drafts, mock_pg, tmp_path):
-        """Load JSON with multiple operations and configurations."""
-        json_path = _make_master_json(
-            tmp_path,
-            {
-                "ttnn::add": [
-                    ("hash_a1", {"arg0": {"type": "int", "value": 1}}),
-                    ("hash_a2", {"arg0": {"type": "int", "value": 2}}),
-                ],
-                "ttnn::multiply": [
-                    ("hash_m1", {"arg0": {"type": "float", "value": 3.14}}),
-                ],
-            },
+
+@pytest.mark.skipif(
+    not _HAS_SF_CREDS,
+    reason="Snowflake creds not set (SNOWFLAKE_ACCOUNT/USER/PRIVATE_KEY[_PATH])",
+)
+class TestSnowflakeLoadReconstructIntegration:
+    """Real Snowflake load -> reconstruct round-trip against a throwaway schema.
+
+    This class replaces the old mocked-``psycopg2`` tests (the loader is now
+    Snowflake-only, so those mocks no longer apply). It is GATED on Snowflake
+    credentials and skipped otherwise, so the default local/CI run stays offline.
+
+    A committed fixture (``fixtures/ttnn_ops_sample_master.json``, reconstructed
+    from a small real V6 trace) is the test input, so no live-DB data is read at
+    test time. Each test builds an empty throwaway schema from the v6 DDL, loads
+    the fixture, reconstructs it, and drops the schema in teardown. The live
+    ``SELF_SERVE.TTNN_OPS_V6`` schema is NEVER touched.
+    """
+
+    # Provenance/aggregation keys added by load+reconstruct that are not part of
+    # the config body we assert equality on.
+    _PROVENANCE_KEYS = {"executions", "trace_run_ids", "pytest_args", "pytest_args_seen"}
+
+    FIXTURE_PATH = str(Path(__file__).parent / "fixtures" / "ttnn_ops_sample_master.json")
+    # Fixed throwaway schema (unqualified name; the loader qualifies + uppercases
+    # it to SELF_SERVE.TTNN_OPS_PYTEST_INTEG). It is DROP+CREATEd per test so
+    # counts are deterministic and no state leaks between runs.
+    TEST_SCHEMA = "ttnn_ops_pytest_integ"
+
+    @pytest.fixture
+    def sf_schema(self):
+        """Create an empty throwaway schema from the v6 DDL; drop it on teardown.
+
+        Yields ``(schema_name, connection)``. The DDL itself begins with
+        ``DROP SCHEMA IF EXISTS ...; CREATE SCHEMA ...`` so it is idempotent.
+        """
+        import tests.sweep_framework.load_ttnn_ops_data_v2 as _ldr
+
+        ddl_path = Path(_ldr.__file__).parent.parent.parent / "model_tracer" / "create_ttnn_ops_schema_v6_snowflake.sql"
+        ddl = ddl_path.read_text().replace("TTNN_OPS_V6", "TTNN_OPS_PYTEST_INTEG")
+
+        conn = _ldr._connect(autocommit=True)
+        qualified = f"SELF_SERVE.{self.TEST_SCHEMA.upper()}"
+        try:
+            for _ in conn.execute_string(ddl):
+                pass
+            yield self.TEST_SCHEMA, conn
+        finally:
+            try:
+                conn.cursor().execute(f"DROP SCHEMA IF EXISTS {qualified}")
+            finally:
+                conn.close()
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def _config_bodies(self, doc):
+        """Map (operation, config_hash) -> config body sans provenance keys."""
+        out = {}
+        for op_name, op_data in doc["operations"].items():
+            for cfg in op_data["configurations"]:
+                body = {k: v for k, v in cfg.items() if k not in self._PROVENANCE_KEYS}
+                out[(op_name, cfg["config_hash"])] = body
+        return out
+
+    def _config_counts(self, doc):
+        """Map (operation, config_hash) -> sorted execution count list."""
+        out = {}
+        for op_name, op_data in doc["operations"].items():
+            for cfg in op_data["configurations"]:
+                out[(op_name, cfg["config_hash"])] = sorted(e["count"] for e in cfg["executions"])
+        return out
+
+    # ── tests ────────────────────────────────────────────────────────────
+
+    def test_load_reconstruct_roundtrip(self, sf_schema):
+        """load_data -> reconstruct_from_trace_run preserves ops/configs/counts."""
+        schema, conn = sf_schema
+        fixture = json.loads(Path(self.FIXTURE_PATH).read_text())
+
+        # Loading appends a draft to model_tracer/trace_selection_registry.yaml;
+        # no-op it so the working tree stays clean.
+        with patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts"):
+            load_data(json_path=self.FIXTURE_PATH, tt_metal_sha="pytest-integ", dry_run=False, schema=schema)
+
+        # Fresh schema -> the loaded trace is trace_run_id 1.
+        result = reconstruct_from_trace_run(1, schema=schema)
+        assert result is not None
+
+        # Operation set matches the fixture.
+        assert set(result["operations"]) == set(fixture["operations"])
+
+        # Per-op config_hash sets match.
+        for op_name in fixture["operations"]:
+            fix_hashes = {c["config_hash"] for c in fixture["operations"][op_name]["configurations"]}
+            got_hashes = {c["config_hash"] for c in result["operations"][op_name]["configurations"]}
+            assert got_hashes == fix_hashes, op_name
+
+        # Per-config body (arguments etc., excluding provenance keys) matches.
+        fix_bodies = self._config_bodies(fixture)
+        got_bodies = self._config_bodies(result)
+        assert set(got_bodies) == set(fix_bodies)
+        for key, body in fix_bodies.items():
+            assert got_bodies[key] == body, key
+
+        # Execution count values are preserved.
+        assert self._config_counts(result) == self._config_counts(fixture)
+
+        # Direct query: base_operation_name is populated for every operation.
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) FROM SELF_SERVE.{schema.upper()}.TTNN_OPERATION WHERE BASE_OPERATION_NAME IS NULL"
         )
-        _, mock_cur = self._setup_mock_db(mock_pg)
-        # Return IDs for each DB operation
-        mock_cur.fetchone.side_effect = [
-            (1,),  # op add id
-            (10,),  # model id (lookup for config 1)
-            (20,),  # hardware id
-            (30,),  # config id (add hash_a1)
-            (40,),  # trace run id
-            (10,),  # model id (config 2, cached miss)
-            (31,),  # config id (add hash_a2)
-            (2,),  # op multiply id
-            (10,),  # model id
-            (32,),  # config id (multiply hash_m1)
-            *[(n,) for n in range(9)],  # _fetch_db_totals
-        ]
+        assert cur.fetchone()[0] == 0
 
-        load_data(json_path=json_path, tt_metal_sha="abc", dry_run=False)
-        mock_drafts.assert_called_once()
+    def test_dry_run_persists_nothing(self, sf_schema):
+        """dry_run=True rolls back every write — the schema stays empty."""
+        schema, conn = sf_schema
 
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    def test_multi_source_config(self, mock_pg, tmp_path):
-        """Config with multiple execution sources (V2 format)."""
-        data = {
-            "operations": {
-                "ttnn::add": {
-                    "configurations": [
-                        {
-                            "config_hash": "hash_shared",
-                            "arguments": {"arg0": {"type": "int", "value": 1}},
-                            "executions": [
-                                {
-                                    "source": "models/demos/audio/whisper/demo/demo.py",
-                                    "machine_info": {
-                                        "board_type": "Wormhole",
-                                        "device_series": "n300",
-                                        "card_count": 1,
-                                    },
-                                    "count": 10,
-                                },
-                                {
-                                    "source": "models/tt_transformers/demo/simple_text_demo.py [HF_MODEL:meta-llama/Llama-3.2-1B-Instruct]",
-                                    "machine_info": {
-                                        "board_type": "Wormhole",
-                                        "device_series": "n300",
-                                        "card_count": 1,
-                                    },
-                                    "count": 20,
-                                },
-                            ],
-                        }
-                    ]
-                }
-            },
-            "metadata": {"trace_uid": "fixture-trace-uid"},
-        }
-        p = tmp_path / "multi_source.json"
-        p.write_text(json.dumps(data))
+        with patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts"):
+            load_data(json_path=self.FIXTURE_PATH, tt_metal_sha="pytest-integ", dry_run=True, schema=schema)
 
-        _, mock_cur = self._setup_mock_db(mock_pg)
-        # Keep this fixture resilient to internal query count changes.
-        mock_cur.fetchone.return_value = (1,)
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) FROM SELF_SERVE.{schema.upper()}.TTNN_CONFIGURATION")
+        assert cur.fetchone()[0] == 0
 
-        load_data(json_path=str(p), tt_metal_sha="sha", dry_run=True)
-        # In dry run: rollback is called, commit is not
-        mock_pg.connect.return_value.rollback.assert_called()
-
-    def _write_loadable_master(self, tmp_path):
-        """Minimal valid master JSON — inlines trace_uid (the loader requires it)."""
-        data = {
-            "operations": {
-                "ttnn::add": {
-                    "configurations": [
-                        {
-                            "config_hash": "hash_a1",
-                            "arguments": {"arg0": {"type": "int", "value": 1}},
-                            "executions": [
-                                {
-                                    "source": "models/demos/deepseek_v3/demo/demo.py",
-                                    "machine_info": {
-                                        "board_type": "Wormhole",
-                                        "device_series": "n300",
-                                        "card_count": 1,
-                                    },
-                                    "count": 1,
-                                    "trace_uid": "fixture-trace-uid",
-                                }
-                            ],
-                        }
-                    ]
-                }
-            }
-        }
-        p = tmp_path / "loadable_master.json"
-        p.write_text(json.dumps(data))
-        return str(p)
-
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts")
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.get_or_create_trace_run")
-    def test_emit_id_file_writes_new_trace_run_id(self, mock_get_trace_run, mock_drafts, mock_pg, tmp_path):
-        """--emit-id-file writes the new trace_run_id so CI can pin validation."""
-
-        def fake_trace_run(
-            cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None, **_unused
-        ):
-            cache[trace_uid] = 77
-            return 77
-
-        mock_get_trace_run.side_effect = fake_trace_run
-
-        json_path = self._write_loadable_master(tmp_path)
-        _, mock_cur = self._setup_mock_db(mock_pg)
-        mock_cur.fetchall.return_value = []  # no existing trace_uids, no lookup rows
-        mock_cur.fetchone.return_value = (1,)  # uniform response for all other fetchone()s
-
+    def test_emit_id_file_written(self, sf_schema, tmp_path):
+        """A real (non-dry-run) load writes the new trace_run_id to emit_id_file."""
+        schema, _conn = sf_schema
         emit_path = tmp_path / "trace_run_id.txt"
-        load_data(
-            json_path=json_path,
-            tt_metal_sha="abc",
-            dry_run=False,
-            emit_id_file=str(emit_path),
-        )
 
-        assert emit_path.read_text().strip() == "77"
+        with patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts"):
+            load_data(
+                json_path=self.FIXTURE_PATH,
+                tt_metal_sha="pytest-integ",
+                dry_run=False,
+                schema=schema,
+                emit_id_file=str(emit_path),
+            )
 
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.get_or_create_trace_run")
-    def test_emit_id_file_not_written_on_dry_run(self, mock_get_trace_run, mock_pg, tmp_path):
-        """Dry run must never produce an ID file — the trace_run doesn't exist."""
-
-        def fake_trace_run(
-            cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None, **_unused
-        ):
-            cache[trace_uid] = 77
-            return 77
-
-        mock_get_trace_run.side_effect = fake_trace_run
-
-        json_path = self._write_loadable_master(tmp_path)
-        _, mock_cur = self._setup_mock_db(mock_pg)
-        mock_cur.fetchall.return_value = []
-        mock_cur.fetchone.return_value = (1,)
-
-        emit_path = tmp_path / "trace_run_id.txt"
-        load_data(
-            json_path=json_path,
-            tt_metal_sha="abc",
-            dry_run=True,
-            emit_id_file=str(emit_path),
-        )
-
-        assert not emit_path.exists()
+        assert emit_path.exists()
+        # Fresh schema -> the sole new trace_run_id is 1.
+        assert emit_path.read_text().strip() == "1"
 
 
 # =====================================================================
@@ -1305,183 +1259,6 @@ class TestFindConfigLineNumbersFunctional:
         result = find_config_line_numbers(json_path, "ttnn::multiply", [0, 1])
         assert result[0] is not None
         assert result[1] is not None
-
-
-# =====================================================================
-# §7  Reconstruct from Trace Run (functional with mock DB)
-# =====================================================================
-
-
-class TestReconstructFromTraceRunFunctional:
-    """reconstruct-trace exercises the full DB→JSON pipeline."""
-
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    def test_multi_model_multi_op_trace(self, mock_pg, tmp_path):
-        """Trace 538 with 2 models and 2 ops — reconstructed JSON has correct structure."""
-        mock_conn, mock_cur = _mock_db_for_reconstruct(
-            mock_pg,
-            {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None, None, None, None),
-                "trace_models": [
-                    (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
-                    (
-                        2,
-                        "models/tt_transformers/demo/simple_text_demo.py",
-                        "meta-llama/Llama-3.2-1B-Instruct",
-                        "llama-3.2-1b-instruct",
-                    ),
-                ],
-                "config_rows": [
-                    (
-                        "ttnn::add",
-                        100,
-                        "h1",
-                        {"arguments": {"a": {"type": "int", "value": 1}}},
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        5,
-                        "models/demos/audio/whisper/demo/demo.py",
-                        None,
-                    ),
-                    (
-                        "ttnn::add",
-                        100,
-                        "h1",
-                        {"arguments": {"a": {"type": "int", "value": 1}}},
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        3,
-                        "models/tt_transformers/demo/simple_text_demo.py",
-                        "meta-llama/Llama-3.2-1B-Instruct",
-                    ),
-                    (
-                        "ttnn::multiply",
-                        200,
-                        "h2",
-                        {"arguments": {"b": {"type": "float", "value": 2.0}}},
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        10,
-                        "models/demos/audio/whisper/demo/demo.py",
-                        None,
-                    ),
-                ],
-            },
-        )
-
-        output = str(tmp_path / "output.json")
-        result = reconstruct_from_trace_run(538, output_path=output)
-
-        assert "ttnn::add" in result["operations"]
-        assert "ttnn::multiply" in result["operations"]
-
-        add_cfg = result["operations"]["ttnn::add"]["configurations"][0]
-        assert add_cfg["config_hash"] == "h1"
-        # Two executions: one per model
-        assert len(add_cfg["executions"]) == 2
-        sources = {e["source"] for e in add_cfg["executions"]}
-        assert "models/demos/audio/whisper/demo/demo.py" in sources
-
-        assert result["metadata"]["trace_run_id"] == 538
-        assert result["metadata"]["device_series"] == "n300"
-        assert Path(output).exists()
-
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    def test_model_name_filter_excludes_models(self, mock_pg):
-        """model_names={'whisper'} excludes llama from the trace."""
-        mock_conn, mock_cur = _mock_db_for_reconstruct(
-            mock_pg,
-            {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None, None, None, None),
-                "trace_models": [
-                    (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
-                    (2, "path/llama.py", "meta-llama/Llama-3.2-1B", "llama-3.2-1b"),
-                ],
-                "config_rows": [
-                    (
-                        "ttnn::add",
-                        100,
-                        "h1",
-                        {"arguments": {}},
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        5,
-                        "models/demos/audio/whisper/demo/demo.py",
-                        None,
-                    ),
-                ],
-            },
-        )
-        result = reconstruct_from_trace_run(538, model_names={"whisper"})
-        # Only whisper's model ID should be in the query filter
-        assert result is not None
-        for cfg in result["operations"]["ttnn::add"]["configurations"]:
-            for ex in cfg["executions"]:
-                assert "llama" not in ex["source"].lower()
-
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    def test_no_matching_models_returns_none(self, mock_pg, capsys):
-        """Filtering to a model not in the trace → None result."""
-        mock_conn, mock_cur = _mock_db_for_reconstruct(
-            mock_pg,
-            {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None, None, None, None),
-                "trace_models": [
-                    (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
-                ],
-                "config_rows": [],
-            },
-        )
-        result = reconstruct_from_trace_run(538, model_names={"nonexistent"})
-        assert result is None
-        assert "no models matching" in capsys.readouterr().out.lower()
-
-    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
-    def test_mesh_config_in_output(self, mock_pg):
-        """Configs with mesh shape include mesh_device_shape in machine_info."""
-        mock_conn, mock_cur = _mock_db_for_reconstruct(
-            mock_pg,
-            {
-                "tr_meta": (35, "Wormhole", "tt-galaxy-wh", 32, "sha", "2026-03-21", 323, "", None, None, None, None),
-                "trace_models": [
-                    (1, "models/demos/deepseek_v3/demo/demo.py", None, "deepseek_v3"),
-                ],
-                "config_rows": [
-                    (
-                        "ttnn::add",
-                        100,
-                        "h1",
-                        {"arguments": {}},
-                        "Wormhole",
-                        "tt-galaxy-wh",
-                        32,
-                        [4, 8],
-                        32,
-                        128,
-                        "models/demos/deepseek_v3/demo/demo.py",
-                        None,
-                    ),
-                ],
-            },
-        )
-        result = reconstruct_from_trace_run(35)
-        cfg = result["operations"]["ttnn::add"]["configurations"][0]
-        mi = cfg["executions"][0]["machine_info"]
-        assert mi["mesh_device_shape"] == [4, 8]
-        assert mi["device_count"] == 32
-        assert mi["card_count"] == 32
 
 
 # =====================================================================
