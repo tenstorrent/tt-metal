@@ -36,6 +36,23 @@ SHAPES = [
 
 ROUNDTRIP_SHAPES = [(32, 1024), (30, 1152), (4, 1, 128, 1024)]
 
+# Masked-decompress configs: (H, local expert_token_counts, dispatch_group_size). Region offsets are
+# derived with the real dispatch rule (each count padded up to TILE_SIZE, cumulative), so the buffer is
+# byte-faithful to a single-device dispatch. Each valid row's per-128-block scales ride in the tail of
+# its metadata row, so no separate scale tensor is needed. dispatch_group_size only feeds the
+# counter_offset derivation (0 on one chip). Covers small/large (multi compute-block) regions, an empty
+# expert, varying blocks-per-row (H/128), and the real width (H=7168, blocks_per_row=56 > tile_h so a
+# single token spans multiple compute blocks).
+MASKED_CONFIGS = [
+    (256, [5, 3], 1),  # 2 blocks/row, two small regions
+    (128, [40, 10], 1),  # 1 block/row, first region 40 rows > tile_h (2 compute blocks)
+    (384, [8, 0, 12], 1),  # 3 blocks/row, middle expert empty
+    (256, [6, 4], 2),  # dispatch_group_size > 1 (counter_offset still 0 on one chip)
+    (256, [12], 4),
+    (7168, [2], 1),  # real width: blocks_per_row=56 > tile_h, each token spans 2 compute blocks
+    (7168, [40, 3], 1),  # real width + a region > tile_h rows
+]
+
 
 # Blackhole only operation
 @pytest.fixture(autouse=True)
@@ -221,3 +238,103 @@ def test_round_trip_random(device, dtype, shape, layout):
 
     # fp8 quantization (~12% worst-case relative error) bounds the reconstruction.
     assert_quality(y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} shape={shape}")
+
+
+# ---------------------------------------------------------------------------
+# Masked per_token_cast_back: decompress only the valid expert-region rows of a dispatch buffer.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("output_dtype", ["float32", "bfloat16"])
+@pytest.mark.parametrize("H, counts, dispatch_group_size", MASKED_CONFIGS, ids=lambda v: str(v))
+def test_cast_back_masked(device, output_dtype, H, counts, dispatch_group_size):
+    """Single-device masked decompress from a hand-built dispatch buffer.
+
+    input_e4m3 is a dispatch buffer of T rows; only the rows in each local expert region
+    [offsets[e], offsets[e]+counts[e]) are decompressed. Each valid row's per-128-block fp32 scales
+    ride in the tail of its metadata row (fields 5.., bit-cast to int32), matching the fp8 dispatch
+    path, so no separate scale tensor is needed (input_scale is unused here — a dummy is passed).
+    Offsets follow the real dispatch rule (counts padded up to TILE_SIZE, cumulative), so the layout
+    matches a single-device dispatch. counter_offset stays 0 (it is mesh-position-derived and cannot
+    be exercised on one chip). Only valid rows are asserted; padding/trailing garbage is left untouched.
+    """
+    torch.manual_seed(0)
+
+    n_blocks = H // BLOCK_W  # scale columns / 128-blocks per row; also the metadata scale-tail length
+    metadata_len = 5 + n_blocks
+    G = dispatch_group_size
+    experts_per_chip = len(counts)  # local experts on this device
+    num_routed_experts = experts_per_chip * G  # num_dispatch_groups = 1
+    ttnn_out_dtype = getattr(ttnn, output_dtype)
+
+    # Local region offsets = cumulative sum of tile-padded counts (get_gate_outputs, single group).
+    offsets = []
+    acc = 0
+    for c in counts:
+        offsets.append(acc)
+        acc += ((c + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    T = acc + 8  # + trailing garbage rows past the last region
+
+    valid = [offsets[e] + i for e in range(experts_per_chip) for i in range(counts[e])]
+
+    # Dispatch buffer values already on the e4m3 grid (decode is then exact), and each row's scales.
+    raw_e4m3 = (torch.randn(T, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn).float()
+    scales = (torch.rand(T, n_blocks) * 2.0 + 0.5).to(torch.float32)
+
+    # metadata head [coord, token, topk, expert, weight] is unread by the masked path; the tail
+    # (fields 5..) carries the token's per-128-block fp32 scales, bit-cast to int32 (dispatch layout).
+    metadata = torch.zeros((1, 1, T, metadata_len), dtype=torch.int32)
+    for r in valid:
+        metadata[0, 0, r, 5:] = scales[r].view(torch.int32)
+
+    e4m3_tt = _make_e4m3_from_torch(raw_e4m3.reshape(1, 1, T, H), device=device)
+    # input_scale is unused in masked mode but still a required positional; pass a minimal dummy.
+    scale_dummy_tt = ttnn.from_torch(
+        torch.zeros(1, 1, 1, n_blocks, dtype=torch.float32),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def _to_int32(vals):
+        return ttnn.from_torch(
+            torch.tensor(vals, dtype=torch.int32).reshape(1, 1, 1, num_routed_experts),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # counts/offsets span all num_routed_experts; only this device's first experts_per_chip entries are
+    # read (counter_offset == 0 on one chip), the rest are padding for the other dispatch-group devices.
+    counts_tt = _to_int32(counts + [0] * (num_routed_experts - experts_per_chip))
+    offsets_tt = _to_int32(offsets + [0] * (num_routed_experts - experts_per_chip))
+    metadata_tt = ttnn.from_torch(
+        metadata, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+        e4m3_tt,
+        scale_dummy_tt,
+        output_dtype=ttnn_out_dtype,
+        expert_token_counts=counts_tt,
+        expert_region_offsets=offsets_tt,
+        metadata=metadata_tt,
+        experts_per_chip=experts_per_chip,
+        dispatch_group_size=G,
+    )
+    out = ttnn.to_torch(out_tt).float().reshape(T, H)
+
+    # Reference: each valid row = decode(e4m3) * its own per-128-block scale (from the metadata tail).
+    ref_valid = torch.stack([raw_e4m3[r] * scales[r].repeat_interleave(BLOCK_W) for r in valid])
+    out_valid = torch.stack([out[r] for r in valid])
+
+    # PCC is the correctness gate: masking, the metadata-tail scale read, and the block layout are exact
+    # (PCC == 1.0). The Tensix eltwise multiply carries reduced-mantissa (tf32/bf16) precision even with
+    # an fp32 dest, leaving a small absolute floor; tiny |values| turn that into a large relative error,
+    # so allclose needs an absolute floor in atol. A bf16 output adds its own rounding.
+    rtol, atol = (6e-2, 1.5e-1) if output_dtype == "bfloat16" else (2e-2, 5e-2)
+    assert_quality(
+        out_valid, ref_valid, pcc_threshold=0.999, rtol=rtol, atol=atol, label=f"masked {output_dtype} H={H} G={G}"
+    )
