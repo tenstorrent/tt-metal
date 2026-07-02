@@ -230,6 +230,13 @@ void kernel_main() {
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
 
+#ifdef STREAMING_IN1
+    // Streaming consumes in1 through the standard in1_cb wait_front/pop_front API, so the
+    // batched-only sync2 channel and the manual block-stride bytes are unused on this path.
+    (void)sync2_buf;
+    (void)in1_block_size_bytes;
+#endif
+
     // Runtime args
     uint32_t rt_args_idx = 0;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
@@ -257,7 +264,7 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
         uint32_t in1_cb_start_addr = 0;
         uint32_t in1_rd_ptr_start_addr = 0;
         uint32_t curr_in1_block_index = 0;
@@ -291,17 +298,27 @@ void kernel_main() {
         }
 
         // Wait to receive in1
+#ifndef STREAMING_IN1
         sync2_buf.wait_front(1);
         sync2_buf.pop_front(1);
+#endif
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
             uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
 
             // Wait for in1 block
+#ifdef STREAMING_IN1
+            // Streaming: in1 lives in the GCB (the in1 CB is aligned to the GCB ring) and the
+            // prefetcher delivers blocks in ring-rotated FIFO order, so consume the CB with the
+            // standard API — the reader pushes one block of credit per landed block and we read it
+            // at the CB front (in1_index_subblock_offset is 0 for the GCB path). No manual rd_ptr.
+            in1_cb.wait_front(in1_block_num_tiles);
+#else
             if constexpr (in1_is_dram) {
                 in1_cb.wait_front(in1_block_num_tiles);
             }
+#endif
 
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             CircularBuffer input0_cb(input0_cb_id);
@@ -321,7 +338,7 @@ void kernel_main() {
             }
             input0_cb.wait_front(in0_block_num_tiles);
 
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
                 in1_cb_id,
                 num_blocks,
@@ -469,13 +486,23 @@ void kernel_main() {
             if constexpr (in1_is_dram) {
                 in1_cb.pop_front(in1_block_num_tiles);
             }
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
             curr_in1_block_index = next_in1_block_index;
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
 #endif
+#ifdef STREAMING_IN1
+            // Streaming: pop the consumed block off the GCB-aligned in1 CB with the standard API
+            // (advances rd_ptr to the next FIFO block and wraps at the fifo limit). No explicit
+            // reader signal: llk_pop_tiles publishes this CB's consumer ack only after
+            // STALLWAIT(UNPACK), i.e. after the unpacker HW has drained the block, so the reader
+            // frees the GCB slot by polling that engine-accurate ack (pages_reservable_at_back). A
+            // hand-rolled done-semaphore isn't tied to the unpacker drain, so it is neither needed
+            // nor safe as the recycle gate.
+            in1_cb.pop_front(in1_block_num_tiles);
+#endif
         }
 
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
         // Release in1
         sync_buf.reserve_back(1);
         sync_buf.push_back(1);
