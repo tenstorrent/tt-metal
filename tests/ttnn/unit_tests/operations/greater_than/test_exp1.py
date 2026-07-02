@@ -49,7 +49,20 @@ def test_gt_org():
 
     # Softmax
     tt_tiled = ttnn.to_layout(input_ttnn, ttnn.Layout.TILE, None, memory_config=DRAM_MEMCFG)
-    tt_softmax = ttnn.softmax(tt_tiled, 2, memory_config=DRAM_MEMCFG)
+
+    fidelity = ttnn.MathFidelity.HiFi4
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_softmax = ttnn.softmax(
+        tt_tiled, 2, memory_config=DRAM_MEMCFG, compute_kernel_config=compute_kernel_config
+    )  # , numeric_stable=True)
+
+    # tt_softmax = ttnn.softmax(tt_tiled, 2, memory_config=DRAM_MEMCFG)
     tt_softmax_torch = ttnn.to_torch(tt_softmax)
 
     # Slice column 1: [0,0,1] to [1,8732,2]
