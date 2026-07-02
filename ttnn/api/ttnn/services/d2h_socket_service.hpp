@@ -36,7 +36,7 @@ namespace tt::tt_metal {
 class D2HStreamService {
 public:
     struct Config {
-        TensorSpec global_spec;
+        std::optional<TensorSpec> global_spec;
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
         std::optional<distributed::MeshComposerConfig> composer_config;
         uint32_t fifo_size_bytes = 0;
@@ -53,6 +53,8 @@ public:
     D2HStreamService& operator=(const D2HStreamService&) = delete;
     D2HStreamService(D2HStreamService&&) = delete;
     D2HStreamService& operator=(D2HStreamService&&) = delete;
+
+    void read_metadata(ttsl::Span<std::byte> metadata);
 
     void read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<std::byte> metadata = {});
     void read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byte> metadata = {});
@@ -87,6 +89,8 @@ private:
         uint32_t num_socket_pages);
 
     void signal_termination();
+    bool tensor_enabled() const;
+    void read_metadata_from_sockets(ttsl::Span<std::byte> metadata);
 
     bool is_owner_ = true;
 

@@ -34,13 +34,12 @@ constexpr uint32_t num_workers = get_compile_time_arg_val(15);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(16);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(17);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
-constexpr auto input_tensor_accessor_args = TensorAccessorArgs<19>();
+constexpr uint32_t tensor_enabled = get_compile_time_arg_val(19);
+constexpr auto input_tensor_accessor_args = TensorAccessorArgs<20>();
 
 void kernel_main() {
     Noc noc;
     CircularBuffer scratch_cb(scratch_buffer_cb_index);
-
-    auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_addr);
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, socket_page_size);
@@ -96,35 +95,37 @@ void kernel_main() {
         if (terminated) {
             break;
         }
+        if constexpr (tensor_enabled) {
+            auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_addr);
+            for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
+                const uint32_t base_page = chunk * pages_per_chunk;
+                for (uint32_t i = 0; i < pages_per_chunk; ++i) {
+                    noc.async_read<NocOptions::DEFAULT, input_tensor_page_size>(
+                        input_tensor_accessor,
+                        scratch_cb,
+                        input_tensor_page_size,
+                        {.page_id = base_page + i},
+                        {.offset_bytes = i * input_tensor_page_size});
+                }
+                noc.async_read_barrier();
 
-        for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            const uint32_t base_page = chunk * pages_per_chunk;
-            for (uint32_t i = 0; i < pages_per_chunk; ++i) {
-                noc.async_read<NocOptions::DEFAULT, input_tensor_page_size>(
-                    input_tensor_accessor,
-                    scratch_cb,
-                    input_tensor_page_size,
-                    {.page_id = base_page + i},
-                    {.offset_bytes = i * input_tensor_page_size});
+                if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {
+                    terminated = true;
+                    break;
+                }
+
+                noc_async_wide_write_any_len_with_state(
+                    NOC_INDEX,
+                    cb_l1_addr,
+                    pcie_xy_enc,
+                    ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
+                        sender_socket.write_ptr,
+                    socket_page_size);
+                noc.async_writes_flushed();
+
+                socket_push_pages(sender_socket, 1);
+                socket_notify_receiver(sender_socket);
             }
-            noc.async_read_barrier();
-
-            if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {
-                terminated = true;
-                break;
-            }
-
-            noc_async_wide_write_any_len_with_state(
-                NOC_INDEX,
-                cb_l1_addr,
-                pcie_xy_enc,
-                ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
-                    sender_socket.write_ptr,
-                socket_page_size);
-            noc.async_writes_flushed();
-
-            socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
         }
 
         if (terminated) {
