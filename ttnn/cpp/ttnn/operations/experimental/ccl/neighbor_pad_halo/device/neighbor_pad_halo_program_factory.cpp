@@ -367,8 +367,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // barrier signal can target the relocated mux W-reader cores. TT_NP_W_MUX forces the mux path at any
     // worker count (bring-up). See PLAN_NP_FABRIC_MUX_IMPL.md.
     const bool w_force_mux = std::getenv("TT_NP_W_MUX") != nullptr;
-    const bool use_w_mux = is_2d && ((num_w_workers > 1) || w_force_mux) && !is_first_w_device &&
-                           !is_last_w_device && (w_coalesce_n > 0);
+    // Uniform mux across ALL W devices (edges too) so the recv-sem targeting is consistent along the whole
+    // W chain (mixed mux/standard breaks edge<->middle recv). Edge devices' no-send direction is handled
+    // by has_neighbor/has_send_neighbor gating in the kernels + no mux kernel for that (link,dir).
+    const bool use_w_mux = is_2d && ((num_w_workers > 1) || w_force_mux) && (w_coalesce_n > 0);
     std::vector<CoreCoord> mux_worker_logical, mux_worker_virtual, mux_core_logical;
     if (use_w_mux) {
         for (uint32_t s = 0; s < pad2_num_links * 2; s++) {
@@ -636,6 +638,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             mux_reader_ct.push_back(progress_t_batch_size);
             mux_reader_ct.push_back(use_w_two_pass);
             mux_reader_ct.push_back(w_coalesce_n);
+            mux_reader_ct.push_back(1);  // W_MUX_MODE: coalesce for edge devices too
             auto mux_reader_cfg = ReaderDataMovementConfig{};
             mux_reader_cfg.compile_args = mux_reader_ct;
 
@@ -654,8 +657,18 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             const std::vector<CoreCoord>& mux_mux_cores = mux_core_logical;
             std::set<CoreRange> worker_crs, mux_crs;
             for (const auto& c : mux_worker_cores) worker_crs.insert(CoreRange(c));
-            for (const auto& c : mux_mux_cores) mux_crs.insert(CoreRange(c));
-            CoreRangeSet worker_crset(worker_crs), mux_crset(mux_crs);
+            // Only create a mux kernel for (link,dir) that actually SEND (have a send-neighbor); the mux
+            // kernel blocks until its worker connects + signals terminate, so an unused mux would hang.
+            // dir=0 (forward) sends iff !is_last_w_device; dir=1 (backward) sends iff !is_first_w_device.
+            for (uint32_t s = 0; s < mux_mux_cores.size(); s++) {
+                const uint32_t w_dir_s = s % 2;
+                const bool sends = w_dir_s == 0 ? !is_last_w_device : !is_first_w_device;
+                if (sends) {
+                    mux_crs.insert(CoreRange(mux_mux_cores[s]));
+                }
+            }
+            CoreRangeSet worker_crset(worker_crs);
+            CoreRangeSet mux_crset(mux_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : mux_crs);
 
             // Send CB (c_in0) on the mux WORKER cores — the base cb_w_sender_config was created only on
             // the standard column-0 W cores, so the relocated workers had no CB (reader/writer would
@@ -716,13 +729,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     const uint32_t extra_wk = rows_this_link % num_w_workers;
                     const uint32_t pw = w_dir ? op.np_pad2_right : op.np_pad2_left;
                     const uint32_t section_base = w_dir ? w_section_wright_base : w_section_wleft_base;
-                    // Opposite-direction worker core (same link, same worker index): this device's dir-d
-                    // writer sends to the neighbor, whose RECEIVING reader is its dir-(1-d) worker. NOC
-                    // coords are device-independent, so we target the local opposite-dir worker's coords.
-                    const uint32_t opp_s = w_link * 2 + (1 - w_dir);
+                    // recv-sem target = the SAME-direction worker core (matches the standard W writer,
+                    // which sets neighbor_sem_noc0 = w_virtual_core[w_link*2+w_dir]). The receiving reader
+                    // on the neighbor waits at the same (device-independent) core coords.
                     for (uint32_t wk = 0; wk < num_w_workers; wk++) {
                         CoreCoord wc = mux_worker_cores[s * num_w_workers + wk];
-                        CoreCoord opp_vc = mux_worker_virtual[opp_s * num_w_workers + wk];
+                        CoreCoord wc_vc = mux_worker_virtual[s * num_w_workers + wk];
                         const uint32_t wk_start = base_link_start + wk * per_wk + std::min(wk, extra_wk);
                         const uint32_t wk_count = per_wk + (wk < extra_wk ? 1 : 0);
                         // Reader RT args (same layout as the standard W reader).
@@ -739,7 +751,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         // NOT the mux core: the recv-sem + startup-barrier incs land on the reader that waits them.
                         std::vector<uint32_t> w_rt = {
                             section_base + wk_start * pw, wk_count,
-                            opp_vc.x, opp_vc.y, opp_vc.x, opp_vc.y,
+                            wc_vc.x, wc_vc.y, wc_vc.x, wc_vc.y,
                             static_cast<uint32_t>(is_first_w_device), static_cast<uint32_t>(is_last_w_device), w_dir,
                             0u, static_cast<uint32_t>(w_dir ? w_backward_device_offset : w_forward_device_offset)};
                         ttnn::ccl::fabric_mux_connection_rt_args(
@@ -762,6 +774,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         w_reader_kernel_config.compile_args.push_back(progress_t_batch_size);
         w_reader_kernel_config.compile_args.push_back(use_w_two_pass);  // global two-pass gate (lockstep w/ writer)
         w_reader_kernel_config.compile_args.push_back(w_coalesce_n);    // W-send bank-major coalesce factor (0=off)
+        w_reader_kernel_config.compile_args.push_back(0);              // W_MUX_MODE off (standard 1-worker path)
         w_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"

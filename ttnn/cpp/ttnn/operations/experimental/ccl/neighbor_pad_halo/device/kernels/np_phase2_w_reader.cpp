@@ -41,6 +41,9 @@ constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_src + 1);
 // middle device gathers same-dst-bank sticks (rel, rel+8, ...) into the CB so the writer ships N of them
 // as one N*page fabric packet. BH has 8 interleaved DRAM banks.
 constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_src + 2);
+// Uniform-mux mode: all W devices (incl. edges) use the coalesce path so the recv-sem targeting is
+// consistent across the whole W chain. Edge devices skip the send-gather for their no-neighbor direction.
+constexpr uint32_t W_MUX_MODE = get_compile_time_arg_val(ct_after_src + 3);
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
 
 void kernel_main() {
@@ -124,7 +127,12 @@ void kernel_main() {
     // (progress>0 fused path gates corners per-batch on HT/HB and ignores this barrier.)
     // Coalescing (middle device) uses the upfront barrier (bank-major mixes interior+corner), so it
     // opts out of interior-first.
-    const bool w_coalesce_active = (W_COALESCE > 0) && !is_first_chip && !is_last_chip;
+    // Coalesce for middle devices always; in uniform-mux mode, edge devices coalesce too.
+    const bool w_coalesce_active = (W_COALESCE > 0) && (W_MUX_MODE || (!is_first_chip && !is_last_chip));
+    // Send-side neighbor for THIS direction (writer sends only when it exists). Per-core args are
+    // direction-swapped by the factory, so the send condition is uniformly !is_last_chip. Edge devices
+    // skip the gather for their no-neighbor direction (paired mux writer also skips) so the CB isn't left full.
+    const bool has_send_neighbor = !is_last_chip;
     const bool interior_first_p0 = (progress_t_batch_size == 0) && (barrier_count > 0) &&
                                    (outer_dim_size == slice_frames * h_total) && !w_coalesce_active;
     if constexpr (progress_t_batch_size == 0) {
@@ -141,7 +149,7 @@ void kernel_main() {
     if constexpr (W_COALESCE > 0) {
         if (w_coalesce_active) {
             const uint32_t w_col = direction ? 0u : (num_interior_sticks - 1u);
-            for (uint32_t j = 0; j < NP_NUM_DRAM_BANKS; j++) {
+            for (uint32_t j = 0; has_send_neighbor && j < NP_NUM_DRAM_BANKS; j++) {
                 uint32_t r = j;
                 while (r < outer_dim_size) {
                     uint32_t g = 0;
