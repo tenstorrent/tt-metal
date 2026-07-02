@@ -1546,33 +1546,36 @@ for run in $(seq 1 $NUM_RUNS); do
         unset DUMP_OUTPUT_CSV
     fi
 
+    run_output_file="$(mktemp)"
     set +e
     if [[ "$use_batch" == true ]]; then
         if [[ "${TT_METAL_EMULE_MODE:-}" == "1" ]]; then
-            run_output=$("$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+            "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
                 --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" \
-                --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+                --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" >"$run_output_file" 2>&1
         else
-            run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
+            TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
                 "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
                 --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" \
-                --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+                --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" >"$run_output_file" 2>&1
         fi
     else
         parse_shape "${TEST_SHAPES[0]}"
         if [[ "${TT_METAL_EMULE_MODE:-}" == "1" ]]; then
-            run_output=$("$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+            "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
                 --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" --tiles "$tile_count" \
-                "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+                "${EXTRA_BINARY_ARGS[@]}" >"$run_output_file" 2>&1
         else
-            run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
+            TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
                 "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
                 --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" --tiles "$tile_count" \
-                "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+                "${EXTRA_BINARY_ARGS[@]}" >"$run_output_file" 2>&1
         fi
     fi
     run_exit=$?
     set -e
+    run_output="$(cat "$run_output_file")"
+    rm -f "$run_output_file"
 
     if [[ $run_exit -ne 0 ]]; then
         # Surface the binary's stderr/stdout — DON'T swallow it. A non-zero exit
@@ -1590,7 +1593,7 @@ for run in $(seq 1 $NUM_RUNS); do
     PROFILER_CSV_PATH="${PROFILER_BASE}/.logs/profile_log_device.csv"
     if [[ -f "$PROFILER_CSV_PATH" ]]; then
         total_shapes=$(( ${#PRECISION_LIST[@]} * ${#TEST_SHAPES[@]} ))
-        batch_times=$(extract_batch_profiler_times "$PROFILER_CSV_PATH" "$total_shapes" "$WORK_DIR")
+        batch_times=$(extract_batch_profiler_times "$PROFILER_CSV_PATH" "$total_shapes" "$WORK_DIR" || true)
         i=0
         IFS=',' read -ra _ptimes <<< "$batch_times"
         for prec in "${PRECISION_LIST[@]}"; do
@@ -1613,13 +1616,13 @@ for run in $(seq 1 $NUM_RUNS); do
             pkey="${prec}_${shape_name}"
             if [[ "$PRECISION" == "both" ]]; then
                 # Multi-precision format: BATCH[bf16,tiles=N]:TIMING_KERNEL_EXECUTION:
-                kernel_exec=$(echo "$run_output" | grep "BATCH\[${prec},tiles=${tile_count}\]:TIMING_KERNEL_EXECUTION:" | awk -F': ' '{print $2}')
+                kernel_exec=$(echo "$run_output" | grep "BATCH\[${prec},tiles=${tile_count}\]:TIMING_KERNEL_EXECUTION:" | awk -F': ' '{print $2}' || true)
             elif [[ "$use_batch" == true ]]; then
                 # Single-precision batch: BATCH[tiles=N]:TIMING_KERNEL_EXECUTION:
-                kernel_exec=$(echo "$run_output" | grep "BATCH\[tiles=${tile_count}\]:TIMING_KERNEL_EXECUTION:" | awk -F': ' '{print $2}')
+                kernel_exec=$(echo "$run_output" | grep "BATCH\[tiles=${tile_count}\]:TIMING_KERNEL_EXECUTION:" | awk -F': ' '{print $2}' || true)
             else
                 # Single shape, single precision: TIMING_KERNEL_EXECUTION:
-                kernel_exec=$(echo "$run_output" | grep "TIMING_KERNEL_EXECUTION:" | head -1 | awk -F': ' '{print $2}')
+                kernel_exec=$(echo "$run_output" | grep "TIMING_KERNEL_EXECUTION:" | head -1 | awk -F': ' '{print $2}' || true)
             fi
             if [[ -n "$kernel_exec" ]]; then
                 host_times_csv[$pkey]="${host_times_csv[$pkey]:+${host_times_csv[$pkey]},}$kernel_exec"
