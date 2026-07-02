@@ -1,21 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-
 import os
 
+from ttnn.device import is_blackhole as ttnn_is_blackhole
+from ttnn.device import is_wormhole_b0 as ttnn_is_wormhole_b0
+
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
 class ModelArgs:
     """
-    BGE-M3 TTv2 model loading contract.
+    BGE-M3 model loading contract (HF checkpoint, tokenizer, and tensor layout).
 
-    Canonical flow:
-        args = ModelArgsTTv2(...)
-        state_dict = args.load_state_dict()
-        model = args.load_model(state_dict=state_dict)
+    Typical usage passes this object into the TT encoder after ``load_state_dict``.
     """
 
     def __init__(
@@ -40,7 +38,7 @@ class ModelArgs:
         self.tile_size = 32
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
-        self.prefill_len_cutoff = 512 if is_blackhole() else 1024
+        self.prefill_len_cutoff = 512 if ttnn_is_blackhole(mesh_device) else 1024
 
         self.dummy_weights = dummy_weights
         self.cache_hf = cache_hf
@@ -222,11 +220,12 @@ class ModelArgs:
 
 
 def get_padded_sequence_length(seq_len: int) -> int:
-    # Attention accepts 128-wide tiles for short sequences, but the long-sequence
-    # output projection path requires 1024 alignment and the QKV path requires
-    # 2048 alignment once those kernels are used.
+    # Attention requires seq_len % 32 (tile height); for seq_len > 128 it must be % 128
+    # (see ``BgeM3Attention.forward``). Padding **≤128** to 32-token steps avoids forcing
+    # e.g. 32→128 (4× wasted device work) while keeping alignment; above 128, keep 128-wide steps.
+    # Long-sequence paths: 1024 / 2048 alignment for large kernels.
     if seq_len <= 1024:
-        pad_multiple = 128
+        pad_multiple = 32 if seq_len <= 128 else 128
     elif seq_len <= 2048:
         pad_multiple = 1024
     else:
@@ -264,14 +263,14 @@ def determine_device_name(mesh_device):
     if num_devices == 0:
         return "CPU", num_devices
 
-    if is_blackhole():
+    if ttnn_is_blackhole(mesh_device):
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
             4: "P150x4",
             8: "P150x8",
         }
-    elif is_wormhole_b0():
+    elif ttnn_is_wormhole_b0(mesh_device):
         dict_device_names = {
             1: "N150",
             2: "N300",

@@ -52,6 +52,7 @@ def test_attention_vs_pytorch(device, seq_len):
         head_dim=HEAD_DIM,
         bqkv=None,
         wo_bias=None,
+        max_seq_len=seq_len,
     )
     x = torch.randn((BATCH_SIZE, 1, seq_len, HIDDEN_SIZE), dtype=torch.float32)
 
