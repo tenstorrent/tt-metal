@@ -4,10 +4,8 @@
 
 """Unit test for TTNNLinearMeshShard.forward.
 
-The smoke test in test_pipeline_smoke.py validates that the sharded Linear
-PLACES on a 32-chip BH Galaxy. This unit test validates that a single
-sharded Linear's forward (matmul + all-gather) produces the same output
-as the torch reference.
+Validates that a single sharded Linear's forward (matmul + all-gather)
+produces the same output as the torch reference.
 
 Approach: wrap a small (1024 → 2048) nn.Linear, place across the mesh,
 run forward on synthetic input, compare against torch reference via PCC.
