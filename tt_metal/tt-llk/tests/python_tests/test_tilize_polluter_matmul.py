@@ -22,9 +22,13 @@ leaks its strides into the matmul, corrupting the result.
 
 The `do_restore` toggle makes this a controlled experiment:
     do_restore=True  -> transition restores the baseline; matmul must match golden.
-    do_restore=False -> no restore; on a correct (PR) build this is expected to expose
-                        the leak for tiny G0 (regular G0 is the control and may pass
-                        even without restore since its strides already match).
+    do_restore=False -> no restore; on a correct (PR) build this always exposes the leak
+                        and corrupts the matmul, for every polluter geometry including the
+                        regular G0 (face_r_dim=16). Even when the regular polluter's
+                        Y-stride already matches, `unpack_tilize` leaves `tilize_mode` set
+                        and `Tile_x_dim` covering the whole tile row, which
+                        `_llk_unpack_AB_matmul_init_` does not reset — so divergence is
+                        guaranteed and (16, False) is a valid negative-control point.
 """
 
 from dataclasses import dataclass

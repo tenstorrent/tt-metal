@@ -43,9 +43,11 @@ from helpers.utils import passed_test
 TINY_NUM_FACES = 2
 
 
-# Blackhole's `_llk_unpack_tilize_uninit_` has no `face_r_dim` argument (2-arg
-# signature), so the tiny-tile (face_r_dim < 16) restore branch under test here
-# cannot be expressed on BH. The num_faces axis (face_r_dim=16) still runs on BH
+# Blackhole's `_llk_unpack_tilize_uninit_` does honor `face_r_dim` (via its
+# `TensorShape` param), but the BH test wrapper `_llk_unpack_tilize_uninit_wrapper_`
+# is 2-arg (`dst, num_faces`) and drops `face_r_dim` (WH's wrapper is 3-arg), so the
+# tiny-tile (face_r_dim < 16) restore branch under test here cannot be expressed on BH
+# without extending that wrapper. The num_faces axis (face_r_dim=16) still runs on BH
 # via test_unpack_tilize_uninit_restore.py.
 @skip_for_blackhole
 @parametrize(

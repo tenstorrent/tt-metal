@@ -24,9 +24,11 @@ golden (a single-geometry stimuli harness can't lay out two tile shapes cleanly)
 in the G0 tilize state, so the kernel asserts the G1 baseline is NOT reproduced
 (Tile_x_dim / Z-dim differ), proving the transition is load-bearing.
 
-WH-only: exercises the 3-arg `_llk_unpack_tilize_uninit_(dst, num_faces,
-face_r_dim)` and tiny `face_r_dim < 16` geometry, which BH's 2-arg uninit cannot
-express (matches `test_unpack_tilize_uninit_restore_tiny`).
+WH-only: exercises the 3-arg WH test wrapper `_llk_unpack_tilize_uninit_wrapper_(dst,
+num_faces, face_r_dim)` and tiny `face_r_dim < 16` geometry. The BH library uninit does
+honor `face_r_dim` (via its `TensorShape` param), but the BH wrapper is 2-arg and drops
+it, so this branch cannot be expressed on BH without extending that wrapper (matches
+`test_unpack_tilize_uninit_restore_tiny`).
 """
 
 from dataclasses import dataclass

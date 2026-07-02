@@ -394,8 +394,26 @@ inline void _llk_unpack_bcastA_B_init_()
     _llk_unpack_bcastA_B_mop_config_();
 }
 
+/**
+ * @brief Restore unpacker state after an SDPA sub_bcast_row operation.
+ *
+ * Drains the unpacker, then restores the canonical srcA Y-stride established by
+ * configure_unpack_AB (_llk_unpack_bcastA_B_init_ mutates it to the bcast-specific value 32). The
+ * restore is order-independent because the canonical value is derivable from the dst format, so no
+ * register snapshot is needed. The per-unpacker x-end datum counts are also reset to the canonical
+ * face layout; x-start/x-end is transient and reprogrammed by the next operation's init (see
+ * tt-llk#1036), so this is a deterministic safety reset rather than a required restore.
+ *
+ * @param unpack_dst_format: Destination data format used to recompute the canonical srcA Y-stride.
+ * @param tensor_shape: Tile geometry; face_r_dim sizes the canonical x-end datum count.
+ * @note Call @ref _llk_unpack_bcastA_B_init_ before this function.
+ */
 inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    // Drain the unpacker before touching config so an in-flight UNPACR does not read a
+    // half-updated Y-stride, mirroring the other unpack uninit paths.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+
     // Restore canonical srcA Y-stride established by configure_unpack_AB.
     // _llk_unpack_bcastA_B_init_ mutates Y-stride to the bcast-specific value (32); the
     // restore here is order-independent because the canonical value is derivable from

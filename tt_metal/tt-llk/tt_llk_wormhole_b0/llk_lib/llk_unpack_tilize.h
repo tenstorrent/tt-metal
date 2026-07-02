@@ -532,6 +532,20 @@ inline void _llk_unpack_tilizeA_B_(
     }
 }
 
+/**
+ * @brief Restore unpacker state after a tilize operation.
+ *
+ * Drains the unpacker, reverts the tile-descriptor Y/Z dimensions to the canonical operand
+ * baseline programmed by configure_unpack_AB, rewrites the unpack config (clearing tilize mode)
+ * and restores the face_r_dim-aware canonical Tile_x_dim so subsequent ops see a normal tile
+ * layout. x-start/x-end is transient and reprogrammed by the next operation's init (see
+ * tt-llk#1036), so it is not restored here.
+ *
+ * @param unpack_dst_format: Destination data format to restore in the unpack config.
+ * @param tensor_shape: Tile geometry; total_num_faces() restores the descriptor Z dimension
+ *                      (valid values = <1, 2, 4>) and face_r_dim restores the canonical Tile_x_dim.
+ * @note Call @ref _llk_unpack_tilize_init_ before this function.
+ */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     const std::uint32_t num_faces  = tensor_shape.total_num_faces();
