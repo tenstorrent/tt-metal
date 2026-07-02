@@ -8,11 +8,10 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <algorithm>
 #include <numeric>
@@ -20,6 +19,8 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+using namespace tt::tt_metal;
 
 namespace {
 
@@ -40,36 +41,29 @@ std::string serialize_physical_core_coords(const std::vector<CoreCoord>& cores, 
     return ttnn::operations::ccl::common::stringify(flat_physical_core_coords);
 }
 
-}  // namespace
-
-namespace ttnn::operations::experimental::moe_gpt::program {
-
-MoEGPTMeshWorkloadFactory::cached_mesh_workload_t MoEGPTMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, MoEGPTMeshWorkloadFactory::shared_variables_t> shared_variables;
-
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program =
-            MoEGPTMeshWorkloadFactory::create_at(args, coord, tensor_args, tensor_return_value, tensor_coords);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+// Convert an unordered_map<string, uint32_t> into the
+// KernelDescriptor::NamedCompileTimeArgs vector-of-pairs format.
+KernelDescriptor::NamedCompileTimeArgs to_named_args(const std::unordered_map<std::string, uint32_t>& m) {
+    KernelDescriptor::NamedCompileTimeArgs out;
+    out.reserve(m.size());
+    for (const auto& [k, v] : m) {
+        out.emplace_back(k, v);
     }
-    return MoEGPTMeshWorkloadFactory::cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+    return out;
 }
 
-ttnn::device_operation::CachedProgram<MoEGPTMeshWorkloadFactory::shared_variables_t>
-MoEGPTMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+// Build a ProgramDescriptor for one coord.  Sharded CBs (combine output) are
+// wired up via CBDescriptor::buffer.  Per-core runtime args use Buffer*
+// binding for tensor addresses (w0_w1, w2, output, input/indices/scores/mapping,
+// per-expert metadata tensors).
+tt::tt_metal::ProgramDescriptor build_program_descriptor(
+    const ttnn::operations::experimental::moe_gpt::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet&) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    const ttnn::operations::experimental::moe_gpt::tensor_args_t& tensor_args,
+    ttnn::operations::experimental::moe_gpt::tensor_return_value_t& tensor_return_value) {
     auto* device = tensor_args.input_tensor.device();
+
+    ProgramDescriptor desc;
 
     // =========================================================================
     // Matmul cores (existing)
@@ -79,8 +73,6 @@ MoEGPTMeshWorkloadFactory::create_at(
 
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
-
-    std::map<std::string, tt::tt_metal::CBHandle> cb_handles_sharded;
 
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, true, 14 * 2 * 3},
@@ -92,18 +84,25 @@ MoEGPTMeshWorkloadFactory::create_at(
 
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : cb_specs0) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles_per_cb * bytes_per_tile,
+            .core_ranges = all_cores,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index), .data_format = data_format, .page_size = bytes_per_tile}},
+        });
     }
 
     // cb_w2c_md (c_5) on matmul cores for metadata bridge (dm1 → compute)
     {
         const uint32_t md_page_size = 16;  // 2 uint32_t values, L1 aligned
-        const auto cb_md_config =
-            tt::tt_metal::CircularBufferConfig(2 * md_page_size, {{tt::CBIndex::c_5, tt::DataFormat::UInt32}})
-                .set_page_size(tt::CBIndex::c_5, md_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_md_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * md_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = md_page_size}},
+        });
     }
 
     // Infer experts_per_device from w0_w1 weight tensor shape dim 2
@@ -115,10 +114,14 @@ MoEGPTMeshWorkloadFactory::create_at(
         constexpr uint32_t SOURCE_WIDTH_TILES = 8;
         constexpr uint32_t c14_page_size = SOURCE_WIDTH_TILES * 32 * 2;  // 512 bytes
         const uint32_t c14_num_pages = 32 * num_experts;                 // 128 pages = 64 KB
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(
-                                   c14_num_pages * c14_page_size, {{tt::CBIndex::c_14, tt::DataFormat::Float16_b}})
-                                   .set_page_size(tt::CBIndex::c_14, c14_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = c14_num_pages * c14_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = c14_page_size}},
+        });
     }
 
     //=========================================================================
@@ -128,10 +131,8 @@ MoEGPTMeshWorkloadFactory::create_at(
     //=========================================================================
     std::vector<CoreCoord> combine_cores;
     CoreRangeSet combine_core_range_set;
-    tt::tt_metal::KernelHandle combine_dm1_handle = 0;
-    uint32_t combine_semaphore_id = 0;
-    uint32_t output_base_l1_addr = 0;
-    std::map<std::string, tt::tt_metal::CBHandle> cb_handles_sharded_combine;
+
+    const auto& tilize_output_tensor = tensor_return_value.at(3);
 
     {
         // Dynamically find a WxH rectangle in the worker grid that avoids matmul cores
@@ -180,50 +181,34 @@ MoEGPTMeshWorkloadFactory::create_at(
         combine_cores = combine_cores_unsorted;
         combine_core_range_set = CoreRangeSet(combine_core_range);
 
-        // Combine output CB: c_0 on combine cores, backed by the HEIGHT_SHARDED output tensor
-        const auto& tilize_output_tensor = tensor_return_value.at(3);
+        // Combine output CB: c_0 on combine cores, backed by the HEIGHT_SHARDED output tensor.
+        // Setting CBDescriptor::buffer wires the framework's dynamic-CB patcher: on cache
+        // hits the CB address is updated from tilize_output_tensor.buffer().
         const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
         const uint32_t output_pages = tilize_output_tensor.buffer()->num_pages();
         const uint32_t output_page_size = tilize_output_tensor.buffer()->page_size();
         const uint32_t shared_cb_num_pages_combine = output_pages / shard_cores.num_cores();
         const auto output_dataformat = tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype());
 
-        auto [combine_cb_id, sharded_output_cb_handle] = tt::tt_metal::create_cb(
-            (uint32_t)tt::CBIndex::c_0,
-            program,
-            combine_core_range_set,
-            output_page_size,
-            shared_cb_num_pages_combine,
-            output_dataformat,
-            tilize_output_tensor.buffer());
-
-        cb_handles_sharded_combine["cb_combine_out"] = sharded_output_cb_handle;
-
-        // Combine dm1 kernel
-        combine_dm1_handle = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/combine_dm1.cpp",
-            combine_core_range_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
-
-        // NOTE: Combine semaphore is created later (after ring_semaphore) to avoid
-        // semaphore slot 0 which conflicts with dispatch infrastructure on combine cores.
-
-        // Output base L1 address
-        output_base_l1_addr = tilize_output_tensor.buffer()->address();
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = shared_cb_num_pages_combine * output_page_size,
+            .core_ranges = combine_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+                .data_format = output_dataformat,
+                .page_size = output_page_size}},
+            .buffer = tilize_output_tensor.buffer(),
+        });
     }
 
-    const auto tensors = std::vector<const Tensor*>{
-        &tensor_args.input_tensor, &tensor_args.w0_w1_tensor, &tensor_args.w2_tensor, &tensor_return_value.at(3)};
     // Note: TensorAccessorArgs are passed to matmul kernels as positional compile args.
     // In fused mode, only w0_w1 and w2 accessors are used (for DRAM weight reads).
     // input_tensor (sparse buffer) and output tensor accessors are vestigial but kept for index stability.
-
     std::vector<uint32_t> compile_args;
-    for (const auto& tensor : tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.w0_w1_tensor.buffer()).append_to(compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.w2_tensor.buffer()).append_to(compile_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_output_tensor.buffer()).append_to(compile_args);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"num_experts", num_experts},
@@ -240,9 +225,15 @@ MoEGPTMeshWorkloadFactory::create_at(
     // OUTPUT_SHARD_CORE_MAP define for dm1 (combine core physical coords)
     dm1_defines["OUTPUT_SHARD_CORE_MAP"] = serialize_physical_core_coords(combine_cores, device);
 
+    // Pre-compute tilize core coords and reserve fused-mode semaphores.
+    // Must match the core selection in the tilize block below.
+    uint32_t fused_metadata_ready_sem = 0;
+    uint32_t fused_chunk_available_sem = 0;
+    uint32_t fused_chunk_ready_sem = 0;
+    uint32_t metadata_count_sem_base = 0;
+    CoreCoord early_drain_physical;
+    CoreRangeSet early_merged;
     {
-        // Pre-compute tilize core coords for fused compile args.
-        // Must match the core selection in the tilize block below.
         constexpr uint32_t EARLY_TILIZE_NUM_CORES = 2;
         std::set<std::pair<uint32_t, uint32_t>> early_matmul_core_set;
         for (const auto& c : dram_bank2core_coords) {
@@ -263,20 +254,51 @@ MoEGPTMeshWorkloadFactory::create_at(
             early_tilize_cores.size() >= EARLY_TILIZE_NUM_CORES,
             "Could not find {} non-matmul worker cores for early tilize precomputation",
             EARLY_TILIZE_NUM_CORES);
-        CoreCoord early_drain_physical = device->worker_core_from_logical_core(early_tilize_cores.at(0));
+        early_drain_physical = device->worker_core_from_logical_core(early_tilize_cores.at(0));
 
-        // Create fused-mode semaphores on merged tilize+matmul range
+        // Reserve fused-mode semaphore IDs on merged tilize+matmul range
         CoreRangeSet early_tilize_set(early_tilize_cores);
-        CoreRangeSet early_merged = early_tilize_set.merge(all_cores);
+        early_merged = early_tilize_set.merge(all_cores);
         constexpr uint32_t INVALID_SEM = 0;
-        auto fused_metadata_ready_sem = tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
-        auto fused_chunk_available_sem = tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
-        auto fused_chunk_ready_sem = tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
+
+        fused_metadata_ready_sem = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = fused_metadata_ready_sem,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = early_merged,
+            .initial_value = INVALID_SEM,
+        });
+        fused_chunk_available_sem = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = fused_chunk_available_sem,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = early_merged,
+            .initial_value = INVALID_SEM,
+        });
+        fused_chunk_ready_sem = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = fused_chunk_ready_sem,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = early_merged,
+            .initial_value = INVALID_SEM,
+        });
 
         // Per-expert token count semaphores (full 32-bit counts, no bit-packing limit)
-        auto metadata_count_sem_base = tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
+        metadata_count_sem_base = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = metadata_count_sem_base,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = early_merged,
+            .initial_value = INVALID_SEM,
+        });
         for (uint32_t e = 1; e < num_experts; e++) {
-            tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
+            const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = sem_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = early_merged,
+                .initial_value = INVALID_SEM,
+            });
         }
 
         named_compile_time_args["metadata_ready_semaphore_id"] = fused_metadata_ready_sem;
@@ -297,47 +319,77 @@ MoEGPTMeshWorkloadFactory::create_at(
         named_compile_time_args["num_tokens_total"] = total_tokens;
     }
 
-    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/dm0.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = compile_args,
-            .defines = matmul_defines,
-            .named_compile_args = named_compile_time_args});
+    // dm0 kernel
+    KernelDescriptor dm0_desc;
+    dm0_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/dm0.cpp";
+    dm0_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    dm0_desc.core_ranges = all_cores;
+    dm0_desc.compile_time_args = compile_args;
+    for (const auto& [k, v] : matmul_defines) {
+        dm0_desc.defines.emplace_back(k, v);
+    }
+    dm0_desc.named_compile_time_args = to_named_args(named_compile_time_args);
+    dm0_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = NOC::NOC_0,
+    };
+    desc.kernels.push_back(std::move(dm0_desc));
+    const auto dm0_kernel_idx = desc.kernels.size() - 1;
 
-    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/dm1.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = compile_args,
-            .defines = dm1_defines,
-            .named_compile_args = named_compile_time_args});
+    // dm1 kernel
+    KernelDescriptor dm1_desc;
+    dm1_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/dm1.cpp";
+    dm1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    dm1_desc.core_ranges = all_cores;
+    dm1_desc.compile_time_args = compile_args;
+    for (const auto& [k, v] : dm1_defines) {
+        dm1_desc.defines.emplace_back(k, v);
+    }
+    dm1_desc.named_compile_time_args = to_named_args(named_compile_time_args);
+    dm1_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::NOC_1,
+    };
+    desc.kernels.push_back(std::move(dm1_desc));
+    const auto dm1_kernel_idx = desc.kernels.size() - 1;
 
-    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/compute.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
-            .fp32_dest_acc_en = false,
-            .dst_full_sync_en = false,
-            .bfp8_pack_precise = false,
-            .math_approx_mode = true,
-            .compile_args = compile_args,
-            .defines = matmul_defines,
-            .named_compile_args = named_compile_time_args});
+    // compute kernel
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/compute.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = compile_args;
+    for (const auto& [k, v] : matmul_defines) {
+        compute_desc.defines.emplace_back(k, v);
+    }
+    compute_desc.named_compile_time_args = to_named_args(named_compile_time_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+        .fp32_dest_acc_en = false,
+        .dst_full_sync_en = false,
+        .bfp8_pack_precise = false,
+        .math_approx_mode = true,
+    };
+    desc.kernels.push_back(std::move(compute_desc));
+    const auto compute_kernel_idx = desc.kernels.size() - 1;
 
-    const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-
+    // ring_semaphore + combine_semaphore are program-scoped.
     // Create combine semaphore after ring semaphore so it gets a higher
-    // semaphore ID, avoiding conflicts with dispatch infrastructure on combine cores
-    combine_semaphore_id = tt::tt_metal::CreateSemaphore(program, combine_core_range_set, 0);
+    // semaphore ID, avoiding conflicts with dispatch infrastructure on combine cores.
+    const uint32_t ring_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = ring_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
+    const uint32_t combine_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = combine_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = combine_core_range_set,
+        .initial_value = 0,
+    });
 
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
@@ -367,21 +419,12 @@ MoEGPTMeshWorkloadFactory::create_at(
         k_start_tiles[i] = k_start_tiles[i - 1] + tiles_per_core_table[i - 1];
     }
 
-    std::vector<uint32_t> runtime_args;
-    runtime_args.push_back(0);
-    runtime_args.push_back(0);
-    for (uint32_t i = 0; i < 4; ++i) {
-        runtime_args.push_back(tensors[i]->buffer()->address());
-    }
-    runtime_args.push_back(ring_semaphore_id);
-    runtime_args.push_back(0);
-    runtime_args.push_back(0);
-    runtime_args.push_back(0);
-
-    // Combine-related runtime args at indices 10-12
-    runtime_args.push_back(combine_semaphore_id);  // [10] combine_semaphore_id
-    runtime_args.push_back(0);                     // [11] k_start_tile (set per core below)
-    runtime_args.push_back(output_base_l1_addr);   // [12] output_base_l1_addr
+    // Per-matmul-core runtime args.  Tensor base addresses are wired via
+    // Buffer* binding so the framework patches them on every dispatch.
+    Buffer* input_buffer = tensor_args.input_tensor.buffer();
+    Buffer* w0_w1_buffer = tensor_args.w0_w1_tensor.buffer();
+    Buffer* w2_buffer = tensor_args.w2_tensor.buffer();
+    Buffer* tilize_output_buffer = tilize_output_tensor.buffer();
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -402,35 +445,65 @@ MoEGPTMeshWorkloadFactory::create_at(
         const auto [ring_pos, next_bank] = bank2ring_pos[dram_bank];
         const auto& next_physical = device->worker_core_from_logical_core(dram_bank2core_coords[next_bank]);
 
-        runtime_args[0] = dram_bank++;
-        runtime_args[1] = vchannel;
-        runtime_args[7] = ring_pos;
-        runtime_args[8] = static_cast<uint32_t>(next_physical.x);
-        runtime_args[9] = static_cast<uint32_t>(next_physical.y);
+        // Build matmul-core runtime args (Buffer* binding for tensor addresses):
+        //   [0]  dram_bank
+        //   [1]  vchannel
+        //   [2]  input_tensor.buffer() (Buffer*)
+        //   [3]  w0_w1_tensor.buffer() (Buffer*)
+        //   [4]  w2_tensor.buffer() (Buffer*)
+        //   [5]  tilize_output_tensor.buffer() (Buffer*)
+        //   [6]  ring_semaphore_id
+        //   [7]  ring_pos
+        //   [8]  next_physical.x
+        //   [9]  next_physical.y
+        //   [10] combine_semaphore_id
+        //   [11] k_start_tile
+        //   [12] tilize_output_buffer.address() (duplicate binding so cache-hit patches it)
+        KernelDescriptor::RTArgList rt_args;
+        rt_args.push_back(dram_bank);
+        rt_args.push_back(vchannel);
+        rt_args.push_back(input_buffer);
+        rt_args.push_back(w0_w1_buffer);
+        rt_args.push_back(w2_buffer);
+        rt_args.push_back(tilize_output_buffer);
+        rt_args.push_back(ring_semaphore_id);
+        rt_args.push_back(ring_pos);
+        rt_args.push_back(static_cast<uint32_t>(next_physical.x));
+        rt_args.push_back(static_cast<uint32_t>(next_physical.y));
+        rt_args.push_back(combine_semaphore_id);
+        rt_args.push_back(k_start_tiles[ring_pos]);
+        rt_args.push_back(tilize_output_buffer);  // same buffer as [5]; second binding keeps [12] patched on cache hit
 
-        runtime_args[11] = k_start_tiles[ring_pos];  // k_start_tile for combine output
+        desc.kernels[dm0_kernel_idx].emplace_runtime_args(core, rt_args);
+        desc.kernels[dm1_kernel_idx].emplace_runtime_args(core, rt_args);
+        desc.kernels[compute_kernel_idx].emplace_runtime_args(core, rt_args);
 
-        tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
+        dram_bank++;
     }
 
     // =========================================================================
-    // Set Runtime Args for combine cores (fused mode only)
+    // Combine cores runtime args (fused mode only)
     // =========================================================================
+    // Combine dm1 kernel
+    KernelDescriptor combine_dm1_desc;
+    combine_dm1_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/combine_dm1.cpp";
+    combine_dm1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    combine_dm1_desc.core_ranges = combine_core_range_set;
+    combine_dm1_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::NOC_1,
+    };
     {
         const std::vector<uint32_t> combine_rt_args = {combine_semaphore_id};
         for (const auto& core : combine_cores) {
-            tt::tt_metal::SetRuntimeArgs(program, combine_dm1_handle, core, combine_rt_args);
+            combine_dm1_desc.runtime_args.emplace_back(core, combine_rt_args);
         }
     }
+    desc.kernels.push_back(std::move(combine_dm1_desc));
 
     // =========================================================================
     // Tilize cores
     // =========================================================================
-    std::vector<tt::tt_metal::KernelHandle> tilize_kernel_handles;
-    std::vector<CoreCoord> tilize_cores_vec;
-
     {
         const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
         const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
@@ -508,7 +581,6 @@ MoEGPTMeshWorkloadFactory::create_at(
             tilize_cores.size() == TILIZE_NUM_CORES,
             "Could not find {} non-matmul worker cores for tilize",
             TILIZE_NUM_CORES);
-        tilize_cores_vec = tilize_cores;
 
         // Verify no tilize core is also a matmul core
         for (const auto& tc : tilize_cores) {
@@ -541,10 +613,6 @@ MoEGPTMeshWorkloadFactory::create_at(
         // Physical coords of the dispatch drain core (for NOC reads from both tilize cores)
         const CoreCoord dispatch_drain_physical = device->worker_core_from_logical_core(dispatch_drain_logical);
 
-        // --- Tilize output tensors (metadata written to DRAM by reader) ---
-        // These are pre-allocated: per_expert_total_tokens, expert_activation, e_t are embedded
-        // in the tilize_output for now. For Phase 1, we only use the main tilize_output tensor.
-
         // --- Output tensor specs ---
         auto per_expert_total_tokens_row_bytes = tt::align(experts_per_device * sizeof(uint32_t), l1_alignment);
         auto tilize_per_expert_total_tokens_output_page_size = per_expert_total_tokens_row_bytes;
@@ -559,21 +627,37 @@ MoEGPTMeshWorkloadFactory::create_at(
         auto tilize_e_t_output_page_size =
             (tokens + 1) * tt::align(static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment);
 
-        // --- Semaphores ---
+        // --- Semaphores (tilize-only, program-scoped) ---
         constexpr uint32_t INVALID = 0;
 
-        auto tilize_partial_metadata_ready_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-        auto tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-        auto previous_chunk_sent_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-        auto initial_gather_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-
-        // Tilize+Matmul shared semaphores (created early before matmul kernel creation)
-        const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(all_cores);
-        uint32_t metadata_ready_semaphore_id = named_compile_time_args.at("metadata_ready_semaphore_id");
-        uint32_t matmul_chunk_available_semaphore_id =
-            named_compile_time_args.at("matmul_chunk_available_semaphore_id");
-        uint32_t matmul_chunk_ready_semaphore_id = named_compile_time_args.at("matmul_chunk_ready_semaphore_id");
+        const uint32_t tilize_partial_metadata_ready_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = tilize_partial_metadata_ready_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = tilize_core_range_set,
+            .initial_value = INVALID,
+        });
+        const uint32_t tilize_chunk_ready_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = tilize_chunk_ready_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = tilize_core_range_set,
+            .initial_value = INVALID,
+        });
+        const uint32_t previous_chunk_sent_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = previous_chunk_sent_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = tilize_core_range_set,
+            .initial_value = INVALID,
+        });
+        const uint32_t initial_gather_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = initial_gather_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = tilize_core_range_set,
+            .initial_value = INVALID,
+        });
 
         // --- Work split ---
         uint32_t tilize_subtoken_bytes_aligned =
@@ -628,106 +712,143 @@ MoEGPTMeshWorkloadFactory::create_at(
         // tiles_per_global_chunk: drain core gathers from all tilize cores before multicast
         uint32_t shared_cb_num_pages = hidden_size / TILE_WIDTH;
 
-        tt::tt_metal::create_cb(
-            per_expert_total_tokens_cb_id,
-            program,
-            tilize_core_range_set,
-            tilize_per_expert_total_tokens_output_page_size,
-            1,
-            tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32));
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tilize_per_expert_total_tokens_output_page_size,
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(per_expert_total_tokens_cb_id),
+                .data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32),
+                .page_size = tilize_per_expert_total_tokens_output_page_size}},
+        });
 
-        tt::tt_metal::create_cb(
-            total_chunks_cb_id, program, tilize_core_range_set, sizeof(uint32_t), 1, tt::DataFormat::UInt32);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = sizeof(uint32_t),
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(total_chunks_cb_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = sizeof(uint32_t)}},
+        });
 
-        tt::tt_metal::create_cb(
-            e_t_cb_id,
-            program,
-            tilize_core_range_set,
-            tilize_e_t_output_page_size,
-            experts_per_device,
-            tt::DataFormat::UInt32);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = experts_per_device * tilize_e_t_output_page_size,
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(e_t_cb_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = tilize_e_t_output_page_size}},
+        });
 
         // Indices CB: fresh on both tilize cores.  Both cores do a bulk NOC read from the
         // dispatch drain core at kernel start.  Use aligned_page_size so the CB covers the
         // full physical buffer allocation (num_pages * aligned_page_size bytes).
-        tt::tt_metal::create_cb(
-            indices_tensor_cb_id,
-            program,
-            tilize_core_range_set,
-            tilize_indices_aligned_page_size,
-            tilize_indices_pages,
-            tilize_indices_data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tilize_indices_pages * tilize_indices_aligned_page_size,
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(indices_tensor_cb_id),
+                .data_format = tilize_indices_data_format,
+                .page_size = tilize_indices_aligned_page_size}},
+        });
 
         // Scores CB: same pattern as indices.
-        tt::tt_metal::create_cb(
-            scores_tensor_cb_id,
-            program,
-            tilize_core_range_set,
-            tilize_scores_aligned_page_size,
-            tilize_scores_pages,
-            tilize_scores_data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tilize_scores_pages * tilize_scores_aligned_page_size,
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(scores_tensor_cb_id),
+                .data_format = tilize_scores_data_format,
+                .page_size = tilize_scores_aligned_page_size}},
+        });
 
-        tt::tt_metal::create_cb(
-            mapping_tensor_cb_id,
-            program,
-            tilize_core_range_set,
-            tilize_mapping_aligned_page_size,
-            tilize_mapping_pages,
-            tilize_mapping_data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tilize_mapping_pages * tilize_mapping_aligned_page_size,
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(mapping_tensor_cb_id),
+                .data_format = tilize_mapping_data_format,
+                .page_size = tilize_mapping_aligned_page_size}},
+        });
 
-        tt::tt_metal::create_cb(
-            tilize_input_cb_id,
-            program,
-            tilize_core_range_set,
-            max_tilize_subtoken_size,
-            tokens_per_chunk,
-            tilize_input_data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tokens_per_chunk * max_tilize_subtoken_size,
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tilize_input_cb_id),
+                .data_format = tilize_input_data_format,
+                .page_size = max_tilize_subtoken_size}},
+        });
 
-        tt::tt_metal::create_cb(
-            expert_activation_cb_id,
-            program,
-            tilize_core_range_set,
-            tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
-            tokens + 1,
-            tt::DataFormat::UInt32);
+        {
+            // num_pages = tokens + 1 (sentinel row written after consolidation needs an extra page,
+            // per #44723 fix on main).
+            const uint32_t page_sz = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = (tokens + 1) * page_sz,
+                .core_ranges = tilize_core_range_set,
+                .format_descriptors = {CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(expert_activation_cb_id),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = page_sz}},
+            });
+        }
 
-        tt::tt_metal::create_cb(
-            brisc_e_t_cb_id,
-            program,
-            tilize_core_range_set,
-            (tokens / 2) * l1_alignment * experts_per_device,
-            1,
-            tt::DataFormat::UInt32);
+        {
+            const uint32_t page_sz = (tokens / 2) * l1_alignment * experts_per_device;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = page_sz,
+                .core_ranges = tilize_core_range_set,
+                .format_descriptors = {CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(brisc_e_t_cb_id),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = page_sz}},
+            });
+        }
 
-        tt::tt_metal::create_cb(
-            brisc_expert_counts_cb_id,
-            program,
-            tilize_core_range_set,
-            sizeof(uint32_t) * experts_per_device,
-            1,
-            tt::DataFormat::UInt32);
+        {
+            const uint32_t page_sz = sizeof(uint32_t) * experts_per_device;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = page_sz,
+                .core_ranges = tilize_core_range_set,
+                .format_descriptors = {CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(brisc_expert_counts_cb_id),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = page_sz}},
+            });
+        }
 
         uint32_t brisc_activation_row_size = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
-        tt::tt_metal::create_cb(
-            brisc_expert_activation_cb_id,
-            program,
-            tilize_core_range_set,
-            brisc_activation_row_size * (tokens / 2),
-            1,
-            tt::DataFormat::UInt32);
+        {
+            const uint32_t total_sz = brisc_activation_row_size * (tokens / 2);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = total_sz,
+                .core_ranges = tilize_core_range_set,
+                .format_descriptors = {CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(brisc_expert_activation_cb_id),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = total_sz}},
+            });
+        }
 
-        tt::tt_metal::create_cb(
-            brisc_activated_count_cb_id, program, tilize_core_range_set, sizeof(uint32_t), 1, tt::DataFormat::UInt32);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = sizeof(uint32_t),
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(brisc_activated_count_cb_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = sizeof(uint32_t)}},
+        });
 
         uint32_t counts_per_remote_core = experts_per_device + 1;
         uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
-        tt::tt_metal::create_cb(
-            remote_counts_cb_id,
-            program,
-            tilize_core_range_set,
-            remote_counts_entry_size,
-            TILIZE_NUM_CORES - 1,
-            tt::DataFormat::UInt32);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = (TILIZE_NUM_CORES - 1) * remote_counts_entry_size,
+            .core_ranges = tilize_core_range_set,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(remote_counts_cb_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = remote_counts_entry_size}},
+        });
 
         // Tilize output CB
         auto tilize_output_tile_size = tt::tile_size(tilize_output_data_format);
@@ -736,13 +857,17 @@ MoEGPTMeshWorkloadFactory::create_at(
         // c_16 is the shared tilize→matmul activation CB.
         // Created on the merged tilize+matmul range so multicast addresses match.
         // Double-buffered: 2 * tiles_per_global_chunk = 2 * 90 = 180 tiles.
+        const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(all_cores);
         {
             uint32_t fused_cb_num_pages = 2 * tiles_per_global_chunk;
-            const auto cb_config = tt::tt_metal::CircularBufferConfig(
-                                       fused_cb_num_pages * tilize_output_tile_size,
-                                       {{(tt::CBIndex)tilize_output_cb_id, tilize_output_data_format}})
-                                       .set_page_size((tt::CBIndex)tilize_output_cb_id, tilize_output_tile_size);
-            tt::tt_metal::CreateCircularBuffer(program, tilize_matmul_core_range_set, cb_config);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = fused_cb_num_pages * tilize_output_tile_size,
+                .core_ranges = tilize_matmul_core_range_set,
+                .format_descriptors = {CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tilize_output_cb_id),
+                    .data_format = tilize_output_data_format,
+                    .page_size = static_cast<uint32_t>(tilize_output_tile_size)}},
+            });
         }
 
         // --- Tilize tensor accessors ---
@@ -839,11 +964,11 @@ MoEGPTMeshWorkloadFactory::create_at(
             {"matmul_bounding_box_num_cores", (uint32_t)matmul_bounding_box.size() - 1},
 
             {"partial_metadata_ready_semaphore_id", tilize_partial_metadata_ready_semaphore_id},
-            {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
-            {"metadata_count_semaphore_base_id", named_compile_time_args.at("metadata_count_semaphore_base_id")},
-            {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
+            {"metadata_ready_semaphore_id", fused_metadata_ready_sem},
+            {"metadata_count_semaphore_base_id", metadata_count_sem_base},
+            {"matmul_chunk_available_semaphore_id", fused_chunk_available_sem},
             {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
-            {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
+            {"matmul_chunk_ready_semaphore_id", fused_chunk_ready_sem},
             {"previous_chunk_sent_semaphore_id", previous_chunk_sent_semaphore_id},
             {"initial_gather_semaphore_id", initial_gather_semaphore_id},
 
@@ -854,31 +979,37 @@ MoEGPTMeshWorkloadFactory::create_at(
         // --- Create tilize kernels ---
         std::map<std::string, std::string> tilize_dram_defines;
 
-        auto tilize_reader_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_reader.cpp",
-            tilize_core_range_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt::tt_metal::NOC::NOC_1,
-                .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
-                .compile_args = tilize_compile_time_args,
-                .defines = tilize_dram_defines,
-                .named_compile_args = tilize_named_compile_time_args,
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
+        KernelDescriptor tilize_reader_desc;
+        tilize_reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_reader.cpp";
+        tilize_reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        tilize_reader_desc.core_ranges = tilize_core_range_set;
+        tilize_reader_desc.compile_time_args = tilize_compile_time_args;
+        tilize_reader_desc.named_compile_time_args = to_named_args(tilize_named_compile_time_args);
+        tilize_reader_desc.opt_level = KernelBuildOptLevel::O2;
+        tilize_reader_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::NOC_1,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC,
+        };
+        desc.kernels.push_back(std::move(tilize_reader_desc));
+        const auto tilize_reader_kernel_idx = desc.kernels.size() - 1;
 
-        auto tilize_writer_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_writer.cpp",
-            tilize_core_range_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::NOC_1,
-                .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
-                .compile_args = tilize_compile_time_args,
-                .defines = tilize_dram_defines,
-                .named_compile_args = tilize_named_compile_time_args,
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
+        KernelDescriptor tilize_writer_desc;
+        tilize_writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_writer.cpp";
+        tilize_writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        tilize_writer_desc.core_ranges = tilize_core_range_set;
+        tilize_writer_desc.compile_time_args = tilize_compile_time_args;
+        tilize_writer_desc.named_compile_time_args = to_named_args(tilize_named_compile_time_args);
+        tilize_writer_desc.opt_level = KernelBuildOptLevel::O2;
+        tilize_writer_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_1,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC,
+        };
+        desc.kernels.push_back(std::move(tilize_writer_desc));
+        const auto tilize_writer_kernel_idx = desc.kernels.size() - 1;
 
         std::unordered_map<std::string, uint32_t> compute_tilize_named_compile_time_args = {
             {"tilize_input_cb_id", tilize_input_cb_id},
@@ -889,56 +1020,26 @@ MoEGPTMeshWorkloadFactory::create_at(
             {"shared_cb_num_pages", shared_cb_num_pages},
         };
 
-        auto tilize_compute_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_compute.cpp",
-            tilize_core_range_set,
-            tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilize_named_compile_time_args});
-
-        tilize_kernel_handles = {tilize_reader_kernel_id, tilize_compute_kernel_id, tilize_writer_kernel_id};
+        KernelDescriptor tilize_compute_desc;
+        tilize_compute_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_compute.cpp";
+        tilize_compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        tilize_compute_desc.core_ranges = tilize_core_range_set;
+        tilize_compute_desc.named_compile_time_args = to_named_args(compute_tilize_named_compile_time_args);
+        tilize_compute_desc.config = ComputeConfigDescriptor{};
+        desc.kernels.push_back(std::move(tilize_compute_desc));
+        const auto tilize_compute_kernel_idx = desc.kernels.size() - 1;
 
         // --- Per-core runtime args ---
-        std::vector<uint32_t> tilize_runtime_args = {
-            sparse_buffer.buffer()->address(),           // 0
-            expert_indices.buffer()->address(),          // 1
-            expert_scores.buffer()->address(),           // 2
-            expert_mapping.buffer()->address(),          // 3
-            tensor_return_value[0].buffer()->address(),  // 4: per_expert_total_tokens
-            tensor_return_value[1].buffer()->address(),  // 5: expert_activation
-            tensor_return_value[2].buffer()->address(),  // 6: e_t
-        };
-
-        uint32_t is_drain_tilize_core_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 7
-        uint32_t is_secondary_mcaster_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 8
-        uint32_t initial_mcast_gather_core_noc_x_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 9
-        uint32_t initial_mcast_gather_core_noc_y_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 10
-        uint32_t global_subtoken_offset_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 11
-        uint32_t mcast_group_subtoken_offset_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 12
-        uint32_t mcast_group_subtoken_size_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 13
-        uint32_t subtoken_size_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 14
-        uint32_t core_token_start_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 15
-        uint32_t core_token_end_idx = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 16
-        uint32_t tilize_core_idx_rt = tilize_runtime_args.size();
-        tilize_runtime_args.push_back(0);  // 17
-
-        // NOC coordinates for all tilize cores
-        for (uint32_t i = 0; i < TILIZE_NUM_CORES; i++) {
-            tilize_runtime_args.push_back((uint32_t)tilize_cores_physical.at(i).x);
-            tilize_runtime_args.push_back((uint32_t)tilize_cores_physical.at(i).y);
-        }
-
-        // Placeholder for DRAM output address (unused in fused mode)
-        tilize_runtime_args.push_back(0);
+        // Tilize tensor base addresses are wired via Buffer* binding so the
+        // framework patches them on every dispatch.
+        Buffer* sparse_buf = sparse_buffer.buffer();
+        Buffer* indices_buf = expert_indices.buffer();
+        Buffer* scores_buf = expert_scores.buffer();
+        Buffer* mapping_buf = expert_mapping.buffer();
+        Buffer* per_expert_buf = tensor_return_value[0].buffer();
+        Buffer* expert_activation_buf = tensor_return_value[1].buffer();
+        Buffer* e_t_buf = tensor_return_value[2].buffer();
 
         // Pre-compute mcast group sizes
         uint32_t primary_mcast_gather_group_subtoken_size = 0;
@@ -964,28 +1065,20 @@ MoEGPTMeshWorkloadFactory::create_at(
 
         uint32_t tokens_per_tilize_core = tokens / TILIZE_NUM_CORES;
 
-        std::vector<uint32_t> tilize_compute_runtime_args = {0};  // tiles_per_chunk
-
         global_subtoken_offset = 0;
         uint32_t group_subtoken_offset = 0;
         for (uint32_t i = 0; i < TILIZE_NUM_CORES; i++) {
-            tilize_runtime_args.at(is_drain_tilize_core_idx) = (i == 0) ? 1 : 0;
-            tilize_runtime_args.at(is_secondary_mcaster_idx) = (i == primary_mcast_gather_group_num_cores) ? 1 : 0;
+            uint32_t is_drain_tilize_core = (i == 0) ? 1 : 0;
+            uint32_t is_secondary_mcaster = (i == primary_mcast_gather_group_num_cores) ? 1 : 0;
 
             CoreCoord initial_mcast_gather_core_physical =
                 i < primary_mcast_gather_group_num_cores
                     ? tilize_cores_physical.at(0)
                     : tilize_cores_physical.at(primary_mcast_gather_group_num_cores);
-            tilize_runtime_args.at(initial_mcast_gather_core_noc_x_idx) =
-                (uint32_t)initial_mcast_gather_core_physical.x;
-            tilize_runtime_args.at(initial_mcast_gather_core_noc_y_idx) =
-                (uint32_t)initial_mcast_gather_core_physical.y;
 
-            tilize_runtime_args.at(global_subtoken_offset_idx) = global_subtoken_offset;
-            tilize_runtime_args.at(mcast_group_subtoken_offset_idx) = group_subtoken_offset;
-            tilize_runtime_args.at(mcast_group_subtoken_size_idx) = i < primary_mcast_gather_group_num_cores
-                                                                        ? primary_mcast_gather_group_subtoken_size
-                                                                        : secondary_mcast_gather_group_subtoken_size;
+            uint32_t mcast_group_subtoken_size = i < primary_mcast_gather_group_num_cores
+                                                     ? primary_mcast_gather_group_subtoken_size
+                                                     : secondary_mcast_gather_group_subtoken_size;
 
             uint32_t subtoken_size = 0;
             if (tilize_cores_work_group_1.contains(tilize_cores.at(i))) {
@@ -996,92 +1089,92 @@ MoEGPTMeshWorkloadFactory::create_at(
             if (global_subtoken_offset + subtoken_size > tilize_input_aligned_page_size) {
                 subtoken_size = tilize_input_aligned_page_size - global_subtoken_offset;
             }
-            tilize_runtime_args.at(subtoken_size_idx) = subtoken_size;
+
+            uint32_t core_token_start = i * tokens_per_tilize_core;
+            uint32_t core_token_end = (i == TILIZE_NUM_CORES - 1) ? tokens : (i + 1) * tokens_per_tilize_core;
+
+            // Tilize per-core RT args (reader/writer share layout):
+            //   [0..6]  Buffer* (sparse, indices, scores, mapping, per_expert,
+            //                    expert_activation, e_t) via Buffer* binding
+            //   [7]     is_drain_tilize_core
+            //   [8]     is_secondary_mcaster
+            //   [9]     initial_mcast_gather_core_noc_x
+            //   [10]    initial_mcast_gather_core_noc_y
+            //   [11]    global_subtoken_offset
+            //   [12]    mcast_group_subtoken_offset
+            //   [13]    mcast_group_subtoken_size
+            //   [14]    subtoken_size
+            //   [15]    core_token_start
+            //   [16]    core_token_end
+            //   [17]    tilize_core_idx
+            //   [18..]  NOC coordinates for each tilize core (x, y)
+            //   [last]  placeholder for DRAM output address (unused in fused mode)
+            KernelDescriptor::RTArgList tilize_rt_args;
+            tilize_rt_args.push_back(sparse_buf);
+            tilize_rt_args.push_back(indices_buf);
+            tilize_rt_args.push_back(scores_buf);
+            tilize_rt_args.push_back(mapping_buf);
+            tilize_rt_args.push_back(per_expert_buf);
+            tilize_rt_args.push_back(expert_activation_buf);
+            tilize_rt_args.push_back(e_t_buf);
+            tilize_rt_args.push_back(is_drain_tilize_core);
+            tilize_rt_args.push_back(is_secondary_mcaster);
+            tilize_rt_args.push_back(static_cast<uint32_t>(initial_mcast_gather_core_physical.x));
+            tilize_rt_args.push_back(static_cast<uint32_t>(initial_mcast_gather_core_physical.y));
+            tilize_rt_args.push_back(global_subtoken_offset);
+            tilize_rt_args.push_back(group_subtoken_offset);
+            tilize_rt_args.push_back(mcast_group_subtoken_size);
+            tilize_rt_args.push_back(subtoken_size);
+            tilize_rt_args.push_back(core_token_start);
+            tilize_rt_args.push_back(core_token_end);
+            tilize_rt_args.push_back(i);
+
+            // NOC coordinates for all tilize cores
+            for (uint32_t k = 0; k < TILIZE_NUM_CORES; k++) {
+                tilize_rt_args.push_back(static_cast<uint32_t>(tilize_cores_physical.at(k).x));
+                tilize_rt_args.push_back(static_cast<uint32_t>(tilize_cores_physical.at(k).y));
+            }
+            // Placeholder for DRAM output address (unused in fused mode)
+            tilize_rt_args.push_back(0u);
+
+            desc.kernels[tilize_reader_kernel_idx].emplace_runtime_args(tilize_cores.at(i), tilize_rt_args);
+            desc.kernels[tilize_writer_kernel_idx].emplace_runtime_args(tilize_cores.at(i), tilize_rt_args);
+
+            std::vector<uint32_t> tilize_compute_runtime_args = {subtoken_size / tile_width_bytes};
+            desc.kernels[tilize_compute_kernel_idx].runtime_args.emplace_back(
+                tilize_cores.at(i), std::move(tilize_compute_runtime_args));
 
             global_subtoken_offset += subtoken_size;
             group_subtoken_offset += subtoken_size;
             if (i == primary_mcast_gather_group_num_cores - 1) {
                 group_subtoken_offset = 0;
             }
-
-            uint32_t core_token_start = i * tokens_per_tilize_core;
-            uint32_t core_token_end = (i == TILIZE_NUM_CORES - 1) ? tokens : (i + 1) * tokens_per_tilize_core;
-            tilize_runtime_args.at(core_token_start_idx) = core_token_start;
-            tilize_runtime_args.at(core_token_end_idx) = core_token_end;
-            tilize_runtime_args.at(tilize_core_idx_rt) = i;
-
-            tilize_compute_runtime_args.at(0) = subtoken_size / tile_width_bytes;
-
-            tt::tt_metal::SetRuntimeArgs(program, tilize_reader_kernel_id, tilize_cores.at(i), tilize_runtime_args);
-            tt::tt_metal::SetRuntimeArgs(program, tilize_writer_kernel_id, tilize_cores.at(i), tilize_runtime_args);
-            tt::tt_metal::SetRuntimeArgs(
-                program, tilize_compute_kernel_id, tilize_cores.at(i), tilize_compute_runtime_args);
         }
     }
 
-    // =========================================================================
-    // Return
-    // =========================================================================
-    // Merge sharded CB handles from combine cores
-    for (const auto& [k, v] : cb_handles_sharded_combine) {
-        cb_handles_sharded[k] = v;
-    }
-
-    return ttnn::device_operation::CachedProgram<shared_variables_t>{
-        std::move(program),
-        MoEGPTSharedVariables{
-            .cb_handles_sharded = cb_handles_sharded,
-            .kernel_handles = {dm0_kernel_handle, dm1_kernel_handle, compute_kernel_handle},
-            .tilize_kernel_handles = tilize_kernel_handles,
-            .combine_kernel_handle = combine_dm1_handle,
-            .worker_cores = dram_bank2core_coords,
-            .tilize_cores = tilize_cores_vec,
-            .combine_cores = combine_cores}};
+    return desc;
 }
 
-void MoEGPTMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t&,
+}  // namespace
+
+namespace ttnn::operations::experimental::moe_gpt::program {
+
+tt::tt_metal::WorkloadDescriptor MoEGPTMeshWorkloadFactory::create_workload_descriptor(
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& output_tensor = tensor_return_value.at(3);
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
 
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-
-        // Update combine output CB
-        if (shared_variables.cb_handles_sharded.contains("cb_combine_out")) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(
-                program, shared_variables.cb_handles_sharded.at("cb_combine_out"), *output_tensor.buffer());
-        }
-
-        // Update runtime args for matmul kernels
-        for (const auto& core : shared_variables.worker_cores) {
-            for (const auto& kernel_handle : shared_variables.kernel_handles) {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-                runtime_args[3] = tensor_args.w0_w1_tensor.buffer()->address();
-                runtime_args[4] = tensor_args.w2_tensor.buffer()->address();
-                runtime_args[12] = output_tensor.buffer()->address();
-            }
-        }
-
-        // Update runtime args for tilize kernels
-        if (!shared_variables.tilize_kernel_handles.empty()) {
-            for (const auto& core : shared_variables.tilize_cores) {
-                for (uint32_t k : {0u, 2u}) {
-                    auto& rt =
-                        tt::tt_metal::GetRuntimeArgs(program, shared_variables.tilize_kernel_handles.at(k), core);
-                    rt.at(0) = tensor_args.input_tensor.buffer()->address();
-                    rt.at(1) = tensor_args.expert_indices.buffer()->address();
-                    rt.at(2) = tensor_args.expert_scores.buffer()->address();
-                    rt.at(3) = tensor_args.expert_mapping.buffer()->address();
-                    rt.at(4) = tensor_return_value.at(0).buffer()->address();  // per_expert_total_tokens
-                    rt.at(5) = tensor_return_value.at(1).buffer()->address();  // expert_activation
-                    rt.at(6) = tensor_return_value.at(2).buffer()->address();  // e_t
-                }
-            }
-        }
+    for (const auto& coord : coords) {
+        tt::tt_metal::ProgramDescriptor desc =
+            build_program_descriptor(operation_attributes, coord, tensor_args, tensor_return_value);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
+
+    return wd;
 }
 
 }  // namespace ttnn::operations::experimental::moe_gpt::program

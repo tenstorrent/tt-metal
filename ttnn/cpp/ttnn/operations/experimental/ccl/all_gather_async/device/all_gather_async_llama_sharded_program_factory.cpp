@@ -4,35 +4,35 @@
 
 #include "all_gather_async_llama_sharded_program_factory.hpp"
 
+#include <algorithm>
+#include <cstdint>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 
 namespace ttnn {
 
 using namespace ccl;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace experimental::prim {
 
-LlamaShardedMeshWorkloadFactory::cached_mesh_workload_t LlamaShardedMeshWorkloadFactory::create_mesh_workload(
-    const AllGatherAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const AllGatherAsyncInputs& tensor_args,
-    Tensor& output_tensor) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, output_tensor);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
-}
+namespace {
 
-LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactory::create_at(
+// Builds the ProgramDescriptor for one coord.  ring_index, forward/backward
+// neighbours, and per-link work distribution vary with the coord; the rest
+// mirrors the legacy create_at body verbatim.
+ProgramDescriptor build_program_descriptor(
     const AllGatherAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
     const AllGatherAsyncInputs& tensor_args,
-    Tensor& output_tensor) {
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinate& mesh_coordinate) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     const auto& sender_device_coord = mesh_coordinate;  // coord
@@ -54,8 +54,6 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
     bool use_optimal_ccl_for_llama = operation_attributes.use_optimal_ccl_for_llama;
 
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
-
-    tt::tt_metal::Program program{};
 
     auto* mesh_device = input_tensor.device();
     if (!mesh_device) {
@@ -106,6 +104,8 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
     log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
     log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
+    ProgramDescriptor desc;
+
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
@@ -115,43 +115,51 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
-            .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb_num_pages * l1_scratch_cb_page_size_bytes,
+        .core_ranges = sender_worker_core_range,
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = df,
+            .page_size = l1_scratch_cb_page_size_bytes}},
+    });
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_packet_headers_storable * packet_header_size_bytes * 2,
+        .core_ranges = sender_worker_core_range,
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(reserved_packet_header_CB_index),
+            .data_format = tt::DataFormat::RawUInt32,
+            .page_size = packet_header_size_bytes}},
+    });
 
     // KERNEL CREATION
     // Reader
-    auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reader_kernel_config.compile_args = {
+    std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
         op_config.get_page_size(),  // tensor0_page_size
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : reader_compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
-    auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "llama_shapes_sharded_reader.cpp",
-        sender_worker_core_range,
-        reader_kernel_config);
+        "llama_shapes_sharded_reader.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = sender_worker_core_range;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    const KernelHandle worker_sender_reader_kernel_id = desc.kernels.size() - 1;
 
     // Writer
-    auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    writer_kernel_config.compile_args = {
+    std::vector<uint32_t> writer_compile_args = {
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,      // num_packet_headers_storable
@@ -164,20 +172,22 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         barrier_semaphore.has_value() &&  // use_barrier_sem
             !using_persistent_buffers,
     };
-    writer_kernel_config.compile_args.insert(
-        writer_kernel_config.compile_args.end(), forward_args.begin(), forward_args.end());
-    writer_kernel_config.compile_args.insert(
-        writer_kernel_config.compile_args.end(), backward_args.begin(), backward_args.end());
+    writer_compile_args.insert(writer_compile_args.end(), forward_args.begin(), forward_args.end());
+    writer_compile_args.insert(writer_compile_args.end(), backward_args.begin(), backward_args.end());
     log_trace(tt::LogOp, "Writer Compile Args:");
-    for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : writer_compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
-    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "llama_shapes_sharded_writer.cpp",
-        sender_worker_core_range,
-        writer_kernel_config);
+        "llama_shapes_sharded_writer.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = sender_worker_core_range;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
+    writer_kernel_desc.config = WriterConfigDescriptor{};
+    desc.kernels.push_back(std::move(writer_kernel_desc));
+    const KernelHandle worker_sender_writer_kernel_id = desc.kernels.size() - 1;
 
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
@@ -244,112 +254,87 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
             // drain sync core is the first worker core
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
-        // Set reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
-        };
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for ([[maybe_unused]] const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
+        // Reader: input_tensor is a tensor buffer → BufferBinding (patched on cache hit).
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(input_tensor.buffer());  // binding
+        reader_rt_args.push_back(input_tensor_shard_num_pages);
+        reader_rt_args.push_back(worker_num_tiles_to_read);
+        reader_rt_args.push_back(input_first_core_tile_start_offset);
+        reader_rt_args.push_back(static_cast<uint32_t>(input_tensor_cores_x.size()));
+        for (uint32_t v : input_tensor_cores_x) {
+            reader_rt_args.push_back(v);
         }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+        for (uint32_t v : input_tensor_cores_y) {
+            reader_rt_args.push_back(v);
+        }
+        desc.kernels[worker_sender_reader_kernel_id].emplace_runtime_args(core, reader_rt_args);
 
-        // Set writer runtime args
+        // Writer: output_tensor binding + workload-scoped semaphores (raw).
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
-        std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
-            output_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
-            drain_sync_core.x,                    // out_ready_sem_noc0_x
-            drain_sync_core.y,                    // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,             // out_ready_sem_wait_value
-            barrier_semaphore.has_value()         // barrier_sem
-                ? barrier_semaphore.value().address()
-                : 0,
-            barrier_core.x,  // barrier_sem_noc0_x
-            barrier_core.y   // barrier_sem_noc0_y
-        };
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Writer Runtime Args:");
-        for ([[maybe_unused]] const auto& arg : writer_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-
-        writer_rt_args.push_back(forward_coord.has_value());
+        std::vector<uint32_t> writer_tail;
+        writer_tail.push_back(forward_coord.has_value());
         if (forward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+            tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_tail);
         }
-        writer_rt_args.push_back(backward_coord.has_value());
+        writer_tail.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+            tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_tail);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.push_back(output_tensor.buffer());  // binding
+        writer_rt_args.push_back(semaphore.address());     // workload semaphore
+        writer_rt_args.push_back(output_tensor_shard_num_pages);
+        writer_rt_args.push_back(worker_num_tiles_to_read);
+        writer_rt_args.push_back(output_first_core_tile_start_offset);
+        writer_rt_args.push_back(static_cast<uint32_t>(output_tensor_cores_x.size()));
+        writer_rt_args.push_back(static_cast<uint32_t>(wait_output_semaphore));
+        writer_rt_args.push_back(static_cast<uint32_t>(reset_global_semaphore));
+        writer_rt_args.push_back(drain_sync_core.x);
+        writer_rt_args.push_back(drain_sync_core.y);
+        writer_rt_args.push_back(out_ready_sem_wait_value);
+        writer_rt_args.push_back(barrier_semaphore.has_value() ? barrier_semaphore.value().address() : 0u);
+        writer_rt_args.push_back(barrier_core.x);
+        writer_rt_args.push_back(barrier_core.y);
+        for (uint32_t v : output_tensor_cores_x) {
+            writer_rt_args.push_back(v);
+        }
+        for (uint32_t v : output_tensor_cores_y) {
+            writer_rt_args.push_back(v);
+        }
+        writer_rt_args.append(writer_tail);
+        desc.kernels[worker_sender_writer_kernel_id].emplace_runtime_args(core, writer_rt_args);
     }
 
-    return {
-        std::move(program),
-        shared_variables_t{
-            .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
-            .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
-            .sender_worker_cores = sender_worker_cores}};
+    return desc;
 }
 
-void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+}  // namespace
+
+WorkloadDescriptor LlamaShardedMeshWorkloadFactory::create_workload_descriptor(
     const AllGatherAsyncParams& operation_attributes,
     const AllGatherAsyncInputs& tensor_args,
-    Tensor& output_tensor) {
-    // Update runtime arguments for each program in the mesh workload
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
 
-        const auto& input = tensor_args.input_tensor;
-        const auto& output = output_tensor;
-
-        auto semaphore = operation_attributes.semaphore.at(0);
-        auto barrier_semaphore = operation_attributes.barrier_semaphore;
-
-        log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
-
-        // update senders
-        auto& worker_reader_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
-        auto& worker_writer_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
-        for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader
-            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input.buffer()->address();
-            // writer
-            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = output.buffer()->address();
-            worker_writer_sender_runtime_args[1] = semaphore.address();
-            if (barrier_semaphore.has_value()) {
-                worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();
-            }
-        }
+    for (const auto& coord : coords) {
+        ProgramDescriptor desc =
+            build_program_descriptor(operation_attributes, tensor_args, tensor_return_value, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
+
+    return wd;
 }
 
 }  // namespace experimental::prim

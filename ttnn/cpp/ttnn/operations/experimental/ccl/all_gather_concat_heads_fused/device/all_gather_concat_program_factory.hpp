@@ -5,45 +5,27 @@
 #pragma once
 
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/distributed/types.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
-struct AllGatherConcatSharedVariables {
-    std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
-    uint32_t num_concat_worker_cores = 0;
-    tt::tt_metal::CBHandle cb_q_output{};
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
-    tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
-    tt::tt_metal::KernelHandle concat_reader_kernel_id{};
-};
-
 struct AllGatherConcatMeshWorkloadFactory {
-    using shared_variables_t = AllGatherConcatSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    // Contract (2): declarative WorkloadDescriptor.  Builds one
+    // ProgramDescriptor per coord (ring_index / forward & backward neighbours
+    // vary across the mesh).
+    //
+    // The single GlobalSemaphore lives on AllGatherConcatParams (caller
+    // allocated) so this factory needs no workload-scoped resources.  The
+    // dynamic CB that points at the output tensor's buffer is wired up via
+    // CBDescriptor::buffer so the framework patches its address on every
+    // dispatch.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherConcatParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const AllGatherConcatInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const AllGatherConcatParams& operation_attributes,
-        const AllGatherConcatInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const AllGatherConcatParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const AllGatherConcatInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim

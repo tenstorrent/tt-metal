@@ -13,7 +13,9 @@
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -45,35 +47,19 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
     struct LlamaReduceScatterCreateHeads {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle quaternary_reduce_reader_kernel_id;
-            tt::tt_metal::KernelHandle quaternary_reduce_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
-            std::vector<tt::tt_metal::CBHandle> cb_handles;
-            CoreRangeSet core_range;
-        };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
+        // Contract (2): declarative WorkloadDescriptor.  Builds one
+        // ProgramDescriptor per coord.  The cross-device GlobalSemaphore lives
+        // on operation_attributes (caller-allocated) so the factory needs no
+        // workload-scoped resources.  Dynamic CBs that point at the input
+        // tensor and intermediate packet buffer are wired up via
+        // CBDescriptor::buffer so the framework patches their addresses on
+        // every dispatch.  Q/K/V output buffer base addresses are wired up
+        // via Buffer* runtime args.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<LlamaReduceScatterCreateHeads>;

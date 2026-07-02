@@ -5,38 +5,24 @@
 #pragma once
 
 #include "recv_async_op_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct RecvAsyncSharedVariables {
-    std::vector<tt::tt_metal::CoreCoord> receiver_core_coords;
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    bool socket_storage_in_dram = false;
-};
-
 struct RecvAsyncMeshWorkloadFactory {
-    using shared_variables_t = RecvAsyncSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const RecvAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const Tensor& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const RecvAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const Tensor& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    // Contract (2): declarative WorkloadDescriptor.  Symmetric to
+    // SendAsyncMeshWorkloadFactory but on the receiver side.
+    //
+    // Only receiver-participating coords get a program; other coords are
+    // simply not added.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const RecvAsyncParams& operation_attributes,
         const Tensor& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim
