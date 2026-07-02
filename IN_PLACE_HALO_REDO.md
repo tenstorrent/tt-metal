@@ -328,6 +328,80 @@ width/block sharding, and the net-L1 gate.
 
 ---
 
+## 9. L1 economics & the remote-temp elimination hypothesis (the path to the "good outcome")
+
+**Mission (per user):** in-place halo was removed because it net-*cost* L1 in most
+practical cases — but that was the team's best understanding, which the user themselves
+argued. The redo's job is to **either confirm that (bad outcome) or refute it and produce
+a better solution (good outcome)** — i.e. genuinely test whether L1 savings are
+achievable, not just re-implement + gate. First target op: **MaxPool, height-sharded.**
+
+### 9a. The accounting (in-place vs normal halo, per core)
+
+Normal halo holds **two** L1 buffers: `input_shard` (size `in_nsticks * aligned_page`)
+and `output_shard` (size `out_nsticks * aligned_stick`), plus config CBs + a pad CB
++ (if tiled) an untilize-out CB.
+
+In-place halo holds **one** output-sized buffer with the input embedded in it. So:
+- **Saved:** the separate `input_shard` buffer (≈ `in_nsticks * aligned_page`).
+- **Added vs normal:** the **remote-temp CB** (`max_ref_size * shard_width * out_nbytes`,
+  where `max_ref_size` = max outbound-halo sticks over all cores), and a possible second
+  pad CB / wide-untilize temp CB.
+- **Shared (not a delta):** the padding_config / gather_config CBs exist in both paths;
+  the untilize-out CB is subsumed by writing untilize straight into the dst buffer.
+
+So the net question reduces to: **is `remote_temp_CB` (+ minor extras) smaller than the
+saved `input_shard`?** For large shards / small kernels (the ResNet/UNet 3×3 common case)
+the outbound halo is a *small fraction* of the shard → temp ≪ input → in-place should
+**win**. For small shards / large windows the halo fraction is large → temp can approach
+or exceed the input → in-place **loses**. That fraction is the whole ballgame.
+
+### 9b. Hypothesis: the remote-temp CB may be eliminable (would flip the economics)
+
+The temp exists so a sender's outbound halo sticks survive the sender's own local copies
+(the original does: stage-remote→temp, local, barrier, distribute-remote-from-temp). But:
+
+- A remote halo write always targets the **receiver's halo region** `[0, delta)` or the
+  tail `[delta+in_size, out_size)`.
+- The receiver only ever *reads as a source* from its **input region**
+  `[delta, delta+in_size)` (for its own local moves and its own outbound halo).
+- By the definition of `delta`, halo region ∩ input region = ∅.
+
+If that disjointness holds universally, then reordering to **(1) all cores send remote
+halo directly to neighbors (reading intact input, no temp) → (2) global barrier →
+(3) all cores do local moves + padding** is correct *without any temp buffer*, because a
+remote write never lands where any core still needs to read. That deletes the dominant
+added cost and makes in-place a near-unconditional L1 win.
+
+**Why the original didn't do this (the risk to disprove):** it distributed remote
+*after* the barrier and local moves, implying a belief that a remote destination *can*
+overlap the receiver's live input region in some configs. Candidates to scrutinize before
+trusting the hypothesis: **block/width sharding** (2D / column-major layouts where "input
+region" isn't a simple contiguous middle band), **large windows spanning >1 neighbor**
+(a core receives halo from cores i±2… and the output row order may interleave), **padding
+interspersed** with halo in the output stick order, and the **exact output stick ordering**
+produced by `generate_tensor_metadata` (does a neighbor's halo ever get a dst index inside
+`[delta, delta+in_size)`?). The disjointness must be *proven from the config*, not assumed.
+
+### 9c. Validation plan (before committing to a kernel design)
+
+1. Instrument the current normal-halo config generation for the MaxPool height-sharded
+   test shapes: extract, per core, the input-region stick range and every remote
+   destination stick index. **Assert remote-dst ∉ input-region.** If it always holds for
+   height-sharded → the no-temp ordering is proven safe there.
+2. Compute real `input_shard` vs `remote_temp` sizes for those shapes → populate the
+   win/lose table. This *is* the confirm-or-refute-the-premise experiment.
+3. Implement the MaxPool height-sharded slice **no-temp** (remote-first → barrier →
+   local), verify correctness with structured inputs, and measure actual L1 saved.
+4. Only if the disjointness breaks for some class (block/width/large-window) does that
+   class fall back to the temp-based ordering (or normal halo) — a per-class decision,
+   not a blanket one.
+
+If step 1 refutes disjointness even for height-sharded, that is itself the confirmation
+of the bad outcome, cheaply and rigorously, before any kernel is written.
+
+---
+
 ## 8. Curriculum lessons to capture (running list)
 
 Per the standing request to log novel/unexpected/useful findings via the curriculum
