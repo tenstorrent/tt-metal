@@ -160,11 +160,10 @@ def test_rad2deg(device, h, w):
 
 
 def test_cbrt(device):
-    # Exhaustive over every bf16 value so coverage can't drift with the torch RNG version.
-    # Evaluate the registered golden in fp64 by upcasting the input: it is sgn(x)*pow(|x|,1/3),
-    # and in bf16 the non-representable 1/3 rounds the reference up to 2 ULP short of the true
-    # cube root while the kernel is correct. Subnormal bf16 inputs are flushed to zero on device,
-    # so flush the reference input to match.
+    # Exhaustive over every bf16 value.
+    # Evaluate the registered golden in fp64 by upcasting the input,
+    # in bf16 the non-representable 1/3 was rounding the reference up to 2 ULP short of the true
+    # cube root while the kernel was correct. Subnormal bf16 inputs are flushed to zero on device.
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor[torch.isfinite(input_tensor.to(torch.float32))]
