@@ -86,6 +86,7 @@ void kernel_main() {
         uint32_t index_cb_ptr = cb_index.get_read_ptr();
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
         const uint32_t update_idx = index_ptr[my_batch_idx];
+        cb_index.pop_front(1);
 
         if (update_idx == (uint32_t)-1) {
             // Passing update_idx = -1 tells us to skip update for this user
@@ -115,6 +116,7 @@ void kernel_main() {
                 const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
                 const uint32_t block_offset = block_row_tile * Wt;
                 cache_id = block_start_id + block_offset;
+                cb_page_table.pop_front(num_pages_to_read);
 
             } else {
                 const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
