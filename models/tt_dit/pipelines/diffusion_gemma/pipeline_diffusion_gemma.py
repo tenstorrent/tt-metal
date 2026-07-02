@@ -48,7 +48,12 @@ class DiffusionGemmaPipelineConfig:
     entropy_bound: float = 0.1
     temperature_start: float = 0.8
     temperature_end: float = 0.4
-    expert_dtype: ttnn.DataType = ttnn.bfloat16
+    # Expert weights are the dominant DRAM consumer at real config (30 layers × 128 experts
+    # × per-expert projection weights). bfp8 fits comfortably where bf16 OOMs, and
+    # demos/gemma4's own MoEBlock default is bfp8 — so precision at the router path is not
+    # further degraded by this choice. Router weights stay at bf16 since the router logic is
+    # more precision-sensitive and its state is small enough to fit at bf16.
+    expert_dtype: ttnn.DataType = ttnn.bfloat8_b
     router_dtype: ttnn.DataType = ttnn.bfloat16
 
 

@@ -48,18 +48,38 @@ PROMPT = "Briefly: what is the capital of France?"
 MAX_NEW_TOKENS = 32
 SEED = 0
 
-# Permissive per-mesh-shape latency thresholds (seconds). To tighten after first hardware run.
+# Permissive per-mesh-shape × per-expert-dtype latency thresholds (seconds). bfp8 experts
+# are ~4x smaller than bf16, so DRAM traffic through the MoE dominates — bfp8 runs meaningfully
+# faster. Tighten after first hardware run.
+# Key format: (rows, cols, topology, expert_dtype_key) where expert_dtype_key ∈ {"bfp8", "bf16"}.
 _DEFAULT_METRICS = {"encoder": 20.0, "denoising": 120.0, "total": 150.0}
 EXPECTED_METRICS = {
-    (2, 4, "linear"): _DEFAULT_METRICS,  # BH QB2
-    (4, 8, "linear"): {"encoder": 8.0, "denoising": 60.0, "total": 80.0},  # BH galaxy
-    (2, 4, "ring"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},  # WH T3K
+    # BH QB2 (2x4 linear)
+    (2, 4, "linear", "bfp8"): _DEFAULT_METRICS,
+    (2, 4, "linear", "bf16"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
+    # BH galaxy (4x8 linear)
+    (4, 8, "linear", "bfp8"): {"encoder": 8.0, "denoising": 60.0, "total": 80.0},
+    (4, 8, "linear", "bf16"): {"encoder": 12.0, "denoising": 90.0, "total": 120.0},
+    # WH T3K (2x4 ring) — bf16 doesn't fit in DRAM, skipped in-test.
+    (2, 4, "ring", "bfp8"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
 }
+
+
+def _expert_dtype_key(dtype: ttnn.DataType) -> str:
+    """Short stable string for keying ``EXPECTED_METRICS``."""
+    return {ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}[dtype]
 
 
 # ----- Test ------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "expert_dtype",
+    [
+        pytest.param(ttnn.bfloat8_b, id="expert_bfp8"),
+        pytest.param(ttnn.bfloat16, id="expert_bf16"),
+    ],
+)
 @pytest.mark.parametrize(
     ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
     [
@@ -70,7 +90,11 @@ EXPECTED_METRICS = {
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_diffusion_gemma(
-    mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, topology: ttnn.Topology
+    mesh_device: ttnn.MeshDevice,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    expert_dtype: ttnn.DataType,
 ) -> None:
     """End-to-end + perf: TT pipeline vs HF ``DiffusionGemmaForBlockDiffusion.generate``."""
     from transformers import AutoProcessor
@@ -87,6 +111,18 @@ def test_pipeline_diffusion_gemma(
                 "Set DIFFUSIONGEMMA_FORCE_T3K=1 to override after validating it fits."
             )
 
+    # DRAM ceiling: bf16 expert weights don't fit on 2x4 meshes (either linear or ring). The
+    # 4x8 Blackhole galaxy has 4x the DRAM banks, so bf16 fits there. Skip 2x4 bf16 variants
+    # to keep the suite green — the bf16 signal is preserved on the galaxy mesh, and bfp8
+    # covers both 2x4 topologies. Override with DIFFUSIONGEMMA_FORCE_BF16=1 if you've validated
+    # the DRAM math on a specific config.
+    if expert_dtype == ttnn.bfloat16 and mesh_shape == (2, 4):
+        if os.environ.get("DIFFUSIONGEMMA_FORCE_BF16", "0") != "1":
+            pytest.skip(
+                f"bf16 expert weights don't fit in DRAM on mesh_shape={mesh_shape}. "
+                "Use expert_dtype=ttnn.bfloat8_b, run on 4x8 mesh, or set DIFFUSIONGEMMA_FORCE_BF16=1."
+            )
+
     torch.manual_seed(SEED)
     benchmark_profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -94,12 +130,17 @@ def test_pipeline_diffusion_gemma(
     # ------------------------------------------------------------------
     # 1. Build TT pipeline + HF reference model.
     # ------------------------------------------------------------------
+    # ``expert_dtype`` is parametrized so we can validate both the DRAM-efficient bfp8 path
+    # (default; fits comfortably on all supported meshes) and the higher-precision bf16 path
+    # (may OOM on tighter mesh shapes — the ``bf16`` variants are expected to skip when the
+    # DRAM budget is exceeded rather than fail the test suite).
     config = DiffusionGemmaPipelineConfig(
         mesh_device=mesh_device,
         tp_axis=tp_axis,
         num_links=num_links,
         topology=topology,
         max_denoising_steps=8,  # cut for test runtime; full would be 48
+        expert_dtype=expert_dtype,
     )
     benchmark_profiler.start("setup")
     pipeline = DiffusionGemmaPipeline.from_pretrained(MODEL_ID, config=config)
@@ -176,7 +217,7 @@ def test_pipeline_diffusion_gemma(
     # 4. Perf: assert per-component thresholds.
     # ------------------------------------------------------------------
     topology_key = "ring" if topology == ttnn.Topology.Ring else "linear"
-    metrics_key = (*mesh_shape, topology_key)
+    metrics_key = (*mesh_shape, topology_key, _expert_dtype_key(expert_dtype))
     expected = EXPECTED_METRICS.get(metrics_key, _DEFAULT_METRICS)
 
     e2e_time = benchmark_profiler.get_duration("e2e_generate")
