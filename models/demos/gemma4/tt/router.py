@@ -113,10 +113,15 @@ class Gemma4Router:
         # bf16 softmax on near-tie scores produces different top-k selections vs fp32; when
         # the router is chained across many layers, tiny input drift flips expert selection
         # and MoE outputs diverge by O(1). fp32 softmax is numerically stable and matches HF.
+        # ``ttnn.topk`` (below) requires bf16/bfp8 input, so cast the fp32 probs back — the
+        # precision benefit is preserved because the fp32 softmax already separated the
+        # probabilities before quantization.
         expert_scores_fp32 = ttnn.typecast(expert_scores, ttnn.float32)
         expert_scores.deallocate(True)
-        router_probs = ttnn.softmax(expert_scores_fp32, dim=-1, numeric_stable=True)
+        router_probs_fp32 = ttnn.softmax(expert_scores_fp32, dim=-1, numeric_stable=True)
         expert_scores_fp32.deallocate(True)
+        router_probs = ttnn.typecast(router_probs_fp32, ttnn.bfloat16)
+        router_probs_fp32.deallocate(True)
 
         # 5. TopK — on device → values [1,1,S,k], indices [1,1,S,k]
         top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
