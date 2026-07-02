@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <limits>
 #include <cstdint>
 
 #include "ckernel.h"
@@ -13,7 +12,6 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel::sfpu {
 
@@ -29,6 +27,7 @@ template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = 0.0f;
@@ -61,33 +60,29 @@ void calculate_binop_with_scalar(std::uint32_t param) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 void calculate_add(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, ADD, ITERATIONS>(param);
-    return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 void calculate_sub(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, SUB, ITERATIONS>(param);
-    return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 void calculate_mul(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, MUL, ITERATIONS>(param);
-    return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 void calculate_div(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, DIV, ITERATIONS>(param);
-    return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 void calculate_rsub(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, RSUB, ITERATIONS>(param);
-    return;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 void calculate_add_int32(std::uint32_t scalar) {
     // dst (int32, 2's complement) + scalar
     const sfpi::vInt s = static_cast<int>(scalar);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
         sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = a + s;
@@ -99,6 +94,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 void calculate_sub_int32(std::uint32_t scalar) {
     // dst (int32, 2's complement) - scalar
     const sfpi::vInt s = static_cast<int>(scalar);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
         sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = a - s;

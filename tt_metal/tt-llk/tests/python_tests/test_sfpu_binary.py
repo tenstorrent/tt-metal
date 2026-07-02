@@ -104,6 +104,9 @@ def test_sfpu_binary_float(
         ]
     ),
     mathop=[
+        # Integer add over 2's-complement Int32 dest, dispatched to _add_int_ by the
+        # ADD + MATH_FORMAT==Int32 branch in call_binary_sfpu_operation.
+        MathOperation.SfpuElwadd,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,

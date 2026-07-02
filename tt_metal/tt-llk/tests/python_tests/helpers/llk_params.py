@@ -94,6 +94,24 @@ class MathOperation(Enum):
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
+    # cpp_enum_value must exactly match the SfpuType enumerator name so that
+    # SFPU_UNARY_OPERATION = SfpuType::{value} resolves in the C++ dispatch.
+    Erfinv = OpSpec("erfinv", MathOpType.SFPU_UNARY)
+    Heaviside = OpSpec("heaviside", MathOpType.SFPU_UNARY)  # value at x==0 fixed to 0.5
+    Softshrink = OpSpec("softshrink", MathOpType.SFPU_UNARY)  # lambda fixed to 0.5
+    Softsign = OpSpec("softsign", MathOpType.SFPU_UNARY)
+    Mish = OpSpec("mish", MathOpType.SFPU_UNARY)
+    Selu = OpSpec(
+        "selu", MathOpType.SFPU_UNARY
+    )  # scale/alpha fixed to defaults (1.0507/1.6733)
+    I0 = OpSpec("i0", MathOpType.SFPU_UNARY)  # polynomial approx valid on |x| <= 3.75
+    Rdiv = OpSpec(
+        "rdiv", MathOpType.SFPU_UNARY
+    )  # rdiv(x) = value / x; value fixed to 2.0
+    Clamp = OpSpec(
+        "clamp", MathOpType.SFPU_UNARY
+    )  # min/max fixed to -1.0/1.0, offset 0
+    Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)  # min/max fixed to -1.0/1.0
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)

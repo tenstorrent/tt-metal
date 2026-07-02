@@ -6,7 +6,6 @@ from itertools import chain, product
 
 import pytest
 import torch
-from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -27,6 +26,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.sfpu_domains import exclude_undefined, for_op
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -42,6 +42,8 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test
+
+from conftest import skip_for_coverage
 
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Log1p,
@@ -381,6 +383,72 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
+# Unary SFPU ops that require per-op input domains: heaviside/softshrink/
+# softsign/compare-to-zero span negatives, erfinv is only defined on (-1, 1),
+# i0 is valid on |x| <= 3.75, rdiv needs x away from 0, and clamp/hardtanh must
+# span past their bounds. They are driven through the domain registry rather
+# than the default positive-only stimuli used by the big float sweep.
+DOMAIN_MATHOPS = [
+    MathOperation.Erfinv,
+    MathOperation.Heaviside,
+    MathOperation.Softshrink,
+    MathOperation.Softsign,
+    MathOperation.Sigmoid,
+    MathOperation.Mish,
+    MathOperation.Selu,
+    MathOperation.I0,
+    MathOperation.EqualZero,
+    MathOperation.NotEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.LessThanEqualZero,
+    MathOperation.GreaterThanEqualZero,
+    MathOperation.Rdiv,
+    MathOperation.Clamp,
+    MathOperation.Hardtanh,
+]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    approx_mode=[ApproximationMode.No],
+    mathop=DOMAIN_MATHOPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_domain(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
+            DataFormat.Float32, DataFormat.Float16
+        ):
+            pytest.skip(reason="This combination is not supported on BH architecture")
+
+    # Pull the safe per-op input domain and clip it to where the op is defined
+    # (erfinv: |x| < 1). Other ops have no undefined holes, so this is a no-op.
+    specs = for_op(mathop, formats.input_format)
+    spec_A = exclude_undefined(mathop, specs.spec_A)
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=spec_A,
+    )
+
+
 def eltwise_unary_sfpu(
     test_name,
     formats: list[InputOutputFormat],
@@ -389,6 +457,7 @@ def eltwise_unary_sfpu(
     mathop,
     fast_mode: FastMode,
     input_dimensions: list[int],
+    spec_A=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -398,6 +467,7 @@ def eltwise_unary_sfpu(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=spec_A,
     )
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
