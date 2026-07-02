@@ -55,7 +55,8 @@ target_include_directories(
 #   3. Binary is executed to collect metrics
 #
 # This eliminates the need for 500+ pre-generated embedded kernels.
-# Use one checkout per concurrent worker because adhoc.cpp is checkout-local.
+# Use one adhoc slot per concurrent worker. The legacy unsuffixed adhoc target
+# remains for old scripts; automation can use adhoc0..adhocN in one checkout.
 
 # Primary adhoc target (backward compatible with run_csv.sh)
 add_executable(programming_examples_generic_lut_activation_embedded_adhoc)
@@ -73,8 +74,11 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/../generic_lut_activation
 )
 
-# Parallel adhoc targets for concurrent sweep execution (adhoc0, adhoc1, adhoc2, adhoc3)
-foreach(ADHOC_IDX RANGE 0 3)
+set(TT_ACT_ADHOC_SLOTS "32" CACHE STRING "Number of parallel generic_lut_activation_embedded adhoc targets")
+math(EXPR TT_ACT_ADHOC_LAST_SLOT "${TT_ACT_ADHOC_SLOTS} - 1")
+
+# Parallel adhoc targets for concurrent sweep/emulation execution.
+foreach(ADHOC_IDX RANGE 0 ${TT_ACT_ADHOC_LAST_SLOT})
     set(TARGET_NAME "programming_examples_generic_lut_activation_embedded_adhoc${ADHOC_IDX}")
     add_executable(${TARGET_NAME})
     target_sources(${TARGET_NAME} PRIVATE generic_lut_activation.cpp)

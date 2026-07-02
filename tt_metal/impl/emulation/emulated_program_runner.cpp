@@ -464,6 +464,69 @@ static uint64_t fnv1a_hash(const std::string& s) {
     return hasher.digest();
 }
 
+static void update_file_identity_hash(
+    tt::StableHasher& hasher, const std::filesystem::path& path, std::set<std::string>& visited) {
+    std::error_code ec;
+    const auto canonical_path = std::filesystem::weakly_canonical(path, ec);
+    const std::string identity = ec ? std::filesystem::absolute(path).string() : canonical_path.string();
+    if (!visited.insert(identity).second) {
+        return;
+    }
+
+    hasher.update(std::string("file:"));
+    hasher.update(identity);
+    hasher.update(std::string("\n"));
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        hasher.update(std::string("missing\n"));
+        return;
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    const std::string src = ss.str();
+    hasher.update(std::string("content:"));
+    hasher.update(src);
+    hasher.update(std::string("\n"));
+
+    static const std::regex include_re(R"RE(#[ \t]*include[ \t]*"([^"]+)")RE");
+    const auto src_dir = path.parent_path();
+    for (std::sregex_iterator it(src.begin(), src.end(), include_re), end; it != end; ++it) {
+        const std::filesystem::path include_path = src_dir / (*it)[1].str();
+        if (std::filesystem::exists(include_path, ec)) {
+            update_file_identity_hash(hasher, include_path, visited);
+        }
+    }
+}
+
+static std::string file_backed_source_identity_hash_hex(const std::string& path) {
+    tt::StableHasher hasher;
+    std::set<std::string> visited;
+    update_file_identity_hash(hasher, std::filesystem::path(path), visited);
+    char hex[FNV_HEX_BUF_SIZE];
+    std::snprintf(hex, sizeof(hex), "%016lx", hasher.digest());
+    return hex;
+}
+
+static std::string emule_preamble_identity_hash_suffix() {
+    const std::filesystem::path jit_inc = TT_EMULE_JIT_INCLUDE_DIR;
+    std::string suffix;
+    for (const auto& rel_path : {
+             "jit_kernel_stubs.hpp",
+             "sfpi.h",
+             "api/compute/common.h",
+             "api/compute/reg_api.h",
+             "api/dataflow/dataflow_api.h",
+             "sfpu/ckernel_sfpu_converter.h",
+         }) {
+        suffix += ":J";
+        suffix += rel_path;
+        suffix += "=";
+        suffix += file_backed_source_identity_hash_hex((jit_inc / rel_path).string());
+    }
+    return suffix;
+}
+
 static std::string get_jit_cache_dir() {
     if (const char* dir = std::getenv("TT_EMULE_JIT_CACHE_DIR")) {
         return dir;
@@ -814,6 +877,9 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
+        if (defines.find("NOC_INDEX") != defines.end()) {
+            f << "#include \"api/dataflow/dataflow_api.h\"\n";
+        }
         emit_metal2_namespaces(f, bindings, named_compile_args);
         f << "#include \"" << patched_kernel_path << "\"\n";
         f << "extern \"C\" { void __emule_kernel_entry() { kernel_main(); } }\n";
@@ -1090,6 +1156,9 @@ static std::string get_extra_include_flags() {
     extra_inc += " -I\"" + project_src + "\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";
+    extra_inc += " -I\"" + project_src + "/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc\"";
+    extra_inc += " -I\"" + project_src + "/tt_metal/tt-llk/tt_llk_blackhole/common/inc\"";
+    extra_inc += " -I\"" + project_src + "/tt_metal/tt-llk/tt_llk_quasar/common/inc\"";
     return extra_inc;
 #else
     return {};
@@ -1455,7 +1524,14 @@ static void collect_kernels(
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
                 std::string key;
                 if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-                    key = src_path;
+                    std::error_code ec;
+                    key = "file:";
+                    key += std::filesystem::weakly_canonical(src_path, ec).string();
+                    if (key == "file:") {
+                        key += std::filesystem::absolute(src_path).string();
+                    }
+                    key += ":IH";
+                    key += file_backed_source_identity_hash_hex(src_path);
                 } else {
                     char hex[FNV_HEX_BUF_SIZE];
                     std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(ksrc.source_));
@@ -1474,6 +1550,7 @@ static void collect_kernels(
                     key += ":" + k + "=" + v;
                 }
                 key += metal2_key_suffix;
+                key += emule_preamble_identity_hash_suffix();
                 return key;
             };
 

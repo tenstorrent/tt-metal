@@ -15,8 +15,22 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)
 WORK_DIR="tt_metal/programming_examples/generic_lut_activation_embedded"
-BUILD_DIR="${TT_METAL_RUNTIME_ROOT:-$REPO_ROOT}/build_Release"
-BINARY="$BUILD_DIR/programming_examples/programming_examples_generic_lut_activation_embedded_adhoc"
+if [[ -n "${TT_METAL_BUILD_DIR:-}" ]]; then
+    BUILD_DIR="$TT_METAL_BUILD_DIR"
+elif [[ "${TT_METAL_EMULE_MODE:-}" == "1" ]]; then
+    BUILD_DIR="${TT_METAL_RUNTIME_ROOT:-$REPO_ROOT}/build_emule"
+else
+    BUILD_DIR="${TT_METAL_RUNTIME_ROOT:-$REPO_ROOT}/build_Release"
+fi
+ADHOC_SLOT="${TT_ACT_ADHOC_SLOT:-}"
+if [[ -n "$ADHOC_SLOT" && ! "$ADHOC_SLOT" =~ ^[0-9]+$ ]]; then
+    echo "Error: TT_ACT_ADHOC_SLOT must be a non-negative integer, got '$ADHOC_SLOT'"
+    exit 1
+fi
+ADHOC_SUFFIX="${ADHOC_SLOT:+$ADHOC_SLOT}"
+ADHOC_BASENAME="adhoc${ADHOC_SUFFIX}"
+ADHOC_TARGET="programming_examples_generic_lut_activation_embedded_adhoc${ADHOC_SUFFIX}"
+BINARY="$BUILD_DIR/programming_examples/${ADHOC_TARGET}"
 KERNEL_DIR="$SCRIPT_DIR/kernels/compute/adhoc"
 
 source "$SCRIPT_DIR/profiler_helpers.sh"
@@ -90,6 +104,8 @@ show_help() {
     echo "  --dump-csv <path>         Copy the first measured shape/precision raw output CSV"
     echo "                            Use --tiles and one --precision for deterministic dumps"
     echo "  --dump-npz <path>         Same as --dump-csv, but compressed NPZ with input/output arrays"
+    echo "  --adhoc-slot <N>          Use kernels/compute/adhoc/adhocN.cpp and matching binary"
+    echo "                            Also accepted via TT_ACT_ADHOC_SLOT=N"
     echo "  --no-dual-eval            Disable dual x-vector evaluation"
     echo "  --no-adaptive-degree      Disable per-segment degree optimization"
     echo "  -h, --help                Show this help"
@@ -130,6 +146,7 @@ while [[ $# -gt 0 ]]; do
         --skip-build)    SKIP_BUILD=true; shift ;;
         --dump-csv)      DUMP_CSV="$2"; shift 2 ;;
         --dump-npz)      DUMP_NPZ="$2"; shift 2 ;;
+        --adhoc-slot)    ADHOC_SLOT="$2"; shift 2 ;;
         --no-dual-eval)  EXTRA_BINARY_ARGS+=("--no-dual-eval"); shift ;;
         --no-adaptive-degree) EXTRA_BINARY_ARGS+=("--no-adaptive-degree"); shift ;;
         -h|--help)       show_help ;;
@@ -149,6 +166,14 @@ if [[ -z "$ACTIVATION" ]]; then
     echo "Error: --activation is required"
     exit 1
 fi
+if [[ -n "$ADHOC_SLOT" && ! "$ADHOC_SLOT" =~ ^[0-9]+$ ]]; then
+    echo "Error: --adhoc-slot must be a non-negative integer, got '$ADHOC_SLOT'"
+    exit 1
+fi
+ADHOC_SUFFIX="${ADHOC_SLOT:+$ADHOC_SLOT}"
+ADHOC_BASENAME="adhoc${ADHOC_SUFFIX}"
+ADHOC_TARGET="programming_examples_generic_lut_activation_embedded_adhoc${ADHOC_SUFFIX}"
+BINARY="$BUILD_DIR/programming_examples/${ADHOC_TARGET}"
 
 # Make CSV path absolute
 CSV_FILE="$(cd "$(dirname "$CSV_FILE")" && pwd)/$(basename "$CSV_FILE")"
@@ -169,10 +194,11 @@ echo "CSV:        $CSV_FILE"
 echo "Activation: $ACTIVATION"
 echo "Precision:  $PRECISION"
 echo "Runs/shape: $NUM_RUNS"
+echo "Adhoc slot: ${ADHOC_SLOT:-legacy}"
 echo ""
 
 mkdir -p "$KERNEL_DIR"
-rm -f "$KERNEL_DIR/adhoc.cpp"
+rm -f "$KERNEL_DIR/${ADHOC_BASENAME}.cpp"
 
 # Inline Python: parse CSV, auto-detect degree/segments, write kernel .cpp
 RUN_CSV_GEN_LOG="$(mktemp "${TMPDIR:-/tmp}/run_csv_gen.XXXXXX.log")"
@@ -185,7 +211,7 @@ python3 -c "
 import csv, sys, os
 
 csv_path = '$CSV_FILE'
-kernel_path = '$KERNEL_DIR/adhoc.cpp'
+kernel_path = '$KERNEL_DIR/${ADHOC_BASENAME}.cpp'
 kernel_tmp_path = f'{kernel_path}.tmp.{os.getpid()}'
 range_min_override = '$RANGE_MIN' or None
 range_max_override = '$RANGE_MAX' or None
@@ -296,7 +322,7 @@ if is_rational:
 else:
     lut_values = boundaries + coefficients
 lut_size = len(lut_values)
-lut_str = ',\n    '.join(f'{clamp(v):.10e}f' for v in lut_values)
+lut_str = ',\n    '.join(f'{clamp(v):.16e}f' for v in lut_values)
 
 # Per-segment adaptive degree (skip wasted FMA on zero high-order coefficients)
 # Two mechanisms:
@@ -467,19 +493,19 @@ elif has_affine_even_basis:
         f'\n// basis_kind={basis_kind_norm}: y = bias + scale*x + even_scale*abs(x)*P(abs(x))\n'
         '#define BASIS_AFFINE_EVEN\n'
         '#define BASIS_INPUT_ABS_X\n'
-        f'#define BASIS_AFFINE_BIAS {clamp(affine_bias):.10e}f\n'
-        f'#define BASIS_AFFINE_SCALE {clamp(affine_scale):.10e}f\n'
-        f'#define BASIS_AFFINE_EVEN_SCALE {clamp(affine_even_scale):.10e}f\n'
+        f'#define BASIS_AFFINE_BIAS {clamp(affine_bias):.16e}f\n'
+        f'#define BASIS_AFFINE_SCALE {clamp(affine_scale):.16e}f\n'
+        f'#define BASIS_AFFINE_EVEN_SCALE {clamp(affine_even_scale):.16e}f\n'
     )
     if left_tail_zero:
         eval_basis_macro += (
             '#define BASIS_LEFT_TAIL_ZERO\n'
-            f'#define BASIS_LEFT_TAIL_ZERO_THRESHOLD {clamp(float(left_tail_zero)):.10e}f\n'
+            f'#define BASIS_LEFT_TAIL_ZERO_THRESHOLD {clamp(float(left_tail_zero)):.16e}f\n'
         )
     if right_tail_identity:
         eval_basis_macro += (
             '#define BASIS_RIGHT_TAIL_IDENTITY\n'
-            f'#define BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD {clamp(float(right_tail_identity)):.10e}f\n'
+            f'#define BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD {clamp(float(right_tail_identity)):.16e}f\n'
         )
     left_tail_zero_label = left_tail_zero or 'none'
     right_tail_identity_label = right_tail_identity or 'none'
@@ -641,7 +667,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         # Honor the log2-domain multiplier + optional compose post-transform.
         mult = metadata.get('expalu_log2_multiplier', '1.4426950408889634')
         compose = metadata.get('expalu_compose', '').strip()
-        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        coeff_str = ', '.join(f'{clamp(v):.16e}f' for v in seg0)
         compose_macro = ''
         if compose == 'sigmoid':
             compose_macro = '#define EXP_HW_COMPOSE_SIGMOID\n'
@@ -670,7 +696,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_EXPONENT_ALU\n'
             '#define EVAL_METHOD_EXPONENT_ALU\n'
             '#define EXPONENT_ALU_EXP2\n'
-            f'#define EXP_HW_MULT {clamp(float(mult)):.10e}f\n'
+            f'#define EXP_HW_MULT {clamp(float(mult)):.16e}f\n'
             f'{compose_macro}'
             f'{fused_macro}'
             f'{bare_macro}'
@@ -683,11 +709,11 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
     elif kind == 'log2':
         scale = metadata.get('expalu_log_scale', metadata.get('log_scale', '1.0'))
         basis = metadata.get('expalu_log2_basis', 'natural')
-        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        coeff_str = ', '.join(f'{clamp(v):.16e}f' for v in seg0)
         log_basis_macro = '#define LOG_HW_BASIS_M_MINUS_1\n' if basis == 'm_minus_1' else ''
         # log1p decomposes (x + 1) before log2 -> expalu_input_offset = 1.0.
         offset = float(metadata.get('expalu_input_offset', '0.0') or '0.0')
-        offset_macro = f'#define LOG_HW_INPUT_OFFSET {clamp(offset):.10e}f\n' if offset != 0.0 else ''
+        offset_macro = f'#define LOG_HW_INPUT_OFFSET {clamp(offset):.16e}f\n' if offset != 0.0 else ''
         decompose_min = min(float(input_min) + offset, float(input_max) + offset)
         skip_specials_macro = '#define LOG_HW_SKIP_SPECIALS\n' if decompose_min > 0.0 else ''
         specials_status = 'skipped' if decompose_min > 0.0 else 'ON'
@@ -706,7 +732,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         )
         print(f'Range reduction: HW exponent-ALU log2 (degree {degree}, scale {scale}, basis {basis}, offset {offset}, specials {specials_status})')
     elif kind == 'pow':
-        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        coeff_str = ', '.join(f'{clamp(v):.16e}f' for v in seg0)
         # root order N, optional final reciprocal (rsqrt), per-r scale constants.
         root_n = int(float(metadata.get('expalu_root_n', '2') or '2'))
         recip = str(metadata.get('expalu_reciprocal', 'False')).strip().lower() in ('true', '1')
@@ -715,7 +741,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         for r in range(root_n):
             key = f'expalu_pow_scale_c{r}'
             if key in metadata:
-                scale_macros += f'#define POW_HW_SCALE_C{r} {clamp(float(metadata[key])):.10e}f\n'
+                scale_macros += f'#define POW_HW_SCALE_C{r} {clamp(float(metadata[key])):.16e}f\n'
         rr_macro = (
             '\n// eval_method: exponent_alu / pow/root_N (exexp -> e, exman -> m), natural [1,2) coeffs. STANDALONE\n'
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_EXPONENT_ALU\n'
@@ -777,9 +803,9 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_NEWTON_ROOT\n'
             '#define EVAL_METHOD_NEWTON_ROOT\n'
             f'#define NEWTON_ROOT_MAGIC {magic}\n'
-            f'#define NEWTON_ROOT_C0 {c0:.10e}f\n'
-            f'#define NEWTON_ROOT_C1 {c1:.10e}f\n'
-            f'#define NEWTON_ROOT_C2 {c2:.10e}f\n'
+            f'#define NEWTON_ROOT_C0 {c0:.16e}f\n'
+            f'#define NEWTON_ROOT_C1 {c1:.16e}f\n'
+            f'#define NEWTON_ROOT_C2 {c2:.16e}f\n'
             f'#define NEWTON_ROOT_N {root_n}\n'
             f'#define NEWTON_ROOT_ITERS {iters}\n'
             f'{recip_macro}'
@@ -810,7 +836,7 @@ elif rr_method in ('trig_residual', 'trig_standalone'):
         raise ValueError(f'trig_residual requires supported trig_phase, got {trig_phase!r}')
     cps = degree + 1
     seg0 = coefficients[0:cps]
-    coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+    coeff_str = ', '.join(f'{clamp(v):.16e}f' for v in seg0)
     c1_is_one_macro = '#define TRIG_RESIDUAL_C1_IS_ONE\n' if len(seg0) > 1 and abs(float(seg0[1]) - 1.0) < 1e-12 else ''
     trig_phase_macro = 'TRIG_RESIDUAL_PHASE_COSINE_PI2_ODD' if trig_phase in cosine_phases else 'TRIG_RESIDUAL_PHASE_SINE_PI_ODD'
     degree_macros = ''
@@ -835,7 +861,7 @@ elif rr_method in ('asin_acos', 'inverse_trig', 'inverse_trig_asin_acos'):
         raise ValueError(f'asin_acos requires inverse_trig_op asin/acos, got {inverse_op!r}')
     cps = degree + 1
     seg0 = coefficients[0:cps]
-    coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+    coeff_str = ', '.join(f'{clamp(v):.16e}f' for v in seg0)
     op_macro = 'ASIN_ACOS_OP_ACOS' if inverse_op == 'acos' else 'ASIN_ACOS_OP_ASIN'
     threshold = metadata.get('asin_acos_direct_threshold', metadata.get('inverse_trig_direct_threshold', '0.625'))
     pi_2 = metadata.get('asin_acos_pi_2', '1.5707963267948966')
@@ -848,8 +874,8 @@ elif rr_method in ('asin_acos', 'inverse_trig', 'inverse_trig_asin_acos'):
         f'#define {op_macro}\n'
         f'constexpr uint32_t ASIN_ACOS_DEGREE = {degree};\n'
         f'constexpr float ASIN_ACOS_COEFFS[] = {{{coeff_str}}};\n'
-        f'constexpr float ASIN_ACOS_DIRECT_THRESHOLD = {float(threshold):.10e}f;\n'
-        f'constexpr float ASIN_ACOS_PI_2 = {float(pi_2):.10e}f;\n'
+        f'constexpr float ASIN_ACOS_DIRECT_THRESHOLD = {float(threshold):.16e}f;\n'
+        f'constexpr float ASIN_ACOS_PI_2 = {float(pi_2):.16e}f;\n'
     )
     print(f'Range reduction: asin_acos standalone (op {inverse_op}, degree {degree}, threshold {threshold})')
 elif rr_method == 'log':
@@ -861,7 +887,7 @@ elif rr_method == 'tan':
     if not is_rational and num_segments == 1:
         cps = degree + 1
         seg0 = coefficients[0:cps]
-        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        coeff_str = ', '.join(f'{clamp(v):.16e}f' for v in seg0)
         degree_macros = ''
         poly_parity_macro = ''
         rr_macro = (
@@ -954,8 +980,8 @@ if want_affine and (not is_rational) and (not has_abs_sign_basis) and (not has_a
                 '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_AFFINE\n'
                 '#define EVAL_METHOD_AFFINE_COLLAPSE\n'
                 '#define AFFINE_COLLAPSE\n'
-                f'#define TT_ACT_AFFINE_B {clamp(c0):.10e}f\n'
-                f'#define TT_ACT_AFFINE_A {clamp(c1):.10e}f\n'
+                f'#define TT_ACT_AFFINE_B {clamp(c0):.16e}f\n'
+                f'#define TT_ACT_AFFINE_A {clamp(c1):.16e}f\n'
                 '#define AFFINE_C0 TT_ACT_AFFINE_B\n'
                 '#define AFFINE_C1 TT_ACT_AFFINE_A\n'
             )
@@ -1035,15 +1061,15 @@ if want_clamped_affine and (not is_rational) and (not has_abs_sign_basis) and (n
                     '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_CLAMPED_AFFINE\n'
                     '#define EVAL_METHOD_CLAMPED_AFFINE_COLLAPSE\n'
                     '#define CLAMPED_AFFINE_COLLAPSE\n'
-                    f'#define TT_ACT_CLAMPED_AFFINE_B {clamp(c0):.10e}f\n'
-                    f'#define TT_ACT_CLAMPED_AFFINE_A {clamp(c1):.10e}f\n'
+                    f'#define TT_ACT_CLAMPED_AFFINE_B {clamp(c0):.16e}f\n'
+                    f'#define TT_ACT_CLAMPED_AFFINE_A {clamp(c1):.16e}f\n'
                     '#define CLAMPED_AFFINE_C0 TT_ACT_CLAMPED_AFFINE_B\n'
                     '#define CLAMPED_AFFINE_C1 TT_ACT_CLAMPED_AFFINE_A\n'
                 )
                 if lo is not None:
-                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MIN\n#define TT_ACT_CLAMPED_AFFINE_MIN {clamp(lo):.10e}f\n#define CLAMPED_AFFINE_MIN TT_ACT_CLAMPED_AFFINE_MIN\n'
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MIN\n#define TT_ACT_CLAMPED_AFFINE_MIN {clamp(lo):.16e}f\n#define CLAMPED_AFFINE_MIN TT_ACT_CLAMPED_AFFINE_MIN\n'
                 if hi is not None:
-                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MAX\n#define TT_ACT_CLAMPED_AFFINE_MAX {clamp(hi):.10e}f\n#define CLAMPED_AFFINE_MAX TT_ACT_CLAMPED_AFFINE_MAX\n'
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MAX\n#define TT_ACT_CLAMPED_AFFINE_MAX {clamp(hi):.16e}f\n#define CLAMPED_AFFINE_MAX TT_ACT_CLAMPED_AFFINE_MAX\n'
                 low_label = '-inf' if lo is None else f'{lo:.6g}'
                 high_label = '+inf' if hi is None else f'{hi:.6g}'
                 print(
@@ -1072,7 +1098,7 @@ if want_threshold_identity and (not is_rational) and (not has_abs_sign_basis) an
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_THRESHOLD_IDENTITY\n'
             '#define EVAL_METHOD_THRESHOLD_IDENTITY_SELECT\n'
             '#define THRESHOLD_IDENTITY_SELECT\n'
-            f'#define TT_ACT_THRESHOLD_LAMBDA {clamp(hi_thr):.10e}f\n'
+            f'#define TT_ACT_THRESHOLD_LAMBDA {clamp(hi_thr):.16e}f\n'
             '#define THRESHOLD_IDENTITY_LAMBDA TT_ACT_THRESHOLD_LAMBDA\n'
         )
         print(f'THRESHOLD IDENTITY SELECT: y=x when |x|>{hi_thr:.6g}, else 0 -> threshold bypass')
@@ -1116,7 +1142,7 @@ if want_threshold_softshift and (not is_rational) and (not has_abs_sign_basis) a
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_THRESHOLD_SOFTSHIFT\n'
             '#define EVAL_METHOD_THRESHOLD_SOFTSHIFT\n'
             '#define THRESHOLD_SOFTSHIFT_SELECT\n'
-            f'#define TT_ACT_THRESHOLD_LAMBDA {clamp(hi_thr):.10e}f\n'
+            f'#define TT_ACT_THRESHOLD_LAMBDA {clamp(hi_thr):.16e}f\n'
             '#define THRESHOLD_SOFTSHIFT_LAMBDA TT_ACT_THRESHOLD_LAMBDA\n'
         )
         print(f'THRESHOLD SOFTSHIFT: y=sign(x)*(abs(x)-{hi_thr:.6g}) outside dead zone -> threshold bypass')
@@ -1146,8 +1172,8 @@ if want_gated_affine_product and (not is_rational) and (not has_abs_sign_basis) 
             '#define EVAL_METHOD_GATED_QUADRATIC_COLLAPSE\n'
             '#define GATED_AFFINE_PRODUCT\n'
             '#define GATED_QUADRATIC_COLLAPSE\n'
-            f'#define TT_ACT_GATE_B {clamp(q0):.10e}f\n'
-            f'#define TT_ACT_GATE_A {clamp(q1):.10e}f\n'
+            f'#define TT_ACT_GATE_B {clamp(q0):.16e}f\n'
+            f'#define TT_ACT_GATE_A {clamp(q1):.16e}f\n'
             '#define GATED_QUADRATIC_Q0 TT_ACT_GATE_B\n'
             '#define GATED_QUADRATIC_Q1 TT_ACT_GATE_A\n'
         )
@@ -1193,8 +1219,8 @@ if precompose in ('input_affine', 'affine_input', 'affine_x'):
     precompose_macro = (
         '\n// precompose: x_eval = a*x + b\n'
         '#define PRECOMPOSE_INPUT_AFFINE\n'
-        f'#define PRECOMPOSE_INPUT_A {clamp(pre_a):.10e}f\n'
-        f'#define PRECOMPOSE_INPUT_B {clamp(pre_b):.10e}f\n'
+        f'#define PRECOMPOSE_INPUT_A {clamp(pre_a):.16e}f\n'
+        f'#define PRECOMPOSE_INPUT_B {clamp(pre_b):.16e}f\n'
     )
     print(f'Precompose: x_eval = {pre_a:.6g}*x + {pre_b:.6g}')
 elif precompose in ('', 'none', 'identity'):
@@ -1220,8 +1246,8 @@ elif postcompose in ('affine_y_times_input', 'input_times_affine_y', 'mul_input_
     postcompose_macro = (
         '\n// postcompose: y = x_orig * (a + b*y)\n'
         '#define POSTCOMPOSE_AFFINE_Y_TIMES_INPUT\n'
-        f'#define POSTCOMPOSE_A {clamp(post_a):.10e}f\n'
-        f'#define POSTCOMPOSE_B {clamp(post_b):.10e}f\n'
+        f'#define POSTCOMPOSE_A {clamp(post_a):.16e}f\n'
+        f'#define POSTCOMPOSE_B {clamp(post_b):.16e}f\n'
     )
     print(f'Postcompose: y = x_orig * ({post_a:.6g} + {post_b:.6g}*y)')
 elif postcompose in ('', 'none', 'identity'):
@@ -1317,8 +1343,8 @@ constexpr uint32_t NUM_DEGREE = {num_degree};
 constexpr uint32_t DEN_DEGREE = {den_degree};
 constexpr uint32_t NUM_SEGMENTS = {num_segments};
 
-constexpr float INPUT_MIN = {input_min:.10e}f;
-constexpr float INPUT_MAX = {input_max:.10e}f;
+constexpr float INPUT_MIN = {input_min:.16e}f;
+constexpr float INPUT_MAX = {input_max:.16e}f;
 
 constexpr uint32_t LUT_SIZE = {lut_size};
 constexpr std::array<float, LUT_SIZE> LUT_DATA = {{{{
@@ -1341,8 +1367,8 @@ else:
 constexpr uint32_t POLY_DEGREE = {degree};
 constexpr uint32_t NUM_SEGMENTS = {num_segments};
 
-constexpr float INPUT_MIN = {input_min:.10e}f;
-constexpr float INPUT_MAX = {input_max:.10e}f;
+constexpr float INPUT_MIN = {input_min:.16e}f;
+constexpr float INPUT_MAX = {input_max:.16e}f;
 
 constexpr uint32_t LUT_SIZE_BF16 = {lut_size};
 constexpr std::array<float, LUT_SIZE_BF16> LUT_DATA_BF16 = {{{{
@@ -1423,9 +1449,9 @@ fi
 if [[ "$SKIP_BUILD" == true ]]; then
     echo "Skipping build (--skip-build)"
 else
-    echo "Building adhoc target..."
+    echo "Building $ADHOC_TARGET..."
     cd "$REPO_ROOT"
-    ninja -C "$BUILD_DIR" programming_examples_generic_lut_activation_embedded_adhoc
+    ninja -C "$BUILD_DIR" "$ADHOC_TARGET"
     echo "Build complete."
 fi
 
@@ -1436,6 +1462,9 @@ cd "$REPO_ROOT"
 
 # Hardware output directory for accuracy CSVs
 output_dir=$(get_hardware_output_dir "$ACTIVATION" "$WORK_DIR")
+csv_stem="$(basename "$CSV_FILE" .csv)"
+csv_stem_safe="$(printf '%s' "$csv_stem" | tr -c 'A-Za-z0-9_.-' '_')"
+output_tag="${csv_stem_safe}${ADHOC_SLOT:+_${ADHOC_BASENAME}}"
 
 # Build batch tile list from TEST_SHAPES
 batch_tiles=""
@@ -1470,19 +1499,19 @@ for prec in "${PRECISION_LIST[@]}"; do
     for test_shape in "${TEST_SHAPES[@]}"; do
         parse_shape "$test_shape"
         if [[ "$PRECISION" == "both" && "$use_batch" == true ]]; then
-            # Binary base: ${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}
+            # Binary base: output_tag
             # Binary suffix: _${prec}_tiles${N} (is_multi_precision + is_batch_mode)
-            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}_${prec}_tiles${tile_count}.csv"
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${output_tag}_${prec}_tiles${tile_count}.csv"
         elif [[ "$PRECISION" == "both" ]]; then
-            # Binary base: ${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}
+            # Binary base: output_tag
             # Binary suffix: _${prec} (is_multi_precision only, no batch)
-            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}_${prec}.csv"
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${output_tag}_${prec}.csv"
         elif [[ "$use_batch" == true ]]; then
             # Single precision batch: base has precision, binary adds _tiles${N}
-            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${PRECISION}_${NUM_SEGMENTS}_${POLY_DEGREE}_tiles${tile_count}.csv"
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${output_tag}_${PRECISION}_tiles${tile_count}.csv"
         else
             # Single precision, single shape: exact path (no suffix added by binary)
-            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${PRECISION}_${NUM_SEGMENTS}_${POLY_DEGREE}_tiles${tile_count}.csv"
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${output_tag}_${PRECISION}_tiles${tile_count}.csv"
         fi
     done
 done
@@ -1500,10 +1529,10 @@ for run in $(seq 1 $NUM_RUNS); do
     if [[ "$run" -eq 1 ]]; then
         if [[ "$PRECISION" == "both" ]]; then
             # Binary inserts _bf16/_fp32 and _tilesN before .csv (is_multi_precision + is_batch_mode)
-            export DUMP_OUTPUT_CSV="${output_dir}/${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}.csv"
+            export DUMP_OUTPUT_CSV="${output_dir}/${output_tag}.csv"
         elif [[ "$use_batch" == true ]]; then
             # Single precision, binary inserts _tilesN before .csv
-            export DUMP_OUTPUT_CSV="${output_dir}/${ACTIVATION}_${PRECISION}_${NUM_SEGMENTS}_${POLY_DEGREE}.csv"
+            export DUMP_OUTPUT_CSV="${output_dir}/${output_tag}_${PRECISION}.csv"
         else
             parse_shape "${TEST_SHAPES[0]}"
             export DUMP_OUTPUT_CSV="${csv_output_paths[${PRECISION_LIST[0]}_${shape_name}]}"
@@ -1514,16 +1543,28 @@ for run in $(seq 1 $NUM_RUNS); do
 
     set +e
     if [[ "$use_batch" == true ]]; then
-        run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
-            "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
-            --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" \
-            --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+        if [[ "${TT_METAL_EMULE_MODE:-}" == "1" ]]; then
+            run_output=$("$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+                --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" \
+                --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+        else
+            run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
+                "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+                --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" \
+                --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+        fi
     else
         parse_shape "${TEST_SHAPES[0]}"
-        run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
-            "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
-            --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" --tiles "$tile_count" \
-            "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+        if [[ "${TT_METAL_EMULE_MODE:-}" == "1" ]]; then
+            run_output=$("$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+                --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" --tiles "$tile_count" \
+                "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+        else
+            run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
+                "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+                --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" --tiles "$tile_count" \
+                "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+        fi
     fi
     run_exit=$?
     set -e

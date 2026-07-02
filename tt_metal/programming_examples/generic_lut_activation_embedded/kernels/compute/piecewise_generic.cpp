@@ -1250,6 +1250,10 @@ inline vFloat asymptotic_exp(vFloat arg) {
 
 #endif  // ASYMPTOTIC_FACTOR_EXP_*
 
+inline vFloat sfpu_mad(vFloat a, vFloat b, vFloat c) {
+    return __builtin_rvtt_sfpmad(a.get(), b.get(), c.get(), SFPMAD_MOD1_OFFSET_NONE);
+}
+
 // Generic polynomial evaluation using Horner's method with compile-time optimization
 template <uint32_t DEGREE>
 inline vFloat eval_polynomial(const float* coeffs, vFloat x) {
@@ -1258,203 +1262,203 @@ inline vFloat eval_polynomial(const float* coeffs, vFloat x) {
         return coeffs[0];
     } else if constexpr (DEGREE == 1) {
         // Linear: y = c0 + c1*x
-        return coeffs[0] + coeffs[1] * x;
+        return sfpu_mad(coeffs[1], x, coeffs[0]);
     } else if constexpr (DEGREE == 2) {
         // Quadratic: y = c0 + c1*x + c2*x²
         // Horner: (c2*x + c1)*x + c0
-        return (coeffs[2] * x + coeffs[1]) * x + coeffs[0];
+        return sfpu_mad(sfpu_mad(coeffs[2], x, coeffs[1]), x, coeffs[0]);
     } else if constexpr (DEGREE == 3) {
         // Cubic: y = c0 + c1*x + c2*x² + c3*x³
         // Horner: ((c3*x + c2)*x + c1)*x + c0
-        return ((coeffs[3] * x + coeffs[2]) * x + coeffs[1]) * x + coeffs[0];
+        return sfpu_mad(sfpu_mad(sfpu_mad(coeffs[3], x, coeffs[2]), x, coeffs[1]), x, coeffs[0]);
     } else if constexpr (DEGREE == 4) {
         // Quartic: y = c0 + c1*x + c2*x² + c3*x³ + c4*x⁴
         // Horner: ((((c4*x + c3)*x + c2)*x + c1)*x + c0
         vFloat result = coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 5) {
         // Quintic: y = c0 + ... + c5*x⁵
         vFloat result = coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 6) {
         // Hexic: y = c0 + ... + c6*x⁶
         vFloat result = coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 7) {
         // Septic: y = c0 + ... + c7*x⁷
         vFloat result = coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 8) {
         // Octic: y = c0 + ... + c8*x⁸
         vFloat result = coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 9) {
         // Nonic: y = c0 + ... + c9*x⁹
         vFloat result = coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 10) {
         // Decic: y = c0 + ... + c10*x¹⁰
         vFloat result = coeffs[10];
-        result = result * x + coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[9]);
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 11) {
         // Undecic: y = c0 + ... + c11*x¹¹
         vFloat result = coeffs[11];
-        result = result * x + coeffs[10];
-        result = result * x + coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[10]);
+        result = sfpu_mad(result, x, coeffs[9]);
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 12) {
         // Dodecic: y = c0 + ... + c12*x¹²
         vFloat result = coeffs[12];
-        result = result * x + coeffs[11];
-        result = result * x + coeffs[10];
-        result = result * x + coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[11]);
+        result = sfpu_mad(result, x, coeffs[10]);
+        result = sfpu_mad(result, x, coeffs[9]);
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 13) {
         // Tridecic: y = c0 + ... + c13*x¹³
         vFloat result = coeffs[13];
-        result = result * x + coeffs[12];
-        result = result * x + coeffs[11];
-        result = result * x + coeffs[10];
-        result = result * x + coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[12]);
+        result = sfpu_mad(result, x, coeffs[11]);
+        result = sfpu_mad(result, x, coeffs[10]);
+        result = sfpu_mad(result, x, coeffs[9]);
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 14) {
         // Tetradecic: y = c0 + ... + c14*x¹⁴
         vFloat result = coeffs[14];
-        result = result * x + coeffs[13];
-        result = result * x + coeffs[12];
-        result = result * x + coeffs[11];
-        result = result * x + coeffs[10];
-        result = result * x + coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[13]);
+        result = sfpu_mad(result, x, coeffs[12]);
+        result = sfpu_mad(result, x, coeffs[11]);
+        result = sfpu_mad(result, x, coeffs[10]);
+        result = sfpu_mad(result, x, coeffs[9]);
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 15) {
         // Pentadecic: y = c0 + ... + c15*x¹⁵
         vFloat result = coeffs[15];
-        result = result * x + coeffs[14];
-        result = result * x + coeffs[13];
-        result = result * x + coeffs[12];
-        result = result * x + coeffs[11];
-        result = result * x + coeffs[10];
-        result = result * x + coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[14]);
+        result = sfpu_mad(result, x, coeffs[13]);
+        result = sfpu_mad(result, x, coeffs[12]);
+        result = sfpu_mad(result, x, coeffs[11]);
+        result = sfpu_mad(result, x, coeffs[10]);
+        result = sfpu_mad(result, x, coeffs[9]);
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 16) {
         // Hexadecic: y = c0 + ... + c16*x¹⁶
         vFloat result = coeffs[16];
-        result = result * x + coeffs[15];
-        result = result * x + coeffs[14];
-        result = result * x + coeffs[13];
-        result = result * x + coeffs[12];
-        result = result * x + coeffs[11];
-        result = result * x + coeffs[10];
-        result = result * x + coeffs[9];
-        result = result * x + coeffs[8];
-        result = result * x + coeffs[7];
-        result = result * x + coeffs[6];
-        result = result * x + coeffs[5];
-        result = result * x + coeffs[4];
-        result = result * x + coeffs[3];
-        result = result * x + coeffs[2];
-        result = result * x + coeffs[1];
-        result = result * x + coeffs[0];
+        result = sfpu_mad(result, x, coeffs[15]);
+        result = sfpu_mad(result, x, coeffs[14]);
+        result = sfpu_mad(result, x, coeffs[13]);
+        result = sfpu_mad(result, x, coeffs[12]);
+        result = sfpu_mad(result, x, coeffs[11]);
+        result = sfpu_mad(result, x, coeffs[10]);
+        result = sfpu_mad(result, x, coeffs[9]);
+        result = sfpu_mad(result, x, coeffs[8]);
+        result = sfpu_mad(result, x, coeffs[7]);
+        result = sfpu_mad(result, x, coeffs[6]);
+        result = sfpu_mad(result, x, coeffs[5]);
+        result = sfpu_mad(result, x, coeffs[4]);
+        result = sfpu_mad(result, x, coeffs[3]);
+        result = sfpu_mad(result, x, coeffs[2]);
+        result = sfpu_mad(result, x, coeffs[1]);
+        result = sfpu_mad(result, x, coeffs[0]);
         return result;
     } else if constexpr (DEGREE == 32) {
         // Duotrigesic: y = c0 + ... + c32*x³²
         vFloat result = coeffs[32];
         for (int i = 31; i >= 0; i--) {
-            result = result * x + coeffs[i];
+            result = sfpu_mad(result, x, coeffs[i]);
         }
         return result;
     }
@@ -2406,7 +2410,8 @@ inline void piecewise_generic_lut(const std::array<float, LUT_SIZE>& lut) {
 #endif
 
 #if defined(BASIS_AFFINE_EVEN)
-        result = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig + (BASIS_AFFINE_EVEN_SCALE * x_eval) * result;
+        result =
+            sfpu_mad(BASIS_AFFINE_EVEN_SCALE * x_eval, result, sfpu_mad(BASIS_AFFINE_SCALE, x_orig, BASIS_AFFINE_BIAS));
 #endif
 
 #if defined(BASIS_CLAMP_MAX)
@@ -2596,8 +2601,10 @@ inline void piecewise_generic_lut_dual(const std::array<float, LUT_SIZE>& lut) {
 #endif
 
 #if defined(BASIS_AFFINE_EVEN)
-        result1 = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig1 + (BASIS_AFFINE_EVEN_SCALE * x1) * result1;
-        result2 = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig2 + (BASIS_AFFINE_EVEN_SCALE * x2) * result2;
+        result1 =
+            sfpu_mad(BASIS_AFFINE_EVEN_SCALE * x1, result1, sfpu_mad(BASIS_AFFINE_SCALE, x_orig1, BASIS_AFFINE_BIAS));
+        result2 =
+            sfpu_mad(BASIS_AFFINE_EVEN_SCALE * x2, result2, sfpu_mad(BASIS_AFFINE_SCALE, x_orig2, BASIS_AFFINE_BIAS));
 #endif
 
 #if defined(BASIS_CLAMP_MAX)
