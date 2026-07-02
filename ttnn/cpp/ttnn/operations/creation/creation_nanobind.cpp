@@ -22,6 +22,7 @@
 #include "ttnn-nanobind/types.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <ttnn/distributed/distributed_tensor.hpp>
 
 namespace ttnn::operations::creation {
 namespace {
@@ -414,8 +415,19 @@ Tensor empty_impl(
     const DataType& dtype,
     const Layout& layout,
     MeshDevice* device,
-    const MemoryConfig& memory_config) {
-    return ttnn::empty(ttnn::Shape{shape}, dtype, layout, device, memory_config);
+    const MemoryConfig& memory_config,
+    const nb::object& mesh_mapper) {
+    std::optional<tt::tt_metal::distributed::MeshMapperConfig> config = std::nullopt;
+    if (!mesh_mapper.is_none()) {
+        // Handle ReplicateTensorToMeshWrapper by calling .unwrap()
+        nb::object mapper_obj = mesh_mapper;
+        if (nb::hasattr(mesh_mapper, "unwrap")) {
+            mapper_obj = mesh_mapper.attr("unwrap")();
+        }
+        auto* mapper = nb::cast<ttnn::distributed::TensorToMesh*>(mapper_obj);
+        config = mapper->config();
+    }
+    return ttnn::empty(ttnn::Shape{shape}, dtype, layout, device, memory_config, config);
 }
 
 // Helper function to bind empty operation
@@ -429,6 +441,9 @@ void bind_empty(nb::module_& mod) {
             layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR`.
             device (ttnn.Device | ttnn.MeshDevice): The device where the tensor will be allocated.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+            mesh_mapper (ttnn.TensorToMesh, optional): The mesh mapper for distributing the tensor across devices.
+                Use ``ttnn.ReplicateTensorToMesh(mesh_device)`` to replicate, or
+                ``ttnn.ShardTensorToMesh(mesh_device, dims)`` to shard. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: The output uninitialized tensor.
@@ -453,7 +468,8 @@ void bind_empty(nb::module_& mod) {
         nb::arg("dtype") = DataType::BFLOAT16,
         nb::arg("layout") = Layout::ROW_MAJOR,
         nb::arg("device"),
-        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG);
+        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
+        nb::arg("mesh_mapper") = nb::none());
 }
 
 Tensor empty_like_impl(
