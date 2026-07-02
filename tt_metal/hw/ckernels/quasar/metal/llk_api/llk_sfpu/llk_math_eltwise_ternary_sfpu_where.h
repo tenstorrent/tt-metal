@@ -26,7 +26,7 @@ inline void llk_math_eltwise_ternary_sfpu_where_init() {
 /**
  * @brief Executes a ternary per-lane where select over DEST tiles.
  *
- * Dispatches @c _calculate_where_ face-by-face via the ternary params wrapper.
+ * Dispatches @c _calculate_where_ face-by-face via @c SFPU_TERNARY_CALL.
  * Per-lane result: @c out = (cond != 0) ? true_val : false_val.
  *
  * @tparam APPROXIMATE   Unused for where; kept for API parity with other SFPU ops.

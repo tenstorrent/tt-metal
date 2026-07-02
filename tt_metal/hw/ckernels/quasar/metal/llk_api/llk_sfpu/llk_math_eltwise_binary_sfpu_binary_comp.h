@@ -6,9 +6,7 @@
 
 #ifdef ARCH_QUASAR
 
-#include "llk_math_eltwise_binary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_assert.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h"
 
 namespace ckernel {
@@ -46,18 +44,17 @@ template <
 inline void llk_math_eltwise_binary_sfpu_gt_int(
     std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU gt_int currently supports Int32 only");
-    LLK_ASSERT(
-        vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
-            vector_mode == VectorMode::None,
-        "Quasar SFPU gt_int only supports vector modes R, C, RC, None");
 
     constexpr std::uint32_t tile_stride = NUM_FACES * FACE_R_DIM;
     const std::uint32_t in0_offset = idst0 * tile_stride;
     const std::uint32_t in1_offset = idst1 * tile_stride;
     const std::uint32_t out_offset = odst * tile_stride;
 
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, ITERATIONS, SfpuType::gt, SIGN_MAGNITUDE_FORMAT>,
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_comp_int32,
+        (APPROXIMATE, ITERATIONS, SfpuType::gt, SIGN_MAGNITUDE_FORMAT),
         in0_offset,
         in1_offset,
         out_offset,

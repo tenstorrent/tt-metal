@@ -14,7 +14,7 @@
 /*
  * Quasar keeps the same macro surface as BH/WH. DST_SYNC and DST_ACCUM are
  * unused until Quasar has an equivalent of get_dest_max_tiles<...>. Binary
- * macro calls are limited to VectorMode::RC for now.
+ * macro calls support vector modes R, C, RC, and None (RC_custom is unary-only).
  */
 
 namespace ckernel {
@@ -25,7 +25,10 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
     [[maybe_unused]] std::uint32_t dst_index_in1,
     [[maybe_unused]] std::uint32_t dst_index_out,
     VectorMode vector_mode) {
-    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
+    LLK_ASSERT(
+        vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
+            vector_mode == VectorMode::None,
+        "Quasar SFPU binary supports vector modes R, C, RC, None");
 }
 
 }  // namespace ckernel

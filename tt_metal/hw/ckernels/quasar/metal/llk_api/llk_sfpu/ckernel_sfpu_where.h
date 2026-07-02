@@ -41,7 +41,7 @@ namespace sfpu {
  * @tparam ITERATIONS         Inner SFPU row-pair count per face. Defaults
  *         to 8 for the standard 16-row face. The outer per-face loop and
  *         section base setup are owned by
- *         @c _llk_math_eltwise_ternary_sfpu_params_.
+ *         @c SFPU_TERNARY_CALL.
  *
  * @param dst_index_in0 DEST tile index holding the condition operand.
  * @param dst_index_in1 DEST tile index holding the true-branch operand.
