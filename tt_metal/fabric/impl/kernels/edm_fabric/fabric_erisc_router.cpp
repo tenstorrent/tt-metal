@@ -2792,15 +2792,24 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 // record_receiver_flow_state appends only when the state differs from the last recorded row,
                 // so identical polling passes collapse. Gated on the combine window so it costs nothing (and
                 // captures nothing) outside the monitored region. `ready` is the doorbell stream register.
-                if (combine_window_active) {
-                    record_receiver_flow_state(
-                        receiver_log_iter,
-                        static_cast<uint32_t>(get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
-                        receiver_channel_pointers_ch0.ack_counter.counter,
-                        receiver_channel_pointers_ch0.wr_sent_counter.counter,
-                        receiver_channel_pointers_ch0.wr_flush_counter.counter,
-                        receiver_channel_pointers_ch0.completion_counter.counter);
+                // The `if constexpr` restricts all log activity to the RISC that actually services the VC0
+                // receiver channel (the receiver eRisc). The log buffer address is shared across both eRiscs
+                // on the core, so without this gate the sender eRisc would interleave its own (idle) records
+                // and race on the shared append index -- see the reset/dump gates below for the same reason.
+                if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
+                    if (combine_window_active) {
+                        record_receiver_flow_state(
+                            receiver_log_iter,
+                            static_cast<uint32_t>(
+                                get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
+                            receiver_channel_pointers_ch0.ack_counter.counter,
+                            receiver_channel_pointers_ch0.wr_sent_counter.counter,
+                            receiver_channel_pointers_ch0.wr_flush_counter.counter,
+                            receiver_channel_pointers_ch0.completion_counter.counter);
+                    }
                 }
+                // Advance unconditionally (cheap, and keeps the counter referenced on the sender eRisc where
+                // the recording above is compiled out) so iter still tracks the true main-loop pass index.
                 receiver_log_iter++;
             }
 
@@ -2857,7 +2866,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         // [debug] Reset the receiver flow-control trace for the new window, priming the
                         // last-state sentinel so the first observed state is recorded. Uses the same
                         // wall-clock window start so the first record's ts_delta is time-since-window-open.
-                        reset_receiver_log(d->window_start_cycles);
+                        // Gated to the receiver eRisc: the buffer is shared across eRiscs, so letting the
+                        // sender eRisc reset here would zero the receiver's buffer mid-window.
+                        if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
+                            reset_receiver_log(d->window_start_cycles);
+                        }
                         combine_window_active = true;
                     } else {
                         // END event: close the window, print the loop-level deltas, then one line per
@@ -2895,9 +2908,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         // for the duration of the prints, which is fine: the monitored window has just closed.
                         // Columns: iter=loop pass, dt=cycles since prev record, rdy=doorbell, ack/wsent/wflush/
                         // cmpl=the four ChannelCounter values. n=records captured, drop=records lost after fill.
-                        {
+                        if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
                             volatile ReceiverLog* rlog = receiver_log();
-                            DEVICE_PRINT("[rxlog] n={} drop={}\n", rlog->count, rlog->dropped);
+                            // slots = the VC0 receiver channel's buffer-slot count (RECEIVER_NUM_BUFFERS),
+                            // logged once per dump so free-slot math (num_slots - rdy - (ack - cmpl)) has a
+                            // concrete denominator without needing the build config.
+                            DEVICE_PRINT(
+                                "[rxlog] n={} drop={} slots={}\n",
+                                rlog->count,
+                                rlog->dropped,
+                                static_cast<uint32_t>(RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]));
                             for (uint32_t r = 0; r < rlog->count; r++) {
                                 volatile ReceiverLogRecord* rec = &rlog->records[r];
                                 DEVICE_PRINT(
