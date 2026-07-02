@@ -29,6 +29,9 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+GPT_OSS_SHARED_EXPERT_EMB_DIM = 2880
+GPT_OSS_SHARED_EXPERT_HIDDEN_DIM = 2880
+
 
 def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Blackhole."""
@@ -434,6 +437,9 @@ class TtSharedExpert(LightweightModule):
 
         gate_n_tiles = self.gate_proj.padded_shape[-1] // TILE
         down_n_tiles = self.down_proj.padded_shape[-1] // TILE
+        use_default_matmul = (
+            self.emb_dim == GPT_OSS_SHARED_EXPERT_EMB_DIM and self.hidden_dim == GPT_OSS_SHARED_EXPERT_HIDDEN_DIM
+        )
         if is_blackhole():
             gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
                 per_core_M, gate_n_tiles, down_n_tiles
@@ -444,20 +450,19 @@ class TtSharedExpert(LightweightModule):
             )
 
         # 1) Compute gate and up projections
-        gate_out = ttnn.matmul(
-            x,
-            self.gate_proj,
-            program_config=gate_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            sub_device_id=self.subdevice_id,
-        )
-        up_out = ttnn.matmul(
-            x,
-            self.up_proj,
-            program_config=up_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            sub_device_id=self.subdevice_id,
-        )
+        gate_matmul_kwargs = {
+            "program_config": None if use_default_matmul else gate_program_config,
+            "compute_kernel_config": self.compute_kernel_config,
+            "sub_device_id": self.subdevice_id,
+        }
+        up_matmul_kwargs = {
+            "program_config": None if use_default_matmul else up_program_config,
+            "compute_kernel_config": self.compute_kernel_config,
+            "sub_device_id": self.subdevice_id,
+        }
+
+        gate_out = ttnn.matmul(x, self.gate_proj, **gate_matmul_kwargs)
+        up_out = ttnn.matmul(x, self.up_proj, **up_matmul_kwargs)
 
         # 2) Multiply gate and up projection
         ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
