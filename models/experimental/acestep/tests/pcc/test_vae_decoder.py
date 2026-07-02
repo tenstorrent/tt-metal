@@ -20,25 +20,7 @@ from models.experimental.acestep.tt.vae_decoder import OobleckDecoder, OobleckVA
 from models.experimental.acestep.tests.test_utils import require_single_device
 
 
-def _effective_decoder_state(ref_decoder) -> dict:
-    """Build a state dict of EFFECTIVE (weight-norm folded) weights matching the TT module tree.
-
-    diffusers stores weight_norm as weight_g/weight_v; `.weight` yields g*v/||v||. We read the
-    effective `.weight`/`.bias`/`alpha`/`beta` under the same child names the TT modules expect.
-    """
-    import torch.nn as nn
-    from diffusers.models.autoencoders.autoencoder_oobleck import Snake1d
-
-    state = {}
-    for name, mod in ref_decoder.named_modules():
-        if isinstance(mod, (nn.Conv1d, nn.ConvTranspose1d)):
-            state[f"{name}.weight"] = mod.weight.detach()
-            if mod.bias is not None:
-                state[f"{name}.bias"] = mod.bias.detach()
-        elif isinstance(mod, Snake1d):
-            state[f"{name}.alpha"] = mod.alpha.detach().reshape(-1)
-            state[f"{name}.beta"] = mod.beta.detach().reshape(-1)
-    return state
+from models.experimental.acestep.tt.model_config import _effective_vae_decoder_state
 
 
 # Latent lengths (25 Hz frames): 40 -> ~1.6s, 120 -> ~4.8s audio.
@@ -62,7 +44,7 @@ def test_vae_decoder(device, t_latent):
         ref_wav = ref_decoder(latents)  # [B, 2, T*1920]
 
     dec = OobleckDecoder(cfg, mesh_device=device, dtype=ttnn.float32)
-    dec.load_torch_state_dict(_effective_decoder_state(ref_decoder))
+    dec.load_torch_state_dict(_effective_vae_decoder_state(ref_decoder))
 
     lat_btc = latents.transpose(1, 2).contiguous()  # [B, T, 64]
     lat_tt = ttnn.from_torch(lat_btc, device=device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Model-level evaluation: AceStepModelConfig + create_tt_model over an eval dataset.
+"""Model-level evaluation: AceStepModelConfig + create_tt_pipeline over an eval dataset.
 
 Unlike the per-module PCC tests, this exercises the public factory contract:
 
     args  = AceStepModelConfig.from_hf(...)
-    model = create_tt_model(args, device)
+    model = create_tt_pipeline(args, device, with_vae=False).dit
     out   = model.forward(...)
 
 against the genuine HF AceStepDiTModel, over a small evaluation dataset of denoise-step inputs
@@ -22,7 +22,8 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
 
 from models.experimental.acestep.reference.hf_reference import load_config, load_modeling_module
 from models.experimental.acestep.reference.weight_utils import checkpoint_path, load_module_weights
-from models.experimental.acestep.tt.model_config import AceStepModelConfig, create_tt_model
+from models.experimental.acestep.tt.model_config import AceStepModelConfig
+from models.experimental.acestep.tt.pipeline import create_tt_pipeline
 from models.common.utility_functions import comp_pcc
 from models.experimental.acestep.tests.test_utils import (
     HEAD_DIM,
@@ -62,7 +63,7 @@ def test_model_eval_dataset(device):
 
     # Public factory contract.
     args = AceStepModelConfig.from_hf(num_hidden_layers=NUM_DIT_LAYERS)
-    model = create_tt_model(args, device)
+    model = create_tt_pipeline(args, device, with_vae=False).dit
 
     # Reference DiT with the same real weights.
     m = load_modeling_module()

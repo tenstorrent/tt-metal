@@ -4,13 +4,13 @@
 
 Canonical flow (mirrors Phi-4 `from_pretrained` and BGE-M3 `ModelArgs.load_model`):
 
-    args  = AceStepModelConfig.from_hf(mesh_device)      # dims from HF config
-    model = create_tt_model(args, mesh_device)           # builds full TT DiT from real weights
+    args     = AceStepModelConfig.from_hf(mesh_device)         # dims from HF config
+    pipeline = create_tt_pipeline(args, mesh_device)           # DiT + VAE, full text-to-music path
 
-`create_tt_model` returns an `AceStepDiTModel` (the flow-matching denoiser — the core generative
-compute) wired from the genuine checkpoint. It reuses the validated per-module configs and the
-`reference/weight_utils` loader. Encoders (lyric/timbre/text) are exposed via `build_condition_encoder`
-for the full pipeline.
+`create_tt_pipeline` (in tt/pipeline.py) is the single public entry point. It assembles the
+DiT denoiser (via the internal `_build_dit_model` here) plus the Oobleck VAE decoder. The DiT
+builder reuses the validated per-module configs and the `reference/weight_utils` loader; encoders
+(lyric/timbre/text) are exposed via `build_condition_encoder` for the full pipeline.
 
 Weights always load from the genuine `model.safetensors` checkpoint (no dummy-weight path).
 """
@@ -267,11 +267,12 @@ def _lyric_encoder_config(enc, args, device) -> AceStepLyricEncoderConfig:
 # =============================================================================
 
 
-def create_tt_model(args: AceStepModelConfig, mesh_device) -> AceStepDiTModel:
+def _build_dit_model(args: AceStepModelConfig, mesh_device) -> AceStepDiTModel:
     """Build the TT AceStepDiTModel (flow-matching denoiser) from the checkpoint.
 
-    Returns an AceStepDiTModel ready for forward(hidden, context_latents, t, t_r, cos, sin,
-    encoder_hidden_states, sliding_mask). Weights load lazily on first forward.
+    Internal DiT builder for `create_tt_pipeline`. Returns an AceStepDiTModel ready for
+    forward(hidden, context_latents, t, t_r, cos, sin, encoder_hidden_states, sliding_mask).
+    Weights load lazily on first forward.
     """
     m, dit = _load_reference_dit(args)
     device = mesh_device
@@ -333,3 +334,57 @@ def build_condition_encoder(args: AceStepModelConfig, mesh_device) -> AceStepCon
             timbre_encoder=_lyric_encoder_config(ce.timbre_encoder, args, device),
         )
     )
+
+
+def build_vae_decoder(mesh_device, *, dtype=None):
+    """Build the TT Oobleck VAE decoder (latents -> 48kHz waveform) from the genuine checkpoint.
+
+    Reuses the TTTv2-primitive OobleckDecoder and loads the diffusers AutoencoderOobleck weights
+    (effective weight-norm-folded weights). fp32 audio path (matches vocoder_ltx).
+    """
+    import ttnn as _ttnn
+    from diffusers import AutoencoderOobleck
+    from models.experimental.acestep.reference.weight_utils import vae_dir
+    from models.experimental.acestep.tt.vae_decoder import OobleckDecoder, OobleckVAEConfig
+
+    dtype = dtype or _ttnn.float32
+    vae = AutoencoderOobleck.from_pretrained(vae_dir()).eval()
+    cfg = OobleckVAEConfig.from_diffusers(vae.config)
+    dec = OobleckDecoder(cfg, mesh_device=mesh_device, dtype=dtype)
+    dec.load_torch_state_dict(_effective_vae_decoder_state(vae.decoder))
+    return dec, cfg
+
+
+def _fold_weight_norm(ref_decoder) -> None:
+    """Materialize + strip weight_norm on every conv, in-place (standard torch API).
+
+    diffusers stores weight_norm as `weight_g`/`weight_v` and computes `.weight` lazily via a
+    parametrization — so `.weight` is a META tensor until the first forward. tt_dit's conv modules
+    expect a plain `weight`, so we fold weight_norm the idiomatic way (`remove_weight_norm`), which
+    materializes `.weight` to a real tensor and removes the g/v buffers. Same approach the tt_dit
+    LTX vocoder path assumes (its diffusers weights arrive already weight-norm-free).
+    """
+    import torch.nn as _nn
+    from torch.nn.utils import remove_weight_norm
+
+    for mod in ref_decoder.modules():
+        if isinstance(mod, (_nn.Conv1d, _nn.ConvTranspose1d)) and hasattr(mod, "weight_g"):
+            remove_weight_norm(mod)
+
+
+def _effective_vae_decoder_state(ref_decoder) -> dict:
+    """State dict of EFFECTIVE (weight-norm folded) VAE decoder weights, keyed to the TT tree."""
+    import torch.nn as _nn
+    from diffusers.models.autoencoders.autoencoder_oobleck import Snake1d as _Snake1d
+
+    _fold_weight_norm(ref_decoder)
+    state: dict = {}
+    for name, mod in ref_decoder.named_modules():
+        if isinstance(mod, (_nn.Conv1d, _nn.ConvTranspose1d)):
+            state[f"{name}.weight"] = mod.weight.detach()
+            if mod.bias is not None:
+                state[f"{name}.bias"] = mod.bias.detach()
+        elif isinstance(mod, _Snake1d):
+            state[f"{name}.alpha"] = mod.alpha.detach().reshape(-1)
+            state[f"{name}.beta"] = mod.beta.detach().reshape(-1)
+    return state
