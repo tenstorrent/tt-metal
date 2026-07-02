@@ -202,6 +202,39 @@ def pad_tensor_with_warning(tt_input_tensor, torch_input_tensor, parallel_config
     return tt_input_tensor, logical_h, logical_w
 
 
+def convert_to_torch_channels_first(tt_tensor, h_axis, w_axis, mesh_device, is_channels_last, logical_h):
+    concat_dims = [None, None]
+
+    if is_channels_last:  # BTHWC
+        h_idx = 2
+        w_idx = 3
+    else:  # BCTHW
+        h_idx = 3
+        w_idx = 4
+
+    concat_dims[h_axis] = h_idx
+    concat_dims[w_axis] = w_idx
+
+    tt_output_torch = ttnn.to_torch(
+        tt_tensor,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    )
+
+    # These checks/unpadding manipulations are only relevant for outputs of the conv3d componennts,
+    # in other worsds one should think of channels last == output from conv3ds.
+    if is_channels_last:
+        if logical_h != tt_output_torch.shape[h_idx]:
+            logger.info(f"Checking that output padded portion is zeros")
+            padding = tt_output_torch[:, :, logical_h:, :, :]
+            if not torch.all(padding == 0.0):
+                logger.warning(f"Padding is not zero, but {padding}")
+
+        tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
+        tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
+
+    return tt_output_torch
+
+
 def test_autoencoder_kl_wan():
     """
     Test to construct a pretrained AutoencoderKLWan for wan2.2 14B t2v model and print it.
@@ -436,6 +469,14 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
     else:
         logger.warning("Computing reference results from scratch (wan_attention).")
         torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+        with torch.no_grad():
+            torch_output = torch_model(torch_input_tensor)
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_attention",
+            param_id,
+            {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
+        )
 
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
@@ -449,33 +490,14 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
         shard_mapping={h_axis: 2, w_axis: 3},
         dtype=tt_input_dtype,
     )
+
     tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
-
-    if golden is None:
-        with torch.no_grad():
-            torch_output = torch_model(torch_input_tensor)
-        save_golden(
-            VAE_COMMIT_HASH_PLACEHOLDER,
-            "wan_attention",
-            param_id,
-            {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
-        )
-
     tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
-
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    tt_output_torch = convert_to_torch_channels_first(
+        tt_output, h_axis, w_axis, mesh_device, is_channels_last=True, logical_h=logical_h
     )
-
-    tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
-    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-
     assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
 
 
@@ -632,21 +654,9 @@ def test_wan_conv3d(
         save_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_conv3d", param_id, golden_data)
 
     tt_output = tt_model(tt_input_tensor, cache_x_BTHWC=tt_cache_tensor, logical_h=logical_h)
-
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    tt_output_torch = convert_to_torch_channels_first(
+        tt_output, h_axis, w_axis, mesh_device, is_channels_last=True, logical_h=logical_h
     )
-    if logical_h != tt_output_torch.shape[2]:
-        logger.info(f"Checking that output padded portion is zeros")
-        padding = tt_output_torch[:, :, logical_h:, :, :]
-        assert torch.all(padding == 0.0), f"Padding must be zero, got {padding}"
-
-    tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
-    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
     if tt_output_torch.shape != torch_output.shape:
         logger.warning(
@@ -654,7 +664,6 @@ def test_wan_conv3d(
         )
         tt_output_torch = tt_output_torch[:, :C_out]
         logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-
     assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
 
 
