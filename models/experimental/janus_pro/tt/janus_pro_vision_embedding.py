@@ -38,8 +38,8 @@ class TtJanusProVisionEmbeddings(LightweightModule):
 
         self.num_patches = (self.image_size // self.patch_size) ** 2
         self.num_positions = self.num_patches
-        self.position_ids = ttnn.arange(0, self.num_positions, 1, dtype=ttnn.uint32, device=self.mesh_device)
-        self.position_ids = ttnn.reshape(self.position_ids, (1, -1))
+        position_ids = ttnn.arange(0, self.num_positions, 1, dtype=ttnn.uint32, device=self.mesh_device)
+        position_ids = ttnn.reshape(position_ids, (1, -1))
 
         self.patch_embed = TtJanusProConv2dPatch(
             mesh_device=mesh_device,
@@ -65,6 +65,9 @@ class TtJanusProVisionEmbeddings(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # position_ids is a fixed arange, so the embedding lookup is constant — precompute it once.
+        self.positional_embeddings = ttnn.embedding(position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
+
     def forward(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         """
         Args:
@@ -75,6 +78,5 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         patch_embeddings = self.patch_embed(pixel_values)  # Returns [1, B, num_patches, hidden_dim]
         batch_size = patch_embeddings.shape[1]
         patch_embeddings = ttnn.reshape(patch_embeddings, (batch_size, -1, self.hidden_dim))
-        positional_embeddings = ttnn.embedding(self.position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
-        embeddings = ttnn.add(patch_embeddings, positional_embeddings)
+        embeddings = ttnn.add(patch_embeddings, self.positional_embeddings)
         return embeddings
