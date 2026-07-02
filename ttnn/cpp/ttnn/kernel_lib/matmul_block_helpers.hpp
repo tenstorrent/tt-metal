@@ -15,19 +15,35 @@
 namespace compute_kernel_lib {
 
 /**
- * Support matrix (every cell supported, no caveats):
- *   tile_order {SubblockMajor, TileRowMajor}
- *     × packer_l1_acc {on, off}
- *     × last_block_target {Out, OutWithRelu, Interm}
- * OutWithUntilize is SubblockMajor-only (route TileRowMajor untilize through
- * Interm + reblock_and_untilize). The default path is FIFO spill/reload: the helper
- * reserves/pushes/pops the pack target in one-block increments per K-block.
+ * matmul_block — ACCUMULATE the output block, then FINALIZE only if needed.
  *
- * The (TileRowMajor + packer_l1_acc + Interm) config packs in place instead: the helper does
- * ONE reserve_back over the whole output block before the K-loop and ONE push_back after
- * (internally, per batch), skipping the per-K-block reserve/push/drain. Each K-block packs to
- * absolute offsets in that fixed region and packer_l1_acc accumulates in place. Callers pass no
- * flag for this — the helper selects it from (TileRowMajor + packer_l1_acc + Interm).
+ * Support matrix (every cell supported, no caveats):
+ *   tile_order {SubblockMajor, TileRowMajor} × packer_l1_acc {on, off}
+ *     × last_block_target {Out, OutWithRelu, Interm}
+ * OutWithUntilize is SubblockMajor-only — a fused fast-path; route TileRowMajor or
+ * multi-subblock-wide untilize through Interm + a downstream reblock_and_untilize phase.
+ *
+ * ── Phase 1: ACCUMULATE the whole output block ──────────────────────────────
+ *   packer_l1_acc ON  → in place: ONE reserve_back over the whole block before the K-loop and
+ *     ONE push_back after (internal, per batch) — no per-K-block reserve/push/drain. Each K-block
+ *     packs to absolute offsets in that fixed region and packer_l1_acc adds in place. Layout-
+ *     agnostic: TileRowMajor row-strided, SubblockMajor contiguous. Lands in interm (l1_acc format).
+ *   packer_l1_acc OFF → FIFO spill + software reload: per-K-block reserve/push/pop, last block
+ *     reloads the accumulated partials into DST.
+ *
+ * ── Phase 2: FINALIZE — runs only when the accumulated block isn't already the output ──
+ *   Interm target                     → a downstream in-kernel op consumes interm → NO finalize.
+ *   Out / OutWithRelu, packer_l1_acc  → materialize interm→out: copy + dtype-convert + relu
+ *     (OutWithRelu) + Activation. ZERO-COPY SKIP when interm is aliased onto out (same CB → already
+ *     the correct dtype / layout / tile).
+ *   Out / OutWithRelu, non-l1_acc     → the software-reload last block is the finished sum in DST,
+ *     so it packs STRAIGHT TO OUT (relu / Activation applied on that pack) → NO finalize.
+ *   OutWithUntilize                   → fused pack_untilize straight to out in the K-loop.
+ *
+ * Callers pass NO path-selection flag — the helper derives the path from packer_l1_acc +
+ * last_block_target + tile_order + whether interm aliases out. Every restriction is legible from
+ * these: e.g. non-l1_acc Out goes straight to out because there is no in-place block to finalize;
+ * a lower-precision or row-major output needs the finalize because accumulation is fp32/fp16_b tile.
  */
 
 /**
@@ -50,15 +66,18 @@ enum class OutputCBLayout { SubblockMajor, TileRowMajor };
 /**
  * Where the last K-block packs and its post-op (compile-time).
  *
- * Out              (default) pack to out_buf, no relu.
- * OutWithRelu      pack to out_buf with PACK_RELU.
- * Interm           pack to interm_buf for a downstream phase (bias add / untilize);
- *                  any relu lives in that phase, not the matmul.
- * OutWithUntilize  pack through pack_untilize_dest (tile-format DST -> row-major bytes),
- *                  bracketed by pack_untilize_dest_init / pack_untilize_uninit. Requires
- *                  tile_order == SubblockMajor and untilize_block_ct_dim > 0 (= the
- *                  per-call out_subblock_num_tiles). For TileRowMajor untilize, route
- *                  through Interm + reblock_and_untilize.
+ * Out              (default) materialize out from the accumulated block (finalize copy when
+ *                  packer_l1_acc + interm not aliased onto out; else straight-to-out / zero-copy).
+ * OutWithRelu      same as Out, plus PACK_RELU applied to the FULLY-ACCUMULATED block — at the
+ *                  finalize (packer_l1_acc) or on the straight-to-out last pack (non-l1_acc). Never
+ *                  per-partial (a per-partial relu under packer_l1_acc would relu before the sum).
+ * Interm           pack to interm_buf for a downstream phase (bias add / untilize); any relu /
+ *                  activation lives in that phase, not the matmul.
+ * OutWithUntilize  fused pack_untilize_dest (tile-format DST -> row-major bytes) straight to out in
+ *                  the K-loop, bracketed by pack_untilize_dest_init / pack_untilize_uninit. Requires
+ *                  tile_order == SubblockMajor and untilize_block_ct_dim > 0 (= the per-call
+ *                  out_subblock_num_tiles). For TileRowMajor / multi-subblock-wide untilize, route
+ *                  through Interm + a downstream reblock_and_untilize phase.
  */
 enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm, OutWithUntilize };
 
