@@ -19,6 +19,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
     make_generation_logits_fn_builder_from_remapped_state,
     read_prompt_kv_cache_by_layer,
+    read_prompt_kv_cache_slice,
 )
 
 
@@ -265,6 +266,39 @@ def test_chunked_norm_forward_uses_sharded_scaleless_norm(monkeypatch):
     assert calls == [([1, 1, 96, 2816], 1e-6, 32)]
 
 
+def test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources(monkeypatch):
+    calls = []
+    prompt_kv = (_FakeTensor([1, 1, 32, 16]), _FakeTensor([1, 1, 32, 16]))
+    canvas = _FakeTensor([1, 1, 256, 16])
+    layer_hidden = _FakeTensor([1, 1, 256, 16])
+    final_hidden = _FakeTensor([1, 1, 256, 16])
+    model = _FakeModel(num_layers=1)
+    model.norm = SimpleNamespace()
+
+    def prompt_source(layer_idx):
+        calls.append(("read", layer_idx))
+        return prompt_kv
+
+    def fake_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
+        calls.append(("layer", layer_idx, prompt_source, q_rope_offset))
+        return layer_hidden
+
+    monkeypatch.setattr(DF, "_denoise_layer_forward", fake_layer_forward)
+    monkeypatch.setattr(DF, "_chunked_norm_forward", lambda norm, hidden_states: final_hidden)
+
+    out = DF.denoise_hidden_forward(
+        model,
+        prompt_hidden_by_layer=prompt_source,
+        prompt_len=32,
+        canvas_hidden=canvas,
+    )
+
+    assert out is final_hidden
+    assert calls == [("read", 0), ("layer", 0, prompt_kv, 32)]
+    assert prompt_kv[0].deallocated is True
+    assert prompt_kv[1].deallocated is True
+
+
 def test_denoise_hidden_forward_deallocates_final_norm_input(monkeypatch):
     prompt = _FakeTensor([1, 1, 32, 16])
     canvas = _FakeTensor([1, 1, 256, 16])
@@ -411,6 +445,37 @@ def test_embed_canvas_tokens_rejects_batch_greater_than_one():
         embed_canvas_tokens(object(), _FakeTensor([2, 256]))
 
 
+def test_read_prompt_kv_cache_slice_uses_dram_slice_outputs(monkeypatch):
+    calls = []
+
+    class _FakeCache:
+        def __init__(self, name):
+            self.name = name
+            self.shape = [1, 2, 128, 16]
+
+    class _FakeTtnn:
+        TILE_SIZE = 32
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def slice(cache, starts, ends, *, memory_config=None):
+            calls.append((cache.name, starts, ends, memory_config))
+            return f"slice-{cache.name}"
+
+    monkeypatch.setattr(DF, "ttnn", _FakeTtnn)
+
+    assert read_prompt_kv_cache_slice(
+        (_FakeCache("k-cache"), _FakeCache("v-cache")), prompt_len=64, seq_len_start=32
+    ) == (
+        "slice-k-cache",
+        "slice-v-cache",
+    )
+    assert calls == [
+        ("k-cache", [0, 0, 32, 0], [1, 2, 96, 16], "dram"),
+        ("v-cache", [0, 0, 32, 0], [1, 2, 96, 16], "dram"),
+    ]
+
+
 def test_read_prompt_kv_cache_by_layer_reads_every_model_layer():
     calls = []
     model = _FakeModel(num_layers=3)
@@ -437,13 +502,13 @@ def test_read_prompt_kv_cache_by_layer_rejects_cache_layer_mismatch():
         read_prompt_kv_cache_by_layer(model, prompt_len=64, read_fn=lambda *args, **kwargs: None)
 
 
-def test_make_denoise_logits_adapter_from_kv_cache_wires_prompt_kv_and_self_conditioning():
-    calls = {}
+def test_make_denoise_logits_adapter_from_kv_cache_reads_prompt_kv_lazily():
+    calls = {"read": []}
     model = _FakeModel(num_layers=2)
 
-    def fake_read(tt_model, *, prompt_len, seq_len_start=0):
-        calls["read"] = (tt_model, prompt_len, seq_len_start)
-        return ["kv0", "kv1"]
+    def fake_read(tt_model, *, prompt_len, seq_len_start=0, layer_idx=None):
+        calls["read"].append((tt_model, prompt_len, seq_len_start, layer_idx))
+        return (f"k{layer_idx}", f"v{layer_idx}")
 
     class _FakeAdapter:
         def __init__(self, tt_model, **kwargs):
@@ -461,10 +526,13 @@ def test_make_denoise_logits_adapter_from_kv_cache_wires_prompt_kv_and_self_cond
     )
 
     assert isinstance(out, _FakeAdapter)
-    assert calls["read"] == (model, 64, 32)
+    assert calls["read"] == []
     tt_model, kwargs = calls["adapter"]
     assert tt_model is model
-    assert kwargs["prompt_hidden_by_layer"] == ["kv0", "kv1"]
+    prompt_source = kwargs["prompt_hidden_by_layer"]
+    assert callable(prompt_source)
+    assert prompt_source(1) == ("k1", "v1")
+    assert calls["read"] == [(model, 64, 32, 1)]
     assert kwargs["self_conditioning"] == "self-conditioning"
     assert kwargs["self_conditioning_embedding_weight"] == "embedding"
     assert kwargs["self_conditioning_compute_kernel_config"] == "kernel"

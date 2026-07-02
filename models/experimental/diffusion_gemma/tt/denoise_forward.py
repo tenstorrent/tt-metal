@@ -176,6 +176,12 @@ def _prompt_source_len(prompt_source):
     return prompt_source[0].shape[-2] if isinstance(prompt_source, (tuple, list)) else prompt_source.shape[-2]
 
 
+def _deallocate_prompt_source(prompt_source) -> None:
+    if isinstance(prompt_source, (tuple, list)):
+        for tensor in prompt_source:
+            _deallocate_optional_tensor(tensor)
+
+
 def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
     if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
         return _rms_norm_dram(hidden_states, epsilon=norm.eps, chunk_size=chunk_size)
@@ -297,6 +303,7 @@ def denoise_hidden_forward(
     prompt_hidden_by_layer,
     canvas_hidden,
     q_rope_offset: int | None = None,
+    prompt_len: int | None = None,
     use_explicit_sliding_mask: bool = False,
     mask_builder=build_device_canvas_denoise_mask,
 ):
@@ -304,17 +311,21 @@ def denoise_hidden_forward(
 
     ``prompt_hidden_by_layer`` provides the frozen encoder-side attention source
     for each decoder layer. Entries can be either `[1, 1, P, H]` hidden tensors
-    (legacy shim) or projected `(K, V)` prompt heads produced by the encoder KV path.
-    The production path is maskless all-attend; set ``use_explicit_sliding_mask``
-    only for HF-geometry A/B tests.
+    (legacy shim), projected `(K, V)` prompt heads, or a callable that lazily
+    returns a per-layer prompt source. The production path is maskless all-attend;
+    set ``use_explicit_sliding_mask`` only for HF-geometry A/B tests.
     """
-    if len(prompt_hidden_by_layer) != len(tt_model.layers):
+    prompt_source_fn = prompt_hidden_by_layer if callable(prompt_hidden_by_layer) else None
+    if prompt_source_fn is None and len(prompt_hidden_by_layer) != len(tt_model.layers):
         raise ValueError(
             f"prompt_hidden_by_layer has {len(prompt_hidden_by_layer)} entries but model has {len(tt_model.layers)} layers"
         )
+    if prompt_len is None:
+        if prompt_source_fn is not None:
+            raise ValueError("prompt_len is required when prompt_hidden_by_layer is callable")
+        prompt_len = _prompt_source_len(prompt_hidden_by_layer[0])
 
     hidden_states = canvas_hidden
-    prompt_len = _prompt_source_len(prompt_hidden_by_layer[0])
     q_rope_offset = prompt_len if q_rope_offset is None else q_rope_offset
     for layer_idx in range(len(tt_model.layers)):
         attn_mask = _build_denoise_attn_mask_for_layer(
@@ -325,15 +336,22 @@ def denoise_hidden_forward(
             use_explicit_sliding_mask=use_explicit_sliding_mask,
             mask_builder=mask_builder,
         )
-        hidden_states = _denoise_layer_forward(
-            tt_model,
-            layer_idx,
-            hidden_states,
-            prompt_hidden_by_layer[layer_idx],
-            attn_mask,
-            q_rope_offset,
+        prompt_source = (
+            prompt_source_fn(layer_idx) if prompt_source_fn is not None else prompt_hidden_by_layer[layer_idx]
         )
-        _deallocate_optional_tensor(attn_mask)
+        try:
+            hidden_states = _denoise_layer_forward(
+                tt_model,
+                layer_idx,
+                hidden_states,
+                prompt_source,
+                attn_mask,
+                q_rope_offset,
+            )
+        finally:
+            if prompt_source_fn is not None:
+                _deallocate_prompt_source(prompt_source)
+            _deallocate_optional_tensor(attn_mask)
     final_hidden = _chunked_norm_forward(tt_model.norm, hidden_states)
     hidden_states.deallocate(True)
     return final_hidden
@@ -345,6 +363,7 @@ def denoise_logits_forward(
     prompt_hidden_by_layer,
     canvas_hidden,
     q_rope_offset: int | None = None,
+    prompt_len: int | None = None,
     use_explicit_sliding_mask: bool = False,
 ):
     """Run a short-prompt DiffusionGemma denoise logits forward.
@@ -357,6 +376,7 @@ def denoise_logits_forward(
         prompt_hidden_by_layer=prompt_hidden_by_layer,
         canvas_hidden=canvas_hidden,
         q_rope_offset=q_rope_offset,
+        prompt_len=prompt_len,
         use_explicit_sliding_mask=use_explicit_sliding_mask,
     )
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
@@ -424,22 +444,22 @@ def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int 
     if seq_len_start % ttnn.TILE_SIZE != 0 or seq_len_end % ttnn.TILE_SIZE != 0:
         raise ValueError("KV cache slice bounds must be multiples of 32")
     k_cache, v_cache = kv_cache
+    starts = [0, 0, seq_len_start, 0]
+    k_ends = [k_cache.shape[0], k_cache.shape[1], seq_len_end, k_cache.shape[3]]
+    v_ends = [v_cache.shape[0], v_cache.shape[1], seq_len_end, v_cache.shape[3]]
     return (
-        ttnn.experimental.nlp_kv_cache_load_slice(
-            k_cache,
-            seq_len_start=seq_len_start,
-            seq_len_end=seq_len_end,
-        ),
-        ttnn.experimental.nlp_kv_cache_load_slice(
-            v_cache,
-            seq_len_start=seq_len_start,
-            seq_len_end=seq_len_end,
-        ),
+        ttnn.slice(k_cache, starts, k_ends, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        ttnn.slice(v_cache, starts, v_ends, memory_config=ttnn.DRAM_MEMORY_CONFIG),
     )
 
 
 def read_prompt_kv_cache_by_layer(
-    tt_model, *, prompt_len: int, seq_len_start: int = 0, read_fn=read_prompt_kv_cache_slice
+    tt_model,
+    *,
+    prompt_len: int,
+    seq_len_start: int = 0,
+    layer_idx: int | None = None,
+    read_fn=read_prompt_kv_cache_slice,
 ):
     """Read frozen prompt K/V prefixes from every layer's Gemma4 KV cache.
 
@@ -451,6 +471,8 @@ def read_prompt_kv_cache_by_layer(
         raise ValueError(
             f"tt_kv_cache has {len(tt_model.tt_kv_cache)} layers but model has {len(tt_model.layers)} layers"
         )
+    if layer_idx is not None:
+        return read_fn(tt_model.tt_kv_cache[layer_idx], prompt_len=prompt_len, seq_len_start=seq_len_start)
     return [read_fn(kv_cache, prompt_len=prompt_len, seq_len_start=seq_len_start) for kv_cache in tt_model.tt_kv_cache]
 
 
@@ -483,6 +505,7 @@ def denoise_logits_from_tokens(
     self_conditioning=None,
     prev_logits=None,
     q_rope_offset: int | None = None,
+    prompt_len: int | None = None,
     use_explicit_sliding_mask: bool = False,
     self_conditioning_embedding_weight=None,
     self_conditioning_compute_kernel_config=None,
@@ -503,6 +526,7 @@ def denoise_logits_from_tokens(
         prompt_hidden_by_layer=prompt_hidden_by_layer,
         canvas_hidden=canvas_hidden,
         q_rope_offset=q_rope_offset,
+        prompt_len=prompt_len,
         use_explicit_sliding_mask=use_explicit_sliding_mask,
     )
 
@@ -524,10 +548,12 @@ class DenoiseLogitsAdapter:
         self_conditioning_embedding_weight=None,
         self_conditioning_compute_kernel_config=None,
         q_rope_offset: int | None = None,
+        prompt_len: int | None = None,
         logits_from_tokens=denoise_logits_from_tokens,
     ):
         self.tt_model = tt_model
         self.prompt_hidden_by_layer = prompt_hidden_by_layer
+        self.prompt_len = prompt_len
         self.self_conditioning = self_conditioning
         self.self_conditioning_embedding_weight = self_conditioning_embedding_weight
         self.self_conditioning_compute_kernel_config = self_conditioning_compute_kernel_config
@@ -544,6 +570,7 @@ class DenoiseLogitsAdapter:
             self_conditioning=self.self_conditioning,
             prev_logits=old_prev_logits,
             q_rope_offset=self.q_rope_offset,
+            prompt_len=self.prompt_len,
             self_conditioning_embedding_weight=self.self_conditioning_embedding_weight,
             self_conditioning_compute_kernel_config=self.self_conditioning_compute_kernel_config,
         )
@@ -575,18 +602,23 @@ def make_denoise_logits_adapter_from_kv_cache(
     adapter_cls=DenoiseLogitsAdapter,
 ):
     """Build a denoise logits adapter from the model's per-layer prompt KV cache."""
-    prompt_kv_by_layer = read_prompt_kv_fn(
-        tt_model,
-        prompt_len=prompt_len,
-        seq_len_start=seq_len_start,
-    )
+
+    def prompt_kv_for_layer(layer_idx: int):
+        return read_prompt_kv_fn(
+            tt_model,
+            prompt_len=prompt_len,
+            seq_len_start=seq_len_start,
+            layer_idx=layer_idx,
+        )
+
     return adapter_cls(
         tt_model,
-        prompt_hidden_by_layer=prompt_kv_by_layer,
+        prompt_hidden_by_layer=prompt_kv_for_layer,
         self_conditioning=self_conditioning,
         self_conditioning_embedding_weight=self_conditioning_embedding_weight,
         self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
         q_rope_offset=prompt_len if q_rope_offset is None else q_rope_offset,
+        prompt_len=prompt_len,
     )
 
 
