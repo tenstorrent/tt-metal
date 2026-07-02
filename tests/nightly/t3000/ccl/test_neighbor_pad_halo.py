@@ -157,7 +157,18 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
             if not eq:
                 _, pcc = comp_pcc(dev, ref, 0.0)
                 all_pass = False
-                print(f"FAIL dev({row},{col}): {msg} | {pcc}")
+                # Per-section diagnostic: which of [H-top | H-bot | W-left | W-right] mismatches.
+                h_sec = outer * pH * W_dev
+                w_sec = outer * (H_dev + 2 * pH) * pW
+                bounds = [("Htop", 0, h_sec), ("Hbot", h_sec, 2 * h_sec),
+                          ("Wleft", 2 * h_sec, 2 * h_sec + w_sec),
+                          ("Wright", 2 * h_sec + w_sec, 2 * h_sec + 2 * w_sec)]
+                secmsg = []
+                for name, a, b in bounds:
+                    if b <= dev.shape[0]:
+                        seq, _ = comp_equal(dev[a:b], ref[a:b])
+                        secmsg.append(f"{name}={'OK' if seq else 'BAD'}")
+                print(f"FAIL dev({row},{col}): {pcc} | sections: {' '.join(secmsg)}")
             else:
                 print(f"PASS dev({row},{col})")
 

@@ -84,10 +84,10 @@ void kernel_main() {
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
 
-    // Nothing to send from an outward-facing edge worker (no neighbor this direction). The per-core
-    // is_first/is_last args are already direction-swapped by the factory, so the send condition is
-    // uniformly !is_last_chip (matches the standard W writer).
-    const bool has_neighbor = !is_last_chip;
+    // Nothing to send from an outward-facing edge worker (no neighbor this direction). The WRITER's
+    // is_first/is_last args are NOT direction-swapped (unlike the reader's), so the send condition is
+    // direction-dependent: forward sends iff !is_last_chip, backward sends iff !is_first_chip.
+    const bool has_neighbor = direction ? !is_first_chip : !is_last_chip;
 
     // ---- Build + connect the mux endpoint ----
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
