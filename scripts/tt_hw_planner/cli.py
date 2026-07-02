@@ -4862,6 +4862,9 @@ _DEVICE_RESET_SIGNATURES: Tuple[str, ...] = (
     "Proceeding could lead to undefined behavior",
     "silicon_sysmem_manager.cpp",
     "pin_or_map_sysmem_to_device",
+    "Fabric Router Sync: Timeout",
+    "fabric_firmware_initializer.cpp",
+    "fabric_unavailable",
 )
 
 

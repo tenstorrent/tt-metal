@@ -325,6 +325,14 @@ def run_component(component: str, mode: str = "single") -> dict:
                     pass
     _prev_run = os.environ.get("TT_HW_PLANNER_SHARD_RUN")
     if mode == "shard":
+        _st0 = _load_state()
+        if not _st0.get("shard_reset_done"):
+            try:
+                _cli._run_tt_smi_reset(context="shard:phase2-init")
+            except Exception:
+                pass
+            _st0["shard_reset_done"] = True
+            _save_state(_st0)
         os.environ["TT_HW_PLANNER_SHARD_RUN"] = "1"
         os.environ["TT_HW_PLANNER_SHARD_TP"] = str(_SHARD_TP)
     try:

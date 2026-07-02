@@ -118,6 +118,61 @@ def test_get_shard_plan_replicate_only(bmcp):
     assert p["eligible"] is False
 
 
+def test_fabric_failure_triggers_device_reset():
+    from scripts.tt_hw_planner.cli import _output_indicates_device_reset_needed as needs_reset
+
+    assert needs_reset("… Fabric Router Sync: Timeout after 10000 ms on Device 2 …") is True
+    assert needs_reset("fabric_firmware_initializer.cpp:263: tt::exception") is True
+    assert needs_reset("fabric_unavailable") is True
+    assert needs_reset("PCC 0.83 below target") is False
+
+
+def test_shard_mode_resets_fabric_once(bmcp, monkeypatch):
+    m, tmp = bmcp
+    (tmp / "_stubs" / "self_attn.py").write_text("x")
+    resets = {"n": 0}
+    monkeypatch.setattr(m._cli, "_run_tt_smi_reset", lambda **k: resets.__setitem__("n", resets["n"] + 1) or True)
+    monkeypatch.setattr(
+        m,
+        "_run_pcc",
+        lambda c: {
+            "ran": True,
+            "passed": False,
+            "failed": True,
+            "skipped": False,
+            "summary": "",
+            "details": "",
+            "skip_reason": "",
+        },
+    )
+    m.run_component("self_attn", mode="shard")
+    m.run_component("self_attn", mode="shard")
+    assert resets["n"] == 1
+    assert m._load_state().get("shard_reset_done") is True
+
+
+def test_single_mode_never_resets_fabric(bmcp, monkeypatch):
+    m, tmp = bmcp
+    (tmp / "_stubs" / "self_attn.py").write_text("x")
+    resets = {"n": 0}
+    monkeypatch.setattr(m._cli, "_run_tt_smi_reset", lambda **k: resets.__setitem__("n", resets["n"] + 1) or True)
+    monkeypatch.setattr(
+        m,
+        "_run_pcc",
+        lambda c: {
+            "ran": True,
+            "passed": False,
+            "failed": True,
+            "skipped": False,
+            "summary": "",
+            "details": "",
+            "skip_reason": "",
+        },
+    )
+    m.run_component("self_attn", mode="single")
+    assert resets["n"] == 0
+
+
 def test_shard_record_writes_sharded_snapshot_not_native(bmcp):
     m, tmp = bmcp
     stub = tmp / "_stubs" / "self_attn.py"
