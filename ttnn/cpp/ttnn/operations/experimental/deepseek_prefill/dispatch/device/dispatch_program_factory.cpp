@@ -1075,6 +1075,16 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         /*cb_id=*/tt::CBIndex::c_3,
         "offsets_tensor");
 
+    // Per-page sparse-multicast grouping is enabled only for 1D Ring + topk==4 on the row-major path:
+    // a token's co-directional experts are collapsed into one per-page sparse-multicast payload write.
+    // This widens the route_info slot to hold a grouped record and toggles the SPARSE_MCAST_DISPATCH
+    // define on both kernels; every other config keeps the per-expert path unchanged.
+    // Requires fabric (num_links > 0 => DEST_CHIP_ID) since the grouped writer uses the fabric
+    // connections + packet header that only exist in the cross-device build.
+    bool enable_sparse_mcast = (topology == tt::tt_fabric::Topology::Ring) &&
+                               (operation_attributes.num_experts_per_tok == 4) && (operation_attributes.num_links > 0);
+    enable_sparse_mcast = false;
+
     // c_4, c_5, c_6: reader→writer CBs for (route_info, payload, metadata) per remote entry.
     // The reader pushes all three per entry in lockstep, so small buffering (2) suffices
     // for the writer to drain concurrently. No large buffering needed.
@@ -1082,6 +1092,11 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         constexpr uint32_t rw_buffering = 2;
 
         uint32_t route_info_page_size = l1_alignment;
+        if (enable_sparse_mcast) {
+            // Grouped record = 10 u32 [dir, num_dests, page_idx[4], distance[4]], rounded to L1 alignment.
+            constexpr uint32_t grouped_route_info_bytes = 10u * static_cast<uint32_t>(sizeof(uint32_t));
+            route_info_page_size = ((grouped_route_info_bytes + l1_alignment - 1) / l1_alignment) * l1_alignment;
+        }
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = rw_buffering * route_info_page_size,
             .core_ranges = sender_core_grid,
@@ -1261,6 +1276,9 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
     }
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
+    if (enable_sparse_mcast) {
+        fabric_defines["SPARSE_MCAST_DISPATCH"] = "1";
     }
 
     // Padding-config support: only the reader reads the config, so it gets a dedicated copy of the

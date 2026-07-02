@@ -404,6 +404,74 @@ void kernel_main() {
     }
 #else
     // ===== Row-major path: standard CB protocol on c_4/c_5/c_6 pushed by the sender reader.
+#ifdef SPARSE_MCAST_DISPATCH
+    // Grouped path (1D Ring, topk==4): each route_info is a direction-group of up to 4 destinations.
+    // The identical payload is delivered to all of them in ONE per-page sparse-multicast; metadata
+    // (distinct per destination) is still sent per-destination. Grouped route_info layout:
+    // [0]=direction, [1]=num_dests, [2..5]=page_idx[0..3], [6..9]=distance[0..3].
+    while (true) {
+        cb_wait_front(cb_route_info_id, 1);
+        volatile tt_l1_ptr uint32_t* route_info =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
+
+        uint32_t direction = route_info[0];
+        if (direction == ROUTE_INFO_SENTINEL) {
+            cb_pop_front(cb_route_info_id, 1);
+            break;
+        }
+        uint32_t num_dests = route_info[1];
+        uint32_t dest_pages[4];
+        uint32_t dest_dist[4];
+        uint16_t hop_mask = 0;
+        for (uint32_t i = 0; i < num_dests; ++i) {
+            dest_pages[i] = route_info[2 + i];
+            dest_dist[i] = route_info[6 + i];
+            hop_mask |= static_cast<uint16_t>(1u << (dest_dist[i] - 1));  // bit (hops-1) per writing chip
+        }
+        cb_pop_front(cb_route_info_id, 1);
+
+        cb_wait_front(cb_payload_for_writer_id, 1);
+        uint32_t payload_addr = get_read_ptr(cb_payload_for_writer_id);
+
+        DPRINT_DISPATCH(
+            "SPARSE_MCAST_FIRED dir={} num_dests={} hop_mask={}\n", direction, num_dests, (uint32_t)hop_mask);
+
+        // One payload write fanned out to all co-directional destinations, each at its own DRAM page.
+        fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction<fabric_max_packet_size>(
+            output_addr_gen,
+            fabric_connections,
+            unicast_packet_header,
+            hop_mask,
+            direction,
+            dest_pages,
+            static_cast<uint8_t>(num_dests),
+            payload_addr,
+            (int)aligned_output_page_size,
+            l1_alignment);
+        cb_pop_front(cb_payload_for_writer_id, 1);
+
+        // Metadata is per-destination: one unicast each, along the same direction/hop.
+        auto& metadata_sender = fabric_connections[direction];
+        for (uint32_t i = 0; i < num_dests; ++i) {
+            cb_wait_front(cb_metadata_for_writer_id, 1);
+            uint32_t metadata_addr = get_read_ptr(cb_metadata_for_writer_id);
+            ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+            pkt_route_info.distance_in_hops = static_cast<uint16_t>(dest_dist[i]);
+            ccl_routing_utils::fabric_set_line_unicast_route(
+                pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+            fabric_send_noc_unicast<fabric_max_packet_size>(
+                metadata_addr_gen,
+                metadata_sender,
+                unicast_packet_header,
+                metadata_addr,
+                dest_pages[i],
+                (int)aligned_metadata_page_size,
+                l1_alignment);
+            cb_pop_front(cb_metadata_for_writer_id, 1);
+        }
+        noc_async_writes_flushed();  // payload + metadata departed L1 before freeing CB slots
+    }
+#else
     while (true) {
         cb_wait_front(cb_route_info_id, 1);
         volatile tt_l1_ptr uint32_t* route_info =
@@ -485,6 +553,7 @@ void kernel_main() {
         cb_pop_front(cb_payload_for_writer_id, 1);
         cb_pop_front(cb_metadata_for_writer_id, 1);
     }
+#endif  // SPARSE_MCAST_DISPATCH
 #endif
 
 #ifdef DEST_CHIP_ID

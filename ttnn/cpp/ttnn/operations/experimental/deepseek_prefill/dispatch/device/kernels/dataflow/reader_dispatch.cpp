@@ -271,6 +271,20 @@ void kernel_main() {
             tt_l1_ptr uint16_t* weights =
                 reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
 
+#ifdef SPARSE_MCAST_DISPATCH
+            // Group this token's cross-device experts by fabric direction so co-directional
+            // destinations can be collapsed into one per-page sparse-multicast payload write (drained
+            // after the k-loop). Metadata stays per-destination. topk==4 -> at most 4 per bucket.
+            constexpr uint32_t MCAST_NUM_DIRS = 4;   // eth_chan_directions::COUNT
+            constexpr uint32_t MCAST_MAX_DESTS = 4;  // NOC_SPARSE_MCAST_WRITE_MAX_DESTS
+            uint32_t mcast_bucket_count[MCAST_NUM_DIRS] = {0, 0, 0, 0};
+            uint32_t mcast_dist[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
+            uint32_t mcast_page[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
+            uint32_t mcast_k[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
+            uint32_t mcast_expert[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
+            uint32_t mcast_weight[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
+#endif
+
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
                 uint32_t routed_expert = (uint32_t)indices[k];
 
@@ -323,6 +337,18 @@ void kernel_main() {
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
 
+#ifdef SPARSE_MCAST_DISPATCH
+                        // Bucket by direction; drained into grouped sparse-multicast records after the
+                        // k-loop. Payload/metadata are staged there, once per direction group.
+                        uint32_t bslot = mcast_bucket_count[route];
+                        ASSERT(bslot < MCAST_MAX_DESTS);
+                        mcast_dist[route][bslot] = distance;
+                        mcast_page[route][bslot] = page_idx;
+                        mcast_k[route][bslot] = k;
+                        mcast_expert[route][bslot] = routed_expert;
+                        mcast_weight[route][bslot] = weights[k];
+                        mcast_bucket_count[route] = bslot + 1;
+#else
                         // route_info layout: [0]=route, [1]=distance, [2]=page_idx, [3]=expert_chip.
                         // route + distance are consumed by the 1D writer; under FABRIC_2D the writer
                         // recomputes the EDM direction from route_info[3] and ignores slots [0..1].
@@ -351,11 +377,90 @@ void kernel_main() {
                         meta_dst[3] = routed_expert;
                         meta_dst[4] = static_cast<int16_t>(weights[k]);
                         cb_push_back(cb_metadata_for_writer_id, 1);
+#endif
                     }
                 }
 
                 offset++;
             }
+#ifdef SPARSE_MCAST_DISPATCH
+            // Drain each direction bucket into one grouped route_info + one shared payload +
+            // per-destination metadata. Destinations sorted nearest-hop-first so write_idx (advanced
+            // by the router on each writing hop) selects the matching page in the mcast address array.
+            for (uint32_t d = 0; d < MCAST_NUM_DIRS; ++d) {
+                uint32_t n = mcast_bucket_count[d];
+                if (n == 0) {
+                    continue;
+                }
+                for (uint32_t a = 1; a < n; ++a) {  // insertion sort by ascending hop distance
+                    uint32_t dd = mcast_dist[d][a], pp = mcast_page[d][a], kk = mcast_k[d][a], ee = mcast_expert[d][a],
+                             ww = mcast_weight[d][a];
+                    int b = (int)a - 1;
+                    while (b >= 0 && mcast_dist[d][b] > dd) {
+                        mcast_dist[d][b + 1] = mcast_dist[d][b];
+                        mcast_page[d][b + 1] = mcast_page[d][b];
+                        mcast_k[d][b + 1] = mcast_k[d][b];
+                        mcast_expert[d][b + 1] = mcast_expert[d][b];
+                        mcast_weight[d][b + 1] = mcast_weight[d][b];
+                        b--;
+                    }
+                    mcast_dist[d][b + 1] = dd;
+                    mcast_page[d][b + 1] = pp;
+                    mcast_k[d][b + 1] = kk;
+                    mcast_expert[d][b + 1] = ee;
+                    mcast_weight[d][b + 1] = ww;
+                }
+
+                // Emit groups of DISTINCT hops. A sparse multicast writes at most once per hop, so a
+                // chip hit by multiple experts of this token (same distance, different pages) must be
+                // split across separate groups — one write per page. Entries are sorted by distance, so
+                // equal distances are adjacent and break the current group.
+                uint32_t gi = 0;
+                while (gi < n) {
+                    uint32_t g_start = gi;
+                    uint32_t g_count = 0;
+                    uint32_t last_dist = 0xFFFFFFFFu;
+                    while (gi < n && mcast_dist[d][gi] != last_dist && g_count < MCAST_MAX_DESTS) {
+                        last_dist = mcast_dist[d][gi];
+                        g_count++;
+                        gi++;
+                    }
+
+                    // Grouped route_info (resized slot): [0]=direction, [1]=num_dests,
+                    // [2..5]=page_idx[0..3], [6..9]=distance[0..3] (only first num_dests valid).
+                    cb_reserve_back(cb_route_info_id, 1);
+                    volatile tt_l1_ptr uint32_t* route_info =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
+                    route_info[0] = d;
+                    route_info[1] = g_count;
+                    for (uint32_t i = 0; i < g_count; ++i) {
+                        route_info[2 + i] = mcast_page[d][g_start + i];
+                        route_info[6 + i] = mcast_dist[d][g_start + i];
+                    }
+                    cb_push_back(cb_route_info_id, 1);
+
+                    // One shared payload for the whole group (the identical token row).
+                    cb_reserve_back(cb_payload_for_writer_id, 1);
+                    uint32_t payload_dst = get_write_ptr(cb_payload_for_writer_id);
+                    noc_async_read(get_noc_addr(token_input_addr), payload_dst, aligned_input_page_size);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_payload_for_writer_id, 1);
+
+                    // Per-destination metadata (differs by top-k slot / expert), in sorted order.
+                    for (uint32_t i = 0; i < g_count; ++i) {
+                        cb_reserve_back(cb_metadata_for_writer_id, 1);
+                        volatile tt_l1_ptr int32_t* meta_dst =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(get_write_ptr(cb_metadata_for_writer_id));
+                        meta_dst[0] = linearized_mesh_coord;
+                        meta_dst[1] = token_idx;
+                        meta_dst[2] = mcast_k[d][g_start + i];
+                        meta_dst[3] = mcast_expert[d][g_start + i];
+                        meta_dst[4] = static_cast<int16_t>(mcast_weight[d][g_start + i]);
+                        cb_push_back(cb_metadata_for_writer_id, 1);
+                    }
+                }
+            }
+#endif
         }
 
         // Issue next batch DRAM reads BEFORE write barrier to overlap read/write NOC channels
