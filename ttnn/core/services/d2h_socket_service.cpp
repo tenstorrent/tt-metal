@@ -617,23 +617,29 @@ std::size_t D2HStreamService::metadata_size_bytes() const { return cfg_.metadata
 std::string D2HStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "D2HStreamService::export_descriptor: only owner-side services can be exported");
     TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::export_descriptor: mesh device unavailable");
-    TT_FATAL(mapper_ != nullptr, "D2HStreamService::export_descriptor: mapper unavailable");
 
     distributed::D2HStreamServiceDescriptor desc;
-    desc.global_shape = cfg_.global_spec.logical_shape();
-    desc.global_dtype = cfg_.global_spec.data_type();
-    desc.mesh_shape = mesh_device_->shape();
-    desc.mapper_config = mapper_->config();
-    if (cfg_.composer_config.has_value()) {
-        desc.composer_config = cfg_.composer_config.value();
-    } else {
-        // Mirror ctor: omit composer_config when auto-derived dims are malformed.
-        auto comp_cfg = derive_composer_config(mapper_->config());
-        const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
-        if (comp_cfg.dims.size() == effective_mesh.dims()) {
-            desc.composer_config = std::move(comp_cfg);
+    if (tensor_enabled()) {
+        TT_FATAL(mapper_ != nullptr, "D2HStreamService::export_descriptor: mapper unavailable");
+        desc.global_shape = cfg_.global_spec->logical_shape();
+        desc.global_dtype = cfg_.global_spec->data_type();
+        desc.mapper_config = mapper_->config();
+        if (cfg_.composer_config.has_value()) {
+            desc.composer_config = cfg_.composer_config.value();
+        } else {
+            // Mirror ctor: omit composer_config when auto-derived dims are malformed.
+            auto comp_cfg = derive_composer_config(mapper_->config());
+            const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
+            if (comp_cfg.dims.size() == effective_mesh.dims()) {
+                desc.composer_config = std::move(comp_cfg);
+            }
         }
+    } else {
+        // Metadata-only: no tensor spec / mapper. Empty shape + benign dtype; num_socket_pages == 0 is the marker.
+        desc.global_shape = tt::tt_metal::Shape{};
+        desc.global_dtype = DataType::UINT8;
     }
+    desc.mesh_shape = mesh_device_->shape();
     desc.socket_page_size = socket_page_size_;
     desc.num_socket_pages = num_socket_pages_;
     desc.metadata_size_bytes = cfg_.metadata_size_bytes;
@@ -656,13 +662,18 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
     auto desc = distributed::D2HStreamServiceDescriptor::wait_and_read(
         distributed::descriptor_path_for_d2h_service(service_id), timeout_ms.value_or(10000));
 
-    const TensorLayout tensor_layout(
-        desc.global_dtype,
-        PageConfig(Layout::ROW_MAJOR),
-        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    TensorSpec global_spec(desc.global_shape, tensor_layout);
+    const bool metadata_only = (desc.num_socket_pages == 0);
 
-    auto mapper = ttnn::distributed::create_mesh_mapper(desc.mesh_shape, desc.mapper_config);
+    std::optional<TensorSpec> global_spec;
+    std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
+    if (!metadata_only) {
+        const TensorLayout tensor_layout(
+            desc.global_dtype,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+        global_spec = TensorSpec(desc.global_shape, tensor_layout);
+        mapper = ttnn::distributed::create_mesh_mapper(desc.mesh_shape, desc.mapper_config);
+    }
 
     std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
     sockets.reserve(desc.per_coord_entries.size());
@@ -691,7 +702,7 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
     TT_FATAL(
         tensor_enabled(),
         "D2HStreamService::read_from_tensor: no tensor configured; use read_metadata() in metadata-only mode");
-    const size_t expected = cfg_.global_spec.compute_packed_buffer_size_bytes();
+    const size_t expected = cfg_.global_spec->compute_packed_buffer_size_bytes();
     TT_FATAL(
         bytes.size() == expected,
         "D2HStreamService::read_from_tensor: span size {} B does not match global_spec packed size {} B",
