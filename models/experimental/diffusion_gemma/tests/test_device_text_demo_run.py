@@ -22,7 +22,9 @@ Run on QB2::
     pytest models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py -q
 
 Override the checkpoint / mesh with ``DG_CKPT`` / ``MESH_DEVICE``; set
-``DG_TEXT_DEMO_NUM_LAYERS`` for a cheaper reduced-depth local smoke.
+``DG_TEXT_DEMO_NUM_LAYERS`` for a cheaper reduced-depth short-prompt smoke.
+The long-prompt smoke defaults to one layer; set
+``DG_TEXT_DEMO_LONG_PROMPT_NUM_LAYERS=full`` to run all layers.
 """
 
 import os
@@ -87,3 +89,44 @@ def test_short_prompt_two_block_run_exits_clean(monkeypatch):
     assert summary["blocks"] == 2
     assert summary["prompt_len"] == 32
     assert summary["next_pos"] == 544
+
+
+def test_long_prompt_two_block_maskless_run_exits_clean(monkeypatch):
+    """R-a: prompt long enough to force maskless denoise -> 2 blocks, no crash."""
+    checkpoint = _require_local_checkpoint()
+    info_lines: list[str] = []
+    monkeypatch.setattr(text_demo.logger, "info", lambda message: info_lines.append(str(message)))
+    argv = [
+        "--checkpoint",
+        checkpoint,
+        "--local-files-only",
+        "--mesh",
+        os.environ.get("MESH_DEVICE", "P150x4"),
+        "--prompt",
+        "hello " * 1000,
+        "--max-seq-len",
+        "1536",
+        "--canvas-length",
+        "32",
+        "--max-denoising-steps",
+        "1",
+        "--max-new-tokens",
+        "64",
+        "--num-blocks",
+        "2",
+        "--seed",
+        "0",
+        "--disable-eos-stop",
+    ]
+    num_layers = os.environ.get("DG_TEXT_DEMO_LONG_PROMPT_NUM_LAYERS", "1")
+    if num_layers.lower() != "full":
+        argv += ["--num-layers", num_layers]
+
+    assert text_demo.main(argv) == 0
+    success_lines = [line for line in info_lines if line.startswith("DG_TEXT_DEMO_SUCCESS ")]
+    assert len(success_lines) == 1
+    summary = text_demo._parse_success_summary(success_lines[0])
+    assert summary["generated_tokens"] == 64
+    assert summary["blocks"] == 2
+    assert summary["prompt_len"] == 1024
+    assert summary["next_pos"] == 1088
