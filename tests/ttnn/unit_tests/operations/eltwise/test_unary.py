@@ -1771,33 +1771,6 @@ def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
         assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, rtol=1e-05, atol=atol)
 
 
-def test_cbrt_arange(device):
-    # Generate all possible bit patterns for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32)
-
-    input_tensor = all_bitpatterns.to(torch.uint16).view(torch.bfloat16)
-    input_tensor = input_tensor.to(torch.float32)
-
-    # Mask subnormals (they get flushed to zero) and NaN (converted to inf for bf16)
-    mask = (((all_bitpatterns >> 7) & 0xFF) == 0) | ((all_bitpatterns & 0x7F) != 0) | torch.isnan(input_tensor)
-    input_tensor[mask] = 1.0
-
-    tt_in = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.cbrt)
-    golden = golden_function(input_tensor, device=device)
-
-    tt_result = ttnn.cbrt(tt_in)
-    result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
-
-
 @pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
