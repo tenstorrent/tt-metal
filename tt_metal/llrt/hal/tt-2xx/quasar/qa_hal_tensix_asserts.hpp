@@ -40,3 +40,8 @@ static_assert(MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 == 0, "Tensix fabric conne
 static_assert(MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 == 0, "Tensix fabric connections size must be 16-byte aligned");
 static_assert(
     MEM_TENSIX_FABRIC_CONNECTIONS_BASE - MEM_TENSIX_ROUTING_TABLE_BASE == sizeof(tt::tt_fabric::routing_l1_info_t));
+
+static_assert(DISPATCH_MEM_MAP_END <= MEM_L1_SIZE, "Dispatch-engine L1 layout exceeds MEM_L1_SIZE");
+static_assert(
+    MEM_DISPATCH_DM0_KERNEL_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0,
+    "Dispatch DM0 kernel base must be NOC-write aligned");

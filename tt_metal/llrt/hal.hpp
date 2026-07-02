@@ -155,6 +155,8 @@ enum class DispatchFeature : uint8_t {
     DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER,
     // Dispatch to Tensix cores utilize a kernel config buffer
     DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Quasar dispatch-engine cores utilize a kernel config buffer for kernel binaries
+    DISPATCH_KERNEL_CONFIG_BUFFER,
 };
 
 class Hal;
@@ -889,7 +891,7 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
             // DRAM kernels are always loaded directly to L1; no config buffer indirection.
             return false;
         case HalProgrammableCoreType::DISPATCH:
-            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER);
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER);
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
     }
 }

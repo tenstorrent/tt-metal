@@ -1973,8 +1973,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     }
                 }
             } else {
-                // Below assumes ethernet dispatch class
-                TT_ASSERT(core_type == CoreType::ETH);
+                // Unicast FD transport: ethernet dispatch class or Quasar dispatch-engine tile
+                TT_ASSERT(core_type == CoreType::ETH || core_type == CoreType::DISPATCH);
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group->core_ranges.ranges(), core_type);
 

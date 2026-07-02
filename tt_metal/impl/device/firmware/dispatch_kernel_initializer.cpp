@@ -82,6 +82,16 @@ void DispatchKernelInitializer::init(
         is_galaxy_cluster,
         /*are_fd_kernels_on_same_core=*/false,
         descriptor_->rtoptions());
+    if (descriptor_->cluster().arch() == tt::ARCH::QUASAR &&
+        descriptor_->hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+            CoreType::DISPATCH,
+            descriptor_->num_cqs(),
+            descriptor_->hal(),
+            is_galaxy_cluster,
+            are_fd_kernels_on_same_core,
+            descriptor_->rtoptions());
+    }
 
     // Skip firmware initialization for mock devices
     if (descriptor_->is_mock_device()) {

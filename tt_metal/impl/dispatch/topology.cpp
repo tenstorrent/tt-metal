@@ -434,6 +434,16 @@ DispatchTopology::DispatchTopology(
         is_galaxy_cluster,
         /*are_fd_kernels_on_same_core=*/false,
         descriptor_.rtoptions());
+    if (descriptor_.cluster().arch() == tt::ARCH::QUASAR &&
+        descriptor_.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<DispatchMemMap>(
+            CoreType::DISPATCH,
+            descriptor_.num_cqs(),
+            descriptor_.hal(),
+            is_galaxy_cluster,
+            are_fd_kernels_on_same_core,
+            descriptor_.rtoptions());
+    }
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }

@@ -20,6 +20,7 @@
 #include "prefetch.hpp"
 #include "impl/context/context_descriptor.hpp"
 // #include "impl/context/metal_context.hpp"
+#include <internal/dispatch/dispatch_engine_cores.hpp>
 #include "kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
@@ -249,6 +250,9 @@ uint32_t FDKernel::get_programmable_core_type_index(
     if (dispatch_core_type == CoreType::WORKER) {
         programmable_core_type_index =
             descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    } else if (dispatch_core_type == CoreType::DISPATCH) {
+        programmable_core_type_index =
+            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH);
     } else if (is_active_eth_core) {
         programmable_core_type_index =
             descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
@@ -317,6 +321,21 @@ KernelHandle FDKernel::configure_kernel_variant(
                     .defines = defines,
                     .opt_level = opt_level});
         }
+    } else if (GetCoreType() == CoreType::DISPATCH) {
+        TT_FATAL(
+            device_->arch() == tt::ARCH::QUASAR,
+            "Dispatch-engine FD kernels are only supported on Quasar (device {})",
+            device_->id());
+        kernel_handle_ = internal::CreateDispatchEngineKernel(
+            *program_,
+            path,
+            CoreCoord(logical_core_.x, logical_core_.y),
+            quasar_dm_processor_,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = compile_args,
+                .defines = defines,
+                .opt_level = opt_level});
     } else {
         kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,

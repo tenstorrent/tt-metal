@@ -22,6 +22,7 @@
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
+#include <internal/dispatch/dispatch_engine_cores.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
@@ -589,6 +590,12 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
+    const auto& cluster = get_cluster();
+    if (env_ != nullptr && cluster.arch() == tt::ARCH::QUASAR && !cluster.all_chip_ids().empty()) {
+        const ChipId device_id = *cluster.all_chip_ids().begin();
+        return dispatch_mem_map(
+            resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_));
+    }
     return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
 }
 

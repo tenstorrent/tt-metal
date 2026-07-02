@@ -173,8 +173,7 @@ extern "C" uint32_t _start1() {
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 WAYPOINT("R");
                 if (enables & (1u << index)) {
-                    uintptr_t kernel_lma =
-                        (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                    uintptr_t kernel_lma = launch_msg_address->kernel_config.kernel_text_offset[index];
                     invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
                     invalidate_l1_icache();
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
@@ -222,7 +221,7 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::DISPATCH, hartid);
         int index = hartid;
 
-        uintptr_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+        uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[index];
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
