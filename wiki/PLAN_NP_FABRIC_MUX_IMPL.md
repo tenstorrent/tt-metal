@@ -176,6 +176,13 @@ H-MUX STEPS (mirror the proven W-mux; reuse mux machinery):
      signals the W-mux reader cores (factory L534), so keep that path for the count.
    - STARTUP BARRIER: try dropping (as W-mux did); if PCC section-diff shows stale H-section, restore it.
    - BRING-UP: TT_NP_H_MUX=1 + 1 worker PCC (section-diff) -> multi-worker -> perf. Expect ~660->~380us.
+  [x] FACTORY WIRED (gated TT_NP_H_MUX). Builds clean; default (no env) full PCC 4/4 intact.
+  [ ] BRING-UP IN PROGRESS: 1-worker H-mux HANGS at the mux CONNECT phase (DPRINT: HMUX_A for all workers,
+      only partial HMUX_B/connected). Ruled out: core placement (BH compute grid 11x10; H-mux cols 0-6 fit).
+      Remaining suspects (mirror W-mux connect debug): mux kernel not reaching READY for H (get_fabric_mux_
+      run_time_args link_idx on the H cluster-axis?), or worker mux-conn args / channel_id. NEXT: DPRINT on
+      the H mux core (status addr) + verify H-axis link_idx maps to a valid H eth channel. Same debug shape
+      as W-mux's connect bring-up (which resolved after fixing reader common-args + sem targeting).
   [ ] Factory: place H mux+worker cores in free columns (W-mux uses cols 1..1+num_w_workers; H-mux goes
       after). Fork np_h_reader onto H worker cores with frames split 8-aligned. Wire mux cfg + CT/RT.
   [ ] H recv: per-worker h_neighbor_sem (neighbor's N H-readers each wait their frame count) + same-dir
