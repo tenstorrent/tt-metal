@@ -8,6 +8,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/gelu.h"
+#include "partial_phases.hpp"  // phase1_partial (shared with the gate_up compute)
 
 using std::uint32_t;
 
@@ -84,35 +85,20 @@ void kernel_main() {
     // in0 row stride within a sender slice (K-tiles per M-row) == matmul kt_dim.
     constexpr uint32_t in0_block_w = inA_K_tiles_per_core;
 
-    // ---- Phase 1: partial matmul ----
+    // ---- Phase 1: partial matmul (shared with the gate_up compute) ----
     cb_wait_front(full_in0_cb_id, full_in0_num_tiles);
     cb_wait_front(in1_cb_id, in1_num_tiles);
-
-    mm_block_init(full_in0_cb_id, in1_cb_id, partial_cb_id, false, out_block_w, out_block_h, in0_block_w);
-
     const uint32_t k_offset = k_idx * Kc_tiles;  // this core's K-slice start (global K-tile)
-    cb_reserve_back(partial_cb_id, block_num_tiles);
-    for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
-        tile_regs_acquire();
-        for (uint32_t kc = 0; kc < Kc_tiles; ++kc) {
-            const uint32_t k_global = k_offset + kc;
-            const uint32_t sender = k_global / inA_K_tiles_per_core;
-            const uint32_t kc_local = k_global - sender * inA_K_tiles_per_core;
-            // in0: K-column kc_local of this sender's block; matmul reads + r*in0_block_w
-            // for r in [0, M_tiles), i.e. every M-row of that K-column.
-            const uint32_t in0_tile = sender * sender_slice_tiles + kc_local;
-            const uint32_t in1_tile = kc * Nc_tiles + nc;
-            matmul_block(
-                full_in0_cb_id, in1_cb_id, in0_tile, in1_tile, 0, false, out_block_w, out_block_h, in0_block_w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t mt = 0; mt < out_block_h; ++mt) {
-            pack_tile<true>(mt, partial_cb_id, mt * Nc_tiles + nc);
-        }
-        tile_regs_release();
-    }
-    cb_push_back(partial_cb_id, block_num_tiles);
+    phase1_partial<
+        M_tiles,
+        Kc_tiles,
+        Nc_tiles,
+        inA_K_tiles_per_core,
+        out_block_w,
+        out_block_h,
+        in0_block_w,
+        block_num_tiles,
+        sender_slice_tiles>(full_in0_cb_id, in1_cb_id, partial_cb_id, k_offset);
     cb_pop_front(full_in0_cb_id, full_in0_num_tiles);
 
     if (is_base == 0) {
