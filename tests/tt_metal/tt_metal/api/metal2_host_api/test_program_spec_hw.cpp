@@ -1013,13 +1013,9 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
             {
                 .runtime_arg_names = {"report_addr"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                    },
-            },
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+        }},
     };
     dm_kernel.scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
