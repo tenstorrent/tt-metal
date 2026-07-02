@@ -27,13 +27,13 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
             mantissa), so results are within one e4m3 ULP of a round-to-nearest reference.
 
             Args:
-                * :attr:`input_tensor`: BFLOAT16 or FLOAT32 ROW_MAJOR tensor of shape [..., M, H].
+                * :attr:`input_tensor`: BFLOAT16 or FLOAT32 ROW_MAJOR or TILE tensor of shape [..., M, H].
                   Requires H % 128 == 0, DRAM interleaved memory, and Blackhole hardware.
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
                   (default: same as input).
 
             Returns:
-                Tuple (e4m3, scale_fp32). Both are ROW_MAJOR.
+                Tuple (e4m3, scale_fp32). Both are ROW_MAJOR regardless of input layout.
         )doc",
         &per_token_cast_to_fp8,
         nb::arg("input_tensor").noconvert(),
