@@ -59,6 +59,8 @@ Dependency-ordered. RUN target: **short prompt → ≥2 committed blocks → det
 > **RUN-first status (updated 2026-07-02):** the first short-prompt, small-context real-26B multi-block hardware run has passed. R-a's RUN-first mitigation is also in code: denoise is maskless by default, with explicit masks reserved for A/B tests. Next RUN hardening: keep this smoke reproducible, add a less-noisy success marker / regression target, and only then expand prompt length/context. **Do not** block on the deferred correctness track below.
 >
 > **Success/failure markers (2026-07-02):** `text_demo.py` now emits a single greppable `DG_TEXT_DEMO_SUCCESS …` line on success **and** a matching `DG_TEXT_DEMO_FAILURE mode=… mesh=… error_type=…` line on any uncaught exception (`main()` logs it then re-raises). Because the RUN-first denoise path emits expected `TT_THROW` fallback noise even on success, these two markers are the authoritative run outcome — grep them instead of scanning the fallback logs. Covered by CPU `tests/test_text_demo.py` (8 passed).
+>
+> **RUN regression target (2026-07-02):** the canonical R-b command is pinned as a device-gated pytest `tests/test_device_text_demo_run.py` (skips unless `DG_RUN_DEVICE=1`; checkpoint via `DG_CKPT`, defaults to `/home/zni/dg_models/diffusiongemma-26B-A4B-it`; optional `DG_TEXT_DEMO_NUM_LAYERS` for a cheaper reduced-depth smoke). The RUN gate is exit 0, not text quality. Collects + skips clean on CPU (1 skipped); **still needs a QB2 run to confirm green and a decision on whether to wire it into `tests/pipeline_reorg/blackhole_e2e_tests.yaml` (holding off until the CI runner's checkpoint path is settled, so it does not break the manifest).**
 
 #### Deferred — correctness track (NOT on the RUN critical path)
 

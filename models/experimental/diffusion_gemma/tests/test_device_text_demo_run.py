@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""RUN-first regression target for the DiffusionGemma text demo (#47464).
+
+This pins the canonical short-prompt, small-context multi-block hardware run
+(R-b) that passed on QB2 2026-07-02 as a reproducible, device-gated smoke test
+so future changes cannot silently break "prompt -> committed blocks -> decoded
+text" without crashing. Output *correctness* is explicitly deferred (#48291);
+the RUN gate is a clean exit + the ``DG_TEXT_DEMO_SUCCESS`` marker, not text
+quality.
+
+Run on QB2::
+
+    source /home/zni/venvs/tt-diffusion-gemma/bin/activate
+    export PYTHONPATH=/home/zni/tt-metal:/home/zni/tt-metal/ttnn TT_METAL_HOME=/home/zni/tt-metal
+    export TT_METAL_RUNTIME_ROOT=/home/zni/tt-metal MESH_DEVICE=P150x4 DG_RUN_DEVICE=1
+    pytest models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py -q
+
+Override the checkpoint / mesh with ``DG_CKPT`` / ``MESH_DEVICE``; set
+``DG_TEXT_DEMO_NUM_LAYERS`` for a cheaper reduced-depth local smoke.
+"""
+
+import os
+
+import pytest
+
+from models.experimental.diffusion_gemma.demo import text_demo
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("DG_RUN_DEVICE") != "1",
+    reason="set DG_RUN_DEVICE=1 to run on a Tenstorrent device",
+)
+
+_DEFAULT_CKPT = "/home/zni/dg_models/diffusiongemma-26B-A4B-it"
+
+
+def _checkpoint() -> str:
+    return os.environ.get("DG_CKPT", _DEFAULT_CKPT)
+
+
+def _require_local_checkpoint() -> str:
+    checkpoint = _checkpoint()
+    if not os.path.isdir(checkpoint):
+        pytest.skip(f"checkpoint not found at {checkpoint!r}; set DG_CKPT")
+    return checkpoint
+
+
+def test_short_prompt_two_block_run_exits_clean():
+    """R-b: short prompt -> 2 committed 256-token blocks -> decoded text, no crash."""
+    checkpoint = _require_local_checkpoint()
+    argv = [
+        "--checkpoint",
+        checkpoint,
+        "--local-files-only",
+        "--mesh",
+        os.environ.get("MESH_DEVICE", "P150x4"),
+        "--max-seq-len",
+        "512",
+        "--canvas-length",
+        "256",
+        "--max-denoising-steps",
+        "1",
+        "--max-new-tokens",
+        "512",
+        "--num-blocks",
+        "2",
+        "--seed",
+        "0",
+    ]
+    num_layers = os.environ.get("DG_TEXT_DEMO_NUM_LAYERS")
+    if num_layers is not None:
+        argv += ["--num-layers", num_layers]
+
+    assert text_demo.main(argv) == 0
