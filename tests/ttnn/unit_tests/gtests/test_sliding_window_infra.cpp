@@ -158,24 +158,16 @@ TEST(InPlaceHaloEconomics, MaxPoolHeightSharded) {
         const auto tensor_meta = generate_tensor_metadata(pad_meta, config, in_nsticks_per_core);
         const uint32_t max_out = generate_max_out_nsticks_per_core(shard_bounds);
 
-        // outbound-halo sticks per source core -> max_ref_size sizes the remote-temp CB
-        std::vector<uint32_t> outbound(num_cores, 0);
-        for (uint32_t dst = 0; dst < shard_bounds.size(); ++dst) {
-            const auto& in_r = shard_bounds[dst].input_range;
-            for (uint32_t p = in_r.start; p <= in_r.end && p < tensor_meta.size(); ++p) {
-                const auto& md = tensor_meta[p];
-                if (!md.is_pad && md.src_core_id != dst && md.src_core_id < num_cores) {
-                    outbound[md.src_core_id]++;
-                }
-            }
-        }
-        const uint32_t max_ref_size = outbound.empty() ? 0 : *std::max_element(outbound.begin(), outbound.end());
+        // Exercise the real shipping functions (the ones the op/factory/callers use).
+        const uint32_t max_ref_size = compute_max_outbound_halo_sticks(tensor_meta, shard_bounds, num_cores);
+        const bool activates =
+            should_halo_be_in_place(config, in_nsticks_per_core, /*is_height_sharded*/ true, /*is_in_tiled*/ false);
 
         const double ratio = in_nsticks_per_core ? (100.0 * max_ref_size / in_nsticks_per_core) : 0.0;
         const char* verdict = (max_ref_size < in_nsticks_per_core) ? "SAVE" : "LOSE";
         log_info(
             tt::LogTest,
-            "{:<32} {:>7} {:>9} {:>9} {:>7.1f} {:>7}  {} ({})",
+            "{:<32} {:>7} {:>9} {:>9} {:>7.1f} {:>7}  {} activates={} ({})",
             s.note,
             num_cores,
             in_nsticks_per_core,
@@ -183,8 +175,13 @@ TEST(InPlaceHaloEconomics, MaxPoolHeightSharded) {
             ratio,
             max_out,
             verdict,
+            activates,
             s.note);
         EXPECT_GT(in_nsticks_per_core, 0u);
+        // The gate uses a 0.75 net-L1 margin, so activation implies a clear per-buffer save.
+        if (activates) {
+            EXPECT_LT(max_ref_size, in_nsticks_per_core);
+        }
     }
 }
 

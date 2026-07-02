@@ -568,6 +568,62 @@ uint32_t calculate_precise_halo_output_elems(
     return max_out_nsticks_per_core * shard_shape[1];
 }
 
+uint32_t compute_max_outbound_halo_sticks(
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
+    uint32_t num_cores_nhw) {
+    if (num_cores_nhw == 0 || tensor_metadata.empty()) {
+        return 0;
+    }
+    // For each destination core, walk the padded-input pixels its output shard reads
+    // (shard_boundaries[dst].input_range indexes tensor_metadata). Every non-pad pixel
+    // owned by a different (source) core is one outbound-halo stick that source must send.
+    std::vector<uint32_t> outbound(num_cores_nhw, 0);
+    const uint32_t last_valid = static_cast<uint32_t>(tensor_metadata.size()) - 1;
+    for (uint32_t dst = 0; dst < shard_boundaries.size() && dst < num_cores_nhw; ++dst) {
+        const auto& in_r = shard_boundaries[dst].input_range;
+        if (in_r.start > in_r.end) {
+            continue;  // empty shard (encoded as end == start - 1)
+        }
+        const uint32_t end = std::min(in_r.end, last_valid);
+        for (uint32_t p = in_r.start; p <= end; ++p) {
+            const auto& md = tensor_metadata[p];
+            if (!md.is_pad && md.src_core_id != dst && md.src_core_id < num_cores_nhw) {
+                outbound[md.src_core_id]++;
+            }
+        }
+    }
+    return *std::max_element(outbound.begin(), outbound.end());
+}
+
+bool should_halo_be_in_place(
+    const SlidingWindowConfig& config, uint32_t in_nsticks_per_core, bool is_height_sharded, bool is_in_tiled) {
+    // Safety gate: only the classes validated corruption-safe so far. Start with the
+    // simplest path (row-major, height-sharded, no untilize); widen as each class is
+    // proven with the rigorous elementwise tests (see IN_PLACE_HALO_REDO.md section 11).
+    if (!is_height_sharded || is_in_tiled || config.is_transpose || config.is_bilinear) {
+        return false;
+    }
+    if (in_nsticks_per_core == 0 || config.num_cores_nhw == 0) {
+        return false;
+    }
+
+    // Net-L1 gate: in-place saves one input-shard buffer (~in_nsticks_per_core sticks) and
+    // adds the remote-temp CB (~max_ref_size sticks); both scale by the same stick width so
+    // the verdict is width-independent. Require the saved buffer to exceed the temp by a
+    // margin covering the smaller config/pad-CB deltas the estimate ignores. Conservative on
+    // purpose -- wrongly activating would raise L1 and risk OOM; missing a win only forgoes
+    // savings. Tighten once real peak-L1 is measured (section 9e).
+    const auto pad_metadata = generate_pad_metadata(config);
+    const auto shard_boundaries = generate_shard_boundaries(config);
+    const auto tensor_metadata = generate_tensor_metadata(pad_metadata, config, in_nsticks_per_core);
+    const uint32_t max_ref_size =
+        compute_max_outbound_halo_sticks(tensor_metadata, shard_boundaries, config.num_cores_nhw);
+
+    constexpr double kInPlaceL1Margin = 0.75;
+    return static_cast<double>(max_ref_size) < kInPlaceL1Margin * static_cast<double>(in_nsticks_per_core);
+}
+
 struct GatherHeader {
     uint16_t noc_x;
     uint16_t noc_y;

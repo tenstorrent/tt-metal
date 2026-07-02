@@ -143,6 +143,22 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
 uint32_t calculate_precise_halo_output_elems(
     const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape);
 
+// Max outbound-halo sticks any single core sends to other cores. This sizes the in-place
+// halo remote-temp CB (== max_ref_size) and drives the in-place net-L1 decision.
+uint32_t compute_max_outbound_halo_sticks(
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
+    uint32_t num_cores_nhw);
+
+// Silent in-place-halo activation decision. Returns true iff running halo in-place (output
+// shard buffer overlapping the input shard buffer) would net-save L1 AND the layout is a
+// class validated to be corruption-safe. Pure function of the attributes so the halo op,
+// its program factory, and the pool/conv callers all reach the same decision without
+// storing state. See IN_PLACE_HALO_REDO.md section 10. NOTE: there is intentionally no
+// user-facing toggle -- in-place activates automatically only when it is a clear win.
+bool should_halo_be_in_place(
+    const SlidingWindowConfig& config, uint32_t in_nsticks_per_core, bool is_height_sharded, bool is_in_tiled);
+
 struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> pad_config0;
     std::vector<std::vector<uint16_t>> pad_config1;
