@@ -24,6 +24,13 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
+def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
+    try:
+        return a.buffer_address() != b.buffer_address()
+    except Exception:
+        return a is not b
+
+
 class RMSNorm(RMSNormBase):
     @classmethod
     def convert_weights(
@@ -75,14 +82,39 @@ class RMSNorm(RMSNormBase):
         )
 
     @classmethod
-    def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:
-        """Forward pass of the embedding.
+    def _rmsnorm_forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        """Forward pass of the RMSNorm for prefill mode.
 
         Args:
-            x: Input tensor (token indices)
-            cfg: RunConfig containing weights and op configurations
+            x: Input tensor
+            cfg: RunPrefillConfig containing weights and op configurations
 
         Returns:
-            Output tensor after embedding lookup
+            Output tensor after RMSNorm computation
         """
         return ttnn.rms_norm(x, program_config=cls._get_pc(x.memory_config()), **cfg)
+
+    @classmethod
+    def _rmsnorm_forward_decode(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        memory_config: ttnn.MemoryConfig,
+        output_memory_config: ttnn.MemoryConfig,
+    ) -> ttnn.Tensor:
+        """Forward pass of the RMSNorm for decode mode.
+
+        Args:
+            x: Input tensor
+            cfg: RunDecodeConfig containing weights and op configurations
+            memory_config: Memory configuration for the input tensor
+            output_memory_config: Memory configuration for the output tensor
+        Returns:
+            Output tensor after RMSNorm computation
+        """
+        tensor_in = ttnn.to_memory_config(x, memory_config)
+        tt_out = ttnn.rms_norm(tensor_in, program_config=cls._get_pc(tensor_in.memory_config()), **cfg)
+        tt_out = ttnn.to_memory_config(tt_out, output_memory_config)
+        if _has_distinct_buffer(x, tensor_in):
+            ttnn.deallocate(tensor_in)
+        return tt_out
