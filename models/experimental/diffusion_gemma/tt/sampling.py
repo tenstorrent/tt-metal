@@ -29,7 +29,15 @@ underflow and reducing accept-boundary flips at the 256-token canvas length.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import ttnn
+
+
+class ChunkedGumbelNoise(NamedTuple):
+    seed: int
+    vocab_chunk_size: int = 1024
+    dtype: object = ttnn.float32
 
 
 def temperature_scale(logits, temperature: float):
@@ -87,6 +95,14 @@ def gumbel_max(logits, temperature: float, noise):
     is an explicit RUN-first shortcut for argmax sampling without allocating the
     full-vocab Gumbel buffer.
     """
+    if isinstance(noise, ChunkedGumbelNoise):
+        return gumbel_max_with_chunked_noise(
+            logits,
+            temperature,
+            seed=noise.seed,
+            vocab_chunk_size=noise.vocab_chunk_size,
+            dtype=noise.dtype,
+        )
     z = temperature_scale(logits, temperature)
     if noise is None:
         sampled = ttnn.argmax(z, dim=-1, keepdim=True)
@@ -97,6 +113,104 @@ def gumbel_max(logits, temperature: float, noise):
     perturbed.deallocate(True)
     _deallocate_scaled_if_temporary(z, logits)
     return sampled
+
+
+def _offset_argmax_indices(indices, offset: int):
+    indices = ttnn.typecast(indices, ttnn.uint32)
+    if offset == 0:
+        return indices
+    out = ttnn.add(indices, offset)
+    indices.deallocate(True)
+    return out
+
+
+def _select_by_mask(mask, candidate, current):
+    mask_t = ttnn.typecast(mask, candidate.get_dtype())
+    ones = ttnn.full(
+        list(candidate.shape),
+        1,
+        dtype=candidate.get_dtype(),
+        layout=ttnn.TILE_LAYOUT,
+        device=candidate.device(),
+    )
+    keep_t = ttnn.subtract(ones, mask_t)
+    selected_candidate = ttnn.multiply(candidate, mask_t)
+    selected_current = ttnn.multiply(current, keep_t)
+    out = ttnn.add(selected_candidate, selected_current)
+    mask_t.deallocate(True)
+    ones.deallocate(True)
+    keep_t.deallocate(True)
+    selected_candidate.deallocate(True)
+    selected_current.deallocate(True)
+    return out
+
+
+def gumbel_max_with_chunked_noise(
+    logits, temperature: float, *, seed: int, vocab_chunk_size: int = 1024, dtype=ttnn.float32
+):
+    """Gumbel-max without materializing full-vocab noise or perturbed logits.
+
+    Each vocab chunk computes local ``max`` and ``argmax`` for
+    ``logits / T + Gumbel``; the per-chunk winners are reduced to the global
+    winner with elementwise masks. This is the production-noise fit path for
+    large canvases where a full ``[B, L, vocab]`` Gumbel tensor does not fit.
+    """
+    seed = _validate_ttnn_rand_seed(seed)
+    if vocab_chunk_size <= 0:
+        raise ValueError("vocab_chunk_size must be positive")
+    vocab_size = logits.shape[-1]
+    best_values = None
+    best_indices = None
+
+    for offset in range(0, vocab_size, vocab_chunk_size):
+        end = min(offset + vocab_chunk_size, vocab_size)
+        starts = [0] * len(logits.shape)
+        ends = list(logits.shape)
+        starts[-1] = offset
+        ends[-1] = end
+        chunk = ttnn.slice(
+            logits,
+            starts,
+            ends,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        z = temperature_scale(chunk, temperature)
+        noise = sample_gumbel_noise(
+            z.shape,
+            device=logits.device(),
+            seed=seed + offset,
+            dtype=dtype,
+        )
+        perturbed = ttnn.add(z, noise)
+        chunk_values = ttnn.max(perturbed, dim=-1, keepdim=True)
+        chunk_indices = _offset_argmax_indices(ttnn.argmax(perturbed, dim=-1, keepdim=True), offset)
+
+        perturbed.deallocate(True)
+        noise.deallocate(True)
+        _deallocate_scaled_if_temporary(z, chunk)
+        chunk.deallocate(True)
+
+        if best_values is None:
+            best_values = chunk_values
+            best_indices = chunk_indices
+            continue
+
+        take_chunk = ttnn.gt(chunk_values, best_values)
+        next_values = _select_by_mask(take_chunk, chunk_values, best_values)
+        take_chunk_u32 = ttnn.typecast(take_chunk, ttnn.uint32)
+        next_indices = _select_by_mask(take_chunk_u32, chunk_indices, best_indices)
+
+        take_chunk.deallocate(True)
+        take_chunk_u32.deallocate(True)
+        best_values.deallocate(True)
+        best_indices.deallocate(True)
+        chunk_values.deallocate(True)
+        chunk_indices.deallocate(True)
+        best_values = next_values
+        best_indices = next_indices
+
+    best_values.deallocate(True)
+    return best_indices
 
 
 def canvas_sample(logits, temperature: float, gumbel_noise):

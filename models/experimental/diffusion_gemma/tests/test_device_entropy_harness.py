@@ -131,6 +131,25 @@ def test_zero_noise_gumbel_is_argmax(device, dtype_name):
     assert agreement >= 0.95, f"zero-noise argmax agreement {agreement:.4f} < 0.95 ({dtype_name})"
 
 
+def test_chunked_gumbel_max_matches_materialized_chunked_noise(device):
+    """Chunked Gumbel-max reduces per-chunk winners without a full noise tensor."""
+    temperature = 0.6
+    logits = _to(_varied_logits(seed=7), device, ttnn.bfloat16)
+    full_noise = TS.sample_gumbel_noise_by_vocab_chunks(logits.shape, device=device, seed=11, vocab_chunk_size=1024)
+
+    expected = TS.gumbel_max(logits, temperature, full_noise)
+    out = TS.gumbel_max(logits, temperature, TS.ChunkedGumbelNoise(seed=11, vocab_chunk_size=1024))
+
+    expected_torch = ttnn.to_torch(expected).squeeze(-1).to(torch.long)
+    out_torch = ttnn.to_torch(out).squeeze(-1).to(torch.long)
+    assert torch.equal(out_torch, expected_torch)
+
+    full_noise.deallocate(True)
+    expected.deallocate(True)
+    out.deallocate(True)
+    logits.deallocate(True)
+
+
 def test_gumbel_max_rejects_bfp8(device, expect_error):
     """Document the op constraint: `ttnn.argmax` rejects bfp8 TILE inputs, so the
     Gumbel-max/argmax decision step must use bf16+ logits (entropy is fine in bfp8,

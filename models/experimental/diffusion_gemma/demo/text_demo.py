@@ -248,6 +248,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate Gumbel noise on host and inject it, avoiding device ttnn.rand allocation",
     )
+    parser.add_argument(
+        "--chunked-gumbel-sampling",
+        action="store_true",
+        help="Generate device Gumbel noise in vocab chunks and reduce argmax without a full noise tensor",
+    )
+    parser.add_argument(
+        "--gumbel-vocab-chunk-size",
+        type=int,
+        default=1024,
+        help="Vocab chunk size for --chunked-gumbel-sampling",
+    )
     return parser
 
 
@@ -261,8 +272,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args) -> int:
-    if args.argmax_sampling and args.host_gumbel_sampling:
-        raise ValueError("choose at most one of --argmax-sampling and --host-gumbel-sampling")
+    sampling_modes = [args.argmax_sampling, args.host_gumbel_sampling, args.chunked_gumbel_sampling]
+    if sum(bool(mode) for mode in sampling_modes) > 1:
+        raise ValueError("choose at most one sampling workaround")
 
     zero_block_run = not args.build_only and (
         args.num_blocks == 0 or (args.num_blocks is None and args.max_new_tokens == 0)
@@ -326,6 +338,9 @@ def _run(args) -> int:
             generate_kwargs["gumbel_noise_fn"] = lambda block_idx: (lambda step: None)
         if args.host_gumbel_sampling:
             generate_kwargs["use_host_gumbel_noise"] = True
+        if args.chunked_gumbel_sampling:
+            generate_kwargs["use_chunked_gumbel_noise"] = True
+            generate_kwargs["gumbel_vocab_chunk_size"] = args.gumbel_vocab_chunk_size
         generation = generate_text_from_checkpoint_model_inputs(
             checkpoint_model_inputs,
             args.prompt,

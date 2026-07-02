@@ -380,6 +380,63 @@ def test_text_demo_host_gumbel_sampling_threads_generation_option(monkeypatch):
     assert "gumbel_noise_fn" not in kwargs
 
 
+def test_text_demo_chunked_gumbel_sampling_threads_generation_option(monkeypatch):
+    calls = {}
+
+    class _FakeMesh:
+        def get_num_devices(self):
+            return 1
+
+    fake_generation = SimpleNamespace(
+        generation=SimpleNamespace(
+            generated=torch.zeros((1, 32), dtype=torch.long),
+            trajectories=[object()],
+            prompt_len=32,
+            next_pos=64,
+        ),
+        sequences=torch.zeros((1, 64), dtype=torch.long),
+        text=["ok"],
+    )
+
+    def fake_generate(checkpoint_model_inputs, prompt, **kwargs):
+        calls["generate"] = (checkpoint_model_inputs, prompt, kwargs)
+        return fake_generation
+
+    monkeypatch.setattr(text_demo, "load_checkpoint_inputs", lambda *args, **kwargs: "checkpoint-inputs")
+    monkeypatch.setattr(text_demo, "_open_mesh_device", lambda mesh: _FakeMesh())
+    monkeypatch.setattr(text_demo, "_close_mesh_device", lambda mesh: calls.setdefault("closed", mesh))
+    monkeypatch.setattr(text_demo, "_log_mesh_dram", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        text_demo,
+        "build_tt_model_from_checkpoint_inputs",
+        lambda *args, **kwargs: SimpleNamespace(tokenizer="tok", tt_model="model", state_dict={}),
+    )
+    monkeypatch.setattr(text_demo, "generate_text_from_checkpoint_model_inputs", fake_generate)
+
+    assert (
+        text_demo.main(
+            [
+                "--checkpoint",
+                "/tmp/ckpt",
+                "--local-files-only",
+                "--chunked-gumbel-sampling",
+                "--gumbel-vocab-chunk-size",
+                "512",
+                "--num-blocks",
+                "1",
+                "--max-new-tokens",
+                "32",
+            ]
+        )
+        == 0
+    )
+
+    _, _, kwargs = calls["generate"]
+    assert kwargs["use_chunked_gumbel_noise"] is True
+    assert kwargs["gumbel_vocab_chunk_size"] == 512
+    assert "gumbel_noise_fn" not in kwargs
+
+
 def test_text_demo_rejects_conflicting_sampling_modes():
     with pytest.raises(ValueError, match="choose at most one"):
         text_demo.main(
@@ -389,5 +446,15 @@ def test_text_demo_rejects_conflicting_sampling_modes():
                 "--local-files-only",
                 "--argmax-sampling",
                 "--host-gumbel-sampling",
+            ]
+        )
+    with pytest.raises(ValueError, match="choose at most one"):
+        text_demo.main(
+            [
+                "--checkpoint",
+                "/tmp/ckpt",
+                "--local-files-only",
+                "--host-gumbel-sampling",
+                "--chunked-gumbel-sampling",
             ]
         )

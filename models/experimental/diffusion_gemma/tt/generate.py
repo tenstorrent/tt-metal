@@ -534,6 +534,33 @@ def make_seeded_host_gumbel_noise_fn(
     return gumbel_noise_for_block
 
 
+def make_seeded_chunked_gumbel_noise_fn(
+    *,
+    seed: int,
+    vocab_chunk_size: int = 1024,
+):
+    """Create lightweight chunked-Gumbel descriptors for ``generate_blocks``."""
+    seed = TS._validate_ttnn_rand_seed(seed)
+    if vocab_chunk_size <= 0:
+        raise ValueError("vocab_chunk_size must be positive")
+
+    def gumbel_noise_for_block(block_idx: int):
+        if isinstance(block_idx, bool) or not isinstance(block_idx, Integral):
+            raise ValueError("chunked Gumbel block index must be an integer")
+
+        def gumbel_noise_for_step(step: int):
+            if isinstance(step, bool) or not isinstance(step, Integral):
+                raise ValueError("chunked Gumbel step index must be an integer")
+            return TS.ChunkedGumbelNoise(
+                seed=seed + int(block_idx) * 1_000_003 + int(step),
+                vocab_chunk_size=vocab_chunk_size,
+            )
+
+        return gumbel_noise_for_step
+
+    return gumbel_noise_for_block
+
+
 def make_seeded_gumbel_noise_fn(
     mesh_device,
     *,
@@ -1151,6 +1178,8 @@ def generate_text_from_checkpoint_state(
     noise_seed: int | None = None,
     batch: int = 1,
     use_host_gumbel_noise: bool = False,
+    use_chunked_gumbel_noise: bool = False,
+    gumbel_vocab_chunk_size: int = 1024,
     adapter_kwargs: dict | None = None,
     logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
     generate_text_fn=generate_text,
@@ -1204,6 +1233,8 @@ def generate_text_from_checkpoint_state(
     if num_blocks > 0 and "gumbel_noise_fn" not in generate_kwargs and (seed is not None or gumbel_seed is not None):
         if vocab_size is None:
             raise ValueError("gumbel_noise_fn requires vocab_size or tokenizer/model vocab metadata")
+        if use_host_gumbel_noise and use_chunked_gumbel_noise:
+            raise ValueError("choose at most one generated Gumbel workaround")
         gumbel_seed_value = gumbel_seed if gumbel_seed is not None else seed + 2
         if use_host_gumbel_noise:
             gumbel_seed_value = _validate_host_rand_seed(gumbel_seed_value)
@@ -1213,6 +1244,11 @@ def generate_text_from_checkpoint_state(
                 canvas_len=config.canvas_length,
                 vocab_size=vocab_size,
                 seed=gumbel_seed_value,
+            )
+        elif use_chunked_gumbel_noise:
+            generate_kwargs["gumbel_noise_fn"] = make_seeded_chunked_gumbel_noise_fn(
+                seed=TS._validate_ttnn_rand_seed(gumbel_seed_value),
+                vocab_chunk_size=gumbel_vocab_chunk_size,
             )
         else:
             gumbel_seed_value = TS._validate_ttnn_rand_seed(gumbel_seed_value)

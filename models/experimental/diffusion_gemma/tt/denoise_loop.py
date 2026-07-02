@@ -214,7 +214,7 @@ def denoise_block(
             gumbel_noise=gumbel_noise,
             noise_tokens=noise_tokens,
         )
-        if gumbel_noise is not None:
+        if gumbel_noise is not None and hasattr(gumbel_noise, "deallocate"):
             gumbel_noise.deallocate(True)
         if noise_tokens is not None:
             noise_tokens.deallocate(True)
