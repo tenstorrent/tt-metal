@@ -4,7 +4,7 @@ import ttnn
 import torch
 
 from .common import DeepSeekV4Module, _HIFI4, _HIFI4_SDPA, _MASK_NEG, _profile
-from .layers import DeepSeekV4RMSNorm, Linear, _rms_norm_unweighted
+from .layers import DeepSeekV4RMSNorm, Linear, _rms_norm_unweighted, dram_width_sharded_weight
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
@@ -538,15 +538,28 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.eps = config.rms_norm_eps
         self.scaling = self.head_dim**-0.5
         cache = _as_cache(cache)
+        self.weight_dtype = weight_dtype
         print(f"weight_dtype: {weight_dtype}")
 
-        # self.q_a_proj = LinearDecode(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype, partial_width_sharded=True, k_blocks=2, n_blocks=32, N=1024)
-        self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
-        self.q_a_norm = DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"))
-        self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
-        self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
-        self.kv_norm = DeepSeekV4RMSNorm(weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"))
         self.o_b_proj = Linear(weights["o_b_proj.weight"], device, cache.file("o_b_proj"), dtype=weight_dtype)
+
+        # Fused decode QKV (attention.py `_qkv`) as one device op:
+        # q_a_proj -> q_a_norm -> q_b_proj -> per-head RMSNorm -> RoPE for Q, and
+        # kv_proj -> kv_norm -> RoPE for the shared K==V, on disjoint parallel cores.
+        # Weights are prepared once as DRAM WIDTH_SHARDED [K, N]; norm gains as
+        # DRAM-interleaved rows. bf16 keeps the fused-op PCC (>0.99) regardless of
+        # the model's storage dtype. Disable to fall back to the op-by-op path.
+        self.use_fused_qkv = True
+        if self.use_fused_qkv:
+            # The fused op subsumes q_a_proj/q_a_norm/q_b_proj/kv_proj/kv_norm, so the
+            # op-by-op projections are never built -- no redundant weight load.
+            self._prepare_fused_qkv(weights, cache)
+        else:
+            self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
+            self.q_a_norm = DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"))
+            self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
+            self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
+            self.kv_norm = DeepSeekV4RMSNorm(weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"))
 
         # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal
         # over o_groups. Store the per-group weight as [g, in_per_group, out_per_group]
@@ -662,6 +675,40 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
         return self._grouped_output(attn)  # already [B, 1, H, Dh] for the grouped proj
 
+    def _prepare_fused_qkv(self, weights, cache: WeightCache) -> None:
+        """One-time prep of the DRAM-sharded weights + norm gains for the fused
+        ``ttnn.experimental.deepseek_fused_qkv`` op (see :meth:`_qkv`).
+
+        The torch ``nn.Linear`` weights ``[out, in]`` become DRAM ``WIDTH_SHARDED``
+        ``[K=in, N=out]`` tensors (one width shard per bank); the RMSNorm gains
+        become DRAM-interleaved ``[1, 1, 1, dim]`` rows. Everything is kept in
+        ``bfloat16`` so the fused op holds its PCC bar irrespective of the model's
+        storage dtype.
+
+        Each prepared tensor is tile-cached under its own ``*_fused`` name so reruns
+        skip the (bf16) materialization + tilize entirely; the ``_fused`` suffix keeps
+        these width-sharded / row tiles from colliding with the op-by-op path's
+        interleaved tiles that share the same base weight name.
+        """
+
+        def prep_weight(key: str, name: str) -> ttnn.Tensor:
+            cfile = cache.file(name)
+            # ``None`` on a cache hit (source untouched); the torch weight otherwise.
+            w = _materialize(weights[key], cfile, self.weight_dtype)
+            return dram_width_sharded_weight(w, self.device, cache_file_name=cfile)
+
+        def prep_gain(key: str, name: str) -> ttnn.Tensor:
+            cfile = cache.file(name)
+            g = _materialize(weights[key], cfile, self.weight_dtype)
+            row = g.reshape(1, 1, 1, -1) if g is not None else None
+            return _load_weight(row, self.device, cache_file_name=cfile)
+
+        self._fused_wqa = prep_weight("q_a_proj.weight", "q_a_proj_fused")
+        self._fused_wqb = prep_weight("q_b_proj.weight", "q_b_proj_fused")
+        self._fused_wkv = prep_weight("kv_proj.weight", "kv_proj_fused")
+        self._fused_qa_g = prep_gain("q_a_norm.weight", "q_a_norm_fused")
+        self._fused_kv_g = prep_gain("kv_norm.weight", "kv_norm_fused")
+
     def _qkv(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Project + RoPE the query and (shared) K=V for ``hidden`` ``[B, S, 1, D]``.
 
@@ -680,9 +727,34 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         b, s, _, _ = hidden.shape  # B == 1, S == 1 (decode)
         h, dh = self.num_heads, self.head_dim
         _profile(self.device)
-        # hidden_input_memory_config = self.q_a_proj.get_input_memory_config(1, hidden.shape[3])
-        # hidden = ttnn.to_memory_config(hidden, hidden_input_memory_config)
-        print(f"hidden: {hidden.shape}")
+
+        if self.use_fused_qkv:
+            # The fused op reads hidden / cos / sin / trans_mat from DRAM-interleaved
+            # sources, so land hidden in DRAM (a no-op if it already is) and reuse the
+            # shared [32,32] rotate tile. q comes back [1, 1, 1, H*Dh]; reshape it into
+            # the per-head SDPA-decode layout, exactly as the op-by-op path did.
+            hidden_dram = (
+                hidden
+                if hidden.memory_config().buffer_type == ttnn.BufferType.DRAM
+                else ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
+            )
+            q, kv = ttnn.experimental.deepseek_fused_qkv(
+                hidden_dram,
+                self._fused_wqa,
+                self._fused_wqb,
+                self._fused_wkv,
+                self._fused_qa_g,
+                self._fused_kv_g,
+                cos,
+                sin,
+                _trans_mat_for(self.rot),
+                self.eps,
+                self.rope_dim,
+                self.num_heads,
+            )
+            q = ttnn.reshape(q, [1, 1, h, dh])  # [1, 1, H, Dh]
+            return q, kv
+
         q_a = self.q_a_norm(self.q_a_proj(hidden))
         q = self.q_b_proj(q_a)  # [B, S, H*Dh]
         q = ttnn.reshape(q, [1, 1, h, dh])

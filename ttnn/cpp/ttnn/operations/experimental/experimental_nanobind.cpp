@@ -43,6 +43,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_partial_rope/fused_partial_rope_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/deepseek_fused_qkv/deepseek_fused_qkv_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
@@ -126,6 +127,7 @@ void py_module(nb::module_& mod) {
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
     transformer::bind_fused_partial_rope(mod);
+    transformer::bind_deepseek_fused_qkv(mod);
     transformer::bind_rotate_half(mod);
 
     create_qkv_heads::detail::bind_create_qkv_heads(mod);

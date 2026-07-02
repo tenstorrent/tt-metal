@@ -204,3 +204,72 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     """Unweighted RMSNorm over the last dim (matches ``DeepseekV4UnweightedRMSNorm``)."""
     return ttnn.rms_norm(x, epsilon=eps)
+
+
+# ---------------------------------------------------------------------------- #
+# DRAM-sharded weight prep for the fused-QKV decode op
+# (``ttnn.experimental.deepseek_fused_qkv``)
+# ---------------------------------------------------------------------------- #
+def dram_num_banks(device: ttnn.MeshDevice) -> int:
+    """Number of DRAM banks on ``device`` (the WIDTH-shard fan-out for weights)."""
+    g = device.dram_grid_size()
+    return g.x * g.y
+
+
+def dram_width_sharded_weight(
+    weight: torch.Tensor,
+    device: ttnn.MeshDevice,
+    *,
+    num_banks: Optional[int] = None,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+    cache_file_name: Optional[str] = None,
+    already_kn: bool = False,
+) -> ttnn.Tensor:
+    """Build a DRAM ``WIDTH_SHARDED`` weight for the fused-QKV op.
+
+    ``weight`` is a torch ``nn.Linear`` weight ``[out, in]`` (transposed to the
+    ``[K=in, N=out]`` layout ttnn matmul wants), unless ``already_kn`` is set (then
+    it is taken as ``[K, N]`` directly). ``N`` is padded up to ``TILE * num_banks``
+    and width-sharded ROW_MAJOR so bank ``b`` holds columns ``[b*Nc, (b+1)*Nc)``
+    (``Nc = padded_N / num_banks``). Each per-bank shard is the full ``[K, Nc]``.
+
+    ``weight`` may be ``None`` only on a verified cache hit (the caller passed a
+    ``cache_file_name`` whose tile already exists): the serialized spec carries the
+    width-sharded layout, so the K/N shard-config work below is skipped and the
+    tensor is loaded straight from disk (``as_tensor`` needs a ``memory_config``
+    when a device is given but ignores it on a cache-hit load).
+    """
+    if weight is None:
+        return ttnn.as_tensor(
+            None,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file_name,
+        )
+
+    grid = device.dram_grid_size()
+    if num_banks is None:
+        num_banks = grid.x * grid.y
+
+    w = weight if already_kn else weight.t().contiguous()
+    k, n = int(w.shape[0]), int(w.shape[1])
+    tile = ttnn.TILE_SIZE
+    step = tile * num_banks
+    padded_n = ((n + step - 1) // step) * step
+    if padded_n != n:
+        w = torch.nn.functional.pad(w, (0, padded_n - n))
+    nc = padded_n // num_banks
+
+    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_spec = ttnn.ShardSpec(dram_grid, [k, nc], ttnn.ShardOrientation.ROW_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    return ttnn.as_tensor(
+        w,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        cache_file_name=cache_file_name,
+    )

@@ -40,6 +40,17 @@ KV = 1024  # kv_proj output width (self_attn.kv_proj)
 N_EXPERTS = 256  # config.n_routed_experts (router gate output width)
 HC_WIDTH = 16384  # hc_mult * hidden_size (hyper-connection stacked streams)
 
+# The embedding op marks the start of each decode forward pass. In practice a single
+# forward pass issues the embedding op a *cluster* of times (once per device shard),
+# so consecutive embedding ops that are close together belong to the same iteration;
+# a large row gap separates one iteration from the next. The first iteration folds in
+# one-time configuration / setup cost (e.g. the initial weight-distribution CCL send),
+# so by default we drop everything up to the *second* embedding cluster and report
+# only steady-state iterations.
+EMBEDDING_OP = "EmbeddingsDeviceOperation"
+# Embedding ops within this many rows of each other are treated as the same iteration.
+EMBEDDING_CLUSTER_GAP = 1000
+
 
 # --------------------------------------------------------------------------- #
 # Shape helpers
@@ -179,6 +190,30 @@ def parse_csv(path: str) -> list[Op]:
     return ops
 
 
+def _second_embedding_row_index(codes: list[str]) -> Optional[int]:
+    """Return the row index that starts the *second* embedding cluster, or None.
+
+    ``codes`` is the OP CODE column in execution order (including signpost markers).
+    Embedding ops fire in clusters (one per device shard) at the head of each decode
+    iteration; consecutive occurrences within ``EMBEDDING_CLUSTER_GAP`` rows are the
+    same iteration. Everything before the returned index is the first (setup)
+    iteration and should be dropped.
+    """
+    emb = [i for i, code in enumerate(codes) if code == EMBEDDING_OP]
+    if len(emb) < 2:
+        return None
+    for prev, cur in zip(emb, emb[1:]):
+        if cur - prev > EMBEDDING_CLUSTER_GAP:
+            return cur  # first embedding of the second cluster
+    return None
+
+
+def trim_warmup(ops: list[Op]) -> list[Op]:
+    """Drop the first decode iteration (up to the second embedding cluster)."""
+    idx = _second_embedding_row_index([o.code for o in ops])
+    return ops[idx:] if idx is not None else ops
+
+
 METRICS = {
     "device": ("DEVICE KERNEL DURATION", lambda o: o.device_ns),
     "host": ("HOST DURATION", lambda o: o.host_ns),
@@ -230,7 +265,7 @@ def print_report(buckets: dict[str, Bucket], total: float, metric: str, n_ops: i
     print()
 
 
-def analyze_signposts(path: str, metric: str) -> tuple[dict[str, Bucket], float]:
+def analyze_signposts(path: str, metric: str, drop_warmup: bool = True) -> tuple[dict[str, Bucket], float]:
     """Ground-truth attribution using ``_region`` Tracy signposts.
 
     Signpost markers land in the profile as pseudo-op rows whose ``OP CODE`` ends
@@ -245,29 +280,34 @@ def analyze_signposts(path: str, metric: str) -> tuple[dict[str, Bucket], float]
     stack: list[str] = []
     total = 0.0
     with open(path, newline="") as f:
-        for row in csv.DictReader(f):
-            code = row["OP CODE"]
-            if code.endswith("_START"):
-                stack.append(code[: -len("_START")])
-                continue
-            if code.endswith("_END"):
-                name = code[: -len("_END")]
-                if name in stack:  # pop back to the matching frame (robust to gaps)
-                    del stack[stack.index(name) :]
-                continue
-            op = Op(
-                code=code,
-                device_ns=float(row.get("DEVICE KERNEL DURATION [ns]") or 0),
-                host_ns=float(row.get("HOST DURATION [ns]") or 0),
-                op_to_op_ns=float(row.get("OP TO OP LATENCY [ns]") or 0),
-                in0=(None, None),
-                in1=(None, None),
-                out0=(None, None),
-                attributes="",
-            )
-            v = getter(op)
-            buckets[stack[-1] if stack else "(outside_regions)"].add(op, v)
-            total += v
+        rows = list(csv.DictReader(f))
+    if drop_warmup:
+        cut = _second_embedding_row_index([r["OP CODE"] for r in rows])
+        if cut is not None:
+            rows = rows[cut:]
+    for row in rows:
+        code = row["OP CODE"]
+        if code.endswith("_START"):
+            stack.append(code[: -len("_START")])
+            continue
+        if code.endswith("_END"):
+            name = code[: -len("_END")]
+            if name in stack:  # pop back to the matching frame (robust to gaps)
+                del stack[stack.index(name) :]
+            continue
+        op = Op(
+            code=code,
+            device_ns=float(row.get("DEVICE KERNEL DURATION [ns]") or 0),
+            host_ns=float(row.get("HOST DURATION [ns]") or 0),
+            op_to_op_ns=float(row.get("OP TO OP LATENCY [ns]") or 0),
+            in0=(None, None),
+            in1=(None, None),
+            out0=(None, None),
+            attributes="",
+        )
+        v = getter(op)
+        buckets[stack[-1] if stack else "(outside_regions)"].add(op, v)
+        total += v
     return buckets, total
 
 
@@ -282,6 +322,12 @@ def main() -> int:
     )
     ap.add_argument("--no-ops", action="store_true", help="hide the per-op-code breakdown")
     ap.add_argument(
+        "--keep-warmup",
+        action="store_true",
+        help="keep the first decode iteration (setup/config cost); by default everything "
+        "up to the second embedding op is dropped so only steady-state iterations count",
+    )
+    ap.add_argument(
         "--mode",
         choices=("auto", "signpost", "heuristic"),
         default="auto",
@@ -295,19 +341,28 @@ def main() -> int:
     has_markers = any(o.code.endswith(("_START", "_END")) for o in ops)
     use_signpost = args.mode == "signpost" or (args.mode == "auto" and has_markers)
 
+    drop_warmup = not args.keep_warmup
+    if drop_warmup and _second_embedding_row_index([o.code for o in ops]) is None:
+        print(f"  note: could not locate a 2nd '{EMBEDDING_OP}' cluster; cannot drop warmup iteration")
+        drop_warmup = False
+
     if use_signpost:
         if not has_markers:
             print("  no signpost markers found in this CSV; re-run with --mode heuristic")
             return 1
-        buckets, total = analyze_signposts(args.csv, args.metric)
+        buckets, total = analyze_signposts(args.csv, args.metric, drop_warmup=drop_warmup)
         n_ops = sum(b.count for b in buckets.values())
         print("  attribution: SIGNPOST regions (ground truth)")
     else:
         # Heuristic mode: drop the marker pseudo-ops before classifying.
         ops = [o for o in ops if not o.code.endswith(("_START", "_END"))]
+        if drop_warmup:
+            ops = trim_warmup(ops)
         buckets, total = analyze(ops, args.metric)
         n_ops = len(ops)
         print("  attribution: HEURISTIC op/shape rules")
+    if drop_warmup:
+        print("  warmup: dropped first iteration (ops before 2nd embedding cluster)")
     print_report(buckets, total, args.metric, n_ops, show_ops=not args.no_ops)
 
     if args.json:

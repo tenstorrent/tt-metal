@@ -85,6 +85,8 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     rotary_embedding_hf/rotary_embedding_hf.cpp
     fused_partial_rope/device/fused_partial_rope_device_operation.cpp
     fused_partial_rope/fused_partial_rope.cpp
+    deepseek_fused_qkv/device/deepseek_fused_qkv_device_operation.cpp
+    deepseek_fused_qkv/deepseek_fused_qkv.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS

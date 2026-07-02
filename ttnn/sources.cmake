@@ -261,6 +261,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/fused_partial_rope/fused_partial_rope_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/deepseek_fused_qkv/deepseek_fused_qkv_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.cpp

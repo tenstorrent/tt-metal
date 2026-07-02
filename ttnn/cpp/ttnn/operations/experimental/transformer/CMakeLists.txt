@@ -35,6 +35,7 @@ file(
     rotary_embedding_llama/device/kernels/*
     rotary_embedding_llama_fused_qk/device/kernels/*
     fused_partial_rope/device/kernels/*
+    deepseek_fused_qkv/device/kernels/*
     rotate_half/device/kernels/*
     split_query_key_value_and_split_heads/device/kernels/*
     dit_layernorm_pre_all_gather/device/kernels/*
