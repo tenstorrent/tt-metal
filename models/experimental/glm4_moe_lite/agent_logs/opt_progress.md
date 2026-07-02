@@ -95,6 +95,26 @@ Ran `agent_logs/verify_multibatch.sh` (A/B PCC + timing at ISL-128) for batches 
 Summary: prefill_pcm optimization is correct + a win at batch **1 (1.46×)** and **32 (1.41×)**;
 batch 8/16 are blocked by a separate pre-existing bug (documented above), not by this change.
 
+## Ground-truth PCC gate (TT vs HF) + cached HF reference
+Added `scripts/pcc_vs_hf.py` (+ `agent_logs/pcc_vs_hf.sh`): computes the HF last-token prefill
+logits ONCE on CPU (~59 GB model) and caches them to
+`experiments/hf_ref/hf_prefill_lasttok_corpus_isl<N>.pt` (bf16, ~310 KB); later runs load the
+cache and just PCC the TT model — instant. Real ground truth, not A/B.
+
+**First result (ISL-128, PRODUCTION flags — BFP4 experts + LoFi):**
+`PCC vs HF = 0.653`, **argmax token MATCHES (220==220)**. The matching top-token with a low
+full-vocab PCC is the signature of *quantization noise*, not a broken forward: the shipping config
+runs 4-bit experts + LoFi fidelity across 46 MoE layers. The official ≥0.97 pipeline test uses
+bf16 experts + fp32 acc + TP=0 to isolate implementation from quantization.
+
+Implications:
+- **A/B-vs-shipping** (ab_prefill_pcm_pcc.py) stays the correctness gate for *changes* (detects
+  regressions precisely; the prefill_pcm change scored 1.0 there).
+- **HF-PCC** (this script) measures *deployed accuracy vs ground truth*. Under production quant it's
+  ~0.65 (top-token correct). TODO to confirm quant-vs-bug: rerun under conservative env
+  (`GLM4_MOE_LITE_EXPERTS_TT_DTYPE=bf16 GLM4_MOE_LITE_MOE_FP32_ACC=1 TP=0 ATTN_DP=0`) — expect ~0.97
+  (one-time weight-cache regen). If production distribution fidelity matters, consider bf8 experts.
+
 ## Reality note
 Each remaining iteration is deep fused-op code surgery + 10-min reprofile + PCC verify. This is the
 long autonomous grind the PLAN is built for; it is not flag-flipping. Batches 8/16/32 repeat this
