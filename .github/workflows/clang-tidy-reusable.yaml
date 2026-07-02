@@ -249,6 +249,7 @@ jobs:
           fi
 
       - name: Post inline clang-tidy suggestions on PR
+        id: post_suggestions
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
         continue-on-error: true
         env:
@@ -257,14 +258,53 @@ jobs:
           # /tmp is noexec (--tmpfs /tmp). Install reviewdog to /usr/local/bin instead.
           curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh \
             | sh -s -- -b /usr/local/bin v0.21.0
-          git diff | reviewdog \
-            -f diff \
-            -name clang-tidy \
-            -reporter github-pr-review \
-            -filter-mode diff_context \
-            -level warning \
-            -fail-level none \
-            -fail-on-error false
+
+          set +e
+          LOG="${RUNNER_TEMP}/reviewdog.log"
+          rc=1
+          for attempt in 1 2; do
+            git diff | reviewdog \
+              -f diff \
+              -name clang-tidy \
+              -reporter github-pr-review \
+              -filter-mode diff_context \
+              -level warning \
+              -fail-level none \
+              -fail-on-error false > "$LOG" 2>&1
+            rc=$?
+            [ $rc -eq 0 ] && break
+            echo "attempt $attempt failed (exit $rc); retrying in 15s" | tee -a "$LOG"
+            sleep 15
+          done
+          cat "$LOG"
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          echo "log_path=$LOG" >> "$GITHUB_OUTPUT"
+          exit $rc
+
+      # This step, not the previous one, decides whether a posting failure fails the job.
+      # A real clang-tidy violation NEVER fails this job (see the "Analyze code with
+      # clang-tidy" step's _ALLOW_VIOLATIONS logic) — inline PR comments from the step
+      # above are the ONLY way a violation is ever surfaced to a human in this mode. So a
+      # silent posting failure here would mean real violations go completely unseen with a
+      # green job. We only allow that silently for failures we can identify as transient
+      # infra hiccups (5xx/timeout/rate-limit); anything else fails the job loudly instead
+      # of risking a false pass.
+      - name: Classify clang-tidy suggestion posting result
+        if: ${{ always() && inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
+        run: |
+          if [ "${{ steps.post_suggestions.outcome }}" != "failure" ]; then
+            exit 0
+          fi
+          LOG="${{ steps.post_suggestions.outputs.log_path }}"
+          if [ -f "$LOG" ] && grep -qiE '5(0[0-9]|02|03|04)\b|rate.?limit|time(d)? ?out|connection reset|temporary failure' "$LOG"; then
+            echo "::warning title=clang-tidy suggestions not posted (transient)::reviewdog failed on a transient GitHub API/network error after retries; treating as non-blocking."
+            { echo "### ⚠️ clang-tidy inline suggestions not posted (transient)"; echo '```'; tail -n 40 "$LOG"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          else
+            echo "::error title=clang-tidy suggestion posting failed::Non-transient reviewdog failure — real violations may be silently unposted on this PR."
+            { echo "### ❌ clang-tidy inline suggestions FAILED to post (non-transient)"; echo '```'; tail -n 80 "$LOG"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Publish Ccache summary
         if: always()
