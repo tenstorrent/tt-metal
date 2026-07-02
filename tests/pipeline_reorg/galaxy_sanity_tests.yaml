@@ -26,7 +26,8 @@
 
     pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "Wan_shape_17 and check" --timeout=300
     pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "medium_5d_h0w1 and general_4x8_1link" --timeout=300
-
+    
+    # TODO: Fix Eth Heartbeat Failures --> https://github.com/tenstorrent/tt-metal/issues/45740
     # TODO: Enable these tests once Fabric Manager is ready
     # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
     # ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
