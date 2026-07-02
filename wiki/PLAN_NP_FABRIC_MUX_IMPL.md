@@ -177,6 +177,18 @@ H-MUX STEPS (mirror the proven W-mux; reuse mux machinery):
    - STARTUP BARRIER: try dropping (as W-mux did); if PCC section-diff shows stale H-section, restore it.
    - BRING-UP: TT_NP_H_MUX=1 + 1 worker PCC (section-diff) -> multi-worker -> perf. Expect ~660->~380us.
   [x] FACTORY WIRED (gated TT_NP_H_MUX). Builds clean; default (no env) full PCC 4/4 intact.
+  [x] HANG FIXED via tt-triage (needs ttexalens 0.3.21, --skip-version-check; Watcher unusable on 2x4).
+      Root cause: np_h_mux_writer never drained c_in0 (np_h_reader's is_first local-pad output) + used raw
+      not direction-adjusted is_first/is_last. Fixed: writer does the is_first local padding fill
+      (zeros/replicate) to the compact H-section + adjusted args (has_neighbor=!is_last_chip).
+  [x] H-mux RUNS, H-DATA CORRECT: Htop/Hbot byte-exact on all 8 devices; 5/8 fully pass (1-worker).
+  [ ] REMAINING: W-section corners race (3/8 fail, PCC 0.95-0.98, H-last row). The W reader gates on the
+      H->W barrier (= this device's H-SEND done, signaled by H-mux writers) but reads incoming-H corners
+      that need this device's H-RECV done. The standard path makes these coincide via the STARTUP BARRIER
+      (mesh sync) which I dropped for H-mux. FIX: restore an H startup barrier (1-hop pairwise via mux, or
+      port np_writer's H multicast), OR gate the W barrier on h_neighbor_sem (H-recv) instead of H-send.
+  [ ] then multi-worker + perf.
+  --- superseded connect-hang note below (was a DPRINT-drain artifact, not the real bug) ---
   [ ] BRING-UP IN PROGRESS: 1-worker H-mux HANGS at the mux CONNECT phase (DPRINT: HMUX_A for all workers,
       only partial HMUX_B/connected). Ruled out: core placement (BH compute grid 11x10; H-mux cols 0-6 fit).
       Remaining suspects (mirror W-mux connect debug): mux kernel not reaching READY for H (get_fabric_mux_
