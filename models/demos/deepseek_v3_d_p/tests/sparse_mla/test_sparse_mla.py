@@ -82,13 +82,13 @@ def _sparse_cases(seqs, anchor_only):
     """Generate (variant, mesh, seq_len) params for the CURRENT box — only valid combos, so the
     collected matrix equals the run matrix (validity is enforced here, not via runtime skips)."""
     meshes = _sparse_meshes()
+    chosen = [_anchor_mesh(meshes)] if (anchor_only and meshes) else meshes
     cases = []
-    for variant_name in SPARSE_VARIANTS:
-        chosen = [_anchor_mesh(meshes)] if (anchor_only and meshes) else meshes
-        for mesh in chosen:
-            for seq_len in seqs:
-                if not _seq_ok_for_mesh(seq_len, mesh):
-                    continue
+    for mesh in chosen:
+        for seq_len in seqs:
+            if not _seq_ok_for_mesh(seq_len, mesh):
+                continue
+            for variant_name in SPARSE_VARIANTS:
                 cases.append(
                     pytest.param(variant_name, mesh, seq_len, id=f"{variant_name}-{mesh[0]}x{mesh[1]}-seq{seq_len}")
                 )
