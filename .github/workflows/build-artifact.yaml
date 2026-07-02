@@ -74,8 +74,10 @@ on:
         type: string
         default: ""
         description: >-
-          Platform string (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04').
+          Platform string (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04', 'manylinux').
           If provided, overrides distro/version/toolchain.
+          Use 'manylinux' to build C++ inside the manylinux container,
+          which shares ccache keys with wheel builds for better cache utilization.
       fetch-depth:
         required: false
         type: number
@@ -219,7 +221,10 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
-        description: "Target Platform"
+          - "manylinux"
+        description: >-
+          Target Platform. Use 'manylinux' to build C++ inside the manylinux
+          container for better ccache sharing with wheel builds.
       build-type:
         required: false
         type: string
@@ -263,11 +268,13 @@ jobs:
   # =============================================================================
   # This workflow handles platform parsing internally via the parse-platform job.
   # Callers should NOT run their own parse-platform job - just pass:
-  #   - platform: "Ubuntu 22.04" or "Ubuntu 24.04"
+  #   - platform: "Ubuntu 22.04", "Ubuntu 24.04", or "manylinux"
   #   - enable-lto: true/false (optional, defaults based on platform)
   #
   # The parse-platform job converts the platform string to distro/version/toolchain
   # and applies platform-specific defaults (e.g., LTO settings).
+  # When platform is "manylinux", the build-artifact job uses the manylinux
+  # container instead of ci-build, sharing ccache keys with wheel builds.
   # =============================================================================
 
   # Parse platform dropdown to extract distro/version/toolchain
@@ -279,6 +286,7 @@ jobs:
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
       python-version: ${{ steps.parse.outputs.python-version }}
+      use-manylinux: ${{ steps.parse.outputs.use-manylinux }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -304,9 +312,11 @@ jobs:
   # to be skipped, but downstream jobs still need to run.
   # =============================================================================
 
-  # Only build docker images if pre-built tags are not provided
+  # Only build docker images if pre-built tags are not provided.
+  # Trigger when ci-build image is missing (normal platforms) OR when manylinux
+  # image is missing and the platform requests it.
   build-docker-image:
-    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    if: ${{ always() && !failure() && !cancelled() && (inputs.ci-build-docker-image == '' || inputs.manylinux-docker-image == '') }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
@@ -400,11 +410,17 @@ jobs:
       CCACHE_S3_READONLY: "false"
       CCACHE_S3_DEBUG: "true"
     container:
-      # Callers that pre-resolve via resolve-docker-pull-refs pass already-prefixed
-      # tags with harbor-prefix=''; callers with raw GHCR tags pass harbor-prefix
-      # from check-harbor. Either way format(prefix, tag) produces the right ref.
+      # When platform is "manylinux", use the manylinux image so that the C++ build
+      # shares the same compiler environment (and ccache keys) as the wheel build.
+      # Otherwise, use the standard ci-build image.
       image: >-
         ${{
+          (needs.parse-platform.outputs.use-manylinux == 'true' && (
+            (inputs.manylinux-docker-image != '' &&
+              format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image)) ||
+            format('{0}{1}', inputs.harbor-prefix,
+              needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
+          )) ||
           (inputs.ci-build-docker-image != '' &&
             format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image)) ||
           format('{0}{1}', inputs.harbor-prefix,
