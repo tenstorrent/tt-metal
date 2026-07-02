@@ -88,12 +88,27 @@ void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix = ""
  * */
 MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type);
 
+/**
+ * Reset the persistent bottom-up DRAM high-water mark to 0.
+ *
+ * Unlike the existing HWM tracked through BeginDramHighWaterMarkTracking, this
+ * counter is always on, tracks only bottom-up allocations, and is never reset
+ * by trace internals. Intended for end-to-end memory profiling: call this
+ * before the workload, run, then read MemoryView::allocation_high_water_mark_per_bank
+ * via GetMemoryView(device, BufferType::DRAM).
+ */
+void ResetDramPersistentBottomUpHwm(IDevice* device);
+
 struct MemoryView {
     std::uint64_t num_banks = 0;
     size_t total_bytes_per_bank = 0;
     size_t total_bytes_allocated_per_bank = 0;
     size_t total_bytes_free_per_bank = 0;
     size_t largest_contiguous_bytes_free_per_bank = 0;
+    // Highest end-address ever consumed by bottom-up allocations.
+    // Populated for BufferType::DRAM only (0 otherwise). Persistent across
+    // trace internals; reset explicitly via ResetDramPersistentBottomUpHwm.
+    size_t allocation_high_water_mark_per_bank = 0;
     MemoryBlockTable block_table;
 };
 

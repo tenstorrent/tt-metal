@@ -472,6 +472,12 @@ uint64_t BankManager::allocate_buffer(
             allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
         }
 
+        // Persistent bottom-up HWM: always-on, only bottom-up allocs.
+        if (bottom_up) {
+            DeviceAddr end_address = address.value() + size_per_bank;
+            persistent_bottom_up_hwm_ = std::max(persistent_bottom_up_hwm_, end_address);
+        }
+
         // No neighbors, nothing to invalidate
         return address.value();
     }
@@ -535,6 +541,12 @@ uint64_t BankManager::allocate_buffer(
         // are done in interleaved space where both allocations have the same bank offset applied
         DeviceAddr end_address = address.value() + size_per_bank;
         allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+    }
+
+    // Persistent bottom-up HWM: always-on, only bottom-up allocs.
+    if (bottom_up) {
+        DeviceAddr end_address = address.value() + size_per_bank;
+        persistent_bottom_up_hwm_ = std::max(persistent_bottom_up_hwm_, end_address);
     }
 
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
@@ -633,6 +645,10 @@ DeviceAddr BankManager::get_high_water_mark() const {
 DeviceAddr BankManager::get_allocation_high_water_mark() const { return allocation_high_water_mark_; }
 
 DeviceAddr BankManager::get_deletion_high_water_mark() const { return deletion_high_water_mark_; }
+
+DeviceAddr BankManager::get_persistent_bottom_up_hwm() const { return persistent_bottom_up_hwm_; }
+
+void BankManager::reset_persistent_bottom_up_hwm() { persistent_bottom_up_hwm_ = 0; }
 
 void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);
