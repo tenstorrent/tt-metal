@@ -147,12 +147,12 @@ class ResNet50TestInfra:
         self.resnet50_first_conv_kernel_size = 3
         self.resnet50_first_conv_stride = 2
 
-        # Batch 1-2 don't shard cleanly across a full compute grid, but they DO fit the tiny 2x3
-        # emulator / craq-sim grid (<=2 cores) — which is exactly the small-grid bring-up the LLK team
-        # runs. Only skip on larger grids; let small batch through on a 1-2 core device.
-        _compute_grid = device.compute_with_storage_grid_size()
-        if batch_size <= 2 and _compute_grid.x * _compute_grid.y > 2:
-            pytest.skip("Batch size 1 and 2 are not supported with sharded data on grids larger than 2 cores")
+        # Batch 1-2 were only validated as unsupported on the Wormhole/Blackhole silicon targets. On the
+        # Quasar sim/emulator they run on BOTH the 2x3 grid AND the full 32-core grid (the latter is ~16x
+        # faster since per-core work = total/num_cores) — the small-grid bring-up path the LLK team uses.
+        # So skip only on WH/BH; let small batch through on Quasar.
+        if batch_size <= 2 and (is_wormhole_b0() or is_blackhole()):
+            pytest.skip("Batch size 1 and 2 are not supported with sharded data on Wormhole/Blackhole")
         elif batch_size == 8:
             pytest.skip("Skipping batch size 8 due to memory config issue")
         elif is_wormhole_b0() and batch_size == 20:
