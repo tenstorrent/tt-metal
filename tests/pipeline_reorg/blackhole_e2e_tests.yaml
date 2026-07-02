@@ -79,6 +79,17 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- id: bh-diffusion-gemma-run-smoke
+  name: DiffusionGemma RUN-first text demo smoke
+  tags: [model, diffusion_gemma]
+  model-name: diffusion_gemma
+  cmd: DG_RUN_DEVICE=1 DG_TEXT_DEMO_NUM_LAYERS=1 pytest models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py -q --timeout=240
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - id: bh-grid-110-cores-panoptic-deeplab
   name: 110 cores panoptic-deeplab
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
