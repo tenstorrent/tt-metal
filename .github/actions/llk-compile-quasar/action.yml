@@ -15,9 +15,9 @@ inputs:
     required: false
     default: '1'
   num-workers:
-    description: 'Number of pytest-xdist workers (-n). Defaults to "auto" (one per CPU). Set higher than nproc to overprovision and hide pytest collection overhead.'
+    description: 'Number of pytest-xdist workers (-n). "auto" (one per CPU) OOM''d on a 40-core xlarge runner even with -Os and serial inner builds; 30 is the current known-safe value there. Override per-call if a different runner size needs a different number.'
     required: false
-    default: 'auto'
+    default: '30'
 
 runs:
   using: composite
