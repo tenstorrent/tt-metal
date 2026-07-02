@@ -59,6 +59,7 @@ ttnn_dtype_to_torch_dtype = {
     ttnn.int32: torch.int32,
     ttnn.bfloat16: torch.float32,
     ttnn.bfloat8_b: torch.bfloat16,
+    ttnn.bfloat4_b: torch.bfloat16,
     ttnn.float32: torch.float32,
 }
 
@@ -124,12 +125,20 @@ def test_fill_pad_float(
     ],
 )
 
-# separate test for bfloat8_b where last dim is tile_width aligned (required for bf8b)
-@pytest.mark.parametrize("fill_value", [1.5, float("inf"), float("-inf")])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+# separate test for block-float (bfloat8_b/bfloat4_b) where last dim is tile_width aligned (required for block-float)
+# bfloat4_b's 3-bit mantissa can't represent +/-inf reliably, so exercise inf/-inf on bfloat8_b only.
+@pytest.mark.parametrize(
+    "dtype, fill_value",
+    [
+        (ttnn.bfloat8_b, 1.5),
+        (ttnn.bfloat8_b, float("inf")),
+        (ttnn.bfloat8_b, float("-inf")),
+        (ttnn.bfloat4_b, 1.5),
+    ],
+)
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_fill_pad_bfloat8_b(
+def test_fill_pad_block_float(
     device,
     shape,
     fill_value,
@@ -148,14 +157,14 @@ def test_fill_pad_bfloat8_b(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
-    # Guard against the rank>3 dtype leak: BFLOAT8_B inputs typecast through BFLOAT16 internally,
-    # but the helper must cast back to BFLOAT8_B on every return path (incl. the rank>3 reshape branch).
+    # Guard against the rank>3 dtype leak: block-float inputs typecast through BFLOAT16 internally,
+    # but the helper must cast back to the input dtype on every return path (incl. the rank>3 reshape branch).
     assert (
         output_tensor.dtype == dtype
     ), f"fill_implicit_tile_padding leaked dtype: expected {dtype}, got {output_tensor.dtype}"
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    # bfloat8_b is a reduced-precision format; keep PCC-based validation for stability.
+    # block-float is a reduced-precision format; keep PCC-based validation for stability.
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
 
 

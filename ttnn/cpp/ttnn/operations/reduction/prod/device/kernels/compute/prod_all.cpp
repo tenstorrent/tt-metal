@@ -5,64 +5,43 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/debug/dprint_pages.h"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const tt::CBIndex input_cb = tt::CBIndex::c_0;
-    const tt::CBIndex partial_prod_cb = tt::CBIndex::c_2;
     const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
 
     CircularBuffer input_cb_obj(input_cb);
-    CircularBuffer partial_prod_cb_obj(partial_prod_cb);
     CircularBuffer final_output_cb_obj(final_output_cb);
 
     const int one_tile = 1;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
-    binary_op_init_common(input_cb, partial_prod_cb, final_output_cb);
 
-    reconfig_data_format(input_cb, partial_prod_cb);
+    binary_op_init_common(input_cb, input_cb, final_output_cb);
     pack_reconfig_data_format(final_output_cb);
 
-    // Ultimate goal is to have a single tile in the final output cb
     final_output_cb_obj.reserve_back(one_tile);
 
-    // Copy the first tile to DST[0]
-    input_cb_obj.wait_front(one_tile);
+    // The running product lives in DEST[0] for the whole reduction. Unlike the previous
+    // implementation it is never spilled to an intermediate CB, so with fp32_dest_acc_en the
+    // accumulation stays fp32 and is never re-quantized to block-float between tiles.
     tile_regs_acquire();
 
+    // Seed DEST[0] with the first input tile.
+    input_cb_obj.wait_front(one_tile);
     copy_tile_to_dst_init_short(input_cb);
-    copy_tile(input_cb, 0, 0);  // copy from c_in[0] to DST[0]
-
+    copy_tile(input_cb, 0, 0);
     input_cb_obj.pop_front(one_tile);
-    mul_tiles_init(input_cb, partial_prod_cb);
 
-    // When we have more than one tile, we can do the tile-wise multiplication of them all to yield one final tile
+    // Fold each remaining tile in: DEST[0] = DEST[0] * next_tile. DEST_TO_SRCA loads the running
+    // product from DEST into SRCA, so no circular-buffer round-trip is needed for the accumulator.
+    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_cb);
     for (uint32_t t = 1; t < num_tiles; t++) {
-        // Save the current partial prod into CB
-        tile_regs_commit();
-        tile_regs_wait();
-
-        partial_prod_cb_obj.reserve_back(one_tile);
-        pack_tile(0, partial_prod_cb);
-        partial_prod_cb_obj.push_back(one_tile);
-        tile_regs_release();
-
-        // Load the next input tile and multiply it with the partial prod
         input_cb_obj.wait_front(one_tile);
-
-        tile_regs_acquire();
-
-        mul_tiles(input_cb, partial_prod_cb, /*tile0=*/0, /*tile1=*/0, /*dst_tile=*/0);
-
+        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_cb, 0, 0);
         input_cb_obj.pop_front(one_tile);
-        partial_prod_cb_obj.pop_front(one_tile);
     }
 
     tile_regs_commit();

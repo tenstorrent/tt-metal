@@ -158,9 +158,11 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
     // Accumulate the running product in full fp32 precision when the tensor is fp32; otherwise the
     // dst register would round each partial product to bf16 and defeat the purpose of fp32 input.
     const bool fp32_dest_acc_en = input.dtype() == DataType::FLOAT32;
-    // On Wormhole, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
-    // (see tenstorrent/tt-metal#38306); use HiFi3 in that case.
-    const auto math_fidelity = fp32_dest_acc_en ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    // On Wormhole B0, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
+    // (see tenstorrent/tt-metal#38306); drop to HiFi3 only on that arch. Other architectures keep HiFi4.
+    const bool needs_wh_fp32_workaround = fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0;
+    const auto math_fidelity =
+        needs_wh_fp32_workaround ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
 
     KernelDescriptor compute_desc_1;
     compute_desc_1.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";

@@ -99,3 +99,39 @@ def test_prod_all_block_float(shapes, npu_dtype, device):
     tt_output = ttnn.to_torch(tt_result).flatten()[0]
     logger.info(f"{npu_dtype} full-product: expected={torch_output.item()} got={tt_output.item()}")
     assert torch.isclose(tt_output, torch_output, atol=1e-2), f"expected {torch_output.item()}, got {tt_output.item()}"
+
+
+def _block_float_nontrivial_input(shape):
+    # Non-trivial but block-float-exact input: values are integer multiples of 0.25 with |k| <= 7,
+    # which are represented exactly in bfp4_b/bfp8_b (block max stays < 2.0, so the step is 0.25).
+    # Unlike the powers-of-two case above, the running cross-tile product lands OFF the block-float
+    # grid, so a kernel that accumulated in block-float (re-quantizing every tile) would drift while
+    # the fp32 DEST-register accumulation stays accurate. The product is kept bounded (mostly 1.0
+    # with a few exact non-power-of-two factors and one sign flip) so it does not overflow.
+    torch_input = torch.ones(shape, dtype=torch.float32)
+    factors = torch.tensor([1.5, 0.75, 1.25, 0.75, 1.5, 0.75, -1.0, 1.25, 0.75], dtype=torch.float32)
+    torch_input.view(-1)[: factors.numel()] = factors
+    return torch_input, torch.prod(torch_input)
+
+
+@pytest.mark.parametrize("npu_dtype", (ttnn.bfloat8_b, ttnn.bfloat4_b), ids=["bfloat8_b", "bfloat4_b"])
+@pytest.mark.parametrize(
+    "shapes",
+    (
+        ([1, 4, 32, 32]),
+        ([1, 16, 32, 32]),
+    ),
+)
+def test_prod_all_block_float_nontrivial(shapes, npu_dtype, device):
+    torch_input, torch_output = _block_float_nontrivial_input(shapes)
+    tt_input = ttnn.Tensor(torch_input, npu_dtype).to(ttnn.TILE_LAYOUT).to(device)
+
+    tt_result = ttnn.prod(tt_input)
+    assert tt_result.dtype == npu_dtype, f"expected {npu_dtype} result, got {tt_result.dtype}"
+
+    tt_output = ttnn.to_torch(tt_result).flatten()[0]
+    # Tolerance reflects a single re-quantization of the result to the block-float output dtype;
+    # bfp4_b's 3-bit mantissa is coarser than bfp8_b's 7-bit.
+    atol = 2e-1 if npu_dtype == ttnn.bfloat4_b else 5e-2
+    logger.info(f"{npu_dtype} non-trivial full-product: expected={torch_output.item()} got={tt_output.item()}")
+    assert torch.isclose(tt_output, torch_output, atol=atol), f"expected {torch_output.item()}, got {tt_output.item()}"

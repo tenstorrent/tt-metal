@@ -21,43 +21,39 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
     CoreRange core({0, 0}, {0, 0});
     CoreRangeSet core_ranges(core);
 
-    DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tile_size(cb_data_format);
+    // Input CB keeps the input dtype (block-float is decoded natively by the unpacker); the output
+    // CB matches the output tensor dtype (FLOAT32 for block-float/fp32 inputs, see compute_output_specs).
+    DataFormat in_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    DataFormat out_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t in_single_tile_size = tile_size(in_cb_data_format);
+    uint32_t out_single_tile_size = tile_size(out_cb_data_format);
 
     uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
 
     TT_FATAL(num_tiles > 0, "Prod_all workload num_tiles must be > 0, got {}", num_tiles);
 
+    // The running product is accumulated in the DEST register (see the compute kernel), so no
+    // intermediate/partial-product CB is needed — only input (c_0) and output (c_3).
     uint32_t num_input_tiles = 2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
+        .total_size = num_input_tiles * in_single_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = in_cb_data_format,
+            .page_size = in_single_tile_size,
         }}},
     });
 
     constexpr uint32_t output_cb_index = CBIndex::c_3;
     uint32_t num_output_tiles = 2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * single_tile_size,
+        .total_size = num_output_tiles * out_single_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = out_cb_data_format,
+            .page_size = out_single_tile_size,
         }}},
     });
 
@@ -87,10 +83,16 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
         1           // per_core_block_size
     };
 
-    bool fp32_dest_acc_en = input.dtype() == DataType::FLOAT32;
-    // On Wormhole, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
-    // (see tenstorrent/tt-metal#38306); use HiFi3 in that case.
-    const auto math_fidelity = fp32_dest_acc_en ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    // Accumulate the running product in fp32 for fp32 and block-float (bf8/bf4) inputs so the
+    // DEST-resident partial product isn't truncated between tile multiplies. bf16 keeps its
+    // original bf16 accumulation (fp32_dest_acc_en=false) to leave the common path unperturbed.
+    bool fp32_dest_acc_en = input.dtype() == DataType::FLOAT32 || is_block_float(input.dtype());
+    // On Wormhole B0, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
+    // (see tenstorrent/tt-metal#38306); drop to HiFi3 only on that arch. Other architectures keep HiFi4.
+    const bool needs_wh_fp32_workaround =
+        fp32_dest_acc_en && tensor_args.input.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    const auto math_fidelity =
+        needs_wh_fp32_workaround ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     bool math_approx_mode = true;
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp";
