@@ -189,6 +189,21 @@ jobs:
               "owner_id": "U08TJ70UFRT"
             },
             {
+              "name": "[BH-QB-2] Qwen3.6-27B",
+              "model": "Qwen/Qwen3.6-27B",
+              "coherence-test": true,
+              "server-timeout": 30,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456}",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "default-chat-template-kwargs": "{\"enable_thinking\": false}",
+              "multimodal": false,
+              "owner_id": "U08HL8X1ECD" # Aniruddha Tupe
+            },
+            {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
@@ -517,6 +532,13 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
+          DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
+          if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
+            DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
+          else
+            DEFAULT_CHAT_TEMPLATE_KWARGS=()
+          fi
+
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
@@ -559,6 +581,7 @@ jobs:
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
