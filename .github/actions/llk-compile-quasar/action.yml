@@ -23,16 +23,20 @@ inputs:
       out to len(KERNEL_COMPONENTS)=4 concurrent g++ (unpack/math/pack/sfpu) for
       one variant, so total concurrent g++ = -n x 4. The compiler-side anon
       memory (the swap driver) scales with total g++; the fixed Python tax scales
-      with -n. To hold ~16 total g++ (fully using the 16-core `large` runner)
-      while paying the Python tax only 4x instead of 16x, use -n 4 with inner
-      parallelism on. Reference point: on the older serial regime, -n 30 measured
-      ~3.6 GiB sustained RAM+swap per worker on a 40-core/78.5 GiB xlarge runner
-      and swapped hard. NOTE: this job runs on `large` (16-core), not xlarge — an
-      -n 18 serial config both over-subscribes cores and pays 18x the fixed
-      Python tax; -n 4 with parallelism is the memory-cheaper way to the same
-      g++ concurrency. Override per-call for a different runner size.
+      with -n. Current value (10) intentionally reconstructs the ORIGINAL
+      pre-#47457 baseline concurrency exactly: before that PR, the inner
+      ThreadPoolExecutor(4) was unconditional (not a toggle), so -n 10 always
+      meant up to 10 x 4 = 40 concurrent g++. This is a deliberate A/B point on
+      the 40-core/78.5 GiB xlarge runner (where all real sidecar measurements in
+      this file's history were taken) to isolate the effect of PCH/-Os/shell=False
+      /slots against the literal original concurrency structure. Caution: 40
+      total g++ is MORE than the -n 30 serial config that already measured
+      ~3.6 GiB sustained RAM+swap per worker and swapped hard (30 total g++) --
+      this may swap as much or more; re-measure via the sidecar output and tune
+      down (or lower KERNEL_COMPONENTS fan-out) if so. Override per-call for a
+      different runner size or target concurrency.
     required: false
-    default: '4'
+    default: '10'
 
 runs:
   using: composite
