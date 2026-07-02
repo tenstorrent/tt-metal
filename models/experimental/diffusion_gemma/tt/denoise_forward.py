@@ -180,6 +180,8 @@ def _deallocate_prompt_source(prompt_source) -> None:
     if isinstance(prompt_source, (tuple, list)):
         for tensor in prompt_source:
             _deallocate_optional_tensor(tensor)
+    else:
+        _deallocate_optional_tensor(prompt_source)
 
 
 def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):

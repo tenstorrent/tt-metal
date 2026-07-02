@@ -268,20 +268,23 @@ def test_chunked_norm_forward_uses_sharded_scaleless_norm(monkeypatch):
 
 def test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources(monkeypatch):
     calls = []
-    prompt_kv = (_FakeTensor([1, 1, 32, 16]), _FakeTensor([1, 1, 32, 16]))
+    prompt_sources = [
+        (_FakeTensor([1, 1, 32, 16]), _FakeTensor([1, 1, 32, 16])),
+        _FakeTensor([1, 1, 32, 16]),
+    ]
     canvas = _FakeTensor([1, 1, 256, 16])
-    layer_hidden = _FakeTensor([1, 1, 256, 16])
+    layer_hiddens = [_FakeTensor([1, 1, 256, 16]), _FakeTensor([1, 1, 256, 16])]
     final_hidden = _FakeTensor([1, 1, 256, 16])
-    model = _FakeModel(num_layers=1)
+    model = _FakeModel(num_layers=2)
     model.norm = SimpleNamespace()
 
     def prompt_source(layer_idx):
         calls.append(("read", layer_idx))
-        return prompt_kv
+        return prompt_sources[layer_idx]
 
     def fake_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
         calls.append(("layer", layer_idx, prompt_source, q_rope_offset))
-        return layer_hidden
+        return layer_hiddens[layer_idx]
 
     monkeypatch.setattr(DF, "_denoise_layer_forward", fake_layer_forward)
     monkeypatch.setattr(DF, "_chunked_norm_forward", lambda norm, hidden_states: final_hidden)
@@ -294,9 +297,15 @@ def test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources(monkey
     )
 
     assert out is final_hidden
-    assert calls == [("read", 0), ("layer", 0, prompt_kv, 32)]
-    assert prompt_kv[0].deallocated is True
-    assert prompt_kv[1].deallocated is True
+    assert calls == [
+        ("read", 0),
+        ("layer", 0, prompt_sources[0], 32),
+        ("read", 1),
+        ("layer", 1, prompt_sources[1], 32),
+    ]
+    assert prompt_sources[0][0].deallocated is True
+    assert prompt_sources[0][1].deallocated is True
+    assert prompt_sources[1].deallocated is True
 
 
 def test_denoise_hidden_forward_deallocates_final_norm_input(monkeypatch):
