@@ -212,6 +212,29 @@ def apply_wh_correctness_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLM4_MOE_LITE_ATTN_DP", "0")
 
 
+def apply_wh_tp1_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WH **1x8** tensor-parallel (TP=1) reference-precision env.
+
+    The 2x4 mesh scores only ~0.65 PCC at TP=1 (2D-mesh MoE-reduce bug: the fused reduce
+    covers only the col axis, missing the DP-row expert sum; a2a dispatch deadlocks). A
+    **1x8** mesh is 1D, so the MoE all-reduce is single-axis (cols) — the same path that
+    works on Blackhole 1x4 — which should make TP=1 accurate on all 8 WH chips.
+
+    TP=8 does not divide num_attention_heads=20, so head-parallel attention is disabled
+    (attention falls back to full-head; the hidden-dim-sharded projections still shard over
+    the 8 columns). bf8 experts (bf16 OOMs WH). Must be run on the conftest mesh fixture
+    (MeshShape(1, param) => 1x8) which sets FABRIC_1D via device_params; a bare
+    set_fabric_config + manual open segfaults on 1x8.
+    """
+    monkeypatch.setenv("GLM4_MOE_LITE_ENABLE_MOE", "1")
+    monkeypatch.setenv("GLM4_MOE_LITE_EXPERTS_TT_DTYPE", "bf8")
+    monkeypatch.setenv("GLM4_MOE_LITE_MOE_FP32_ACC", "1")
+    monkeypatch.setenv("GLM4_MOE_LITE_TP", "1")
+    monkeypatch.setenv("GLM4_MOE_LITE_ATTN_DP", "0")
+    monkeypatch.setenv("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "0")  # 20 heads not divisible by TP=8
+    monkeypatch.setenv("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "0")
+
+
 def apply_single_layer_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLM4_MOE_LITE_DEBUG_ALLOW_PARTIAL_LAYERS", "1")
     monkeypatch.setenv("GLM4_MOE_LITE_NUM_LAYERS", "1")

@@ -38,6 +38,7 @@ from models.experimental.glm4_moe_lite.tests.pipeline_tests.test_utils import (
     PROMPT_FILE,
     alloc_kv_cache_and_page_table,
     apply_wh_correctness_env,
+    apply_wh_tp1_env,
     compute_max_seq_len,
     create_runner,
     fabric_1d_trace_device_params,
@@ -51,6 +52,44 @@ from models.experimental.glm4_moe_lite.tests.pipeline_tests.test_utils import (
 
 # Achievable WH ceiling with bf8 experts (bf16 OOMs). See module docstring.
 WH_PCC_REQUIRED = 0.95
+
+
+def _wh_prefill_logits_pcc(seq_len, batch_size, page_params, mesh_device, pcc_required, cache_subdir):
+    """Shared body: TT prefill last-token logits vs HF, return (passing, pcc_val)."""
+    snap = require_snapshot()
+    page_params = scale_page_params(page_params, seq_len, batch_size)
+    tok = load_tokenizer(snap)
+    with bz2.open(PROMPT_FILE, "rt", encoding="utf-8") as f:
+        prompt = f.read()
+    encoded_prompt = tok(prompt, add_special_tokens=True)["input_ids"][:seq_len]
+    if len(encoded_prompt) < seq_len:
+        pytest.skip(f"Prompt corpus shorter than seq_len={seq_len}")
+
+    hf_model = load_hf_causal_lm(snap)
+    vocab_size = int(hf_model.config.vocab_size)
+    block_size = int(page_params["page_block_size"])
+    total_tokens = seq_len + 32
+    max_seq_len = compute_max_seq_len(total_tokens, block_size)
+    runner = create_runner(
+        mesh_device=mesh_device, snapshot_dir=snap, max_seq_len=max_seq_len, cache_subdir=cache_subdir
+    )
+    kv_cache, page_table, _ = alloc_kv_cache_and_page_table(
+        mesh_device=mesh_device, runner=runner, batch_size=batch_size, total_tokens=total_tokens, block_size=block_size
+    )
+    prompt_ids = torch.tensor([encoded_prompt], dtype=torch.int32)
+    tt_logits = runner.prefill(
+        tokens=prompt_ids,
+        prompt_lens=[seq_len],
+        page_table=page_table,
+        kv_cache=kv_cache,
+        seq_pad_multiple=int(page_params["page_block_size"]),
+    )
+    hf_input = torch.tensor([encoded_prompt], dtype=torch.long)
+    ref_logits = hf_prefill_last_token_logits(hf_model, hf_input, vocab_size)
+    tt_logits_cmp = tt_logits[:, :1, :vocab_size].to(dtype=torch.float32)
+    passing, pcc_val = comp_pcc(ref_logits, tt_logits_cmp, pcc_required)
+    logger.info(comp_allclose(ref_logits, tt_logits_cmp))
+    return passing, pcc_val
 
 
 @torch.no_grad()
@@ -129,3 +168,41 @@ def test_text_prefill_logits_wh(
     logger.info(f"[WH] Prefill last-token logits PCC (seq_len={seq_len}): {pcc_val}")
 
     assert passing, f"[WH] Prefill logits PCC {pcc_val} below {pcc_required} for seq_len={seq_len}."
+
+
+# TP=1 on the 1x8 (1D) mesh: single-axis MoE reduce (like BH 1x4) -> TP works on all 8 WH chips.
+# 2x4's TP=1 is broken (2D-mesh reduce); 1x8 is 1D so it should recover accuracy. Gate a bit
+# below the TP=0 ceiling to allow for TP-collective numerics.
+WH_TP1_PCC_REQUIRED = 0.93
+
+
+@torch.no_grad()
+@run_for_wormhole_b0()
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("seq_len", (128,), ids=["128"])
+@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize("page_params", [{"page_block_size": 64, "page_max_num_blocks": 1024}])
+@pytest.mark.parametrize("device_params", fabric_1d_trace_device_params(num_command_queues=2), indirect=True)
+@pytest.mark.parametrize("mesh_device", [mesh_shape_param()], indirect=True)
+def test_text_prefill_logits_wh_tp1_1x8(
+    seq_len,
+    batch_size,
+    page_params,
+    mesh_device,
+    reset_seeds,
+    is_ci_env,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """WH TENSOR-PARALLEL (TP=1) prefill logits PCC on the 1x8 mesh (fixture opens MeshShape(1,8)).
+
+    Validates the fix for the 2x4 TP=1 accuracy bug: run all 8 chips as a 1D 1x8 mesh so the MoE
+    all-reduce is single-axis (the working BH path). Head-parallel disabled (20 heads not div 8).
+    """
+    if int(mesh_device.shape[0]) != 1:
+        pytest.skip(f"TP=1 1x8 test requires a 1xN mesh; got {tuple(mesh_device.shape)}.")
+    apply_wh_tp1_env(monkeypatch)
+    passing, pcc_val = _wh_prefill_logits_pcc(
+        seq_len, batch_size, page_params, mesh_device, WH_TP1_PCC_REQUIRED, "pipeline_prefill_logits_wh_tp1"
+    )
+    logger.info(f"[WH TP=1 1x8] Prefill last-token logits PCC (seq_len={seq_len}): {pcc_val}")
+    assert passing, f"[WH TP=1 1x8] Prefill logits PCC {pcc_val} below {WH_TP1_PCC_REQUIRED}."
