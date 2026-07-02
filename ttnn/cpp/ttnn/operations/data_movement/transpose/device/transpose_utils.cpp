@@ -166,8 +166,12 @@ ShardSpec generate_transpose_shard_spec(
             tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(grid_size.x)), tt::constants::TILE_WIDTH);
         shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)};
     }
+    const auto orientation =
+        input_tensor.is_sharded() && input_tensor.shard_spec().has_value()
+            ? input_tensor.shard_spec()->orientation
+            : ShardOrientation::ROW_MAJOR;
     log_debug(tt::LogOp, "Transpose: generated shard spec over full compute grid ({} cores)", num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+    return ShardSpec(all_cores, shard_shape, orientation);
 }
 
 }  // namespace ttnn::operations::data_movement::transpose
