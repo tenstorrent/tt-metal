@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
@@ -28,10 +29,13 @@ void kernel_main() {
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {
         uint32_t curr_src_offset = src_index;
         cb_in0.reserve_back(1);
+        // noc_async_read_sharded: single read for interleaved/HEIGHT, splits per-shard for W/B.
+        const uint32_t cb_write_addr = cb_in0.get_write_ptr();
         uint32_t l1_offset = 0;
         for (uint32_t i = 0; i < stride_h; i++) {
             for (uint32_t j = 0; j < stride_w; j++) {
-                noc.async_read(s_in, cb_in0, stick_nbytes, {.page_id = curr_src_offset}, {.offset_bytes = l1_offset});
+                tt::data_movement::common::noc_async_read_sharded(
+                    noc, cb_write_addr + l1_offset, s_in, curr_src_offset, 0, stick_nbytes);
                 curr_src_offset++;
                 l1_offset += aligned_stick_nbytes_dram;
             }

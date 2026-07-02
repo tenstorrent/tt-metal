@@ -297,10 +297,10 @@ static std::array<uint32_t, 6> extract_padding_values(
         padding);
 }
 
-// Helper function to validate height sharding
+// Used only by the legacy `use_transpose_as_fold=true` path; modern path handles W/B natively.
 static void validate_height_sharding(const Tensor& tensor) {
     if (tensor.is_sharded() && tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_THROW("fold op does not support non height-sharding!");
+        TT_THROW("fold op (use_transpose_as_fold=true) does not support non height-sharding!");
     }
 }
 
@@ -432,10 +432,17 @@ Tensor fold(
                    input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
             .at(0);
     }
-    // Modern sharded tensor path
-    if (input_tensor.memory_config().is_l1() && input_tensor.is_sharded()) {
-        operations::data_movement::validate_height_sharding(input_tensor);
+    // Path B — HEIGHT_SHARDED + ROW_MAJOR zero-NOC fast path. Take it only when the user did NOT
+    // request an incompatible output config (mirrors the predicate inside `prim::fold`).
+    const bool input_is_fast_path_compatible =
+        input_tensor.memory_config().is_l1() && input_tensor.is_sharded() &&
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+        input_tensor.layout() == Layout::ROW_MAJOR;
+    const bool height_sharded_rm_fast_path =
+        input_is_fast_path_compatible &&
+        operations::data_movement::override_compatible_with_fast_path(override_memory_config);
 
+    if (height_sharded_rm_fast_path) {
         Tensor processed_tensor = input_tensor;
 
         // Apply H,W padding using halo if needed
@@ -456,16 +463,14 @@ Tensor fold(
                 ::ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
-        // If processed tensor is tiled, convert to row-major.
-        if (processed_tensor.layout() == Layout::TILE) {
-            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
-        }
         // Reshard if needed for optimal fold computation
         processed_tensor = operations::data_movement::reshard_if_needed(processed_tensor, stride_h, stride_w);
 
-        return ttnn::prim::fold(processed_tensor, stride_h, stride_w);
+        return ttnn::prim::fold(
+            processed_tensor, stride_h, stride_w, /*is_height_sharded_rm_fast_path=*/true, override_memory_config);
     }
-    // Interleaved tensor path (DRAM or L1)
+
+    // Path C — interleaved / W,B-sharded / HEIGHT+TILE all go through MultiCoreDRAMFold.
     Tensor processed_tensor = input_tensor;
 
     // Apply padding if needed
@@ -486,17 +491,25 @@ Tensor fold(
     const auto in_channels = shape[3];
     const bool was_tiled = processed_tensor.layout() == Layout::TILE;
 
-    // The interleaved fold kernels operate on row-major data, so untilize first.
-    if (was_tiled) {
-        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
-    }
+    auto output_tensor = ttnn::prim::fold(
+        processed_tensor, stride_h, stride_w, /*is_height_sharded_rm_fast_path=*/false, override_memory_config);
 
-    auto output_tensor = ttnn::prim::fold(processed_tensor, stride_h, stride_w);
-
-    // Reshape output if input was tiled
+    // TILE: finalise preserved_4d → folded_4d. For sharded TILE the shard spec rescales by sh*sw
+    // (metadata-only); the device op already set the correct buffer_type/layout via override.
     if (was_tiled) {
         const ttnn::Shape final_shape(
             {batch_size, input_height / stride_h, input_width / stride_w, in_channels * stride_h * stride_w});
+        if (output_tensor.is_sharded()) {
+            auto new_shard_spec = output_tensor.shard_spec().value();
+            // Divide-safety of `shape[0] /= sh*sw` is enforced by `validate_fold` (TILE + sharded branch).
+            new_shard_spec.shape[0] /= stride_h * stride_w;
+            new_shard_spec.shape[1] *= stride_h * stride_w;
+            auto new_mc = MemoryConfig(
+                output_tensor.memory_config().memory_layout(),
+                output_tensor.memory_config().buffer_type(),
+                new_shard_spec);
+            return ttnn::reshape(output_tensor, final_shape, new_mc);
+        }
         return ttnn::reshape(output_tensor, final_shape);
     }
 

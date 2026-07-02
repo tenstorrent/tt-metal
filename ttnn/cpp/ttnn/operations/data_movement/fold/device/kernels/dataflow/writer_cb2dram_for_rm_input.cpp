@@ -45,17 +45,14 @@ void kernel_main() {
                 l1_addr += aligned_stick_nbytes_dram;
             }
         }
+        // Sharded-safe: splits the per-pixel stick across cores for W/B-sharded outputs;
+        // collapses to a single noc_async_write for HEIGHT/interleaved.
         if constexpr (!is_l1_aligned) {
-            // Scratch buffer (cb_in1) is populated at its WRITE_PTR; no push_back has advanced it yet.
-            noc.async_write(
-                use<experimental::CB::AddrSelector::WRITE_PTR>(cb_in1),
-                s_out,
-                stick_nbytes * patch_size,
-                {},
-                {.page_id = dst_index});
+            tt::data_movement::common::noc_async_write_sharded(
+                noc, cb_in1.get_write_ptr(), s_out, dst_index, 0, stick_nbytes * patch_size);
         } else {
-            // If L1 aligned, write directly from the circular buffer
-            noc.async_write(cb_in0, s_out, stick_nbytes * patch_size, {}, {.page_id = dst_index});
+            tt::data_movement::common::noc_async_write_sharded(
+                noc, l1_addr, s_out, dst_index, 0, stick_nbytes * patch_size);
         }
         noc.async_write_barrier();
         cb_in0.pop_front(1);
