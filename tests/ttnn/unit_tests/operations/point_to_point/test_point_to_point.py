@@ -11,12 +11,19 @@ is identity:
   * the receiver device's output shard == the sender device's input shard,
   * every other device's output shard == that device's input shard (unchanged).
 
-This file is the immutable spec — the implementer must not modify it.
+This file is the immutable spec — the implementer must NOT modify it.
 
-The op requires a multi-device ``ttnn.MeshDevice`` with the fabric enabled, so it
-uses the ``mesh_device`` fixture (parametrized to a 1xN line) plus a
-``device_params`` fabric_config keyed to the topology under test. Tests
-auto-skip on machines with too few devices.
+Verification topology (see ``scripts/run_multidevice_sim_pytest.py --list`` ->
+``bh_8xP150_p2p``): an 8-chip Blackhole mesh of shape ``(2, 4)`` with
+``fabric_config = FABRIC_1D``. The sim's mesh-graph descriptor is fixed to this
+shape, so every test here opens EXACTLY ``mesh_device == (2, 4)``. Opening a
+different shape (e.g. ``(1, 2)``) hangs fabric init with
+``Fabric Router Sync: Timeout`` — a test/topology mismatch, not an op defect.
+
+The Linear topology is exercised on ``FABRIC_1D`` (the required config); the Ring
+topology is exercised on ``FABRIC_1D_RING`` (the torus_x descriptor is
+ring-capable in x). Sender/receiver are adjacent in row 0 — a single fabric hop
+under both topologies.
 """
 
 from math import prod
@@ -59,9 +66,12 @@ SHARD_SHAPES = [
     (1, 1, 48, 64),  # non-tile-aligned (H not %32), 16B-aligned page
 ]
 
-# Topology <-> fabric_config pairing.
+# Topology <-> fabric_config pairing. Both open the SAME (2, 4) mesh.
 LINEAR = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear)
 RING = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring)
+
+# The required verification mesh shape (bh_8xP150_p2p). Do not change.
+MESH_SHAPE = (2, 4)
 
 
 def _linear_index(coord, mesh_shape):
@@ -99,7 +109,7 @@ def _make_input(mesh_device, shard_shape, dtype, layout):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR, RING], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUTS)
 @pytest.mark.parametrize("shard_shape", SHARD_SHAPES)
 def test_point_to_point(mesh_device, topology, dtype, layout, shard_shape):
@@ -128,12 +138,12 @@ def test_point_to_point(mesh_device, topology, dtype, layout, shard_shape):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR, RING], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT), (ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)])
 def test_point_to_point_nonparticipating_unchanged(mesh_device, topology, dtype, layout):
-    """On a >2-device line, every non-receiver shard stays equal to its input."""
+    """On the (2, 4) mesh, every non-receiver shard stays equal to its input."""
     if prod(tuple(mesh_device.shape)) < 4:
-        pytest.skip("this test needs at least 4 mesh devices on a line")
+        pytest.skip("this test needs at least 4 mesh devices")
 
     sender_coord = ttnn.MeshCoordinate(0, 0)
     receiver_coord = ttnn.MeshCoordinate(0, 1)
@@ -156,7 +166,7 @@ def test_point_to_point_nonparticipating_unchanged(mesh_device, topology, dtype,
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR, RING], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT), (ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)])
 def test_point_to_point_output_tensor(mesh_device, topology, dtype, layout):
     """The output_tensor path writes into the supplied tensor and returns it."""
@@ -182,7 +192,7 @@ def test_point_to_point_output_tensor(mesh_device, topology, dtype, layout):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 def test_point_to_point_program_cache(mesh_device, topology):
     """Second call (program-cache hit) still transfers correctly.
 
@@ -204,3 +214,24 @@ def test_point_to_point_program_cache(mesh_device, topology):
         output_shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(output_tensor)]
         assert_with_pcc(input_shards[send_idx], output_shards[recv_idx], PCC[ttnn.bfloat16])
         logger.info(f"program-cache call {call}: receiver shard matches sender shard")
+
+
+@pytest.mark.parametrize("device_params, topology", [RING], indirect=["device_params"])
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_point_to_point_ring_wraparound(mesh_device, topology):
+    """Ring routes the short way: (0,0) -> (0,3) is a single wraparound hop."""
+    if prod(tuple(mesh_device.shape)) < 4:
+        pytest.skip("this test needs at least 4 columns for a ring wraparound")
+
+    sender_coord = ttnn.MeshCoordinate(0, 0)
+    receiver_coord = ttnn.MeshCoordinate(0, mesh_device.shape[1] - 1)  # (0, 3) on (2, 4)
+    send_idx = _linear_index(sender_coord, mesh_device.shape)
+    recv_idx = _linear_index(receiver_coord, mesh_device.shape)
+
+    input_tensor, input_shards = _make_input(mesh_device, (1, 1, 32, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+
+    output_tensor = point_to_point(input_tensor, sender_coord, receiver_coord, topology=topology)
+    ttnn.synchronize_device(mesh_device)
+
+    output_shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(output_tensor)]
+    assert_with_pcc(input_shards[send_idx], output_shards[recv_idx], PCC[ttnn.bfloat16])
