@@ -3,8 +3,8 @@ Conv2d patch-embedding for the Janus-Pro-7B vision model.
 
 The convolution weight is folded into a 2D matrix so the patch projection runs
 as a single ttnn.linear over the unfolded input. A 4D conv weight is reshaped to
-(out_channels, in_channels * kernel_size**2); its inner dimension is zero-padded
-to a tile multiple.
+(out_channels, in_channels * kernel_size**2). For Janus-Pro this inner dimension
+(3 * 16**2 = 768) is already a tile multiple, so no padding is applied.
 """
 
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
@@ -15,7 +15,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import nearest_32
 
 
 class TtJanusProConv2dPatch(LightweightModule):
@@ -71,13 +70,10 @@ class TtJanusProConv2dPatch(LightweightModule):
         weight = state_dict[f"{state_dict_prefix}_linear.weight"]
         if weight.ndim == 4:
             weight = weight.view(out_channels, -1)
-        pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]
-        padding = torch.zeros(self.out_channels, pad_len, dtype=weight.dtype)
-        padded_weight = torch.cat([weight, padding], dim=-1)
-        padded_weight = padded_weight.permute(1, 0).reshape(1, 1, -1, self.out_channels)
+        weight = weight.permute(1, 0).reshape(1, 1, -1, self.out_channels)
 
         self._linear_weight = ttnn.as_tensor(
-            padded_weight,
+            weight,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
@@ -96,11 +92,6 @@ class TtJanusProConv2dPatch(LightweightModule):
     def forward(self, x: torch.Tensor):
         x = self._unfold(x)
         x = x.permute(0, 2, 1)
-
-        # Need to pad the last dimension of x to be a multiple of a tile
-        pad_len = nearest_32(x.shape[-1]) - x.shape[-1]
-        padding = torch.zeros((x.shape[0], x.shape[1], pad_len), dtype=x.dtype, device=x.device)
-        x = torch.cat([x, padding], dim=-1)
 
         x = ttnn.as_tensor(
             x,

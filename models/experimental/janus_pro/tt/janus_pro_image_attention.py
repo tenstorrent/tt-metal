@@ -13,7 +13,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import nearest_32
 
 
 class TtJanusProImageAttention(LightweightModule):
@@ -67,35 +66,13 @@ class TtJanusProImageAttention(LightweightModule):
         assert self.n_heads % configuration.num_devices == 0
         assert self.n_kv_heads % configuration.num_devices == 0
 
-        # Pad head_dim to multiple of 32
-        def pad_head_dim(weight, heads_out=True):
-            # Pad head dim to multiple of 32
-            # heads_out means that the output dim of this weight contains heads.
-            dim = weight.shape[1]
-            assert weight.shape[0] == dim
-            padded_head_dim = nearest_32(self.head_dim)
-            padding_size = padded_head_dim - self.head_dim
-            if padding_size > 0:
-                if heads_out:
-                    weight = weight.transpose(-1, -2)
-                weight = weight.reshape(dim, self.n_heads, self.head_dim)
-                padding = torch.zeros(dim, self.n_heads, padding_size, dtype=weight.dtype)
-                weight = torch.cat([weight, padding], dim=-1)
-                weight = weight.reshape(dim, self.n_heads * padded_head_dim)
-                if heads_out:
-                    weight = weight.transpose(-1, -2)
-            return weight
+        # Janus-Pro head_dim (64) is already a tile multiple, so no head-dim padding is needed.
+        wq = self.state_dict[wq_str]
+        wk = self.state_dict[wk_str]
+        wv = self.state_dict[wv_str]
+        wo = self.state_dict[wo_str]
 
-        wq_padded = pad_head_dim(self.state_dict[wq_str])
-        wk_padded = pad_head_dim(self.state_dict[wk_str])
-        wv_padded = pad_head_dim(self.state_dict[wv_str])
-        wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
-
-        wq_chunked, wk_chunked, wv_chunked = (
-            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
-        )
-
-        self.qkv_program_config = lambda seq_len, MAX_MM_SEQ_LEN: None
+        wq_chunked, wk_chunked, wv_chunked = (torch.chunk(w, configuration.num_devices) for w in [wq, wk, wv])
 
         self.wqkv = ttnn.as_tensor(
             torch.concat(
@@ -138,32 +115,11 @@ class TtJanusProImageAttention(LightweightModule):
         bo_str = f"{state_dict_prefix}wo.bias"
 
         if bq_str in self.state_dict:
+            bq = self.state_dict[bq_str]
+            bk = self.state_dict[bk_str]
+            bv = self.state_dict[bv_str]
 
-            def pad_head_dim_bias(bias):
-                # Pad 1D bias to match padded head dim
-                dim = bias.shape[0]
-                assert (
-                    dim == self.n_heads * self.head_dim
-                ), f"Expected bias of shape ({self.n_heads} * {self.head_dim}) = {self.n_heads * self.head_dim}, but got {dim}"
-
-                padded_head_dim = nearest_32(self.head_dim)
-                padding_size = padded_head_dim - self.head_dim
-
-                if padding_size > 0:
-                    bias = bias.view(self.n_heads, self.head_dim)
-                    padding = torch.zeros(self.n_heads, padding_size, dtype=bias.dtype)
-                    bias = torch.cat([bias, padding], dim=-1)
-                    bias = bias.view(self.n_heads * padded_head_dim)
-
-                return bias
-
-            bq_padded = pad_head_dim_bias(self.state_dict[bq_str])
-            bk_padded = pad_head_dim_bias(self.state_dict[bk_str])
-            bv_padded = pad_head_dim_bias(self.state_dict[bv_str])
-
-            bq_chunked, bk_chunked, bv_chunked = (
-                torch.chunk(b, configuration.num_devices) for b in [bq_padded, bk_padded, bv_padded]
-            )
+            bq_chunked, bk_chunked, bv_chunked = (torch.chunk(b, configuration.num_devices) for b in [bq, bk, bv])
 
             self.bqkv = ttnn.as_tensor(
                 torch.concat(
@@ -192,7 +148,7 @@ class TtJanusProImageAttention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             torch.transpose(
-                wo_padded,
+                wo,
                 -2,
                 -1,
             ),
@@ -229,11 +185,6 @@ class TtJanusProImageAttention(LightweightModule):
         if len(x_11SH.shape) == 3:
             x_11SH = ttnn.reshape(x_11SH, (batch_size, 1, seq_len, -1))
 
-        MAX_MM_SEQ_LEN = seq_len
-
-        if seq_len > MAX_MM_SEQ_LEN:
-            x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-
         # Bias applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         xqkv_fused = ttnn.linear(
             x_11SH,
@@ -241,7 +192,6 @@ class TtJanusProImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
         if self.bqkv is not None:
             xqkv_fused = ttnn.add(xqkv_fused, self.bqkv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -285,22 +235,13 @@ class TtJanusProImageAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # reshaping long sequence to matmul fit on device
-        if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_11SH = ttnn.reshape(
-                attn_output_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1]
-            )
-
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
-        if seq_len > MAX_MM_SEQ_LEN:
-            output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
         if self.num_devices > 1:
