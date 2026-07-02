@@ -79,7 +79,7 @@ import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
@@ -228,7 +228,11 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
             hidden_channels=HID,
             out_channels=LATENT,
         )
-        bf16_layers = {0, 1, 2, 3, NUM_LAYERS - 4, NUM_LAYERS - 3, NUM_LAYERS - 2, NUM_LAYERS - 1}
+        bf16_layers = (
+            {int(s) for s in os.environ["HY_BF16_LAYERS"].split(",") if s.strip() != ""}
+            if os.environ.get("HY_BF16_LAYERS")
+            else default_bf16_layers(NUM_LAYERS)
+        )
         layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in _load_prefix(f"model.layers.{i}").items()}
         backbone = HunyuanTtModel(
             mesh_device,

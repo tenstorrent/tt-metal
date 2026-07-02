@@ -70,7 +70,7 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
 from models.experimental.hunyuan_image_3_0.tt.pipeline import (
     HunyuanTtDenoiseStep,
     decode_latent,
@@ -255,10 +255,22 @@ def _load_cond_images(proc, paths: list[str], *, infer_align: bool) -> tuple[lis
 
 
 def _build_backbone(
-    mesh_device, ccl, c, weights: _WeightLoader, *, num_layers: int, apply_final_norm: bool, sp_factor: int = 2
+    mesh_device,
+    ccl,
+    c,
+    weights: _WeightLoader,
+    *,
+    num_layers: int,
+    apply_final_norm: bool,
+    sp_factor: int = 2,
+    model_cache_name: str = "hunyuan-image-3.0-instruct",
 ):
     layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in weights.load_prefix(f"model.layers.{i}").items()}
-    bf16_layers = {0, 1, 2, 3, num_layers - 4, num_layers - 3, num_layers - 2, num_layers - 1}
+    bf16_layers = (
+        {int(s) for s in os.environ["HY_BF16_LAYERS"].split(",") if s.strip() != ""}
+        if os.environ.get("HY_BF16_LAYERS")
+        else default_bf16_layers(num_layers)
+    )
     norm_sd = {"model.ln_f.weight": weights.load("model.ln_f.weight")} if apply_final_norm else None
     embed_sd = {"model.wte.weight": weights.load("model.wte.weight")}
     return HunyuanTtModel(
@@ -287,6 +299,7 @@ def _build_backbone(
         sp_axis=0,
         sp_factor=sp_factor,
         bf16_layers=bf16_layers,
+        model_cache_name=model_cache_name,
     )
 
 
@@ -379,6 +392,7 @@ def main():
     cot_text = None
 
     variant = "Instruct-Distil" if args.distil or cfg_distilled else "Instruct"
+    model_cache_name = "hunyuan-image-3.0-instruct-distil" if args.distil else "hunyuan-image-3.0-instruct"
     print(
         f"[demo_i2i] model={model_dir}  variant={variant}  bot_task={args.bot_task}  "
         f"image_size={image_size}  steps={steps}  cond={args.cond!r}"
@@ -481,6 +495,7 @@ def main():
                     num_layers=RECAPTION_LAYERS,
                     apply_final_norm=True,
                     sp_factor=recap_sp,
+                    model_cache_name=model_cache_name,
                 )
                 print(f"[demo_i2i] recaption backbone ready ({time.time() - t0:.0f}s)", flush=True)
                 print("[demo_i2i] loading LM head ...", flush=True)
@@ -636,7 +651,15 @@ def main():
             )
             print(f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers) ...", flush=True)
             t0 = time.time()
-            backbone = _build_backbone(mesh_device, ccl, c, weights, num_layers=NUM_LAYERS, apply_final_norm=False)
+            backbone = _build_backbone(
+                mesh_device,
+                ccl,
+                c,
+                weights,
+                num_layers=NUM_LAYERS,
+                apply_final_norm=False,
+                model_cache_name=model_cache_name,
+            )
             print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
             print("[demo_i2i] building timestep embedders ...", flush=True)
             te1 = HunyuanTtTimestepEmbedder(
