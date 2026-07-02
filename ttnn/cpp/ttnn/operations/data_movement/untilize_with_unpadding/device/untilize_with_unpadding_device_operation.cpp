@@ -15,6 +15,61 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+
+bool should_use_block_interleaved_factory(
+    const Tensor& input,
+    bool use_multicore,
+    bool enough_space_height,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (input.memory_config().is_sharded() || !use_multicore) {
+        return false;
+    }
+    if (!enough_space_height) {
+        return true;
+    }
+
+    const auto& input_shape = input.padded_shape();
+    auto* device = input.device();
+    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+
+    uint32_t num_blocks =
+        input_shape[-1] == 0 ? 0 : input.physical_volume() / input_shape[-1] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = input_shape[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = input_shape[-2] / tt::constants::TILE_HEIGHT;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block =
+            (input_shape[-1] * input_shape[-2]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        return ncores < ncores_wh.ncores;
+    }
+    return false;
+}
+
+uint32_t get_output_single_tile_size(const Tensor& input) {
+    const auto output_dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
+    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
+    return tt::tile_size(output_cb_data_format);
+}
+
+uint32_t get_cb_block_size_limit(const Tensor& input) {
+    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t output_single_tile_size = get_output_single_tile_size(input);
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input);
+    return max_l1_size / (input_single_tile_size + output_single_tile_size);
+}
+
+}  // namespace
+
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
     if (input.memory_config().is_sharded()) {
@@ -29,35 +84,8 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
     if (!operation_attributes.use_multicore) {
         return UntilizeWithUnpaddingSingleCoreProgramFactory{};
     }
-    if (!operation_attributes.enough_space_height) {
+    if (operation_attributes.use_block_interleaved) {
         return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
-    }
-    const auto& a = input;
-    const auto& input_shape = a.padded_shape();
-    auto* device = a.device();
-    CoreCoord grid_size = device->compute_with_storage_grid_size();
-    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    CoreRangeSet default_grid(default_cores);
-    CoreRangeSet available_grid =
-        operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
-
-    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / tt::constants::TILE_HEIGHT;
-    uint32_t num_tiles_per_row = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-
-    uint32_t num_tiles_per_col = a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-
-    size_t grid_area = available_grid.num_cores();
-    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
-    constexpr uint32_t threshold_row_block = 32;
-    if (num_tiles_per_row > threshold_row_block &&
-        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
-        uint32_t num_blocks_block =
-            (a.padded_shape()[-1] * a.padded_shape()[-2]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
-
-        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-        if (ncores < ncores_wh.ncores) {
-            return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
-        }
     }
     return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
 }
@@ -291,13 +319,18 @@ Tensor untilize_with_unpadding(
     bool fp32_dest_acc_en,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    const bool use_block_interleaved =
+        should_use_block_interleaved_factory(input_tensor, use_multicore, enough_space_height, sub_core_grids);
+    const uint32_t cb_block_size_limit = use_block_interleaved ? get_cb_block_size_limit(input_tensor) : 0;
+
     return ttnn::device_operation::launch<UntilizeWithUnpaddingDeviceOperation>(
         UntilizeWithUnpaddingParams{
             .output_tensor_end = output_tensor_end,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .use_multicore = use_multicore,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .enough_space_height = enough_space_height,
+            .use_block_interleaved = use_block_interleaved,
+            .cb_block_size_limit = cb_block_size_limit,
             .sub_core_grids = sub_core_grids},
         input_tensor);
 }
