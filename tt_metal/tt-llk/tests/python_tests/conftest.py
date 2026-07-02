@@ -437,12 +437,7 @@ def _collapse_runtime_only_variants(items):
         if key not in seen:
             seen.add(key)
             keep.append(item)
-    original = len(items)
     items[:] = keep
-    logger.info(
-        f"Compile-producer deselection: {original} -> {len(items)} tests "
-        f"({original - len(items)} runtime-only duplicates removed)"
-    )
 
 
 def pytest_collection_modifyitems(config, items):

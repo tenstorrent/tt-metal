@@ -306,12 +306,13 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
 
 def parametrize(**kwargs: any):
     compile_key_fn = None
-    runtime_axes = []
-    runtime_indices = None
+    _rt_names = set()
+    _combo_name = None
+    _combo_rt_indices = frozenset()
     unwrapped = {}
     for name, value in kwargs.items():
         if isinstance(value, _RuntimeMarker):
-            runtime_axes.append(name)
+            _rt_names.add(name)
             unwrapped[name] = value.value
         elif (
             isinstance(value, list)
@@ -319,10 +320,10 @@ def parametrize(**kwargs: any):
             and isinstance(value[0], tuple)
             and any(isinstance(v, _RuntimeMarker) for v in value[0])
         ):
-            runtime_indices = frozenset(
+            _combo_name = name
+            _combo_rt_indices = frozenset(
                 i for i, v in enumerate(value[0]) if isinstance(v, _RuntimeMarker)
             )
-            runtime_axes.append(name)
             unwrapped[name] = [
                 tuple(v.value if isinstance(v, _RuntimeMarker) else v for v in combo)
                 for combo in value
@@ -330,26 +331,21 @@ def parametrize(**kwargs: any):
         else:
             unwrapped[name] = value
 
-    if runtime_axes:
-        if runtime_indices is not None:
-            _combo_name = runtime_axes[0]
-            _ri = runtime_indices
+    if _rt_names or _combo_name:
 
-            def compile_key_fn(params):
-                combo = params[_combo_name]
-                if len(combo) == 1 and isinstance(combo[0], tuple):
-                    combo = combo[0]
-                filtered = tuple(v for i, v in enumerate(combo) if i not in _ri)
-                other = tuple(
-                    sorted((k, v) for k, v in params.items() if k != _combo_name)
-                )
-                return (filtered, other)
-
-        else:
-            _rt = frozenset(runtime_axes)
-
-            def compile_key_fn(params):
-                return tuple(sorted((k, v) for k, v in params.items() if k not in _rt))
+        def compile_key_fn(params):
+            parts = []
+            for k, v in sorted(params.items()):
+                if k in _rt_names:
+                    continue
+                if k == _combo_name:
+                    if len(v) == 1 and isinstance(v[0], tuple):
+                        v = v[0]
+                    v = tuple(
+                        el for i, el in enumerate(v) if i not in _combo_rt_indices
+                    )
+                parts.append((k, v))
+            return tuple(parts)
 
     parameters = tuple(unwrapped.keys())
     parameters_string = ",".join(parameters)
