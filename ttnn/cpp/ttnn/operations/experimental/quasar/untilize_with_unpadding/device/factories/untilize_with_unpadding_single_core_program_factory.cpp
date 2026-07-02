@@ -137,9 +137,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ---- Writer kernel ----
@@ -168,9 +166,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // ---- Compute kernel ----
@@ -178,10 +174,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     if (float32_dtype) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw{
-        .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+    ComputeHardwareConfig compute_hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
     if (fp32_dest_acc_en) {
-        compute_hw.gen2_config->unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::get<ComputeGen2Config>(compute_hw)
+            .unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,

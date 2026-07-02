@@ -664,7 +664,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "signal"}},
         .hw_config =
             DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER),
+                DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER),
             },
     };
     KernelSpec consumer{
@@ -676,7 +676,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "waiter"}},
         .hw_config =
             DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER),
+                DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER),
             },
     };
 
@@ -1014,11 +1014,8 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
                 .runtime_arg_names = {"report_addr"},
             },
         .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                    },
+            DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_0,
             },
     };
     dm_kernel.scratchpad_bindings.push_back(

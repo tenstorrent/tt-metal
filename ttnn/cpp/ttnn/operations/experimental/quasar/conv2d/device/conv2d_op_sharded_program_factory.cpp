@@ -1099,9 +1099,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .tensor_bindings = std::move(reader_tensor_bindings),
         .hw_config =
             m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc},
+                m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc},
             },
     };
 
@@ -1338,9 +1337,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .compile_time_args = build_writer_ctas(/*is_sender=*/true),
         .hw_config =
             m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
             },
     };
     // The sender always builds the weights-mcast Semaphore objects (even under SKIP_MCAST), so always bind.
@@ -1392,9 +1390,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .compile_time_args = build_writer_ctas(/*is_sender=*/false),
         .hw_config =
             m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
             },
     };
     if (create_writer_mcast_receiver) {
@@ -1520,13 +1517,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .dfb_bindings = std::move(compute_dfb_bindings),
         .hw_config =
             m2::ComputeHardwareConfig{
-                .gen2_config =
-                    m2::ComputeHardwareConfig::Gen2Config{
-                        .math_fidelity = math_fidelity,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .dst_full_sync_en = dst_full_sync_en,
-                        .math_approx_mode = math_approx_mode,
-                    },
+                m2::ComputeGen2Config{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .math_approx_mode = math_approx_mode,
+                },
             },
     };
 

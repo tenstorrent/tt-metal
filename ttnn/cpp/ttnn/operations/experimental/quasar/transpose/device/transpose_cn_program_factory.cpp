@@ -128,9 +128,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"N", "C", "HtWt", "batch_step", "channel_step", "num_pages", "start_id", "hw", "n"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // Writer KernelSpec.
@@ -154,9 +152,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
                 {"write_size", stick_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     spec.kernels.push_back(std::move(reader));

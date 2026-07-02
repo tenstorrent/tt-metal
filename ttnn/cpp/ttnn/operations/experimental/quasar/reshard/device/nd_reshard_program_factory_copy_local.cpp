@@ -130,13 +130,10 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
         // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                    }},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+        }},
     };
 
     KernelSpec ncrisc{
@@ -147,13 +144,10 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
         // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = NOC::RISCV_1_default,
-                    }},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+        }},
     };
 
     // Common runtime args (broadcast to all nodes).

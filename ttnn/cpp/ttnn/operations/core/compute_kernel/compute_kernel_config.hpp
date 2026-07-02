@@ -10,11 +10,8 @@
 #include <optional>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
-
-namespace tt::tt_metal::experimental {
-struct ComputeHardwareConfig;
-}
 
 namespace ttnn {
 

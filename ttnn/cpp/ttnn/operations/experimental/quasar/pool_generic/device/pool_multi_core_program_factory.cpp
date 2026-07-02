@@ -1019,9 +1019,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .tensor_bindings = make_reader_tensor_bindings(false),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     std::optional<KernelSpec> reader1;
@@ -1035,9 +1033,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
             .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         };
     }
 
@@ -1186,13 +1182,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
     ComputeHardwareConfig compute_hw{
-        .gen2_config =
-            ComputeHardwareConfig::Gen2Config{
-                .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-                .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
-                .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
-                .math_approx_mode = false,
-            },
+        ComputeGen2Config{
+            .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+            .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+            .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
+            .math_approx_mode = false,
+        },
     };
 
     KernelSpec compute{

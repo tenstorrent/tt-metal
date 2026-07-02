@@ -334,12 +334,14 @@ void run_single_core_broadcast(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+            [&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {INP0_DFB, INP1_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+            }(),
     };
 
     experimental::KernelSpec writer_spec{
@@ -351,12 +353,14 @@ void run_single_core_broadcast(
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+            [&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUT_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+            }(),
     };
 
     experimental::KernelSpec compute_spec{
@@ -387,10 +391,9 @@ void run_single_core_broadcast(
              }},
         .hw_config =
             experimental::ComputeHardwareConfig{
-                .gen2_config =
-                    experimental::ComputeHardwareConfig::Gen2Config{
-                        .math_fidelity = test_config.math_fidelity,
-                    },
+                experimental::ComputeGen2Config{
+                    .math_fidelity = test_config.math_fidelity,
+                },
             },
     };
 

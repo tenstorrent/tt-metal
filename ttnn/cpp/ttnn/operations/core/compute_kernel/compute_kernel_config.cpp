@@ -108,13 +108,12 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config) {
     return tt::tt_metal::experimental::ComputeHardwareConfig{
-        .gen1_config =
-            tt::tt_metal::experimental::ComputeHardwareConfig::Gen1Config{
-                .math_fidelity = config.math_fidelity,
-                .fp32_dest_acc_en = config.fp32_dest_acc_en,
-                .dst_full_sync_en = config.dst_full_sync_en,
-                .math_approx_mode = config.math_approx_mode,
-            },
+        tt::tt_metal::experimental::ComputeGen1Config{
+            .math_fidelity = config.math_fidelity,
+            .fp32_dest_acc_en = config.fp32_dest_acc_en,
+            .dst_full_sync_en = config.dst_full_sync_en,
+            .math_approx_mode = config.math_approx_mode,
+        },
     };
 }
 

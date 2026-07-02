@@ -459,10 +459,8 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
                   "src5_addr",
                   "src5_bank_id",
                   "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
+            .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -476,10 +474,8 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
             .access_pattern = DFBAccess::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
+            .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::KernelSpec compute_spec{
@@ -496,14 +492,13 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
             experimental::ComputeHardwareConfig{
-                .gen2_config =
-                    experimental::ComputeHardwareConfig::Gen2Config{
-                        .math_fidelity = MathFidelity::HiFi4,
-                        .fp32_dest_acc_en = true,
-                        .unpack_to_dest_mode =
-                            {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                             {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
-                    },
+                experimental::ComputeGen2Config{
+                    .math_fidelity = MathFidelity::HiFi4,
+                    .fp32_dest_acc_en = true,
+                    .unpack_to_dest_mode =
+                        {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
+                         {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                },
             },
     };
 
@@ -779,14 +774,14 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
             .dfb_bindings = {experimental::ConsumerOf(out_dfb, "in")},
             .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
             .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen1_config =
-                        experimental::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                            .noc = tt_metal::NOC::RISCV_0_default},
-                    .gen2_config =
-                        experimental::DataMovementHardwareConfig::Gen2Config{
-                            .disable_dfb_implicit_sync_for_all = true}},
+                [&] {
+                    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                        return experimental::DataMovementHardwareConfig{
+                            experimental::DataMovementGen2Config{.disable_implicit_sync_for = {out_dfb}}};
+                    }
+                    return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+                }(),
         };
     };
 
@@ -816,10 +811,8 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
                   "src5_addr",
                   "src5_bank_id",
                   "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
+            .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
     };
 
     experimental::KernelSpec writer0_spec = make_writer_spec(WRITER0, OUT0_DFB);
@@ -842,14 +835,13 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
              dfb_binding(OUT2_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
             experimental::ComputeHardwareConfig{
-                .gen2_config =
-                    experimental::ComputeHardwareConfig::Gen2Config{
-                        .math_fidelity = MathFidelity::HiFi4,
-                        .fp32_dest_acc_en = true,
-                        .unpack_to_dest_mode =
-                            {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                             {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
-                    },
+                experimental::ComputeGen2Config{
+                    .math_fidelity = MathFidelity::HiFi4,
+                    .fp32_dest_acc_en = true,
+                    .unpack_to_dest_mode =
+                        {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
+                         {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                },
             },
     };
 

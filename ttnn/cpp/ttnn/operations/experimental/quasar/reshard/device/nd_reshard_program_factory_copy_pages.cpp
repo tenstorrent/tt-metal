@@ -86,9 +86,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     KernelSpec writer{
@@ -109,9 +107,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // Work split: per-core page ranges.

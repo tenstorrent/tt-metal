@@ -112,9 +112,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks_per_core_read", "num_read_per_barrier", "start_id", "curr_c", "curr_h", "curr_n"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ------------------------------------------------------------------------
@@ -128,9 +126,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = {{"W_size_bytes", stick_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks_per_core_read", "num_read_per_barrier", "start_id"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // ------------------------------------------------------------------------

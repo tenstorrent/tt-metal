@@ -114,9 +114,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
              {"page_size", page_size},
              {"size_of_valid_data_in_last_page_in_row", size_of_valid_data_in_last_page_in_row}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "pad_value", "start_page_id", "n_block_reps"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ---- Writer (Metal 2.0 fork) ----
@@ -129,16 +127,15 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // ---- Compute (Metal 2.0 fork; full + cliff) ----
     auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{.gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
+        ComputeHardwareConfig hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
         if (fp32_llk_acc) {
-            hw.gen2_config->unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            std::get<ComputeGen2Config>(hw).unpack_to_dest_mode.emplace(
+                IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
         return hw;
     };

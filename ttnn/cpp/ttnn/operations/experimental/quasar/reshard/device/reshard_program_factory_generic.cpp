@@ -790,9 +790,7 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(role)},
+            .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(role)},
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kGenInputTensorParam}, .accessor_name = kGenInputTensorParam});
