@@ -15,6 +15,7 @@ We compare against the REAL HF pieces:
 Deep multi-encoder composition -> threshold 0.96.
 """
 
+import pytest
 import torch
 
 import ttnn
@@ -135,6 +136,7 @@ def _encode_core(ref_enc, m, x, seq_len):
     return ref_enc.norm(h)
 
 
+@pytest.mark.slow
 def test_condition_encoder_vs_hf(device):
     require_single_device(device)
     torch.manual_seed(0)

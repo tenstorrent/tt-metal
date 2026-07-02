@@ -142,6 +142,7 @@ def _init(dit):
 LAYER_CASES = [(2, 0.95), (24, 0.95)]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("n_layers,pcc", LAYER_CASES, ids=[f"L{n}" for n, _ in LAYER_CASES])
 def test_dit_model_vs_hf(device, n_layers, pcc):
     require_single_device(device)

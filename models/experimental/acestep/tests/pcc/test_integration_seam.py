@@ -17,6 +17,7 @@ Both feed the SAME reference DiT weights, so any divergence is the seam/composit
 config (2 DiT layers, short seqs) to bound runtime. Deep two-subsystem chain -> threshold 0.94.
 """
 
+import pytest
 import torch
 
 import ttnn
@@ -209,6 +210,7 @@ def _mask_tt(m, seq, ref_dev, device):
     return ttnn.from_torch(mk, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
 
+@pytest.mark.slow
 def test_condition_to_dit_seam(device):
     require_single_device(device)
     torch.manual_seed(0)

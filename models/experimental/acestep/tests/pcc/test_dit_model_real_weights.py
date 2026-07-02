@@ -119,6 +119,7 @@ def _layer_cfg(rl, at, d):
     )
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _have_checkpoint(), reason="model.safetensors not downloaded")
 def test_dit_model_real_weights_vs_hf(device):
     require_single_device(device)
