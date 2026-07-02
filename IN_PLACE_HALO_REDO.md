@@ -356,49 +356,64 @@ the outbound halo is a *small fraction* of the shard → temp ≪ input → in-p
 **win**. For small shards / large windows the halo fraction is large → temp can approach
 or exceed the input → in-place **loses**. That fraction is the whole ballgame.
 
-### 9b. Hypothesis: the remote-temp CB may be eliminable (would flip the economics)
+### 9b. First hypothesis (remote-temp is eliminable) — TESTED & REFUTED
 
-The temp exists so a sender's outbound halo sticks survive the sender's own local copies
-(the original does: stage-remote→temp, local, barrier, distribute-remote-from-temp). But:
+Attractive idea: the temp only exists so a sender's outbound halo survives its own local
+copies; if a remote halo write always landed in a region the receiver never reads, we
+could reorder to **remote-first → barrier → local** with *no temp*, deleting the dominant
+added cost. That requires halo-destinations ∩ receiver-input-region = ∅.
 
-- A remote halo write always targets the **receiver's halo region** `[0, delta)` or the
-  tail `[delta+in_size, out_size)`.
-- The receiver only ever *reads as a source* from its **input region**
-  `[delta, delta+in_size)` (for its own local moves and its own outbound halo).
-- By the definition of `delta`, halo region ∩ input region = ∅.
+**It is not ∅.** Two facts from current-main code kill it:
+- `generate_shard_boundaries` (`sliding_window.cpp:454-514`) makes each output shard a
+  **contiguous window of the padded/haloed input space** → the output is **spatially
+  ordered**: `[top halo/pad from core i-1][core i's own local sticks][bottom halo/pad from
+  core i+1]`, *not* segregated `[all-halo][all-local]`.
+- The delta is `in_out_shard_size_delta = aligned(out_nsticks) − aligned(in_nsticks)`
+  (archived `halo_device_operation.cpp:141-147`), so the input is placed at the **tail**
+  `[delta, out_nsticks)` of the output buffer.
 
-If that disjointness holds universally, then reordering to **(1) all cores send remote
-halo directly to neighbors (reading intact input, no temp) → (2) global barrier →
-(3) all cores do local moves + padding** is correct *without any temp buffer*, because a
-remote write never lands where any core still needs to read. That deletes the dominant
-added cost and makes in-place a near-unconditional L1 win.
+Therefore the **bottom-halo region sits at the end of the output = inside `[delta,
+out_nsticks)` = the receiver's live input region.** A remote-first write from core i+1
+would overwrite core i's input before core i reads it → corruption. The original's
+**stage-remote→temp, local, barrier, distribute-remote-after** ordering is genuinely
+required. (This is the recurring theme: the "obvious" simplification has a real reason it
+doesn't work. Verified before writing any kernel — cheap.)
 
-**Why the original didn't do this (the risk to disprove):** it distributed remote
-*after* the barrier and local moves, implying a belief that a remote destination *can*
-overlap the receiver's live input region in some configs. Candidates to scrutinize before
-trusting the hypothesis: **block/width sharding** (2D / column-major layouts where "input
-region" isn't a simple contiguous middle band), **large windows spanning >1 neighbor**
-(a core receives halo from cores i±2… and the output row order may interleave), **padding
-interspersed** with halo in the output stick order, and the **exact output stick ordering**
-produced by `generate_tensor_metadata` (does a neighbor's halo ever get a dst index inside
-`[delta, delta+in_size)`?). The disjointness must be *proven from the config*, not assumed.
+### 9c. So where the "good outcome" actually lives (the real experiment)
 
-### 9c. Validation plan (before committing to a kernel design)
+The temp stays, but per-buffer accounting still favors in-place when the temp is small:
+`remote_temp = max_ref_size · shard_width · nbytes`, and `max_ref_size` = max **outbound
+halo** sticks per core ≈ a few rows for small kernels. Net saving ≈
+`input_shard − remote_temp − extra_CBs`. For **large shards / small kernels** (ResNet/UNet
+3×3) the outbound halo is a small fraction of the shard, so this should be **positive**.
 
-1. Instrument the current normal-halo config generation for the MaxPool height-sharded
-   test shapes: extract, per core, the input-region stick range and every remote
-   destination stick index. **Assert remote-dst ∉ input-region.** If it always holds for
-   height-sharded → the no-temp ordering is proven safe there.
-2. Compute real `input_shard` vs `remote_temp` sizes for those shapes → populate the
-   win/lose table. This *is* the confirm-or-refute-the-premise experiment.
-3. Implement the MaxPool height-sharded slice **no-temp** (remote-first → barrier →
-   local), verify correctness with structured inputs, and measure actual L1 saved.
-4. Only if the disjointness breaks for some class (block/width/large-window) does that
-   class fall back to the temp-based ordering (or normal halo) — a per-class decision,
-   not a blanket one.
+So why did it net-*lose* "in most practical cases"? The suspects, to measure empirically:
+1. **Config-CB bloat**: in-place reordering (`reorder_transfers_globally` "may add
+   duplicate routes") can enlarge the gather/pad config tensors vs normal halo.
+2. **Allocation lifetime / over-allocation**: in-place needs the *input* allocated at
+   *output* size up front. If the producer of that input then holds an output-sized buffer
+   for its whole lifetime (or the input must persist for a residual), the "saving" is paid
+   back elsewhere — the win only materializes when the input is truly transient.
+3. **Shape distribution**: models may shard into *small* per-core shards where the halo
+   fraction (and thus temp) is large, erasing the saving.
 
-If step 1 refutes disjointness even for height-sharded, that is itself the confirmation
-of the bad outcome, cheaply and rigorously, before any kernel is written.
+**The experiment (needs the implementation):** build the MaxPool height-sharded slice
+(temp-based, correct), then measure **actual peak L1** for in-place vs normal across the
+`test_maxpool2d.py` shapes AND a couple of real conv layers, decomposed into
+input/output/temp/config contributions. That win/lose table — not more reasoning — is
+what confirms the bad outcome or reveals the good one. If in-place wins per-buffer but
+loses in a model, the lever is suspect #2 (lifetime), which is a *scheduling/gating*
+problem, not a kernel one.
+
+### 9d. Candidate levers for the good outcome (to try if the table is close)
+
+- **Shrink the temp**: it only needs to hold *outbound* halo, not `shard_width` full
+  width if channels are padded; size it from the exact `max_ref_size`, post-untilize dtype.
+- **Shrink config CBs**: avoid duplicate-route bloat in the in-place ordering; reuse the
+  normal-halo config where the ordering already happens to be safe.
+- **Gate precisely** (net-savings check) and, for models, **only enable when the input is
+  provably transient** so the over-allocation isn't paid back — turning a blanket
+  loss into a targeted win.
 
 ---
 
