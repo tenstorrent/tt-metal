@@ -222,3 +222,35 @@ python_env/bin/python -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner
   conflicts open). Discard + redo per §4 (all decisions recorded there), OR finish resolving.
 - untracked (unrelated, leave alone): `models/demos/deepseek_v3_d_p/reference/dflash_draft_prefill.py`,
   `.../reference/mtp_prefill.py` (from a separate dflash task).
+
+## 8. Phase-5 (L10/L61 traced prefill on rebased-onto-main) — ROOT-CAUSED, BLOCKED (2026-07-02)
+
+Status: rebased branch `trace_experiments_rebased` @ `21a3b24f2a9` builds clean, ring_mla equivalence
+5/5, **L1 trace KV-PCC green**. **L10 trace capture fails** with `TT_FATAL: Writes are not supported
+during trace capture`. All experimental debugging reverted — the branch is back to the clean rebased
+commit (no uncommitted changes). Findings (keep — hard-won):
+
+- **NOT padding_config host from_torch.** Memoizing `build_padding_config` per `actual_isl` + a Python
+  monkeypatch instrumenting `from_torch/to_torch/copy_*_tensor/to_device` during capture proved **0
+  Python host transfers** happen inside the capture window. padding_config is not the culprit.
+- **NOT program-cache eviction.** `tt_metal/api/tt-metalium/program_cache.hpp` is a plain unbounded
+  `std::unordered_map` — no LRU/eviction. A program compiled in warmup stays cached.
+- **Root cause = tensor-address non-determinism across warmup→capture.** On a program-cache *hit*, an op
+  re-patches its runtime args (tensor addresses) via WriteBuffer; that WriteBuffer is illegal during
+  capture. It is only skipped when every input/output lands at the *same address* as in the warmup that
+  compiled the program. The full 10-layer main-MoE forward does not allocate deterministically enough:
+  the FIRST fatal op *moves* when you perturb allocations (clean branch: burst of 32 writes + 2 reads
+  right after `forward_layer_9_start`; after a memoize+no-deallocate experiment: the burst moved to the
+  very first op, `ttnn.embedding`, `tt_parallel_embedding.py:240`). "32 writes" = one op × 32 devices.
+- Program factories that "defer tensor destruction until the cached workload is evicted" (seen across
+  pad/pool/conv/sort/reshape factories) pin output tensors forever (unbounded cache), which is one source
+  of allocator drift between the warmup that pins and the capture that doesn't.
+- A 2nd warmup does NOT fix it (the earlier "2 warmups → writes:0" reading was an artifact: that run
+  crashed in warmup2 on a freed memoized tensor *before* capture ran, so 0 writes was trivial).
+
+What would actually fix it (not attempted — real trace-integration work, likely needs MoE-owner input):
+make the whole L10 forward allocate deterministically so every op's I/O address matches warmup at capture
+(free all warmup intermediates identically; avoid the per-layer pin drift), OR capture the embedding /
+pre-MoE prefix in its own trace segment with pinned-address I/O. The per-element metadata deliverable
+itself is unaffected and already validated on the original segmented-trace branch (L10/L61 KV-PCC green,
+per project memory) — this blocker is specific to re-hosting that trace on top of current `main`'s MoE.
