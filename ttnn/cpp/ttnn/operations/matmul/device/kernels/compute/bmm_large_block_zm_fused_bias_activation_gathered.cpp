@@ -11,6 +11,7 @@
 #include "internal/mod_div_lib.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp"
 
 #ifdef SFPU_ACTIVATION
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
@@ -370,11 +371,18 @@ void kernel_main() {
 
     // LastBlockTarget selection (FUSE_BIAS is host-side dead code in this
     // kernel — same as the llama variant — so the FUSE_BIAS arm is moot).
+    // untilize_out uses Interm (not the old fused OutWithUntilize): the matmul accumulates
+    // the fully-tiled block into interm, then a downstream reblock_and_untilize untilizes the
+    // FULLY-accumulated block into out. The fused pack_untilize untilized a partial before the
+    // block finished accumulating, corrupting under packer_l1_acc.
     constexpr LastBlockTarget last_block_target =
-        untilize_out ? LastBlockTarget::OutWithUntilize
+        untilize_out ? LastBlockTarget::Interm
                      : (pack_relu_defined ? LastBlockTarget::OutWithRelu : LastBlockTarget::Out);
 
-    // OutWithUntilize doesn't auto-enable relu; the PreKBlockFn picks it up there.
+    // With the Interm-target untilize path, relu (if any) is applied on the interm block by the
+    // matmul's own pack stage — but LastBlockTarget::Interm does NOT auto-enable relu, and the
+    // downstream reblock does not apply activation. Keep the PreKBlockFn relu-on-last for the
+    // untilize path so relu still runs before untilize (matches the pre-migration behavior).
     constexpr bool enable_relu_on_last_via_pre_k = pack_relu_defined && untilize_out;
 
     // in1_policy mirrors the original kernel's `if constexpr (in1_is_dram)`
@@ -526,6 +534,40 @@ void kernel_main() {
             inner_dim_fn,
             in0_source_fn,
             in1_offset_fn);
+
+        // ── Downstream untilize (Interm target) ─────────────────────────────
+        // matmul_block accumulated the fully-tiled block into mm_partials_buf (SubblockMajor).
+        // reblock_and_untilize gathers it into row-major and untilizes into mm_out_buf. This
+        // untilizes the FULLY-accumulated block (fixes the packer_l1_acc corruption the old fused
+        // OutWithUntilize had, where a partial got untilized before accumulation finished).
+        if constexpr (untilize_out) {
+#ifdef PACK_RELU
+            // The PreKBlockFn (enable_relu_on_last_via_pre_k) enabled relu for the last K-block's
+            // interm pack; restore a clean packer state before the untilize reblock.
+            PACK((llk_pack_relu_config(ReluConfig::none())));
+#endif
+            // Reconfigure srcA / pack DF / l1_acc for the reblock read, then invoke with
+            // NoReconfigure so the helper adds no reconfig of its own — mirrors the production
+            // (non-gather) kernel's !FUSE_BIAS untilize phase.
+            reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+#if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
+            PACK((pack_reconfig_data_format(mm_out_cb_id)));
+#endif
+#ifdef PACKER_L1_ACC
+            PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+            reblock_and_untilize<
+                out_subblock_w,
+                out_block_w,
+                reblock_untilize_config::InitUninitMode::InitAndUninit,
+                reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                in0_num_subblocks,
+                in1_num_subblocks,
+                out_subblock_num_tiles,
+                out_subblock_h,
+                mm_partials_buf,
+                mm_out_buf);
+        }
 
         if constexpr (enable_global_cb) {
             // Release in1
