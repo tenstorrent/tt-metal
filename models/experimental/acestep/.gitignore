@@ -1,0 +1,20 @@
+# ACE-Step v1.5 — never commit weights, audio, or large binaries.
+# The pipeline checkpoints live outside the repo (ACESTEP_PIPELINE_DIR / HF cache); only source
+# code + PCC tests + perf harness are tracked. These patterns are scoped to this model so they
+# don't clutter the shared root .gitignore.
+
+# model weights / checkpoints
+**/*.safetensors
+**/*.ckpt
+**/*.pt
+**/*.pth
+**/*.bin
+
+# generated / reference audio + arrays
+**/*.wav
+**/*.mp3
+**/*.flac
+**/*.npy
+
+# third-party SongEval toolkit assets (ASLP-lab) — fetched per README, never committed
+demo/songeval/
