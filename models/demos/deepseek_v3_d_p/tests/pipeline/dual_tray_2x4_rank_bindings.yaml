@@ -1,0 +1,29 @@
+# Two-rank single-galaxy rank binding using WHOLE trays per mesh.
+#
+# rank 0 -> mesh_id=0, TT_VISIBLE_DEVICES = tray 1 (chips 0..7)   — 2x4 mesh
+# rank 1 -> mesh_id=1, TT_VISIBLE_DEVICES = tray 2 (chips 8..15)  — 2x4 mesh
+#
+# Each tray is one UBB and naturally a 2×4 chip cluster, so the physical
+# layout matches the MGD's (2, 4) mesh_descriptor without scattering chips
+# across multiple trays. Intermesh fabric runs over the inter-tray backplane
+# ethernet links between trays 1 and 2 (Bus IDs 0x00 and 0x40).
+#
+# Reuses the existing bh_galaxy_dual_2x4_intermesh.textproto MGD (which
+# requires count: 8 intermesh channels). If 8 still doesn't fit physically,
+# we'd dial that down in a fork of the MGD.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+      TT_METAL_SLOW_DISPATCH_MODE: "1"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+      TT_METAL_SLOW_DISPATCH_MODE: "1"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto"
