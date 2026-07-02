@@ -366,6 +366,7 @@ Reduction
    ttnn.sampling
    ttnn.std
    ttnn.sum
+   ttnn.experimental.topk_large_indices
    ttnn.topk
    ttnn.var
 
@@ -472,6 +473,7 @@ Transformer
    ttnn.transformer.concatenate_heads
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.gated_delta_attn_seq
    ttnn.transformer.joint_scaled_dot_product_attention
    ttnn.transformer.paged_flash_multi_latent_attention_decode
    ttnn.transformer.paged_scaled_dot_product_attention_decode
@@ -480,8 +482,11 @@ Transformer
    ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_sdpa
+   ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads
-   ttnn.transformer.windowed_scaled_dot_product_attention
+   ttnn.experimental.indexer_score_dsa
+   ttnn.experimental.indexer_score_msa
 
 CCL
 ===

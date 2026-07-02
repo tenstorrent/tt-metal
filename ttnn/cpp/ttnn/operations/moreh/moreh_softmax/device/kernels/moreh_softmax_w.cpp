@@ -46,7 +46,7 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
         if (Wt == 1) {
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_cb(cb_in0_obj, cb_mask_obj, cb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
@@ -66,7 +66,7 @@ void kernel_main() {
             // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
             // into cb_max via Accumulate. The accumulator and output are both cb_max:
             // the helper waits+pops the previous tile, then packs+pushes the new one.
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_cb(cb_in0_obj, cb_mask_obj, cb_tmp_obj, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -80,12 +80,12 @@ void kernel_main() {
 
         for (uint32_t w = 0; w < Wt; ++w) {
             tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(cb_in0, cb_max);
+            sub_bcast_cols_init_short_with_dt(cb_in0_obj, cb_max_obj);
             sub_tiles_bcast<BroadcastType::COL>(cb_in0, cb_max, w, 0, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_x_m_max);
+            pack_tile_with_dt(dst0, cb_x_m_max_obj);
             tile_regs_release();
         }
         cb_max_obj.pop_front(1);
@@ -97,7 +97,7 @@ void kernel_main() {
         cb_x_m_max_obj.wait_front(Wt);
         for (uint32_t w = 0; w < Wt; ++w) {
             tile_regs_acquire();
-            copy_tile_init_with_dt(cb_x_m_max);
+            copy_tile_init_with_dt(cb_x_m_max_obj);
             copy_tile(cb_x_m_max, w, dst0);
 
 #ifndef SOFTMAX
@@ -109,7 +109,7 @@ void kernel_main() {
             exp_tile(dst0);
 
             if (w == Wt - 1) {
-                copy_tile_init_with_dt(cb_mask);
+                copy_tile_init_with_dt(cb_mask_obj);
                 copy_tile(cb_mask, 0, dst1);
 
                 mask_tile_init();
@@ -118,7 +118,7 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_exps);
+            pack_tile_with_dt(dst0, cb_exps_obj);
             tile_regs_release();
         }
         cb_exps_obj.push_back(Wt);
@@ -170,22 +170,22 @@ void kernel_main() {
 #ifdef LOG
             // x - max - log(sum)
             tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(cb_x_m_max, cb_recipsumexps);
+            sub_bcast_cols_init_short_with_dt(cb_x_m_max_obj, cb_recipsumexps_obj);
             sub_tiles_bcast<BroadcastType::COL>(cb_x_m_max, cb_recipsumexps, w, 0, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
+            pack_tile_with_dt(dst0, cb_out0_obj);
             tile_regs_release();
 #else
             // exp(x - max) / psum
             tile_regs_acquire();
-            mul_bcast_cols_init_short_with_dt(cb_exps, cb_recipsumexps);
+            mul_bcast_cols_init_short_with_dt(cb_exps_obj, cb_recipsumexps_obj);
             mul_tiles_bcast_cols(cb_exps, cb_recipsumexps, w, 0, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
+            pack_tile_with_dt(dst0, cb_out0_obj);
             tile_regs_release();
 #endif
         }

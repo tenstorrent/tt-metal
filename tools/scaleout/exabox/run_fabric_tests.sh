@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -43,13 +47,21 @@ Optional:
                                         8x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
                                                        (8 Z-connected 4x4 meshes across 4 galaxies; even single-host, odd split 2x1)
     --test-binary <path>                Path to test binary
-                                        (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
+                                        (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
-                                        (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
+                                        (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
-    --mpi-if <interface>                Network interface for MPI TCP transport (default: ens5f0np0)
+    --num-packets <N>                   Number of packets each sender sends (test_tt_fabric --num-packets).
+                                        This is the knob to shorten a run: the heavy all_to_all tests
+                                        (the bulk of the runtime) scale ~linearly with it, and every
+                                        sender stays active so all cables are still exercised. The script
+                                        reads the config's baseline counts and prints what fraction of the
+                                        default per-sender packet volume you're running. e.g. 1000 for a
+                                        quick run.
+    --mpi-if <interface>                Network interface for MPI TCP transport
+                                        (auto-detected if not specified)
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
                                         e.g. --mpi-args "--tag-output"
     --skip-reorder                      Use --hosts exactly as given; skip the canonical ring
@@ -85,17 +97,19 @@ MESH_GRAPH_DESC_PATH_8x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_gala
 CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
-TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
-TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
+TEST_BINARY="./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+TEST_CONFIG="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml"
 TEST_CONFIG_EXPLICIT=false
 # Multi-mesh (Z) configs default to the multi-mesh sanity config, whose
 # neighbor_exchange/all_to_all patterns route across mesh boundaries (Z links).
 # The single-mesh test_fabric_sanity_neighbor_exchange.yaml is NOT compatible
 # with an inter-mesh Z fabric (its Linear/Ring/Torus setups trip the tensix
 # datamover buffer-index assert), so it must not be the default here.
-TEST_CONFIG_Z="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_sanity_common.yaml"
+TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
 FILTER=""
-MPI_IF="ens5f0np0"
+NUM_PACKETS=""
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 SKIP_REORDER=false
 
@@ -174,12 +188,25 @@ while [[ $# -gt 0 ]]; do
             FILTER="$2"
             shift 2
             ;;
+        --num-packets)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --num-packets requires a non-empty value"
+                exit 1
+            fi
+            if [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --num-packets must be a positive integer (got '$2')"
+                exit 1
+            fi
+            NUM_PACKETS="$2"
+            shift 2
+            ;;
         --mpi-if)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
                 echo "Error: --mpi-if requires a non-empty value"
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -221,6 +248,19 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     echo ""
     show_help
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 # For the Nx32x4 family, capture the mesh/host count N (empty for all other configs).
@@ -386,6 +426,22 @@ echo "Test config: $TEST_CONFIG"
 if [[ -n "$FILTER" ]]; then
     echo "Filter: $FILTER"
 fi
+if [[ -n "$NUM_PACKETS" ]]; then
+    echo "Num packets per sender: $NUM_PACKETS"
+    # Read the config's baseline num_packets so the operator sees how much shorter
+    # this run is. Counts are per-sender; sender/iteration counts are unchanged, so
+    # runtime scales ~linearly with the per-sender packet volume.
+    if [[ -f "$TEST_CONFIG" ]]; then
+        mapfile -t _baselines < <(grep -oE 'num_packets:[[:space:]]*[0-9]+' "$TEST_CONFIG" | grep -oE '[0-9]+$')
+        if [[ ${#_baselines[@]} -gt 0 ]]; then
+            _baseline_sum=0
+            for _b in "${_baselines[@]}"; do _baseline_sum=$((_baseline_sum + _b)); done
+            _new_sum=$((NUM_PACKETS * ${#_baselines[@]}))
+            _pct=$(awk -v n="$_new_sum" -v o="$_baseline_sum" 'BEGIN { if (o > 0) printf "%.1f", 100.0 * n / o; else printf "n/a" }')
+            echo "  -> ~${_pct}% of the default per-sender packet volume across ${#_baselines[@]} pattern group(s) (baseline sum ${_baseline_sum} -> ${_new_sum})"
+        fi
+    fi
+fi
 echo "MPI interface: $MPI_IF"
 if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
@@ -403,6 +459,9 @@ if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS+=(--filter "$FILTER")
+fi
+if [[ -n "$NUM_PACKETS" ]]; then
+    EXTRA_BINARY_ARGS+=(--num-packets "$NUM_PACKETS")
 fi
 
 # Non-Z multi-host configs are a single mesh (TT_MESH_ID=0) that spans several

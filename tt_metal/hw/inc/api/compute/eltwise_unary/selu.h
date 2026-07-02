@@ -29,25 +29,25 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void selu_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_selu,
         (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param0,
         param1));
 }
 
 ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
-    PACK(SFPU_CALL_MODE(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_selu,
         (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param0,
         param1));
 }
@@ -55,8 +55,8 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void selu_tile_init() { MATH(SFPU_INIT(selu)); }
+ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
 
-ALWI void selu_tile_init_pack() { PACK(SFPU_INIT(selu)); }
+ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
 
 }  // namespace ckernel

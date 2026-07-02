@@ -157,6 +157,7 @@ void kernel_main() {
                 }
 
                 tt_memmove<false, false, true, 0>(
+                    noc,
                     l1_write_addr,
                     temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset),
                     width_size);

@@ -22,6 +22,7 @@ from models.common.utility_functions import (
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
@@ -388,7 +389,7 @@ def create_tt_qwen_model(
     "device_params",
     [
         {
-            "trace_region_size": 184915840,
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy-qwen",
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,

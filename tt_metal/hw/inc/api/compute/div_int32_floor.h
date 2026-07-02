@@ -31,32 +31,32 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_div_int32_floor,
         (APPROX, 8 /* ITERATIONS */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 }
 ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_div_int32_trunc,
         (APPROX, 8 /* ITERATIONS */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void div_int32_floor_tile_init() { MATH((SFPU_BINARY_INIT_CB(div_int32_floor, sfpu::div_floor_init, (APPROX)))); }
-ALWI void div_int32_trunc_tile_init() { MATH((SFPU_BINARY_INIT_CB(div_int32_trunc, sfpu::div_trunc_init, (APPROX)))); }
+ALWI void div_int32_floor_tile_init() { MATH((SFPU_BINARY_INIT_FN(div_int32_floor, sfpu::div_floor_init, (APPROX)))); }
+ALWI void div_int32_trunc_tile_init() { MATH((SFPU_BINARY_INIT_FN(div_int32_trunc, sfpu::div_trunc_init, (APPROX)))); }
 
 }  // namespace ckernel

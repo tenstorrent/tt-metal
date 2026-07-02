@@ -226,9 +226,17 @@ def _generate_unicast_segment(
         f"            get_arg_val<uint32_t>(rt_offset + {arrive_offset}));\n"
         f"        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
         f"            get_arg_val<uint32_t>(rt_offset + {release_offset}));\n"
-        f"        // Reset L1 semaphores for re-execution\n"
-        f"        *arrive = 0;\n"
-        f"        *release = 0;\n"
+        f"        // NOTE: Do NOT reset *arrive / *release here.  These are\n"
+        f"        // cross-core GlobalSemaphores: a non-core0 core increments\n"
+        f"        // core0's *arrive over NOC in sync(), and core0 unicasts\n"
+        f"        // *release to the other cores.  init() runs unsynchronized\n"
+        f"        // across cores, so a slow init() on the receiving core would\n"
+        f"        // zero the semaphore AFTER a peer's NOC write already arrived,\n"
+        f"        // erasing it and deadlocking the barrier (same NOC-clobber\n"
+        f"        // race the op-semaphore NOTE in _emit_init_coordinator warns\n"
+        f"        // about).  The semaphores are allocated ephemerally with\n"
+        f"        // initial_value 0 on every dispatch, so an explicit reset is\n"
+        f"        // both unnecessary and unsafe.\n"
         f"    }}\n"
         f"\n"
         f"    template <SyncMode mode>\n"
@@ -266,8 +274,11 @@ namespace seg_{seg_idx} {{
         call_count = 0;
         release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_arg_val<uint32_t>(rt_offset + {release_offset}));
-        // Reset L1 semaphore for re-execution
-        *release = 0;
+        // NOTE: Do NOT reset *release here.  core0 unicasts *release to this
+        // core over NOC in sync(); a slow init() would zero it after that
+        // write arrived, deadlocking the spinwait.  The semaphore is allocated
+        // ephemerally with initial_value 0 on every dispatch, so resetting it
+        // here is both unnecessary and unsafe.
     }}
 
     template <SyncMode mode>
@@ -663,10 +674,21 @@ def _emit_init_follower(
         lines.append("        get_arg_val<uint32_t>(rt_offset + 1));")
         lines.append("    pack_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append("        get_arg_val<uint32_t>(rt_offset + 2));")
-        lines.append("    *pack_drained = 0;")
         lines.append("    math_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append("        get_arg_val<uint32_t>(rt_offset + 3));")
-        lines.append("    *math_drained = 0;")
+        # NOTE: Do NOT reset *pack_drained / *math_drained here.  These are the
+        # three TRISC threads' drain-handshake flags in local::sync (pack sets
+        # *pack_drained, math waits on it then sets *math_drained, unpack waits
+        # on it).  init() runs on ALL THREE threads with no barrier before the
+        # first local::sync, so a thread whose init() is slow (e.g. after a
+        # no-op phase, where the fast threads reach local::sync almost
+        # immediately) would write 0 here AFTER another thread already advanced
+        # the flag in the first barrier — clobbering it and deadlocking the
+        # spinwait.  The GlobalSemaphores are allocated with initial_value 0 and
+        # the hardware dispatch re-initializes them to that value on every
+        # enqueue (including cache hits), so an explicit reset is both
+        # unnecessary and unsafe.  This mirrors the compute_done/writer_done
+        # rationale below (they are deliberately not reset in init() either).
     for seg_idx in range(num_segments):
         lines.append(f"    group::seg_{seg_idx}::init();")
     lines.append("}")

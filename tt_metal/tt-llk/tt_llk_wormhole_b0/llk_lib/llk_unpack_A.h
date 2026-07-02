@@ -15,6 +15,7 @@
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
+#include "sanitizer/api.h"
 #include "sfpi.h"
 
 using namespace ckernel;
@@ -245,12 +246,37 @@ inline void _llk_unpack_A_init_(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
 
+    if constexpr (BType == BroadcastType::NONE)
+    {
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            face_r_dim,
+            llk::san::IGNORE,
+            num_faces,
+            llk::san::IGNORE);
+    }
+    else
+    {
+        // If using broadcast UnpackA uses UNP_B... yeah i know...
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            face_r_dim,
+            llk::san::IGNORE,
+            num_faces);
+    }
+    llk::san::operation_init<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
+
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
-
-    // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
-    // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) == static_cast<uint>(DataFormat::UInt16));
-    // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
     // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused.
@@ -313,6 +339,35 @@ template <
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+
+    if constexpr (BType == BroadcastType::NONE)
+    {
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE);
+    }
+    else
+    {
+        // If using broadcast UnpackA uses UNP_B... yeah i know...
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE);
+    }
+    llk::san::operation_check<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);

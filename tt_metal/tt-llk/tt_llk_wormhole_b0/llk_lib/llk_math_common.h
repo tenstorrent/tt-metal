@@ -10,55 +10,9 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel::math;
-
-// DO NOT call this unless absolutely necessary
-// Bit 11 enables 32 bit mode for dest as a workaround for tt-metal#46219.
-// We need to wait for both math and pack to be fully idle before writing this bit
-// because it affects dest bank access which is shared by both pipelines.
-// Changing it while either pipeline is active can cause a race condition.
-/**
- * @brief Set debug feature disable bit 11 to work around an FPU HW bug.
- *
- * @note Workaround for bug tt-metal#46219. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
- */
-inline void _llk_math_dbg_feature_disable_()
-{
-    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
-    if (val & (1 << 11))
-    {
-        return;
-    }
-    tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-        asm volatile("nop");
-    };
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val | (1 << 11));
-}
-
-// Clears bit 11 to disable 32 bit mode for dest.
-// Same synchronization is needed here to avoid racing.
-/**
- * @brief Clear debug feature disable bit 11, restoring default FPU behavior.
- *
- * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219). Issues a tensix_sync() first.
- */
-inline void _llk_math_dbg_feature_enable_()
-{
-    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
-    if (!(val & (1 << 11)))
-    {
-        return;
-    }
-    tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-        asm volatile("nop");
-    };
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val & ~(1 << 11));
-}
 
 /**
  * @brief Enable or disable FP32 accumulation in the destination register for both FPU and SFPU.
@@ -76,23 +30,22 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
  * Programs the source A/B ALU formats, enables INT8 math when either source is Int8/Int32, and sets FP32 dest
- * accumulation mode. Applies HW-bug workarounds (disables debug feature bit 11) for INT8 math and for the
- * UInt16-with-FP32-dest combination, otherwise re-enables it.
+ * accumulation mode. Always clears debug feature bit 11 (32-bit dest mode workaround) to establish a known-good
+ * baseline; bit 11 is never set by any math/SFPU path (tt-llk#1568).
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: Data format of source B (DataFormat enum underlying value).
- * @note May disable debug feature bit 11 via @ref _llk_math_dbg_feature_disable_ for INT8/UInt16 workarounds (budabackend#1948).
  * @note srcb_data_format programs ALU_FORMAT_SPEC_REG1_SrcB, which the SFPU also reads to interpret data it loads from DEST.
  *       For SFPU work, pass a srcb_data_format whose exponent family (BF16 vs FP16) matches the data in DEST (tt-llk #951).
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    llk::san::math_operand_configure(srca_data_format, srcb_data_format);
+
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    std::uint32_t int8_math_enabled = (masked_data_format(srca_data_format) == to_underlying(DataFormat::Int8)) ||
-                                      (masked_data_format(srcb_data_format) == to_underlying(DataFormat::Int8)) ||
-                                      (srca_data_format == to_underlying(DataFormat::Int32)) || (srcb_data_format == to_underlying(DataFormat::Int32));
+    std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     std::uint32_t config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
                                 (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
@@ -101,20 +54,8 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
-    // Workaround for HW bugs:
-    // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
-    // budabackend#1948: fp32 dest and movd2a/b with UInt16 srcA/B
-    bool uint16_with_fp32_dest =
-        is_fp32_dest_acc_en && ((srca_data_format == to_underlying(DataFormat::UInt16)) || (srcb_data_format == to_underlying(DataFormat::UInt16)));
-
-    if (int8_math_enabled || uint16_with_fp32_dest)
-    {
-        _llk_math_dbg_feature_disable_();
-    }
-    else
-    {
-        _llk_math_dbg_feature_enable_();
-    }
+    // Establish the operand-driven baseline for the Src zero-substitution flag.
+    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 
 /**
@@ -194,12 +135,13 @@ inline void _llk_math_pack_sync_init_()
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
+    llk::san::math_operand_configure<true>(srca_data_format, llk::san::IGNORE);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-        std::uint32_t int8_math_enabled =
-            (masked_data_format(srca_data_format) == to_underlying(DataFormat::Int8)) || (srca_data_format == to_underlying(DataFormat::Int32));
+        std::uint32_t int8_math_enabled     = is_int8_or_int32_format(srca_data_format);
         std::uint32_t config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
@@ -209,6 +151,9 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcA format.
+    _configure_default_zero_flag_state_(srca_data_format, src_zero_flag_srcb_fmt);
 }
 
 /**
@@ -224,12 +169,13 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
+    llk::san::math_operand_configure<true>(llk::san::IGNORE, srcb_data_format);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-        std::uint32_t int8_math_enabled =
-            (masked_data_format(srcb_data_format) == to_underlying(DataFormat::Int8)) || (srcb_data_format == to_underlying(DataFormat::Int32));
+        std::uint32_t int8_math_enabled     = is_int8_or_int32_format(srcb_data_format);
         std::uint32_t config_data = (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_ADDR32, 0, config_mask>(config_data);
@@ -239,6 +185,9 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(srcb_data_format);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcB format.
+    _configure_default_zero_flag_state_(src_zero_flag_srca_fmt, srcb_data_format);
 }
 
 /**
@@ -255,13 +204,13 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-        std::uint32_t int8_math_enabled = (masked_data_format(srca_data_format) == to_underlying(DataFormat::Int8)) ||
-                                          (masked_data_format(srcb_data_format) == to_underlying(DataFormat::Int8)) ||
-                                          (srca_data_format == to_underlying(DataFormat::Int32)) || (srcb_data_format == to_underlying(DataFormat::Int32));
+        std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
         std::uint32_t config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
                                     (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
@@ -274,6 +223,9 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new formats.
+    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 
 /**

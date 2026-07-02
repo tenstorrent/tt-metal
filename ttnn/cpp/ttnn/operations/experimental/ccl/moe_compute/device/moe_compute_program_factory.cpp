@@ -28,11 +28,10 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace {
-
-constexpr uint32_t TILE_WIDTH = 32;
 
 inline uint32_t non_tile_cb_page_size(tt::DataFormat data_format, uint32_t l1_alignment) {
     return std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
@@ -49,51 +48,6 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     auto hidden_size = tensor.logical_shape()[-1];
     TT_FATAL(logical_volume % hidden_size == 0, "Logical volume must be divisible by hidden size");
     return logical_volume / hidden_size;
-}
-
-// Per-arch layout for tilize+combine. The matmul cores come from
-// mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(...) and live at the
-// "DRAM-bank-adjacent" columns: WH packs them at logical x=0,4 (close); BH spreads them
-// across logical x=0,7 (far apart). The free corner where tilize+combine fit without
-// overlapping the matmul mcast bounding box is therefore arch-specific.
-//
-// Order in `max_tilize_cores` is LOAD-BEARING: index 0 is the drain-sync core and the
-// first half forms the primary mcast group (second half is the secondary mcast group).
-// Existing 6U callers hardcode input sharding to (6,9) on WH under the assumption that
-// it's the drain core, so the production order is preserved here. The grid-availability
-// filter in get_cores() drops out-of-range entries (e.g. y=9 on harvested n150_L; see
-// #41827). On a harvested chip that filter leaves {(6,8),(5,8)}; callers that hardcode
-// (6,9) must derive the drain core dynamically from the grid (see the single-card test
-// for an example).
-struct MoEComputeLayout {
-    std::vector<CoreCoord> max_tilize_cores;  // [0] = drain core (load-bearing)
-    CoreRangeSet max_combine_core_range_set;
-};
-
-const MoEComputeLayout& get_layout(tt::ARCH arch) {
-    switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: {
-            static tt::stl::Indestructible<MoEComputeLayout> wh{MoEComputeLayout{
-                /*max_tilize_cores=*/{CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)},
-                /*max_combine_core_range_set=*/CoreRangeSet(CoreRange({5, 0}, {6, 7})),
-            }};
-            return wh.get();
-        }
-        case tt::ARCH::BLACKHOLE: {
-            // BH has DRAM cols at logical x=0,7 (vs WH's x=0,4) and a presumed 11x10
-            // production worker grid. Tilize+combine shift to the right edge (x=9,10)
-            // to clear the matmul mcast bounding box ({0,0},{7,9}). See #41827 for the
-            // BH topology rationale.
-            static tt::stl::Indestructible<MoEComputeLayout> bh{MoEComputeLayout{
-                /*max_tilize_cores=*/{CoreCoord(10, 9), CoreCoord(10, 8), CoreCoord(9, 9), CoreCoord(9, 8)},
-                /*max_combine_core_range_set=*/CoreRangeSet(CoreRange({9, 0}, {10, 7})),
-            }};
-            return bh.get();
-        }
-        case tt::ARCH::QUASAR:
-        case tt::ARCH::Invalid: break;
-    }
-    TT_THROW("moe_compute: no layout for arch {}", static_cast<int>(arch));
 }
 
 std::tuple<
@@ -113,139 +67,23 @@ get_cores(
     const uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
-    uint32_t bh_ring_size) {
-    /*
-     * - First tilize core is the drain sync
-     * - First ((total_tilize_cores + 1) / 2) tilize cores are primary mcast group
-     * - Remaining cores are secondary mcast group (with the first of them being the secondary mcaster)
-     */
-
-    // Calculate number of tilize cores based on hidden dimension
-    const uint32_t hidden_tiles = hidden_size / TILE_WIDTH;
-
-    // Per-arch tilize/combine layout (layout struct above; see #41827 for BH bring-up).
-    const auto& layout = get_layout(mesh_device->arch());
-    const auto& max_tilize_cores = layout.max_tilize_cores;
-    const auto& max_combine_core_range_set = layout.max_combine_core_range_set;
-
-    // Filter max_tilize_cores by what the device's logical worker grid actually exposes.
-    // Harvested SKUs (e.g. n150_L with one disabled compute row) may not expose the y=9
-    // entries; combined with the y=8-first ordering of `max_tilize_cores`, this lets the op
-    // run on harvested chips while still using all 4 cores on full-grid WH/6U Galaxy.
-    const auto grid_size = mesh_device->compute_with_storage_grid_size();
-    std::vector<CoreCoord> tilize_cores;
-    tilize_cores.reserve(max_tilize_cores.size());
-    for (const auto& c : max_tilize_cores) {
-        if (c.x < grid_size.x && c.y < grid_size.y) {
-            tilize_cores.push_back(c);
-        }
-    }
-    TT_FATAL(!tilize_cores.empty(), "No tilize cores fit the device's logical worker grid");
-
-    // Then prune so the remaining count evenly divides hidden_tiles.
-    while (tilize_cores.size() > 1 && hidden_tiles % tilize_cores.size() != 0) {
-        tilize_cores.pop_back();
-    }
-
-    // matmul cores come from the DRAM-bank-to-worker assignment: WH returns 12, BH returns 8.
-    // WH instantiates the N=12 ring; BH instantiates the N=bh_ring_size ring (per-call value
-    // resolved from the op kwarg; supported {8, 12, 16}, default 12).
-    //   - N=8 (BH): keep only the 8 DRAM-adjacent cores; weights HEIGHT_SHARDED 1:1 with banks.
-    //   - N=12/16 (BH): append extras inside the matmul mcast bbox ({0,0},{7,9}); weights still
-    //     HEIGHT_SHARDED with 8 shards, but each ring core's slice spans 1-2 banks → dm0.cpp
-    //     walks the slice via the bank-run loop, set_state'ing once per bank crossing.
-    // See #41827.
-    auto matmul_cores =
-        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-    if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
-        // BH 8 DRAM-adjacent cores at x=0,7 (first 4 cols x=0; next 4 cols x=7).
-        // BH DRAM-adjacent positions: (0,0)(0,3)(0,7)(0,9)(7,1)(7,4)(7,6)(7,9). Extras must avoid
-        // these, stay inside x=0..7,y=0..9 (matmul bbox), and not extend the bbox (so tilize/
-        // combine bboxes at x=9,10 remain non-overlapping). The first 4 entries reach N=12; the
-        // next 4 reach N=16. Append in order so growing N strictly extends the previous set.
-        constexpr std::array<CoreCoord, 8> kBhMatmulExtras = {{
-            // First 4 (used at N=12): free y in x=0 col {5, 8}; free y in x=7 col {3, 8}.
-            {0, 5},
-            {0, 8},
-            {7, 3},
-            {7, 8},
-            // Next 4 (used at N=16): free y in x=0 col {1, 2}; free y in x=7 col {0, 2}.
-            {0, 1},
-            {0, 2},
-            {7, 0},
-            {7, 2},
-        }};
-        const uint32_t n = bh_ring_size;
-        TT_FATAL(
-            n == 8 || n == 12 || n == 16,
-            "moe_compute: unsupported BH ring size N={}, supported values are {{8, 12, 16}}",
-            n);
-        // N=8: no extras (the 8 DRAM-adjacent cores are exactly the ring). N>8: pad up.
-        if (n > 8) {
-            const uint32_t num_extras = n - 8;
-            TT_FATAL(num_extras <= kBhMatmulExtras.size(), "moe_compute: not enough BH extras for N={}", n);
-            for (uint32_t i = 0; i < num_extras; ++i) {
-                matmul_cores.push_back(kBhMatmulExtras[i]);
-            }
-        }
-    }
-    const uint32_t expected_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size : 12u;
-    TT_FATAL(
-        matmul_cores.size() == expected_n,
-        "moe_compute: expected {} matmul cores after padding (got {})",
-        expected_n,
-        matmul_cores.size());
-
-    // CoreRangeSets
-    const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
-    const CoreRangeSet matmul_core_range_set = CoreRangeSet(matmul_cores);
-    const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(matmul_core_range_set);
-
-    // Bounding boxes
-    const CoreRange tilize_bounding_box = tilize_core_range_set.bounding_box();
-    const CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
-
-    // Verify none of the bounding boxes overlap
-    TT_FATAL(!tilize_bounding_box.intersects(matmul_bounding_box), "tilize and matmul bounding boxes cannot overlap");
-
-    // Combine cores (16 max), that don't overlap with any of the tilize or matmul bounding boxes
-    const auto combine_core_range_set = select_from_corerangeset(
-        max_combine_core_range_set,
-        /*start_index=*/0,
-        (combine_token_parallel_cores * combine_data_parallel_cores) - 1);
-
-    const CoreRange combine_bounding_box = combine_core_range_set.bounding_box();
-
-    // consistent order matters for the list of combine cores so produce them as a sorted vector
-    auto combine_cores = corerange_to_cores(combine_core_range_set);
-    std::sort(combine_cores.begin(), combine_cores.end(), [](const auto& ca, const auto& cb) {
-        if (ca.x != cb.x) {
-            return ca.x < cb.x;
-        }
-        return ca.y < cb.y;
-    });
-
-    // MatMul + combine CoreRangeSet, needed for semaphores
-    const auto combine_matmul_core_range_set = combine_core_range_set.merge(matmul_core_range_set);
-
-    // All worker cores (tilize + matmul + combine)
-    const CoreRangeSet all_worker_cores_range_set = tilize_matmul_core_range_set.merge(combine_core_range_set);
-
-    TT_FATAL(!combine_bounding_box.intersects(tilize_bounding_box), "combine and tilize bounding boxes cannot overlap");
-    TT_FATAL(!combine_bounding_box.intersects(matmul_bounding_box), "combine and matmul bounding boxes cannot overlap");
+    uint32_t bh_ring_size,
+    const CoreRangeSet& mux_core_range_set) {
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set, bh_ring_size);
 
     return {
-        tilize_cores,
-        matmul_cores,
-        tilize_core_range_set,
-        matmul_core_range_set,
-        tilize_matmul_core_range_set,
-        combine_core_range_set,
-        combine_matmul_core_range_set,
-        all_worker_cores_range_set,
-        combine_cores,
-        tilize_bounding_box,
-        matmul_bounding_box};
+        selection.tilize_cores,
+        selection.matmul_cores,
+        selection.tilize_core_range_set,
+        selection.matmul_core_range_set,
+        selection.tilize_matmul_core_range_set,
+        selection.combine_core_range_set,
+        selection.combine_matmul_core_range_set,
+        selection.all_worker_cores_range_set,
+        selection.combine_cores,
+        selection.tilize_bounding_box,
+        selection.matmul_bounding_box};
 }
 
 std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& cores, const ttnn::MeshDevice& device) {
@@ -265,27 +103,42 @@ std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& c
 namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine.
-// Combine cores depend only on the per-arch layout's max_combine_core_range_set + the (token, data)
-// parallel dims — not on hidden_size or bh_ring_size — so derive them directly without calling
-// get_cores(). Layout overlap (tilize/matmul/combine bboxes) is checked in get_cores() at program
+// Combine cores are selected dynamically based on hidden_size (for tilize core count) and mux_core_range_set
+// (for core avoidance). Layout overlap (tilize/matmul/combine bboxes) is checked in get_cores() at program
 // build time, so callers that subsequently invoke the op still get the assert coverage.
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
-    const uint32_t combine_data_parallel_cores) {
-    const auto& layout = get_layout(mesh_device->arch());
-    const auto combine_core_range_set = select_from_corerangeset(
-        layout.max_combine_core_range_set,
-        /*start_index=*/0,
-        (combine_token_parallel_cores * combine_data_parallel_cores) - 1);
-    auto combine_cores = corerange_to_cores(combine_core_range_set);
-    std::sort(combine_cores.begin(), combine_cores.end(), [](const auto& ca, const auto& cb) {
-        if (ca.x != cb.x) {
-            return ca.x < cb.x;
-        }
-        return ca.y < cb.y;
-    });
-    return combine_cores;
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set,
+    const uint32_t bh_ring_size) {
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        bh_ring_size);
+    return selection.combine_cores;
+}
+
+ttnn::CoreCoord get_moe_tilize_drain_core(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set,
+    const uint32_t bh_ring_size) {
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        bh_ring_size);
+    TT_FATAL(!selection.tilize_cores.empty(), "moe_compute tilize drain core selection returned no tilize cores");
+    return selection.tilize_cores.at(0);
 }
 
 ttnn::CoreRange get_moe_worker_mcast_bounding_box(
@@ -293,10 +146,16 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set,
     const uint32_t bh_ring_size) {
-    const auto core_ret =
-        get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, bh_ring_size);
-    return std::get<7>(core_ret).bounding_box();
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        bh_ring_size);
+    return selection.all_worker_cores_range_set.bounding_box();
 }
 
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
@@ -318,8 +177,14 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
 
     if (args.path == MoEComputePath::Full) {
         // combine_params.has_value() is checked in validate_on_program_cache_miss.
+        // mux_core_range_set comes from combine_params when in Full mode.
         const auto core_ret = get_cores(
-            mesh_device, args.num_token_parallel_cores, args.num_data_parallel_cores, hidden_size, args.bh_ring_size);
+            mesh_device,
+            args.num_token_parallel_cores,
+            args.num_data_parallel_cores,
+            hidden_size,
+            args.bh_ring_size,
+            args.combine_params->mux_core_range_set);
 
         const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
@@ -457,6 +322,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t intermediate_size = args.intermediate_size;
     const uint32_t hidden_tiles = hidden_size / 32;
     const uint32_t intermediate_tiles = intermediate_size / 32;
+    const uint32_t num_shared_experts = args.num_shared_experts_per_device.value_or(0);
 
     // Cores
     const auto
@@ -472,7 +338,12 @@ MoEComputeMeshWorkloadFactory::create_at(
          tilize_bounding_box,
          matmul_bounding_box] =
             get_cores(
-                mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, args.bh_ring_size);
+                mesh_device,
+                combine_token_parallel_cores,
+                combine_data_parallel_cores,
+                hidden_size,
+                args.bh_ring_size,
+                args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{});
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
@@ -492,6 +363,34 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
+
+    // noc_async_write_multicast / noc_semaphore_set_multicast (non-loopback) exclude the sender.
+    // Matmul-targeting mcast is issued by tilize_cores[0] (drain) and, on the first chunk when
+    // num_tilize_cores > 1, also by tilize_cores[tilize_num_cores / 2] (secondary mcaster).
+    // All tilize kernels share one compile-time num_dests, so every sender must be consistently
+    // inside or outside the matmul bounding-box rectangle (not merely bbox intersection).
+    bool any_sender_inside = false;
+    bool any_sender_outside = false;
+    const auto check_matmul_mcast_sender = [&](const CoreCoord& sender) {
+        if (matmul_bounding_box.contains(sender)) {
+            any_sender_inside = true;
+        } else {
+            any_sender_outside = true;
+        }
+    };
+    check_matmul_mcast_sender(tilize_cores.at(0));
+    if (tilize_num_cores > 1) {
+        check_matmul_mcast_sender(tilize_cores.at(tilize_num_cores / 2));
+    }
+    TT_FATAL(
+        !(any_sender_inside && any_sender_outside),
+        "moe_compute: tilize matmul mcast senders {} and {} straddle matmul bbox {} (inside vs outside); "
+        "core placement must keep all senders on the same side of the rectangle",
+        tilize_cores.at(0).str(),
+        tilize_num_cores > 1 ? tilize_cores.at(tilize_num_cores / 2).str() : tilize_cores.at(0).str(),
+        matmul_bounding_box.str());
+    const uint32_t matmul_mcast_num_dests =
+        any_sender_inside ? matmul_bounding_box_num_cores - 1 : matmul_bounding_box_num_cores;
 
     // All worker cores bounding box
     const CoreRange all_worker_cores_bounding_box = all_worker_cores_range_set.bounding_box();
@@ -569,7 +468,9 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Tilize drain-sync core signals combine sync core (which then multicasts to the rest)
     // that metadata is ready and task splitting can proceed.
-    // Allocate on full rectangle of usable cores so we can multicast without clobbering.
+    // Allocate on the combine bounding box (not just selected cores) because the combine
+    // reader kernel multicasts to the full rectangle — cores inside the bbox but outside
+    // the selected set must also have a valid semaphore address to avoid L1 corruption.
     // In ComputeOnly mode, the kernel-side increment is gated off via the compute_only CT arg, so
     // the semaphore is unused by anyone -- but tilize_reader still calls get_semaphore() on it
     // (a local L1 address lookup), so we still need it to be allocated on at least the matmul
@@ -577,7 +478,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const auto tilize_combine_sync_semaphore_id = tt::tt_metal::CreateSemaphore(
         program,
         args.path == MoEComputePath::ComputeOnly ? matmul_core_range_set
-                                                 : get_layout(mesh_device->arch()).max_combine_core_range_set,
+                                                 : CoreRangeSet(combine_core_range_set.bounding_box()),
         INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
@@ -908,7 +809,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // tile_width_bytes = TILE_WIDTH * element_size
     // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
-    uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
+    uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * tilize_input_tensor.element_size();
     uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
 
     const uint32_t primary_mcast_gather_group_num_cores = tilize_num_cores / 2;
@@ -1010,7 +911,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"matmul_mcast_start_y", (uint32_t)matmul_mcast_start_physical.y},
         {"matmul_mcast_end_x", (uint32_t)matmul_mcast_end_physical.x},
         {"matmul_mcast_end_y", (uint32_t)matmul_mcast_end_physical.y},
-        {"matmul_bounding_box_num_cores", matmul_bounding_box_num_cores},
+        {"matmul_bounding_box_num_cores", matmul_mcast_num_dests},
 
         // All worker cores multicast coordinates
         // TODO(#41827): when path == ComputeOnly, this bounding box still includes the
@@ -1290,10 +1191,22 @@ MoEComputeMeshWorkloadFactory::create_at(
         "moe_compute: w2 total pages ({}) not divisible by num_cores ({})",
         w2_total_pages_buf,
         matmul_num_cores);
+
+    uint32_t shared_expert_tp_factor;
+    if (args.path == MoEComputePath::ComputeOnly) {
+        // concept of a shared expert doesn't hold in the compute only case.
+        shared_expert_tp_factor = 1;
+    } else {
+        auto* mesh_device = tilize_input_tensor.device();
+        const auto& mesh_shape = mesh_device->get_view().shape();
+        shared_expert_tp_factor = mesh_shape[1 - args.cluster_axis().value()];
+    }
     const uint32_t w0_w1_pages_per_ring_core_total = w0_w1_total_pages_buf / matmul_num_cores;
     const uint32_t w2_pages_per_ring_core_total = w2_total_pages_buf / matmul_num_cores;
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
+        {"num_shared_experts", num_shared_experts},
+        {"shared_expert_tp_factor", shared_expert_tp_factor},
         {"layer_id", args.layer_id},
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},

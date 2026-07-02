@@ -22,7 +22,7 @@ void kernel_main() {
     Noc noc;
 
     uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         // Strided access: producer i owns pages i, i+P, i+2P, ...

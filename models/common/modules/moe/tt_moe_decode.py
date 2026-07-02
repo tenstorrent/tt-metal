@@ -33,7 +33,11 @@ from __future__ import annotations
 
 import torch
 from loguru import logger
-from ttnn.experimental.moe_compute_utils import map_shared_experts
+from ttnn.experimental.moe_compute_utils import (
+    auto_output_width_shard_dim,
+    effective_matmul_ring_size,
+    map_shared_experts,
+)
 
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
@@ -163,6 +167,17 @@ class _TTMoEDecodeExpertState:
                     f"shared_expert_ids_to_devices has {len(shared_expert_ids_to_devices)} entries "
                     f"but num_shared_experts={num_shared_experts}"
                 )
+
+            shared_experts_per_device = [0] * num_devices
+            for edl in shared_expert_ids_to_devices.values():
+                for d in edl:
+                    shared_experts_per_device[d] += 1
+            if len(set(shared_experts_per_device)) > 1 or 0 in shared_experts_per_device:
+                raise ValueError(
+                    "Every device, should have the same number of, and at least 1 shared expert:"
+                    f" {shared_experts_per_device=}"
+                )
+
             expected_ids = set(range(num_routed_experts, num_routed_experts + num_shared_experts))
             if set(shared_expert_ids_to_devices.keys()) != expected_ids:
                 raise ValueError(
@@ -392,7 +407,13 @@ class _TTMoEDecodeExpertState:
             )
             routed_w0, routed_w1, routed_w2 = tt_w0, tt_w1, tt_w2
             tt_w0, tt_w1, tt_w2 = ttnn.experimental.add_shared_expert_weights(
-                routed_w0, routed_w1, routed_w2, tt_shared_w0, tt_shared_w1, tt_shared_w2
+                routed_w0,
+                routed_w1,
+                routed_w2,
+                tt_shared_w0,
+                tt_shared_w1,
+                tt_shared_w2,
+                cluster_axis=cluster_axis,
             )
             for t in (routed_w0, routed_w1, routed_w2, tt_shared_w0, tt_shared_w1, tt_shared_w2):
                 ttnn.deallocate(t)
@@ -703,7 +724,21 @@ class TTMoEDecode:
             torch_b1=torch_b1,
             torch_b2=torch_b2,
         )
-        self.buffers = _TTMoEDecodeBuffers(mesh_device, **config.buffers.model_dump())
+        buffers_dict = config.buffers.model_dump()
+        if buffers_dict.get("compute_tilize_drain_core") is None:
+            matmul_ring_size = effective_matmul_ring_size(mesh_device)
+            buffers_dict["compute_tilize_drain_core"] = ttnn.experimental.get_moe_tilize_drain_core(
+                mesh_device,
+                config.compute.output_height_shard_dim,
+                auto_output_width_shard_dim(config.hidden_size, matmul_ring_size=matmul_ring_size),
+                config.hidden_size,
+                mux_core_range_set=config.compute.mux_core_range_set,
+            )
+        else:
+            raise ValueError(
+                "compute_tilize_drain_core is not user-configurable; omit it to resolve dynamically at runtime"
+            )
+        self.buffers = _TTMoEDecodeBuffers(mesh_device, **buffers_dict)
 
     @property
     def _num_fast_reduce_outputs(self) -> int:

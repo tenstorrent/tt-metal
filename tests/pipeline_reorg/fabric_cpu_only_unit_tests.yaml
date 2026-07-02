@@ -1,0 +1,77 @@
+# Fabric CPU-only unit test matrix (mock cluster / tt-run; no hardware).
+#
+# Each entry: id, name, cmd, skus, team, arch, owner_id.
+# Commands are kept in sync with tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh.
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> unit).
+
+- id: fabric-cpu-unit-phys-ctrl-t3k-wh
+  name: fabric cpu unit tests (unit-phys-ctrl-t3k-wh)
+  cmd: |
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group phys-grouping
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group control-plane
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group t3k
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group wh-galaxy
+  skus:
+    cpu_medium:
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-slices
+  name: fabric cpu unit tests (bh-slices)
+  cmd: |
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-6u
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-single-galaxy
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-dual-galaxy
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
+  skus:
+    cpu_medium:
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-sp4-glx
+  name: fabric cpu unit tests (bh-sp4-glx)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-sp4-glx
+  skus:
+    cpu_medium:
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-subtorus
+  name: fabric cpu unit tests (bh-subtorus)
+  cmd: |
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc16
+  skus:
+    cpu_medium:
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-subtorus-sc20
+  name: fabric cpu unit tests (bh-subtorus-sc20)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
+  skus:
+    cpu_medium:
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-blitz-decode
+  name: fabric cpu unit tests (bh-blitz-decode)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
+  skus:
+    cpu_medium:
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song

@@ -105,18 +105,6 @@ Tensor PaddedSliceDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "PaddedSliceDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    // Include input shape last dimension as it affects pad_output_row decision (RM factory)
-    // and max_num_tiles_per_row calculation (Tile factory), which affect kernel selection and CB configs
-    return tt::tt_metal::operation::hash_operation<PaddedSliceDeviceOperation>(
-        args, tensor_args, program_factory.index());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

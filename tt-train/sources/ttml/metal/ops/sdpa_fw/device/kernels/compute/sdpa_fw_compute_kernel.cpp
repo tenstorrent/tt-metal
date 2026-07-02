@@ -26,7 +26,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "sdpa_compute_utils.hpp"
 
 // For standard mode: num_rows_per_core = rows to process
@@ -128,7 +128,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // read FP32 score from L1, add the DST tile (mask) in FP32, write back FP32. Score
         // stays at full FP32 precision the whole time — no DST→SRC conversion truncation
         // to TF32.
-        mm_block_init_short(
+        matmul_block_init(
             cb_query,
             cb_key,
             /* transpose */ 1,
@@ -198,7 +198,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
         constexpr uint32_t matmul_accum_reg = 0U;
         for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-            mm_init_short(cb_query, cb_key, /* transpose */ 1);
+            matmul_init(cb_query, cb_key, /* transpose */ 1);
             tile_regs_acquire();
             for (uint32_t tile_idx = 0; tile_idx < qWt; ++tile_idx) {
                 matmul_tiles(
@@ -327,7 +327,9 @@ void kernel_main() {
 
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-    mm_init(cb_query, cb_key, cb_attention_weights);
+    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // re-establishes its state with reconfig_data_format + matmul_init.
+    matmul_init(cb_query, cb_key);
 
     cb_wait_front(cb_reduction_scaler, onetile);
 

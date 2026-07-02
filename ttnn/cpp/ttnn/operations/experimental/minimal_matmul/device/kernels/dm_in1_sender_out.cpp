@@ -4,10 +4,15 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
+    Noc noc;
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
@@ -79,11 +84,11 @@ void kernel_main() {
     constexpr uint32_t ternary_a_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
 #endif
-    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+    constexpr uint32_t cb_ternary_a_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_ternary_b_id = tt::CBIndex::c_6;
 
-    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
-    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
+    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_ternary_a_id);
+    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_ternary_b_id);
 
     constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
     constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
@@ -100,10 +105,16 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
+    constexpr uint32_t cb_in1_id = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
+    constexpr uint32_t cb_in2_id = tt::CBIndex::c_4;
+#endif
+
+    CircularBuffer cb_in1(cb_in1_id);
+    CircularBuffer cb_out(cb_out_id);
+#ifdef FUSE_BIAS
+    CircularBuffer cb_in2(cb_in2_id);
 #endif
 
 #ifdef FUSE_AG
@@ -187,8 +198,8 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                        cb_out.wait_front(out_block_num_tiles);
+                        uint32_t out_read_ptr = get_read_ptr(cb_out_id);
 
                         // write_block_sync_split is more generic (support multiple output tensors)
                         // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
@@ -213,14 +224,14 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         }
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
+                        cb_out.pop_front(out_block_num_tiles);
                     }
                 }
 
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.reserve_back(in1_block_num_tiles);
 
-                uint32_t in1_start_address = get_write_ptr(cb_id_in1);
+                uint32_t in1_start_address = get_write_ptr(cb_in1_id);
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core) {
@@ -231,7 +242,7 @@ void kernel_main() {
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
-                        cb_id_in1,
+                        cb_in1_id,
                         in1_tile_size,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles,
@@ -245,7 +256,7 @@ void kernel_main() {
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.push_back(in1_block_num_tiles);
 
                 if (!is_sink_core) {
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
@@ -263,7 +274,7 @@ void kernel_main() {
                     }
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
 #endif
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
@@ -274,7 +285,7 @@ void kernel_main() {
                     // previous block has been produced and any data from this core has been written to NOC afterwards,
                     // at the moment all cores are expected to be done writing their corresponding blocks.
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
-                        noc_async_write_barrier();
+                        noc.async_write_barrier();
                         srs_fuse_signaler.synchronize_workers_and_signal_op(0);
                     }
                 }
@@ -282,16 +293,21 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
-                cb_reserve_back(cb_id_in2, N_block_tiles);
+                cb_in2.reserve_back(N_block_tiles);
 
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+                uint32_t l1_write_addr_in2 = get_write_ptr(cb_in2_id);
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);
+                    noc.async_read(
+                        in2_reader,
+                        CoreLocalMem<uint32_t>(l1_write_addr_in2),
+                        in2_tile_size,
+                        {.page_id = n_tile_id},
+                        {});
                     l1_write_addr_in2 += in2_tile_size;
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
-                cb_push_back(cb_id_in2, N_block_tiles);
+                cb_in2.push_back(N_block_tiles);
             }
 #endif
 
@@ -301,8 +317,8 @@ void kernel_main() {
                     ternary_a_reader,
                     ternary_b_reader,
                     out_shape,
-                    cb_id_ternary_a,
-                    cb_id_ternary_b,
+                    cb_ternary_a_id,
+                    cb_ternary_b_id,
                     ternary_a_tile_size,
                     ternary_b_tile_size,
                     broadcast_ternary_b,
@@ -335,7 +351,7 @@ void kernel_main() {
                         write_block_sync_granular<M_block_tiles, N_block_tiles>(
                             std::get<0>(outputs_tuple),
                             out_shape,
-                            cb_id_out,
+                            cb_out_id,
                             out_tile_size,
                             m_tile,
                             m_tile_end,
@@ -345,7 +361,7 @@ void kernel_main() {
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                             outputs_tuple,
                             out0_shape,
-                            cb_id_out,
+                            cb_out_id,
                             out_tile_size,
                             m_tile,
                             m_tile_end,
@@ -354,7 +370,7 @@ void kernel_main() {
                     }
 #ifdef SRS_FUSE_OP_SIGNALER
                     if (is_last_block) {
-                        noc_async_write_barrier();
+                        noc.async_write_barrier();
                         srs_fuse_signaler.synchronize_workers_and_signal_op(0);
                     }
 #endif
@@ -362,6 +378,6 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }

@@ -47,17 +47,17 @@ void kernel_main() {
     CircularBuffer cb_pred(predicate_cb);
     CircularBuffer cb_b(src_b_cb);
 
-    // #if !SRC_SHARDED_A
+#if !SRC_SHARDED_A
     const uint32_t src_tile_bytes = cb_pred.get_tile_size();
     const auto src = TensorAccessor(src_args, src0_addr);
-    // #endif
-    // #if !SRC_SHARDED_B
+#endif
+#if !SRC_SHARDED_B
     const uint32_t src_tile_bytes_b = cb_b.get_tile_size();
     const auto src_b = TensorAccessor(src_b_args, src1_addr);
-    // #endif
+#endif
 
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = false;  // TODO: add sharding support
+    constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

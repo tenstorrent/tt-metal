@@ -68,13 +68,6 @@ PolyNorm3FWTensorReturn PolyNorm3ForwardDeviceOperation::create_output_tensors(
     return create_device_tensor(specs[0], tensor_args.input.device());
 }
 
-ttsl::hash::hash_t PolyNorm3ForwardDeviceOperation::compute_program_hash(
-    const PolyNorm3FWAttributes& args, const PolyNorm3FWTensorArgs& tensor_args) {
-    const auto& input = tensor_args.input;
-    return tt::tt_metal::operation::hash_operation<PolyNorm3ForwardDeviceOperation>(
-        args, input.dtype(), input.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::polynorm3_fw::device
 
 namespace ttnn::prim {

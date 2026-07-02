@@ -24,7 +24,7 @@ FORCE_INLINE float bf16_to_fp32(std::uint16_t bf16) {
     return result;
 }
 
-// Convert a single-precision float to bfloat16 using IEEE 754 round-to-nearest-even.
+// Convert a single-precision float to bfloat16 using IEEE 754 round-to-nearest.
 // Matches the packer hardware semantics, so values produced via this helper compare
 // bit-identically against values rounded down to bf16 by the packer.
 FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
