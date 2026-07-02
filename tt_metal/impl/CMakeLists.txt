@@ -87,10 +87,6 @@ list(APPEND IMPL_SRC ${PROTO_SRCS})
 # dir is already on this target, so this is the natural home for it.
 list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table_protobuf.cpp)
 
-if(TT_METAL_USE_EMULE)
-    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
-endif()
-
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 

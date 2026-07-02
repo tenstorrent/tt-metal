@@ -50,6 +50,11 @@ struct ComputeHardwareConfig {
     //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
     bool dst_full_sync_en = false;
 
+    // (Quasar only) Explicitly route this kernel's unpacked operands into dest
+    // running the unpack→math→pack semaphore handshake, independent of operand data format.
+    // Default false. On WH/BH this is ignored (unpack-to-dest stays inferred from 32-bit format).
+    bool unpack_to_dest_en = false;
+
     // Pack-side precision tweak for the Bfp8 block-float format.
     // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
     bool bfp8_pack_precise = false;
