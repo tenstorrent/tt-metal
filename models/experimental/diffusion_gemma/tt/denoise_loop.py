@@ -133,6 +133,9 @@ def denoise_step(
 
 
 def _to_host_torch(tensor: ttnn.Tensor) -> torch.Tensor:
+    device = tensor.device()
+    if device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
     try:
         return ttnn.to_torch(tensor)
     except RuntimeError as exc:

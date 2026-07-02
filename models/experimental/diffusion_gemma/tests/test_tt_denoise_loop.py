@@ -19,6 +19,37 @@ class _FakeTensor:
         self.deallocated = True
 
 
+def test_to_host_torch_uses_first_device_tensor_for_mesh_readback(monkeypatch):
+    class _FakeMeshDevice:
+        def get_num_devices(self):
+            return 4
+
+    class _FakeMeshTensor:
+        def device(self):
+            return _FakeMeshDevice()
+
+    mesh_tensor = _FakeMeshTensor()
+    shard0 = _FakeTensor("shard0")
+    calls = []
+
+    class _FakeTtnn:
+        @staticmethod
+        def get_device_tensors(tensor):
+            assert tensor is mesh_tensor
+            return [shard0]
+
+        @staticmethod
+        def to_torch(tensor):
+            calls.append(tensor.name)
+            assert tensor is shard0
+            return torch.tensor([7])
+
+    monkeypatch.setattr(DL, "ttnn", _FakeTtnn)
+
+    assert torch.equal(DL._to_host_torch(mesh_tensor), torch.tensor([7]))
+    assert calls == ["shard0"]
+
+
 @pytest.mark.parametrize(
     "gumbel_noise_fn,noise_tokens_fn",
     [
