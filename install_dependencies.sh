@@ -284,7 +284,8 @@ prep_ubuntu_system() {
     if [ "$docker" -ne 1 ]; then
         local cmake_version="4.0.2"
         local cmake_installer="/tmp/cmake-${cmake_version}-installer.sh"
-        wget -q "https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-linux-x86_64.sh" -O "$cmake_installer"
+        local cmake_arch="$(uname -m)"
+        wget -q "https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-linux-${cmake_arch}.sh" -O "$cmake_installer"
         bash "$cmake_installer" --skip-license --prefix=/usr/local
         rm -f "$cmake_installer"
     else
@@ -464,6 +465,12 @@ install_mpi_ulfm() {
 
     if [[ "$OS_ID" == "ubuntu" ]] && [ "$VERSION_NUM" -gt "2404" ]; then
         echo "[INFO] Skipping MPI ULFM installation for Ubuntu $OS_VERSION (only needed for 24.04 or older)"
+        return
+    fi
+
+    local DEB_ARCH="$(uname -m)"
+    if [[ "$DEB_ARCH" != "x86_64" ]]; then
+        echo "[INFO] Skipping MPI ULFM installation on $DEB_ARCH (only amd64 package is available)"
         return
     fi
 
