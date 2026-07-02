@@ -239,20 +239,20 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::DataMovementHardwareConfig reader_dm_cfg = [&] {
+    experimental::DataMovementHardwareConfig reader_dm_cfg = std::invoke([&] {
         if (is_quasar) {
             return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
         }
         return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-    }();
-    experimental::DataMovementHardwareConfig writer_dm_cfg = [&] {
+    });
+    experimental::DataMovementHardwareConfig writer_dm_cfg = std::invoke([&] {
         if (is_quasar) {
             return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
         }
         return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-    }();
+    });
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -424,20 +424,20 @@ bool reader_datacopy_writer(
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::DataMovementHardwareConfig reader_dm_cfg = [&] {
+    experimental::DataMovementHardwareConfig reader_dm_cfg = std::invoke([&] {
         if (is_quasar) {
             return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
         }
         return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-    }();
-    experimental::DataMovementHardwareConfig writer_dm_cfg = [&] {
+    });
+    experimental::DataMovementHardwareConfig writer_dm_cfg = std::invoke([&] {
         if (is_quasar) {
             return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
         }
         return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-    }();
+    });
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -122,13 +123,13 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     // Both gen1 and gen2 DM configs are populated; the runtime selects the one
     // matching the active arch. On Quasar all 6 user DMs (DM2..DM7) run the
     // kernel; on WH/BH the legacy DM was a single RISCV_0 thread.
-    experimental::DataMovementHardwareConfig dm_cfg = [&] {
+    experimental::DataMovementHardwareConfig dm_cfg = std::invoke([&] {
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
             return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
         }
         return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-    }();
+    });
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
     const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
 
