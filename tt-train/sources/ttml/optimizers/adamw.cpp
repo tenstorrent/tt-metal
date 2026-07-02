@@ -14,6 +14,20 @@
 
 namespace ttml::optimizers {
 
+namespace {
+// RMSNorm gains and biases are stored as 1-D tensors ({1,1,1,N}); matmul weights and
+// embeddings have >=2 non-unit dims. Decoupled AdamW skips weight decay on the former
+// so normalization scales aren't dragged toward zero.
+bool is_effectively_1d(const ttnn::Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
+    int non_unit_dims = 0;
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        non_unit_dims += static_cast<int>(shape[i] > 1);
+    }
+    return non_unit_dims < 2;
+}
+}  // namespace
+
 std::string AdamW::get_name() const {
     return "AdamW";
 }
@@ -73,6 +87,11 @@ void AdamW::step() {
             max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
         }
 
+        float weight_decay = m_config.weight_decay;
+        if (m_config.weight_decay_skip_1d && is_effectively_1d(param)) {
+            weight_decay = 0.0F;
+        }
+
         ttml::metal::adamw(
             param,
             gradients,
@@ -85,7 +104,7 @@ void AdamW::step() {
             m_beta1_pow,
             m_beta2_pow,
             m_config.epsilon,
-            m_config.weight_decay,
+            weight_decay,
             static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding));
     }
 }

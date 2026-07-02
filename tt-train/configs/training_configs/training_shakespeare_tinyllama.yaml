@@ -3,21 +3,22 @@ training_config:
   seed: 5489
   model_save_interval: 500
   batch_size: 5
-  num_epochs: 1
   max_steps: 1000
-  use_clip_grad_norm: false
+  scheduler_type: warmup_linear
+  use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
   data_path: "data/tokenized_shakespeare_tinyllama.yaml"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
   optimizer:
     type: AdamW
-    lr: 0.0003
+    lr: 4.0e-4
     beta1: 0.9
-    beta2: 0.999
+    beta2: 0.95
     epsilon: 1.0e-8
-    weight_decay: 0.01
+    weight_decay: 0.1
     amsgrad: false
-    stochastic_rounding: false
+    stochastic_rounding: true
+    weight_decay_skip_1d: true
 
 device_config:
   enable_ddp: false

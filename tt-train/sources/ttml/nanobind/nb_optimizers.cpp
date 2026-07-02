@@ -197,7 +197,8 @@ void py_module(nb::module_& m) {
                float epsilon,
                float weight_decay,
                bool amsgrad,
-               bool stochastic_rounding) {
+               bool stochastic_rounding,
+               bool weight_decay_skip_1d) {
                 return AdamWConfig{
                     .lr = lr,
                     .beta1 = beta1,
@@ -205,7 +206,8 @@ void py_module(nb::module_& m) {
                     .epsilon = epsilon,
                     .weight_decay = weight_decay,
                     .amsgrad = amsgrad,
-                    .stochastic_rounding = stochastic_rounding};
+                    .stochastic_rounding = stochastic_rounding,
+                    .weight_decay_skip_1d = weight_decay_skip_1d};
             },
             nb::arg("lr"),
             nb::arg("beta1"),
@@ -214,6 +216,7 @@ void py_module(nb::module_& m) {
             nb::arg("weight_decay"),
             nb::arg("amsgrad") = false,
             nb::arg("stochastic_rounding") = false,
+            nb::arg("weight_decay_skip_1d") = false,
             "Make an AdamWConfig object");
     }
 
