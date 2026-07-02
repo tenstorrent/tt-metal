@@ -50,6 +50,7 @@ Usage:
 import argparse
 import json
 import os
+import resource
 import sys
 import time
 from pathlib import Path
@@ -62,6 +63,26 @@ from transformers import AutoTokenizer
 # Make `models.demos.minimax_m3...` importable when run as a script (sys.path[0] is the script dir).
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from models.demos.minimax_m3.reference.model import load_text_model  # noqa: E402
+
+
+def _raise_cpu_time_limit():
+    """The fp32 CPU reference runs matmuls across all cores, and RLIMIT_CPU counts CPU-seconds
+    summed over every thread. With N threads busy the budget drains ~N× wall-clock, so a default
+    soft cap (e.g. 86400 = 24 CPU-hr) is exhausted after only ~86400/N wall-seconds — the process
+    then dies mid-run with SIGXCPU ("CPU time limit exceeded", core dumped), which looks like a
+    crash but is just the limit. Raise the soft limit to the hard limit (allowed without
+    privileges) so a long multi-layer prefill isn't killed partway through."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_CPU)
+    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
+        try:
+            resource.setrlimit(resource.RLIMIT_CPU, (hard, hard))
+            print(f"[limit] raised RLIMIT_CPU soft {soft}s -> {hard} (fp32 CPU golden burns CPU-time × nthreads)")
+        except (ValueError, OSError) as e:
+            print(
+                f"[limit] WARNING: could not raise RLIMIT_CPU (soft={soft}s); if the run dies with "
+                f"'CPU time limit exceeded', run `ulimit -t unlimited` first: {e}",
+                file=sys.stderr,
+            )
 
 
 def parse_args():
@@ -173,6 +194,7 @@ def tokenize_prompt(tokenizer, prompt: str, max_tokens: int, use_chat_template: 
 
 def main():
     args = parse_args()
+    _raise_cpu_time_limit()  # fp32 CPU golden burns CPU-time × nthreads; avoid SIGXCPU mid-run (see fn)
 
     # Setup
     model_path = args.model_path or os.environ.get("HF_MODEL")

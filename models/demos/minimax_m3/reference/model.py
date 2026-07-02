@@ -45,6 +45,7 @@ blocks selected) and only matters for >2048 sparsity. This reference matches the
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -54,6 +55,17 @@ import torch
 # MSA equivalence bound: sparse_topk_blocks(16) * sparse_block_size(128). At or below this many
 # context tokens, MSA's top-k block selection covers every block -> identical to dense attention.
 MSA_DENSE_EQUIV_TOKENS = 2048
+
+# -------------------------------------------------------------------------------------------------
+# Long-context memory controls. The only O(S^2) tensors in this reference are the attention scores
+# ([heads, S, S]) and the MSA index scores ([groups, S, S]); at S=55k, fp32 those are hundreds of
+# GB. We never materialize them: queries are processed in row-chunks of ATTN_Q_CHUNK (exact per-row
+# softmax, so the result is numerically identical to the un-chunked path), and the FFNs are computed
+# in token-chunks of FFN_TOKEN_CHUNK. Both are pure memory/speed knobs — they do NOT change outputs.
+# Defaults keep peak host RAM well under ~40GB at S=55k in fp32; raise them (via env) for speed on
+# machines with more RAM, or lower them if you still OOM.
+ATTN_Q_CHUNK = int(os.environ.get("REF_ATTN_Q_CHUNK", "256"))
+FFN_TOKEN_CHUNK = int(os.environ.get("REF_FFN_TOKEN_CHUNK", "4096"))
 
 
 @dataclass
@@ -214,8 +226,25 @@ def swiglu_oai(gate: torch.Tensor, up: torch.Tensor, alpha: float, limit: float)
 
 
 def ffn(x: torch.Tensor, w_gate, w_up, w_down, alpha: float, limit: float) -> torch.Tensor:
-    """SwiGLU FFN. ``w_gate``=w1/gate_proj, ``w_up``=w3/up_proj, ``w_down``=w2/down_proj."""
-    return swiglu_oai(x @ w_gate.t(), x @ w_up.t(), alpha, limit) @ w_down.t()
+    """SwiGLU FFN. ``w_gate``=w1/gate_proj, ``w_up``=w3/up_proj, ``w_down``=w2/down_proj.
+
+    Computed in token-chunks of ``FFN_TOKEN_CHUNK`` so the ``[tokens, intermediate]`` activations
+    never fully materialize (at S=55k the dense-MLP intermediate is 12288-wide). Chunking is along
+    tokens only, so the output is numerically identical to the single-shot path.
+    """
+    lead = x.shape[:-1]
+    flat = x.reshape(-1, x.shape[-1])
+    n = flat.shape[0]
+    out_dim = w_down.shape[0]
+    if n <= FFN_TOKEN_CHUNK:
+        y = swiglu_oai(flat @ w_gate.t(), flat @ w_up.t(), alpha, limit) @ w_down.t()
+    else:
+        y = torch.empty(n, out_dim, dtype=flat.dtype, device=flat.device)
+        for i in range(0, n, FFN_TOKEN_CHUNK):
+            j = min(i + FFN_TOKEN_CHUNK, n)
+            fc = flat[i:j]
+            y[i:j] = swiglu_oai(fc @ w_gate.t(), fc @ w_up.t(), alpha, limit) @ w_down.t()
+    return y.reshape(*lead, out_dim)
 
 
 def msa_block_selection(index_q, index_k, scale, block_size, topk_blocks):
@@ -249,6 +278,41 @@ def msa_block_selection(index_q, index_k, scale, block_size, topk_blocks):
     selected = torch.zeros(1, G, S, nblk, dtype=torch.bool, device=scores.device)
     selected.scatter_(-1, sel, True)
     return selected[0]  # [G, S, nblk]
+
+
+def msa_block_selection_chunk(iq_g, ik_shared, scale, block_size, topk_blocks, q_start, seq_len):
+    """Per-query-chunk MSA block selection -> token-level ``[C, seq_len]`` bool mask.
+
+    Identical math to :func:`msa_block_selection`, but for a single GQA group and only the ``C``
+    query rows ``[q_start, q_start + C)``, so the score tensor is ``O(C * seq_len)`` instead of
+    ``O(S * seq_len)``. This is what makes >2048-token prefill fit in modest RAM.
+
+    ``iq_g``       ``[C, d]``  one group's post-norm/post-RoPE index-q rows for this chunk.
+    ``ik_shared``  ``[T, d]``  the single shared index-k over the full context (``T == seq_len``).
+    Returns the selected key TOKENS (blocks expanded and trimmed to ``seq_len``), ready to use as an
+    attention mask. Only the local (current) block is force-selected — no sink/init block (upstream).
+    """
+    C = iq_g.shape[0]
+    T = ik_shared.shape[0]
+    nblk = (T + block_size - 1) // block_size
+    tpad = nblk * block_size
+
+    scores = scale * (iq_g.float() @ ik_shared.float().t())  # [C, T]
+    kpos = torch.arange(T, device=scores.device)
+    qpos = torch.arange(q_start, q_start + C, device=scores.device)
+    scores = scores.masked_fill(kpos[None, :] > qpos[:, None], float("-inf"))  # causal (future keys)
+    if tpad > T:  # pad partial trailing block with -inf so block max-pool ignores it
+        scores = torch.cat([scores, scores.new_full((C, tpad - T), float("-inf"))], dim=-1)
+
+    bs = scores.view(C, nblk, block_size).max(-1).values  # block max-pool [C, nblk]
+    local = (qpos // block_size).clamp(max=nblk - 1)
+    bs[torch.arange(C, device=scores.device), local] = float("inf")  # force-local current block
+
+    k = min(topk_blocks, nblk)
+    sel = bs.topk(k, dim=-1).indices  # [C, k]
+    selected = torch.zeros(C, nblk, dtype=torch.bool, device=scores.device)
+    selected.scatter_(-1, sel, True)
+    return selected.repeat_interleave(block_size, dim=-1)[:, :seq_len]  # [C, seq_len] bool
 
 
 # --------------------------------------------------------------------------------------------
@@ -308,46 +372,42 @@ class MiniMaxM3TextModel:
         index_k = None
 
         scale = hd**-0.5
-        qpos = torch.arange(S, device=x.device)
-        causal_bias = torch.where(  # [S, S] additive: 0 if key<=query, -inf otherwise
-            qpos[None, :] <= qpos[:, None],
-            torch.zeros((), device=x.device),
-            torch.full((), float("-inf"), device=x.device),
-        )
 
-        # MSA: per-GQA-group block selection from the index branch. selected[g] is [S, nblk] bool.
-        #
-        # Causality. The model is causal (decoder LM), and the device pipeline enforces this at BLOCK
-        # granularity: the indexer causal-masks future tokens before block-max-pool, so future-only
-        # blocks score -inf; `topk_large_indices` maps -inf to the sentinel 0xFFFFFFFF and
-        # `sparse_sdpa_msa` masks sentinel blocks. We additionally apply the standard token-level
-        # causal mask BEFORE the block mask, which (a) makes the within-current-block tokens strictly
-        # causal and (b) renders the future-block sentinel handling moot here. The net selected set is
-        # therefore "the top-k past blocks + current block, token-causal" — exactly the intended
-        # semantics, and identical to full causal attention whenever every block fits in the top-k
-        # (S <= sparse_topk_blocks*sparse_block_size). It only diverges from dense above that bound,
-        # where un-selected past blocks are dropped.
-        selected = None
+        # MSA index branch (per-GQA-group block selection). We keep index_q/index_k around and
+        # compute the block mask per query-chunk below (never the full [G, S, S]).
+        iq = ik_shared = None
         if sparse:
-            iq, ik = self._index_branch(x, p, cos, sin)
+            iq, ik = self._index_branch(x, p, cos, sin)  # iq [B,G,S,d], ik [B,1,S,d]
             index_k = ik  # cache the post-norm/post-RoPE shared index key
-            sel = msa_block_selection(  # [G, S, nblk], G == nkv
-                iq, ik, scale, cfg.sparse_block_size, cfg.sparse_topk_blocks
-            )
-            # expand selected blocks -> per-token [G, S, S], aligned to the (block-padded) key axis
-            selected = sel.repeat_interleave(cfg.sparse_block_size, dim=-1)[:, :, :S]  # [G, S, S]
+            ik_shared = ik[0, 0]  # [S, d] (B==1 for the sparse path, as in the device pipeline)
 
-        # Attend per GQA group (keeps scores at [rep, S, S], 1/nkv of the full-head memory).
+        # Attend per GQA group, and within each group per query row-chunk, so the score tensor peaks
+        # at [rep, ATTN_Q_CHUNK, S] instead of [rep, S, S] — the difference between a few hundred MB
+        # and hundreds of GB at S=55k. Exact per-row softmax => bit-identical to the un-chunked path.
+        #
+        # Causality is enforced at the token level here (future keys -> -inf). For MSA, the block
+        # mask (top-k past blocks + the force-local current block) is intersected on top. Both masks
+        # produce the same -inf set as the old causal_bias + block-mask formulation; below the
+        # top-k*block_size (=2048) bound every block is selected, so MSA == full causal attention.
         out = torch.empty(B, nq, S, hd, dtype=q.dtype, device=x.device)
+        kpos = torch.arange(S, device=x.device)
         for g in range(nkv):
-            qg = q[:, g * rep : (g + 1) * rep]  # [B, rep, S, hd]
-            kg, vg = k[:, g], v[:, g]  # [B, S, hd]
-            scores = (qg @ kg.transpose(-1, -2)) * scale  # [B, rep, S, S]
-            scores = scores + causal_bias
-            if selected is not None:
-                scores = scores.masked_fill(~selected[g][None, None], float("-inf"))  # drop unselected blocks
-            attn = torch.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
-            out[:, g * rep : (g + 1) * rep] = attn @ vg
+            kgt = k[:, g].transpose(-1, -2)  # [B, hd, S]
+            vg = v[:, g]  # [B, S, hd]
+            for qs in range(0, S, ATTN_Q_CHUNK):
+                qe = min(qs + ATTN_Q_CHUNK, S)
+                qg = q[:, g * rep : (g + 1) * rep, qs:qe, :]  # [B, rep, C, hd]
+                scores = (qg @ kgt) * scale  # [B, rep, C, S]
+                future = kpos[None, :] > kpos[qs:qe][:, None]  # [C, S] bool: key later than query
+                scores = scores.masked_fill(future[None, None], float("-inf"))
+                if sparse:
+                    sel = msa_block_selection_chunk(  # [C, S] bool: selected key tokens
+                        iq[0, g, qs:qe], ik_shared, scale, cfg.sparse_block_size, cfg.sparse_topk_blocks, qs, S
+                    )
+                    scores = scores.masked_fill(~sel[None, None], float("-inf"))  # drop unselected blocks
+                attn = torch.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
+                out[:, g * rep : (g + 1) * rep, qs:qe, :] = attn @ vg
+                del scores, attn
 
         o = out.transpose(1, 2).reshape(B, S, nq * hd)
         attn_out = o @ self.w.get(p + "self_attn.o_proj.weight").t()
