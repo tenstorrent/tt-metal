@@ -50,9 +50,11 @@ def _require_local_checkpoint() -> str:
     return checkpoint
 
 
-def test_short_prompt_two_block_run_exits_clean():
+def test_short_prompt_two_block_run_exits_clean(monkeypatch):
     """R-b: short prompt -> 2 committed 256-token blocks -> decoded text, no crash."""
     checkpoint = _require_local_checkpoint()
+    info_lines: list[str] = []
+    monkeypatch.setattr(text_demo.logger, "info", lambda message: info_lines.append(str(message)))
     argv = [
         "--checkpoint",
         checkpoint,
@@ -78,3 +80,9 @@ def test_short_prompt_two_block_run_exits_clean():
         argv += ["--num-layers", num_layers]
 
     assert text_demo.main(argv) == 0
+    success_lines = [line for line in info_lines if line.startswith("DG_TEXT_DEMO_SUCCESS ")]
+    assert len(success_lines) == 1
+    assert "generated_tokens=512" in success_lines[0]
+    assert "blocks=2" in success_lines[0]
+    assert "prompt_len=32" in success_lines[0]
+    assert "next_pos=544" in success_lines[0]
