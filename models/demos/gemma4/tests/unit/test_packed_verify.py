@@ -217,11 +217,21 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
-    Bs = [int(b) for b in os.environ.get("GEMMA4_BENCH_B", "1,8,16,32").split(",") if b.strip()]
-    ctx = int(os.environ.get("GEMMA4_BENCH_CTX", 2048))
+    # CI is a shared, time-boxed runner: perf numbers there are meaningless and
+    # the full sweep (B up to 32, ctx=2048, 20 reps) on a 31B target blows the
+    # job timeout (65k-token prefill + 4 B-values × 20 reps × 2 paths). Under
+    # CI=true default to a light sweep so this still runs as a B>1 packed-verify
+    # smoke/correctness check; local runs keep full fidelity. Any explicit
+    # GEMMA4_BENCH_* override wins in both cases. NOTE: ctx must keep
+    # max_seq_len >= the sliding window (1024) — the sliding-window decode slices
+    # `window` keys from the cache, so a shorter cache overruns it. ctx=1024 gives
+    # max_seq_len=1088 (>= 1024); do not lower it below the window.
+    _ci = os.getenv("CI") == "true"
+    Bs = [int(b) for b in os.environ.get("GEMMA4_BENCH_B", "1,8" if _ci else "1,8,16,32").split(",") if b.strip()]
+    ctx = int(os.environ.get("GEMMA4_BENCH_CTX", 1024 if _ci else 2048))
     K = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
     P = K + 1
-    reps = int(os.environ.get("GEMMA4_BENCH_ITERS", 20))
+    reps = int(os.environ.get("GEMMA4_BENCH_ITERS", 3 if _ci else 20))
     # A packed-vs-alias argmax flip is a real bug only if the reference (alias)
     # preferred its token by more than this logit margin; smaller gaps are
     # near-ties that the ~1e-1 batched-SDPA noise is expected to flip.

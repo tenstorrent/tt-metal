@@ -554,14 +554,9 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
     parts = []
     for h in range(nkv):
         src_h = ttnn.slice(src, [0, h, 0, 0], [1, h + 1, src_seq, head_dim])
-        src_h2d = ttnn.reshape(src_h, (src_seq, head_dim))  # metadata view of src_h
+        src_h2d = ttnn.reshape(src_h, (src_seq, head_dim))
         merged_h = ttnn.embedding(base_idx, src_h2d, layout=ttnn.TILE_LAYOUT)  # [1, S2, hd]
         parts.append(ttnn.reshape(merged_h, (1, 1, S2, head_dim)))
-        # src_h (a fresh slice output) and its view src_h2d are consumed by the
-        # embedding above; free the per-head slice so peak DRAM tracks one head,
-        # not nkv. (merged_h is kept alive by its reshape-view in ``parts``.)
-        ttnn.deallocate(src_h)
-    ttnn.deallocate(base_idx)
     ttnn.deallocate(src)
     merged = ttnn.concat(parts, dim=1) if nkv > 1 else parts[0]
     merged = ttnn.to_memory_config(merged, dram)  # [1, nkv, S2, hd]
