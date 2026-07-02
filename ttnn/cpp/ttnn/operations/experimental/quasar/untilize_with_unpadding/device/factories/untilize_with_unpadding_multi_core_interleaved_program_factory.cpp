@@ -4,6 +4,8 @@
 
 #include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
 
+#include <functional>
+
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
@@ -127,12 +129,16 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+        ComputeUnpackToDestModes utd;
         if (fp32_dest_acc_en) {
-            std::get<ComputeGen2Config>(hw).unpack_to_dest_mode.emplace(
-                IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            utd.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
-        return hw;
+        return std::invoke([&]() -> ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+            }
+            return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        });
     };
     const std::filesystem::path compute_source(
         "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/"

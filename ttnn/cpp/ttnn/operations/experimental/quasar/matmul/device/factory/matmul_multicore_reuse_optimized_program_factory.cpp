@@ -4,6 +4,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -460,14 +461,22 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
     };
 
-    ComputeHardwareConfig compute_hw_config{
-        ComputeGen2Config{
+    ComputeHardwareConfig compute_hw_config = std::invoke([&]() -> ComputeHardwareConfig {
+        if (device->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
+            };
+        }
+        return ComputeGen1Config{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
-        },
-    };
+        };
+    });
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -260,13 +261,18 @@ ProgramArtifacts create_sharded_artifacts(
         .dfb_bindings = {m2::ConsumerOf(IN0, "in0"), m2::ConsumerOf(IN1, "in1"), m2::ProducerOf(OUT, "out")},
         .compile_time_args = {{"num_tiles_per_cycle", num_tiles_per_cycle}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config =
-            m2::ComputeHardwareConfig{
-                m2::ComputeGen2Config{
+        .hw_config = std::invoke([&]() -> m2::ComputeHardwareConfig {
+            if (a.device()->arch() == tt::ARCH::QUASAR) {
+                return m2::ComputeGen2Config{
                     .math_fidelity = MathFidelity::HiFi4,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
-                },
-            },
+                };
+            }
+            return m2::ComputeGen1Config{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+            };
+        }),
     };
 
     // -----------------------------------------------------------------------------------------

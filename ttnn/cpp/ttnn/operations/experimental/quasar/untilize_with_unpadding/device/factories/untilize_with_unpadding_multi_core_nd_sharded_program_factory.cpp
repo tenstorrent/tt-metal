@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 #include "ttnn/operation.hpp"
@@ -199,11 +200,16 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    ComputeHardwareConfig compute_hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+    ComputeUnpackToDestModes utd;
     if (fp32_dest_acc_en) {
-        std::get<ComputeGen2Config>(compute_hw)
-            .unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        utd.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
+    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
+        if (input.device()->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+    });
 
     KernelSpec compute{
         .unique_id = COMPUTE,

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -610,15 +611,22 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"tilized_cb_second_reader_offset", 0u},
                 {"split_reader_cb_shared", 0u},
             },
-        .hw_config =
-            m2::ComputeHardwareConfig{
-                m2::ComputeGen2Config{
+        .hw_config = std::invoke([&]() -> m2::ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return m2::ComputeGen2Config{
                     .math_fidelity = math_fidelity,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .dst_full_sync_en = dst_full_sync_en,
                     .math_approx_mode = math_approx_mode,
-                },
-            },
+                };
+            }
+            return m2::ComputeGen1Config{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
+            };
+        }),
     };
 
     // ---- Activation reader kernel ----

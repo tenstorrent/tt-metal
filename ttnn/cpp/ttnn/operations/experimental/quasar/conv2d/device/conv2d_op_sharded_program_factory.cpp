@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -1515,15 +1516,22 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(compute_kernel),
         .compiler_options = {.defines = m2::KernelSpec::CompilerOptions::Defines(compute_defines)},
         .dfb_bindings = std::move(compute_dfb_bindings),
-        .hw_config =
-            m2::ComputeHardwareConfig{
-                m2::ComputeGen2Config{
+        .hw_config = std::invoke([&]() -> m2::ComputeHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return m2::ComputeGen2Config{
                     .math_fidelity = math_fidelity,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .dst_full_sync_en = dst_full_sync_en,
                     .math_approx_mode = math_approx_mode,
-                },
-            },
+                };
+            }
+            return m2::ComputeGen1Config{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
+            };
+        }),
     };
 
     if (is_conv_1d_depthwise_conv) {

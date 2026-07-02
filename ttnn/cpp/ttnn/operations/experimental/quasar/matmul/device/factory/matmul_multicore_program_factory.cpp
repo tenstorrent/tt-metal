@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_program_factory.hpp"
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -216,14 +217,22 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     // Table has no iterator-pair constructor; use the single-argument range constructor over the std::map.
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
-    ComputeHardwareConfig compute_hw_config{
-        ComputeGen2Config{
+    ComputeHardwareConfig compute_hw_config = std::invoke([&]() -> ComputeHardwareConfig {
+        if (device->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
+            };
+        }
+        return ComputeGen1Config{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
-        },
-    };
+        };
+    });
 
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity

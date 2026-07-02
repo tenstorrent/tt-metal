@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include <functional>
 #include <vector>
 
 using namespace tt::constants;
@@ -164,14 +165,20 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
     };
 
-    ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+    ComputeUnpackToDestModes utd;
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         // Keep both the tilize input (cb_in) and its output (cb_tilize, which feeds the transpose)
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
-        std::get<ComputeGen2Config>(compute_cfg).unpack_to_dest_mode = {
+        utd = {
             {CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
             {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
     }
+    ComputeHardwareConfig compute_cfg = std::invoke([&]() -> ComputeHardwareConfig {
+        if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+        }
+        return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
+    });
 
     // Output binding: ht<=8 -> compute self-loops the borrowed output shard directly; ht>8 -> compute
     // is PRODUCER-only of the staging DFB (the compute kernel's producer-side wait_front does not make
