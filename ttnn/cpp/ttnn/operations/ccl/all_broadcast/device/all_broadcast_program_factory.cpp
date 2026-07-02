@@ -348,19 +348,25 @@ tt::tt_metal::WorkloadDescriptor AllBroadcastProgramFactory::create_workload_des
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    // Allocate the two workload-scoped GlobalSemaphores.  Park them on the
-    // descriptor's `semaphores` vector so their device-side allocations stay
+    // Use caller-provided GlobalSemaphores when available; otherwise allocate workload-scoped ones.
+    // Park them on the descriptor's `semaphores` vector so their device-side allocations stay
     // alive for the lifetime of the cached workload — both are referenced by
     // writer runtime args as absolute addresses.  The init barrier is stored
     // at index 0 and the out-ready drain semaphore at index 1; subscript
-    // access below mirrors the original argument ordering at the create_at
+    // access below mirrors the argument ordering at the build_program_descriptor_at
     // call site (semaphore = final drain, barrier_semaphore = init barrier).
     auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
                                                                             : tt::tt_metal::BufferType::L1;
-    workload_descriptor.semaphores.push_back(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
-    workload_descriptor.semaphores.push_back(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
+    auto get_or_create_semaphore =
+        [&](const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore) -> tt::tt_metal::GlobalSemaphore {
+        if (semaphore.has_value()) {
+            return semaphore.value();
+        }
+        return ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    };
+
+    workload_descriptor.semaphores.push_back(get_or_create_semaphore(operation_attributes.barrier_semaphore));
+    workload_descriptor.semaphores.push_back(get_or_create_semaphore(operation_attributes.semaphore));
     const auto& init_barrier_semaphore = workload_descriptor.semaphores[0];
     const auto& final_barrier_semaphore = workload_descriptor.semaphores[1];
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
