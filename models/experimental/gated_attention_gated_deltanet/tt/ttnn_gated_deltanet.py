@@ -233,7 +233,13 @@ def _causal_conv1d_fir(
     if valid_len is None:
         # Default: the last kernel_size-1 tokens of x.
         new_state = x_padded[:, total_len - (kernel_size - 1) :, :]
+        # Land in DRAM: new_state is the cross-chunk carry, held alive ACROSS the gated_delta_attn_seq
+        # kernel call downstream; an L1 carry (when mc=L1) would clash with the kernel's static CBs.
+        # Use to_layout (no memory_config) then to_memory_config: the slice is already TILE, so passing
+        # memory_config to to_layout is a silent no-op (it warns and keeps the L1 config). to_memory_config
+        # actually moves it to DRAM.
         new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
+        new_state = ttnn.to_memory_config(new_state, ttnn.DRAM_MEMORY_CONFIG)
     else:
         # Fixed-bucket masking: x is right-padded to a bucket length T but only the first
         # valid_len positions are real; the decode conv window must come from the real tail
@@ -247,7 +253,8 @@ def _causal_conv1d_fir(
             sel[:, j, valid_len + j] = 1.0
         sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
         xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
-        new_state = ttnn.matmul(sel_tt, xp, memory_config=mc)
+        # new_state is the cross-chunk carry, alive across the downstream kernel -> DRAM (avoid CB clash).
+        new_state = ttnn.matmul(sel_tt, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(sel_tt)
 
     # Precompute weight taps if not provided
@@ -282,7 +289,10 @@ def _causal_conv1d_fir(
         )
         out = ttnn.add(out, bias_dev_tmp, memory_config=mc)
 
-    return ttnn.silu(out, memory_config=mc), new_state
+    # Land the conv OUTPUT in DRAM even when mc=L1: it's sliced into q/k/v and v (which skips l2_norm)
+    # stays alive into the gated_delta_attn_seq kernel, whose static CBs leave ~no L1 for a persistent
+    # tensor. The MAC above still ran in L1 (the transient win); only the result lands in DRAM.
+    return ttnn.silu(out, memory_config=ttnn.DRAM_MEMORY_CONFIG), new_state
 
 
 def causal_conv1d_ttnn(
@@ -758,10 +768,10 @@ def gated_deltanet_forward_ttnn(
             bias_dev=v_bias_dev,
         )
 
-    # 3. Reshape to multi-head
-    q = ttnn.reshape(q, [B, T, num_heads, head_k_dim])
-    k = ttnn.reshape(k, [B, T, num_heads, head_k_dim])
-    v = ttnn.reshape(v, [B, T, num_v_heads, head_v_dim])
+    # 3. Reshape to multi-head (explicit mc so these stay L1 in decode instead of defaulting to DRAM)
+    q = ttnn.reshape(q, [B, T, num_heads, head_k_dim], memory_config=mc)
+    k = ttnn.reshape(k, [B, T, num_heads, head_k_dim], memory_config=mc)
+    v = ttnn.reshape(v, [B, T, num_v_heads, head_v_dim], memory_config=mc)
 
     # GVA: repeat q,k
     if num_v_heads > num_heads:
@@ -854,17 +864,17 @@ def gated_deltanet_forward_ttnn(
     # 6. Output normalization
     if use_gate and g_proj_weight is not None:
         if _mega_extracted:
-            gate = ttnn.reshape(gate_raw, [B, T, num_v_heads, head_v_dim])
+            gate = ttnn.reshape(gate_raw, [B, T, num_v_heads, head_v_dim], memory_config=mc)
         else:
             gate = ttnn.linear(hidden_states, g_proj_weight, memory_config=mc, compute_kernel_config=ckc)
-            gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim])
+            gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim], memory_config=mc)
         o = rms_norm_gated_ttnn(o, gate, o_norm_weight, eps=norm_eps, memory_config=mc)
     else:
         o = rms_norm_ttnn(o, o_norm_weight, eps=norm_eps, memory_config=mc)
 
     # 7. Reshape and project output — clamp to prevent sparse overflow in o_proj matmul
-    o = ttnn.clip(o, min=-1e4, max=1e4)
-    o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
+    o = ttnn.clip(o, min=-1e4, max=1e4, memory_config=mc)
+    o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim], memory_config=mc)
     if mc is not None:
         o = ttnn.to_memory_config(o, mc)
     o = ttnn.linear(o, o_proj_weight, memory_config=mc, compute_kernel_config=ckc)

@@ -89,22 +89,30 @@ def chunk_gated_delta_rule_seq_adapter(
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
 
-    def _to_bhtd(t, D, Hh):  # [B,T,Hh,D] -> [B*Hh,T,D] float32 TILE/DRAM (ROW_MAJOR-correct)
-        t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
+    # OPT (prefill): run the seq-major<->head-major relayout DATA MOVEMENT (untilize->permute) in L1
+    # so the actual head-shuffle is L1<->L1 and the untilize/tilize each get one side in L1. But LAND
+    # the final kernel-input tensor back in DRAM: gated_delta_attn_seq allocates ~1.36MB/core of static
+    # circular buffers, and all 5 relayout outputs (q/k/v/g/beta) are alive as its inputs — keeping them
+    # in L1 clashes with those CBs (OOM). The transient ROW_MAJOR intermediate is only alive DURING the
+    # relayout (no kernel running then), so L1 there is safe. Intermediate=_L1, kernel-input=_DRAM.
+    _L1 = ttnn.L1_MEMORY_CONFIG
+
+    def _to_bhtd(t, D, Hh):  # [B,T,Hh,D] -> [B*Hh,T,D] float32 TILE (ROW_MAJOR-correct)
+        t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)  # untilize -> L1
         t = ttnn.reshape(t, [B, T, Hh, D])
-        t = ttnn.permute(t, (0, 2, 1, 3))  # [B,Hh,T,D]
+        t = ttnn.permute(t, (0, 2, 1, 3))  # [B,Hh,T,D] shuffle in L1
         t = ttnn.reshape(t, [B * Hh, T, D])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)
+        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # land kernel input in DRAM (CB room)
         if t.dtype != ttnn.float32:
             t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
         return t
 
-    def _to_bht(t):  # [B,T,H] -> [BH,T] float32 TILE/DRAM
-        t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
+    def _to_bht(t):  # [B,T,H] -> [BH,T] float32 TILE
+        t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)  # untilize -> L1
         t = ttnn.reshape(t, [B, T, H])
-        t = ttnn.permute(t, (0, 2, 1))  # [B,H,T]
+        t = ttnn.permute(t, (0, 2, 1))  # [B,H,T] shuffle in L1
         t = ttnn.reshape(t, [BH, T])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)
+        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # land kernel input in DRAM (CB room)
         if t.dtype != ttnn.float32:
             t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
         return t
@@ -142,8 +150,8 @@ def chunk_gated_delta_rule_seq_adapter(
         valid_len=valid_len,
     )
 
-    # o [BH,T,V] -> [B,T,H,V]
-    o = ttnn.to_layout(o_bh, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
+    # o [BH,T,V] -> [B,T,H,V]  (shuffle in L1, land in DRAM — feeds the out-proj matmul's CBs downstream)
+    o = ttnn.to_layout(o_bh, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)
     o = ttnn.reshape(o, [B, H, T, V])
     o = ttnn.permute(o, (0, 2, 1, 3))  # [B,T,H,V]
     o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_DRAM)
