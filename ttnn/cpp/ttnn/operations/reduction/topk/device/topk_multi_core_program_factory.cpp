@@ -75,9 +75,15 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     // Data format configuration for all circular buffers
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
-    const tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
+    tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
     const bool is32_bit_data =
         index_cb_data_format == tt::DataFormat::UInt32 || index_cb_data_format == tt::DataFormat::Int32;
+    // The sort datapath handles 32-bit indices as UInt32. INT32 shares the same 4-byte little-endian layout for
+    // the non-negative positions TopK produces, so run the compute in UInt32 and let the writer copy the raw tile
+    // bytes into the (INT32-typed) output buffer unchanged.
+    if (index_cb_data_format == tt::DataFormat::Int32) {
+        index_cb_data_format = tt::DataFormat::UInt32;
+    }
 
     // Core grid and tile size calculations
     const auto first_core_range = args.sub_core_grids.ranges().at(0);
@@ -337,7 +343,9 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp",
         local_cores_range_set,  // Runs on all local processing cores
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
+        // survive the transpose/sort datapath without truncation.
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is32_bit_data, .compile_args = compute_args});
 
     // Final compute - Global TopK Bitonic Merge
     // Responsibility: Perform final bitonic merge of all local TopK results
@@ -362,7 +370,9 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp",
         final_cores_range_set,  // Runs only on final aggregation core
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args_final});
+        // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
+        // survive the merge datapath without truncation.
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is32_bit_data, .compile_args = compute_args_final});
 
     uint32_t core_id = 0;            // Width offset counter for core assignment
     bool ascending = !args.largest;  // Initial sort direction for bitonic properties

@@ -287,12 +287,13 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
     (
         (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
         (1, 1, 32, 4096, 3, 32),  # larger dim, still single-core
-        (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core eligible
+        (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
     ),
 )
 @pytest.mark.parametrize("index_dtype", (ttnn.int32, ttnn.uint32))
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_int32_indices(N, C, H, W, dim, k, index_dtype, largest, device):
+    # Exercises 32-bit (UINT32/INT32) index outputs on both the single-core and multi-core paths.
     torch.manual_seed(2005)
     shape = [N, C, H, W]
 
