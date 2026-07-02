@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -56,6 +57,15 @@ struct AllGatherFusedOpSignaler {
         const CoreRangeSet& all_gather_workers,
         std::vector<CoreCoord>& all_gather_worker_cores);
 
+    // ProgramDescriptor overload: allocates semaphores via SemaphoreDescriptor
+    // instead of CreateSemaphore(program, ...). Used by descriptor-based factories.
+    void init_all_gather(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+
+        const CoreRangeSet& all_gather_workers,
+        std::vector<CoreCoord>& all_gather_worker_cores);
+
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,
 
@@ -91,6 +101,15 @@ struct StridedAllGatherFusedOpSignaler {
         const CoreRangeSet& all_gather_workers,
         std::vector<CoreCoord>& all_gather_worker_cores);
 
+    // ProgramDescriptor overload: allocates semaphores via SemaphoreDescriptor
+    // instead of CreateSemaphore(program, ...). Used by descriptor-based factories.
+    void init_all_gather(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+
+        const CoreRangeSet& all_gather_workers,
+        std::vector<CoreCoord>& all_gather_worker_cores);
+
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,
 
@@ -111,6 +130,13 @@ struct ReduceScatterFusedOpSignaler {
 
     void init_reduce_scatter(
         tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
+
+    // ProgramDescriptor overload: allocates semaphores via SemaphoreDescriptor
+    // instead of CreateSemaphore(program, ...). Used by descriptor-based factories.
+    void init_reduce_scatter(
+        tt::tt_metal::ProgramDescriptor& desc,
         const tt::tt_metal::IDevice* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
 
@@ -202,6 +228,15 @@ struct MatmulFusedOpSignaler {
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
         int privilaged_index = 0);
+
+    // ProgramDescriptor overloads: allocate semaphores via SemaphoreDescriptor
+    // instead of CreateSemaphore(program, ...). Used by descriptor-based factories.
+    void init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, tt::tt_metal::ProgramDescriptor& desc);
+    void init_llama_rs_cores_mm(
+        const CoreRangeSet& matmul_cores,
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        int privilaged_index = 0);
     // Get the rt values
     // Write the semaphore ID
     void push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const;
@@ -221,6 +256,20 @@ struct MatmulFusedOpSignaler {
 
     void init_fused_op(
         tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
+    // ProgramDescriptor overloads: allocate semaphores via SemaphoreDescriptor
+    // instead of CreateSemaphore(program, ...). Used by descriptor-based factories.
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const CoreRange& matmul_workers,
+        const std::vector<CoreCoord>& matmul_worker_cores);
+
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
         const tt::tt_metal::IDevice* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
@@ -270,6 +319,14 @@ struct MinimalMatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
+    // ProgramDescriptor overload: allocates semaphores via SemaphoreDescriptor
+    // instead of CreateSemaphore(program, ...). Used by descriptor-based factories.
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
@@ -292,6 +349,13 @@ struct StridedReduceScatterFusedOpSignaler {
 
     void init_strided_reduce_scatter(
         tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
+
+    // ProgramDescriptor overload: allocates semaphores via SemaphoreDescriptor
+    // instead of CreateSemaphore(program, ...). Used by descriptor-based factories.
+    void init_strided_reduce_scatter(
+        tt::tt_metal::ProgramDescriptor& desc,
         const tt::tt_metal::IDevice* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
 
