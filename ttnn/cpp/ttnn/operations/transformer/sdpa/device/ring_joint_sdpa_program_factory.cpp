@@ -1376,8 +1376,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df =
+        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
     // Use fp32 precision for cb_sum_A/B when fp32 accumulation is enabled so
     // the running softmax denominator doesn't lose precision with K-iter rounding.
