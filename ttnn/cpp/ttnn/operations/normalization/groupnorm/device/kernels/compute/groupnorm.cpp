@@ -393,6 +393,10 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                // fp32: previous reduce steps use bf16 scaler CBs. Reset both sources so the
+                // fp32 input and mean tiles are not read through stale bf16 source formats.
+                reconfig_data_format_srca(cb_in0_id);
+                reconfig_data_format_srcb(cb_ex_global_id);
 
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
@@ -515,6 +519,10 @@ void kernel_main() {
             // (Var + eps)
             tile_regs_acquire();
             add_tiles_init(cb_ex2_global_id, cb_eps_id);
+            // fp32 variance plus bf16 eps: reset both source formats after the preceding fp32
+            // square/reduce path, otherwise eps or variance can be interpreted with a stale format.
+            reconfig_data_format_srca(cb_ex2_global_id);
+            reconfig_data_format_srcb(cb_eps_id);
             add_tiles(cb_ex2_global_id, cb_eps_id, 0, 0, dst0);
             tile_regs_wait();
             // 1/[sqrt(Var + eps)]
@@ -547,6 +555,10 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                // fp32: previous rsqrt/eps steps leave source-format state that is not valid for
+                // reading fp32 input and mean tiles.
+                reconfig_data_format_srca(cb_in0_id);
+                reconfig_data_format_srcb(cb_ex_global_id);
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
@@ -605,6 +617,10 @@ void kernel_main() {
                 // (x - Ex) * 1/[sqrt(Var + eps)]
                 index_h_offset = 0;
                 mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
+                // fp32: cb_x and rstd are fp32 while the prior mask/eps stages used non-fp32
+                // SrcB formats. Reset both before the broadcast multiply.
+                reconfig_data_format_srca(cb_x_id);
+                reconfig_data_format_srcb(cb_ex2pe_id);
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex2pe.wait_front(1);
                 cb_x.wait_front(out_block_hw_normal);
