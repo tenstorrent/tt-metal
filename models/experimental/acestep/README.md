@@ -214,16 +214,49 @@ cp /tmp/SongEval/ckpt/model.safetensors "$DST/ckpt/model.safetensors"
 ### Run it
 
 ```bash
+# point at the downloaded bundle if it isn't already in the HF cache
+export ACESTEP_PIPELINE_DIR=/path/to/acestep_pipeline
+
 pytest models/experimental/acestep/demo/test_songeval_pipeline.py -q -s
 ```
 
-The test **skips cleanly** if the pipeline checkpoints, SongEval deps, or scorer ckpt are missing.
+The test **skips cleanly** if the pipeline checkpoints, SongEval deps, or the scorer ckpt are
+missing (so CI stays green without the third-party toolkit). With everything installed it prints
+the reference vs TT scores for all five aesthetic dimensions and asserts each tracks within
+Δ ≤ 0.30.
 
 ## Demo (prompt → song)
 
 `demo/demo.py` is a short, readable example — a fixed prompt + lyrics generated to a `.wav` via the
-one-call `generate_song` API. It is a usage sample (not committed, not a test): open it to see the
-end-to-end flow, then `python models/experimental/acestep/demo/demo.py` to write a song.
+one-call `generate_song` API. Open it to see the end-to-end flow (it is intentionally a plain
+script, not a CLI — edit the `PROMPT` / `LYRICS` / `SECONDS` / `STEPS` constants at the top to
+change the song).
+
+```bash
+# 1. one-time: download the pipeline bundle (DiT + VAE + text encoder), or set the env var below
+python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/Ace-Step1.5')"
+export ACESTEP_PIPELINE_DIR=/path/to/acestep_pipeline   # only if not in the HF cache
+
+# 2. (optional) install soundfile so it writes a .wav (otherwise it saves a .npy)
+uv pip install soundfile
+
+# 3. run it — writes acestep_demo_song.wav in the current dir
+python models/experimental/acestep/demo/demo.py
+```
+
+Expected output (p150, ~8 s of audio, 30 ODE steps):
+
+```
+[demo] prompt : 'upbeat synthwave, driving bass, warm analog pads, nostalgic 80s energy'
+[demo] lyrics : 'neon lights over the city tonight, we ride the endless skyline'
+[demo] length : 8.0s  |  steps: 30
+[demo] pipeline ready in ~20s
+[demo] generated 8.00s of audio in ~23s
+[demo] wrote acestep_demo_song.wav  (384000 samples, 48000 Hz stereo)
+```
+
+The generated `.wav` is git-ignored (never committed). For a quick numeric smoke test of the same
+one-call API without writing audio, see `tests/pcc/test_generate_song_api.py`.
 
 ## Weight loading
 
