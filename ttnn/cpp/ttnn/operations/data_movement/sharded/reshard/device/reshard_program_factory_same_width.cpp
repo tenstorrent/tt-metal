@@ -17,6 +17,7 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Anonymous-namespace helper unique to reshard same-width to avoid unity-build collisions.
 void push_reshard_same_width_cb_pair(
@@ -26,7 +27,7 @@ void push_reshard_same_width_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    const MeshTensor* bound_tensor) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
@@ -35,10 +36,24 @@ void push_reshard_same_width_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
-    cb.buffer = bound_buffer;
+    cb.buffer = bound_tensor ? bound_tensor->mesh_buffer().get_reference_buffer() : nullptr;
     desc.cbs.push_back(std::move(cb));
 }
 
+// The core type a tensor's storage lives on.
+auto get_buffer_core_type(const MeshTensor& tensor) { return tensor.mesh_buffer().get_reference_buffer()->core_type(); }
+
+// How a tensor's pages are distributed across cores.
+const std::optional<BufferDistributionSpec>& get_buffer_distribution_spec(const MeshTensor& tensor) {
+    return tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
+}
+
+// Allocator alignment of a tensor's storage.
+uint32_t get_buffer_alignment(const MeshTensor& tensor) {
+    return tensor.mesh_buffer().get_reference_buffer()->alignment();
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 template <bool local_is_output>
@@ -47,37 +62,40 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     const auto& input = tensor_args.input;
     const auto& output = output_tensor;
     const auto& local_tensor = local_is_output ? output : input;
-    const auto& remote_tensor = local_is_output ? input : output;
+    const auto& remote_tensor = local_is_output ? input.mesh_tensor() : output.mesh_tensor();
 
     auto* device = input.device();
 
-    const auto local_shard_spec = local_tensor.shard_spec().value();
+    const auto& local_mesh_tensor = local_tensor.mesh_tensor();
+    const auto local_shard_spec = local_mesh_tensor.shard_spec().value();
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
 
-    auto remote_core_type = remote_tensor.buffer()->core_type();
+    auto remote_core_type = CMAKE_UNIQUE_NAMESPACE::get_buffer_core_type(remote_tensor);
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
     constexpr uint32_t cb_scratch_index = tt::CBIndex::c_1;
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    auto remote_cores = CMAKE_UNIQUE_NAMESPACE::get_buffer_distribution_spec(remote_tensor).value().cores_with_data();
 
     uint32_t unit_size = 0;
     uint32_t local_units_per_shard = 0;
     uint32_t remote_units_per_shard = 0;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_mesh_tensor.dtype());
 
-    uint32_t num_units = local_tensor.buffer()->num_pages();
-    if (local_tensor.layout() == Layout::TILE) {
+    uint32_t num_units = local_mesh_tensor.mesh_buffer().num_pages();
+    if (local_mesh_tensor.layout() == Layout::TILE) {
         unit_size = tt::tile_size(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
     } else {
-        unit_size = static_cast<uint32_t>(local_shard_spec.shape[1] * local_tensor.element_size());
+        unit_size = static_cast<uint32_t>(local_shard_spec.shape[1] * local_mesh_tensor.element_size());
         local_units_per_shard = local_shard_spec.shape[0];
         remote_units_per_shard = remote_shard_spec.shape[0];
     }
-    uint32_t local_unit_size_padded = tt::align(unit_size, local_tensor.buffer()->alignment());
-    uint32_t remote_unit_size_padded = tt::align(unit_size, remote_tensor.buffer()->alignment());
+    uint32_t local_unit_size_padded =
+        tt::align(unit_size, CMAKE_UNIQUE_NAMESPACE::get_buffer_alignment(local_mesh_tensor));
+    uint32_t remote_unit_size_padded =
+        tt::align(unit_size, CMAKE_UNIQUE_NAMESPACE::get_buffer_alignment(remote_tensor));
     bool unaligned = false;
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
@@ -89,26 +107,24 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
-    auto* local_buffer = local_tensor.buffer();
-    auto* remote_buffer = remote_tensor.buffer();
-    auto remote_buffer_type = remote_buffer->buffer_type();
+    auto remote_buffer_type = remote_tensor.memory_config().buffer_type();
 
     ProgramDescriptor desc;
 
     // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
-    push_reshard_same_width_cb_pair(
-        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
+    CMAKE_UNIQUE_NAMESPACE::push_reshard_same_width_cb_pair(
+        desc, cb_index, data_format, total_size, unit_size, all_cores, &local_mesh_tensor);
 
     if (unaligned) {
         // Scratch CB used by kernels when local/remote alignments differ.
-        push_reshard_same_width_cb_pair(
+        CMAKE_UNIQUE_NAMESPACE::push_reshard_same_width_cb_pair(
             desc,
             cb_scratch_index,
             data_format,
             remote_units_per_shard * remote_unit_size_padded,
             unit_size,
             all_cores,
-            /*bound_buffer=*/nullptr);
+            nullptr);
     }
 
     // Reader/writer kernels share the same source and compile-time args.
@@ -148,12 +164,12 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
         uint32_t local_units_per_kernel = tt::div_up(local_units_per_core, static_cast<uint32_t>(kernels.size()));
         uint32_t local_start_offset = 0;
         for (auto* kernel : kernels) {
-            // arg 0 is remote-buffer base address (binding via Buffer*).
+            // arg 0 is remote-buffer base address (bound via the remote MeshTensor).
             // RTArgList doesn't expose operator[] for back-patching, so we build
             // a std::vector<variant> here and pass via the vector overload of
             // emplace_runtime_args.
-            std::vector<std::variant<uint32_t, Buffer*>> kernel_args;
-            kernel_args.emplace_back(remote_buffer);
+            std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> kernel_args;
+            kernel_args.emplace_back(std::ref(remote_tensor));
             kernel_args.emplace_back(uint32_t{0});
             kernel_args.emplace_back(uint32_t{0});
             uint32_t local_units_to_transfer = std::min(local_units_per_core, local_units_per_kernel);

@@ -13,6 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Anonymous-namespace helper unique to nd_reshard_copy_pages to avoid unity-build collisions.
 void push_reshard_copy_pages_cb(
@@ -34,25 +35,37 @@ void push_reshard_copy_pages_cb(
     desc.cbs.push_back(std::move(cb));
 }
 
+// Aligned page size of the tensor's allocated buffer (Buffer-only: depends on the device allocator).
+uint32_t get_buffer_aligned_page_size(const MeshTensor& tensor) {
+    return static_cast<uint32_t>(tensor.mesh_buffer().get_reference_buffer()->aligned_page_size());
+}
+
+// Number of device pages in the tensor's storage, from its buffer-distribution spec.
+uint32_t get_num_dev_pages(const MeshTensor& tensor) {
+    return static_cast<uint32_t>(tensor.mesh_buffer()
+                                     .device_local_config()
+                                     .sharding_args.buffer_distribution_spec()
+                                     ->tensor_shape_in_pages()
+                                     .volume());
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    auto& output = output_tensor;
-
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = output_tensor.mesh_tensor();
 
     auto input_nd_shard_spec = input.memory_config().nd_shard_spec().value();
 
-    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
-    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+    const auto input_accessor_args = TensorAccessorArgs(input);
+    const auto output_accessor_args = TensorAccessorArgs(output);
 
-    auto aligned_page_size = input_buffer->aligned_page_size();
+    auto aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(input);
 
     // Create grid + cores
-    auto grid_size = input.device()->compute_with_storage_grid_size();
+    auto grid_size = input.device().compute_with_storage_grid_size();
     auto grid = CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
     auto cores = corerange_to_cores(grid, std::nullopt, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
@@ -62,7 +75,7 @@ ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
     constexpr uint32_t cb_in0_idx = tt::CBIndex::c_0;
 
     ProgramDescriptor desc;
-    push_reshard_copy_pages_cb(
+    CMAKE_UNIQUE_NAMESPACE::push_reshard_copy_pages_cb(
         desc, cb_in0_idx, data_format, aligned_page_size * num_tiles_in_cb, aligned_page_size, grid);
 
     // Prepare compile time arguments
@@ -91,16 +104,15 @@ ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.compile_time_args = std::move(compile_time_args_writer);
 
-    // Common runtime args: arg 0 is the buffer base address (binding via Buffer*).
+    // Common runtime args: arg 0 is the buffer base address (bound via the MeshTensor).
     // emplace_common_runtime_args registers a CommonBufferBinding for the framework
     // fast cache-hit path.
-    reader_desc.emplace_common_runtime_args({input_buffer});
-    writer_desc.emplace_common_runtime_args({output_buffer});
+    reader_desc.emplace_common_runtime_args({input});
+    writer_desc.emplace_common_runtime_args({output});
 
     // Per-core unique runtime args: [start_page, end_page]
     uint32_t start_page = 0;
-    uint32_t num_dev_pages =
-        static_cast<uint32_t>(input_buffer->buffer_distribution_spec()->tensor_shape_in_pages().volume());
+    uint32_t num_dev_pages = CMAKE_UNIQUE_NAMESPACE::get_num_dev_pages(input);
     uint32_t n_pages_per_core = num_dev_pages / static_cast<uint32_t>(cores.size());
     uint32_t remainder = num_dev_pages % static_cast<uint32_t>(cores.size());
 
