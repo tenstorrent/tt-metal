@@ -2190,7 +2190,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
 
-    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
+    // Untilize needs a SEPARATE interm CB (not aliased onto out): the compute kernel now
+    // accumulates the fully-tiled block into interm (LastBlockTarget::Interm), then a downstream
+    // reblock_and_untilize reads interm and untilizes into out. If interm aliased out, that
+    // untilize would be in-place on the row-major output (corruption). Previously only
+    // in1_num_subblocks>1 forced a separate interm; single-subblock untilize aliased out — safe
+    // only for the old fused straight-to-out pack (OutWithUntilize), which no longer exists here.
+    if ((interm0_data_format != output_data_format) || untilize_out) {
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
