@@ -933,18 +933,11 @@ class Qwen36Model:
         return ttnn.reshape(logits, (1, 1, logits.shape[-1]))
 
     def warmup_prefill_masked_buckets(self, page_table, buckets=None):
-        """Compile every masked-bucket prefill program up front so short prompts never compile
-        at request time (which clobbers parked decode/chunk traces -> second-request hang, #48536).
-
-        Per bucket, run dummy prefills covering the no-mask program (actual_len == bucket) and the
-        masked program (actual_len < bucket), plus one length per distinct paged_fill_cache fill
-        width. MUST run while the GDN is in serving state mode and BEFORE any trace is parked;
-        capture_prefill_trace_chunked calls this just before begin_trace_capture. page_table must
-        cover the largest bucket.
-
-        Sweep from the BUCKET set, not block_size: this hybrid GDN unifies the attention KV page
-        with the large recurrent-state page, so get_block_size() is big (~800, not 64) and the old
-        max(buckets)//block_size only warmed the large buckets, never the small 128/256/512 ones."""
+        """Compile every masked-bucket prefill program up front so short prompts never compile at
+        request time (clobbers parked decode/chunk traces -> second-request hang, #48536). Must run
+        in GDN serving state mode, BEFORE any trace is parked; page_table must cover the largest
+        bucket. Sweep from the BUCKET set (not block_size): the hybrid GDN's large get_block_size()
+        (~800) makes the old max(buckets)//block_size skip the small 128/256/512 buckets."""
         if buckets is None:
             buckets = self._PREFILL_MASK_BUCKETS
         block_size = get_block_size(self._paged_kv_caches)

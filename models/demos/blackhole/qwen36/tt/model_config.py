@@ -189,21 +189,11 @@ class Qwen36ModelArgs(ModelArgs):
         return self.attention_type_list[layer_idx] == "linear_attention"
 
     def weight_cache_path(self, dtype=None):
-        """Return cache directory path for converted weight tensors.
-
-        Rooted at the framework ``model_cache_path`` (``TT_CACHE_PATH`` + device name), NOT the HF
-        checkpoint snapshot: the snapshot dir is often mounted read-only in CI, so caching there
-        silently never persists and every run regenerates all weights, exceeding the test timeout
-        for the full 64-layer model. Falls back to the checkpoint dir if no cache path resolved.
-        The directory is created by ttnn.as_tensor on first write.
-
-        Multi-device (TP) caches are qualified by mesh shape because per-device layouts differ by
-        mesh (e.g. the framework Embedding shards the hidden dim, so it is FULL on (1,1) but
-        fractured on (1,4)) and ttnn.as_tensor reloads a cache file as-is, IGNORING the mesh_mapper.
-        Without this a single-device run's full weights would be reused as a TP run's shards,
-        failing the distributed RMSNorm gamma/input alignment check. Single device keeps the
-        original unqualified path so validated 9B behavior is unchanged.
-        """
+        """Weight tensor cache dir, rooted at model_cache_path (TT_CACHE_PATH + device), NOT the HF
+        snapshot (often read-only in CI -> caching there silently never persists); falls back to the
+        checkpoint dir. TP caches qualified by mesh shape: per-device layouts differ by mesh and
+        as_tensor reloads a cache file as-is, IGNORING mesh_mapper (single device keeps the
+        unqualified path so validated 9B behavior is unchanged)."""
         if dtype is None:
             dtype = self.weight_dtype
         import ttnn
