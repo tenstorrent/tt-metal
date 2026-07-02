@@ -29,3 +29,5 @@ line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
 line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_config()}
 ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}
+line_params_req_exact_devices = {**line_params, "require_exact_physical_num_devices": True}
+ring_params_req_exact_devices = {**ring_params, "require_exact_physical_num_devices": True}

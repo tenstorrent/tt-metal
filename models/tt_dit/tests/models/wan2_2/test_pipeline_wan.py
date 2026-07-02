@@ -13,6 +13,7 @@ from PIL import Image
 
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.pipelines.events import log_event_section
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
@@ -127,6 +128,7 @@ def test_pipeline_inference(
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
                 output_type="uint8",
+                on_event=log_event_section,
             )
 
         logger.info(f"Inference completed successfully")

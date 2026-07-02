@@ -108,6 +108,87 @@ def print_shapes_info(shapes_info):
     print("=" * 100)
 
 
+def defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, dtype=ttnn.bfloat16):
+    """Move feature cache tensors to host and back to device to defragment device memory."""
+    tt_feat_cache_host = []
+    for j in range(len(tt_feat_cache)):
+        if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+            tt_feat_cache_host.append(tt_feat_cache[j])
+        else:
+            tt_feat_cache_host.append(
+                ttnn.to_torch(
+                    tt_feat_cache[j],
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
+                    ),
+                )
+            )
+            ttnn.deallocate(tt_feat_cache[j])
+    for j in range(len(tt_feat_cache)):
+        if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+            tt_feat_cache[j] = tt_feat_cache_host[j]
+        else:
+            tt_feat_cache[j] = typed_tensor_2dshard(
+                tt_feat_cache_host[j],
+                mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                shard_mapping={h_axis: 2, w_axis: 3},
+                dtype=dtype,
+            )
+
+
+def compare_tt_torch_feat_cache(tt_feat_cache, torch_feat_cache, mesh_device, concat_dims, MIN_PCC, MAX_RMSE):
+    for cache_idx in range(len(tt_feat_cache)):
+        logger.info(f"checking feat_cache {cache_idx}")
+        if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
+            logger.info(f"feat_cache {cache_idx} is Rep")
+            assert torch_feat_cache[cache_idx] == "Rep"
+            continue
+        tt_feat_cache_back = ttnn.to_torch(
+            tt_feat_cache[cache_idx],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+        )
+        tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
+        if tt_feat_cache_back.shape[1] != torch_feat_cache[cache_idx].shape[1]:
+            tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[cache_idx].shape[1]]
+            logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
+        if tt_feat_cache_back.shape[3] != torch_feat_cache[cache_idx].shape[3]:
+            tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[cache_idx].shape[3]]
+            logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
+        logger.info(f"feat_cache {cache_idx} shape: {torch_feat_cache[cache_idx].shape}, {tt_feat_cache_back.shape}")
+        try:
+            assert_quality(torch_feat_cache[cache_idx], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+        except Exception as e:
+            logger.error(
+                f"Error checking feat_cache {cache_idx}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
+            )
+            # breakpoint()
+            raise e
+
+
+def trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w):
+    if tt_output_torch.shape[1] != torch_output.shape[1]:
+        tt_output_torch = tt_output_torch[:, : torch_output.shape[1]]
+        logger.warning(f"Trimmed tt_output_torch channels to {tt_output_torch.shape}")
+    if new_logical_h != tt_output_torch.shape[3]:
+        tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
+        logger.warning(f"Trimmed tt_output_torch height to {tt_output_torch.shape}")
+    if new_logical_w != tt_output_torch.shape[4]:
+        tt_output_torch = tt_output_torch[:, :, :, :, :new_logical_w]
+        logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
+
+
+def pad_tensor_with_warning(torch_input_tensor, parallel_config):
+    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
+    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
+    if logical_h != tt_input_tensor.shape[2]:
+        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
+    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor)
+    if logical_w != tt_input_tensor.shape[3]:
+        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
+    return tt_input_tensor, logical_h, logical_w
+
+
 def test_autoencoder_kl_wan():
     """
     Test to construct a pretrained AutoencoderKLWan for wan2.2 14B t2v model and print it.
@@ -923,7 +1004,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
             feat_idx=torch_feat_idx,
         )
 
-    tt_output, new_logical_h, _new_logical_w = tt_model(
+    tt_output, new_logical_h, new_logical_w = tt_model(
         tt_input_tensor,
         logical_h,
         feat_cache=tt_feat_cache,
@@ -1066,7 +1147,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             )
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h, _new_logical_w = tt_model(
+        tt_output, new_logical_h, new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -1103,32 +1184,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
             assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=0.999_000, relative_rmse=0.03)
 
-        # Defrag the cache
-        tt_feat_cache_host = []
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[i])
-            else:
-                tt_feat_cache_host.append(
-                    ttnn.to_torch(
-                        tt_feat_cache[i],
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(
-                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                        ),
-                    )
-                )
-                ttnn.deallocate(tt_feat_cache[i])
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache[i] = tt_feat_cache_host[i]
-            else:
-                tt_feat_cache[i] = typed_tensor_2dshard(
-                    tt_feat_cache_host[i],
-                    mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    shard_mapping={h_axis: 2, w_axis: 3},
-                    dtype=tt_input_dtype,
-                )
+        defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, dtype=tt_input_dtype)
 
 
 @pytest.mark.parametrize(
@@ -1143,7 +1199,6 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("check_cache", [True])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1173,9 +1228,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder3d(
-    mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, dtype, MIN_PCC, MAX_RMSE
-):
+def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, dtype, MIN_PCC, MAX_RMSE):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
     torch.manual_seed(0)
@@ -1263,7 +1316,7 @@ def test_wan_decoder3d(
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h, _new_logical_w = tt_model(
+        tt_output, new_logical_h, new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -1282,65 +1335,8 @@ def test_wan_decoder3d(
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-
-        if check_cache:
-            for cache_idx in range(len(tt_feat_cache)):
-                logger.info(f"checking feat_cache {cache_idx}")
-                if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
-                    logger.info(f"feat_cache {cache_idx} is Rep")
-                    assert torch_feat_cache[cache_idx] == "Rep"
-                    continue
-                tt_feat_cache_back = ttnn.to_torch(
-                    tt_feat_cache[cache_idx],
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                    ),
-                )
-                tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
-                if tt_feat_cache_back.shape[1] != torch_feat_cache[cache_idx].shape[1]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[cache_idx].shape[1]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                if tt_feat_cache_back.shape[3] != torch_feat_cache[cache_idx].shape[3]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[cache_idx].shape[3]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                logger.info(
-                    f"feat_cache {cache_idx} shape: {torch_feat_cache[cache_idx].shape}, {tt_feat_cache_back.shape}"
-                )
-                try:
-                    assert_quality(torch_feat_cache[cache_idx], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-                except Exception as e:
-                    logger.error(
-                        f"Error checking feat_cache {cache_idx}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
-                    )
-                    # breakpoint()
-                    raise e
-
-        # Defrag the cache
-        tt_feat_cache_host = []
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[j])
-            else:
-                tt_feat_cache_host.append(
-                    ttnn.to_torch(
-                        tt_feat_cache[j],
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(
-                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                        ),
-                    )
-                )
-                ttnn.deallocate(tt_feat_cache[j])
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache[j] = tt_feat_cache_host[j]
-            else:
-                tt_feat_cache[j] = typed_tensor_2dshard(
-                    tt_feat_cache_host[j],
-                    mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    shard_mapping={h_axis: 2, w_axis: 3},
-                    dtype=tt_input_dtype,
-                )
+        compare_tt_torch_feat_cache(tt_feat_cache, torch_feat_cache, mesh_device, concat_dims, MIN_PCC, MAX_RMSE)
+        defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, dtype=tt_input_dtype)
 
 
 @pytest.mark.parametrize(
@@ -1357,8 +1353,6 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("T", [1, 10, 81], ids=["_1f", "10f", "81f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
-@pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
 @pytest.mark.parametrize("t_chunk_size", [1, 2, None], ids=["chunk_1", "chunk_2", "no_cache_full_T"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
@@ -1405,8 +1399,6 @@ def test_wan_decoder(
     h_axis,
     w_axis,
     num_links,
-    real_weights,
-    skip_check,
     t_chunk_size,
     dtype,
     MIN_PCC,
@@ -1418,30 +1410,7 @@ def test_wan_decoder(
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
 
     torch_dtype = torch.float32
-    base_dim = 96
-    z_dim = 16
-    dim_mult = [1, 2, 4, 4]
-    num_res_blocks = 2
-    attn_scales = []
-    temperal_downsample = [False, True, True]
-    dropout = 0.0
-    out_channels = 3
-    is_residual = False
-
-    if real_weights:
-        torch_model = TorchAutoencoderKLWan.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae")
-    else:
-        torch_model = TorchAutoencoderKLWan(
-            base_dim=base_dim,
-            z_dim=z_dim,
-            dim_mult=dim_mult,
-            num_res_blocks=num_res_blocks,
-            attn_scales=attn_scales,
-            temperal_downsample=temperal_downsample,
-            dropout=dropout,
-            out_channels=out_channels,
-            is_residual=is_residual,
-        )
+    torch_model = TorchAutoencoderKLWan.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae")
     torch_model.eval()
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
@@ -1450,14 +1419,14 @@ def test_wan_decoder(
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
     )
     tt_model = WanDecoder(
-        base_dim=base_dim,
-        z_dim=z_dim,
-        dim_mult=dim_mult,
-        num_res_blocks=num_res_blocks,
-        attn_scales=attn_scales,
-        temperal_downsample=temperal_downsample,
-        out_channels=out_channels,
-        is_residual=is_residual,
+        base_dim=torch_model.config.base_dim,
+        z_dim=torch_model.config.z_dim,
+        dim_mult=torch_model.config.dim_mult,
+        num_res_blocks=torch_model.config.num_res_blocks,
+        attn_scales=torch_model.config.attn_scales,
+        temperal_downsample=torch_model.config.temperal_downsample,
+        out_channels=torch_model.config.out_channels,
+        is_residual=torch_model.config.is_residual,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -1467,13 +1436,8 @@ def test_wan_decoder(
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor)
-    if logical_w != tt_input_tensor.shape[3]:
-        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
+
+    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(torch_input_tensor, parallel_config)
     tt_input_tensor = typed_tensor_2dshard(
         tt_input_tensor,
         mesh_device,
@@ -1484,7 +1448,7 @@ def test_wan_decoder(
 
     logger.info(f"running tt model (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h, _new_logical_w = tt_model(
+    tt_output, new_logical_h, new_logical_w = tt_model(
         tt_input_tensor, logical_h, t_chunk_size=t_chunk_size, logical_w=logical_w
     )
 
@@ -1498,27 +1462,16 @@ def test_wan_decoder(
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
-    if not skip_check:
-        logger.info(f"running torch model")
-        start = time.time()
-        with torch.no_grad():
-            torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
-        logger.info(f"torch time taken: {time.time() - start}")
-        logger.info(f"torch output shape: {torch_output.shape}")
+    logger.info(f"running torch model")
+    start = time.time()
+    with torch.no_grad():
+        torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
+    logger.info(f"torch time taken: {time.time() - start}")
+    logger.info(f"torch output shape: {torch_output.shape}")
 
-        logger.info(f"checking output")
-        if tt_output_torch.shape[1] != torch_output.shape[1]:
-            logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-            tt_output_torch = tt_output_torch[:, : torch_output.shape[1]]
-        if new_logical_h != tt_output_torch.shape[3]:
-            tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
-            logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-        if _new_logical_w != tt_output_torch.shape[4]:
-            tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
-            logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
-        assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-    else:
-        logger.warning("Skipping check")
+    logger.info(f"checking output")
+    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
+    assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
@@ -1617,13 +1570,7 @@ def test_wan_decoder_production_blocking(
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype)
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor)
-    if logical_w != tt_input_tensor.shape[3]:
-        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
+    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(torch_input_tensor, parallel_config)
     tt_input_tensor = typed_tensor_2dshard(
         tt_input_tensor,
         mesh_device,
@@ -1634,7 +1581,7 @@ def test_wan_decoder_production_blocking(
 
     logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h, _new_logical_w = tt_model(
+    tt_output, new_logical_h, new_logical_w = tt_model(
         tt_input_tensor, logical_h, t_chunk_size=t_chunk_size, logical_w=logical_w
     )
 
@@ -1656,15 +1603,7 @@ def test_wan_decoder_production_blocking(
     logger.info(f"torch output shape: {torch_output.shape}")
 
     logger.info("checking output")
-    if tt_output_torch.shape[1] != torch_output.shape[1]:
-        logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-        tt_output_torch = tt_output_torch[:, : torch_output.shape[1]]
-    if new_logical_h != tt_output_torch.shape[3]:
-        tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
-        logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-    if _new_logical_w != tt_output_torch.shape[4]:
-        tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
-        logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
+    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1777,7 +1716,7 @@ def test_wan_encoder_production_blocking(
 
     logger.info(f"running tt encoder (encoder_t_chunk_size={encoder_t_chunk_size}, forward_chunk={forward_chunk})")
     start = time.time()
-    tt_output, new_logical_h, _new_logical_w = tt_model(
+    tt_output, new_logical_h, new_logical_w = tt_model(
         tt_input_tensor, logical_h, encoder_t_chunk_size=forward_chunk, logical_w=logical_w
     )
 
@@ -1799,15 +1738,7 @@ def test_wan_encoder_production_blocking(
     logger.info(f"torch output shape: {torch_output.shape}")
 
     logger.info("checking output")
-    if tt_output_torch.shape[1] != torch_output.shape[1]:
-        tt_output_torch = tt_output_torch[:, : torch_output.shape[1]]
-        logger.warning(f"Trimmed tt_output_torch channels to {tt_output_torch.shape}")
-    if new_logical_h != tt_output_torch.shape[3]:
-        tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
-        logger.warning(f"Trimmed tt_output_torch height to {tt_output_torch.shape}")
-    if _new_logical_w != tt_output_torch.shape[4]:
-        tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
-        logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
+    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1918,7 +1849,7 @@ def test_wan_decoder_chunked_consistency(
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=ttnn.float32 if dtype == ttnn.DataType.FLOAT32 else ttnn.bfloat16,
         )
-        tt_output, new_logical_h, _new_logical_w = tt_model(
+        tt_output, new_logical_h, new_logical_w = tt_model(
             tt_input_tensor, logical_h, t_chunk_size=t_chunk_size, logical_w=logical_w
         )
         return ttnn.to_torch(
@@ -1972,7 +1903,6 @@ def test_wan_decoder_chunked_consistency(
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("check_cache", [True])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
     [
@@ -1990,7 +1920,7 @@ def test_wan_decoder_chunked_consistency(
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache):
+def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanEncoder3d as TorchWanEncoder3D
 
     in_channels = C
@@ -2072,7 +2002,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h, _new_logical_w = tt_model(
+        tt_output, new_logical_h, new_logical_w = tt_model(
             tt_input_tensor,
             logical_h,
             feat_cache=tt_feat_cache,
@@ -2091,64 +2021,8 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-
-        if check_cache:
-            for cache_idx in range(len(tt_feat_cache)):
-                logger.info(f"checking feat_cache {cache_idx}")
-                if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
-                    logger.info(f"feat_cache {cache_idx} is Rep")
-                    assert torch_feat_cache[cache_idx] == "Rep"
-                    continue
-                tt_feat_cache_back = ttnn.to_torch(
-                    tt_feat_cache[cache_idx],
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                    ),
-                )
-                tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
-                if tt_feat_cache_back.shape[1] != torch_feat_cache[cache_idx].shape[1]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[cache_idx].shape[1]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                if tt_feat_cache_back.shape[3] != torch_feat_cache[cache_idx].shape[3]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[cache_idx].shape[3]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                logger.info(
-                    f"feat_cache {cache_idx} shape: {torch_feat_cache[cache_idx].shape}, {tt_feat_cache_back.shape}"
-                )
-                try:
-                    assert_quality(torch_feat_cache[cache_idx], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-                except Exception as e:
-                    logger.error(
-                        f"Error checking feat_cache {cache_idx}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
-                    )
-                    # breakpoint()
-                    raise e
-
-        # Defrag the cache
-        tt_feat_cache_host = []
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[j])
-            else:
-                tt_feat_cache_host.append(
-                    ttnn.to_torch(
-                        tt_feat_cache[j],
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(
-                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                        ),
-                    )
-                )
-                ttnn.deallocate(tt_feat_cache[j])
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache[j] = tt_feat_cache_host[j]
-            else:
-                tt_feat_cache[j] = bf16_tensor_2dshard(
-                    tt_feat_cache_host[j],
-                    mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    shard_mapping={h_axis: 2, w_axis: 3},
-                )
+        compare_tt_torch_feat_cache(tt_feat_cache, torch_feat_cache, mesh_device, concat_dims, MIN_PCC, MAX_RMSE)
+        defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis)
 
 
 @pytest.mark.parametrize(
@@ -2165,8 +2039,6 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 @pytest.mark.parametrize("T", [1, 10, 81], ids=["_1f", "10f", "81f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
-@pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
     [
@@ -2192,35 +2064,11 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check):
+def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch_dtype = torch.float32
-    base_dim = 96
-    z_dim = 16
-    dim_mult = [1, 2, 4, 4]
-    num_res_blocks = 2
-    attn_scales = []
-    temperal_downsample = [False, True, True]
-    dropout = 0.0
-    in_channels = out_channels = 3
-    is_residual = False
-
-    if real_weights:
-        torch_model = TorchAutoencoderKLWan.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae")
-    else:
-        torch_model = TorchAutoencoderKLWan(
-            base_dim=base_dim,
-            in_channels=in_channels,
-            z_dim=z_dim,
-            dim_mult=dim_mult,
-            num_res_blocks=num_res_blocks,
-            attn_scales=attn_scales,
-            temperal_downsample=temperal_downsample,
-            dropout=dropout,
-            out_channels=out_channels,
-            is_residual=is_residual,
-        )
+    torch_model = TorchAutoencoderKLWan.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae")
     torch_model.eval()
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
@@ -2229,14 +2077,14 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
     )
     tt_model = WanEncoder(
-        base_dim=base_dim,
-        in_channels=in_channels,
-        z_dim=z_dim,
-        dim_mult=dim_mult,
-        num_res_blocks=num_res_blocks,
-        attn_scales=attn_scales,
-        temperal_downsample=temperal_downsample,
-        is_residual=is_residual,
+        base_dim=torch_model.config.base_dim,
+        in_channels=torch_model.config.in_channels,
+        z_dim=torch_model.config.z_dim,
+        dim_mult=torch_model.config.dim_mult,
+        num_res_blocks=torch_model.config.num_res_blocks,
+        attn_scales=torch_model.config.attn_scales,
+        temperal_downsample=torch_model.config.temperal_downsample,
+        is_residual=torch_model.config.is_residual,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -2259,7 +2107,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
 
     logger.info(f"running tt model")
     start = time.time()
-    tt_output, new_logical_h, _new_logical_w = tt_model(
+    tt_output, new_logical_h, new_logical_w = tt_model(
         tt_input_tensor,
         logical_h,
         logical_w=logical_w,
@@ -2275,27 +2123,16 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
-    if not skip_check:
-        logger.info(f"running torch model")
-        start = time.time()
-        with torch.no_grad():
-            torch_output = torch_model.encode(
-                torch_input_tensor,
-                return_dict=False,
-            )[0].mode()
-        logger.info(f"torch time taken: {time.time() - start}")
-        logger.info(f"torch output shape: {torch_output.shape}")
+    logger.info(f"running torch model")
+    start = time.time()
+    with torch.no_grad():
+        torch_output = torch_model.encode(
+            torch_input_tensor,
+            return_dict=False,
+        )[0].mode()
+    logger.info(f"torch time taken: {time.time() - start}")
+    logger.info(f"torch output shape: {torch_output.shape}")
 
-        logger.info(f"checking output")
-        if tt_output_torch.shape[1] != torch_output.shape[1]:
-            logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-            tt_output_torch = tt_output_torch[:, : torch_output.shape[1]]
-        if new_logical_h != tt_output_torch.shape[3]:
-            tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
-            logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-        if _new_logical_w != tt_output_torch.shape[4]:
-            tt_output_torch = tt_output_torch[:, :, :, :, :_new_logical_w]
-            logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
-        assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
-    else:
-        logger.warning("Skipping check")
+    logger.info(f"checking output")
+    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
+    assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
