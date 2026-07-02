@@ -23,6 +23,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -121,6 +122,17 @@ public:
             const auto& layout = get_dispatch_query_manager_ref().cq_dispatch_layout(core_type);
             dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
                 core_type, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster, layout, descriptor.rtoptions());
+        }
+        if (descriptor.cluster().arch() == tt::ARCH::QUASAR &&
+            descriptor.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+            const auto& layout = get_dispatch_query_manager_ref().cq_dispatch_layout(CoreType::DISPATCH);
+            dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+                CoreType::DISPATCH,
+                descriptor.num_cqs(),
+                descriptor.hal(),
+                is_galaxy_cluster,
+                layout,
+                descriptor.rtoptions());
         }
     }
     virtual ~FDKernel() = default;
@@ -238,6 +250,8 @@ protected:
     noc_selection_t noc_selection_;
     bool send_to_brisc_ = false;            // WH/BH only: selects RISCV_0 (true) vs RISCV_1 (false)
     bool force_watcher_no_inline_ = false;  // Prefetcher enables to fit in code region when watcher is enabled
+    // Quasar dispatch-engine FD: explicit DM pinning via CreateDispatchEngineKernel (DM0 prefetch, DM1 dispatch).
+    DataMovementProcessor quasar_dm_processor_ = DataMovementProcessor::RISCV_0;
 
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;

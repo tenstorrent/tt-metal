@@ -1528,13 +1528,13 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     if (!dispatch_not_done_cores.empty()) {
-        log_debug(LogDevice, "Waiting for dispatch-engine firmware init complete");
+        log_info(LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
         try {
             llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, timeout_ms);
         } catch (std::runtime_error&) {
             TT_THROW("Device {} init: failed to initialize dispatch-engine FW!", device_id);
         }
-        log_debug(LogDevice, "Dispatch-engine firmware init complete");
+        log_info(LogDevice, "Dispatch-engine firmware init complete");
     }
 }
 

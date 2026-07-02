@@ -74,6 +74,20 @@ struct QuasarDispatchCoresCacheKeyHash {
     }
 };
 
+// Quasar 1CQ fast dispatch places prefetch and dispatch HD on the same dispatch-engine tile (DM0/DM1).
+// dispatch_core_manager assigns them via separate pool pops, mirroring interim Tensix YAML that lists
+// the same logical coord twice (e.g. dispatch_cores: [[1,-1], [1,-1]]).
+void expand_quasar_dispatch_engine_pool_for_fd_assignment(std::vector<CoreCoord>& logical_cores, uint8_t num_hw_cqs) {
+    if (logical_cores.size() != 1) {
+        return;
+    }
+    const size_t min_pool_entries = static_cast<size_t>(num_hw_cqs) * 2;
+    logical_cores.reserve(min_pool_entries);
+    while (logical_cores.size() < min_pool_entries) {
+        logical_cores.push_back(logical_cores.front());
+    }
+}
+
 const std::vector<CoreCoord>& get_quasar_dispatch_cores_cached(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
@@ -100,6 +114,7 @@ const std::vector<CoreCoord>& get_quasar_dispatch_cores_cached(
             get_quasar_tensix_fallback_dispatch_cores_from_yaml(env, device_id, num_hw_cqs, dispatch_core_config);
     } else {
         logical_cores = get_quasar_soc_dispatch_engine_logical_cores(env.get_cluster().get_soc_desc(device_id));
+        expand_quasar_dispatch_engine_pool_for_fd_assignment(logical_cores, num_hw_cqs);
     }
 
     cache.emplace(key, std::move(logical_cores));

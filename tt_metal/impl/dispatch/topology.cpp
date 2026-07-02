@@ -435,6 +435,18 @@ DispatchTopology::DispatchTopology(
         dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
             core_type, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, layout, descriptor_.rtoptions());
     }
+    if (descriptor_.cluster().arch() == tt::ARCH::QUASAR &&
+        descriptor_.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) 
+    {
+        const auto& layout = this->get_dispatch_query_manager_().cq_dispatch_layout(CoreType::DISPATCH);
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<DispatchMemMap>(
+            CoreType::DISPATCH,
+            descriptor_.num_cqs(),
+            descriptor_.hal(),
+            is_galaxy_cluster,
+            layout,
+            descriptor_.rtoptions());
+    }
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
