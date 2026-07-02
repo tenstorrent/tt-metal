@@ -12,6 +12,10 @@
 - [3. Global Circular Buffers](#3-global-circular-buffers)
   - [3.1 Host APIs](#31-host-apis)
   - [3.2 Kernel APIs](#32-kernel-apis)
+- [4. Use Case Scenarios](#4-use-case-scenarios)
+  - [4.1 Persistent Background Kernel with Overlapping Compute](#41-persistent-background-kernel-with-overlapping-compute)
+  - [4.2 Overlapping Data Movement and Compute](#42-overlapping-data-movement-and-compute)
+  - [4.3 Isolated Memory Allocation for Independent Workloads](#43-isolated-memory-allocation-for-independent-workloads)
 
 ## Introduction
 
@@ -232,3 +236,189 @@ Common APIs:
 * `align_local_cbs_to_remote_cb(remote_cb_index, local_cb_indices[])`
 
   Used to update any associated local cbs that are in-placed with a remote cb with updated total size and read/write pointers. Normally called after reconfiguring a remote circular buffer's page size.
+
+## 4. Use Case Scenarios
+
+The following scenarios illustrate practical situations where sub-devices provide concrete benefits. Each example uses the Python/ttnn API and follows the patterns found in the existing test suite.
+
+### 4.1 Persistent Background Kernel with Overlapping Compute
+
+**Problem:** You have a long-running "service" kernel — for example, a routing or prefetch kernel that must remain active for the duration of a workload — while separate compute kernels process data on other cores. Without sub-devices, any read, write, or synchronize call would stall waiting for the persistent kernel to finish, which it never will (until explicitly signaled). This deadlocks the system.
+
+**Solution:** Place the persistent kernel on one sub-device and the compute kernels on another. Use `set_sub_device_stall_group` to exclude the persistent kernel's sub-device from the default stall list, so that dispatch commands only wait on the compute sub-device. When the overall workload is done, signal the persistent kernel to exit via a global semaphore, then reset the stall group and perform a full synchronize.
+
+```python
+import ttnn
+
+# --- Define two sub-devices: one for a persistent service, one for compute ---
+service_cores = ttnn.CoreRangeSet({
+    ttnn.CoreRange(ttnn.CoreCoord(4, 4), ttnn.CoreCoord(4, 4)),
+})
+compute_cores = ttnn.CoreRangeSet({
+    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3)),
+})
+
+sub_device_service = ttnn.SubDevice([service_cores])
+sub_device_compute = ttnn.SubDevice([compute_cores])
+
+sub_device_manager = device.create_sub_device_manager(
+    [sub_device_service, sub_device_compute], 3200
+)
+device.load_sub_device_manager(sub_device_manager)
+
+# Create a global semaphore the persistent kernel polls to know when to exit
+global_sem = ttnn.create_global_semaphore(device, service_cores, initial_value=0)
+
+# ... enqueue the persistent service program on sub_device_service (SubDeviceId 0) ...
+
+# Exclude the service sub-device from stalls so dispatch doesn't deadlock
+device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+
+# --- Normal compute work proceeds without blocking on the persistent kernel ---
+x = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                    device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+y = ttnn.matmul(x, weights)
+result = ttnn.to_torch(y, device=device)
+
+# ... more compute iterations can be enqueued freely ...
+
+# --- Tear down: signal the persistent kernel to exit ---
+ttnn.reset_global_semaphore_value(global_sem, reset_value=1)
+
+# Now include all sub-devices in the stall group and synchronize fully
+device.reset_sub_device_stall_group()
+ttnn.synchronize_device(device)
+
+# Clean up
+device.clear_loaded_sub_device_manager()
+device.remove_sub_device_manager(sub_device_manager)
+```
+
+**Key synchronization decisions:**
+- `set_sub_device_stall_group([SubDeviceId(1)])` is the critical call — it tells the dispatch infrastructure that reads, writes, and synchronizes should only wait for the compute sub-device (index 1), not the service sub-device (index 0) whose program intentionally never finishes on its own.
+- The global semaphore acts as the shutdown signal. The persistent kernel polls the semaphore address; when the host writes a non-zero value, the kernel exits.
+- `reset_sub_device_stall_group()` must be called before the final `synchronize_device` to ensure the host waits for the persistent kernel to actually terminate.
+
+### 4.2 Overlapping Data Movement and Compute
+
+**Problem:** In a pipelined workload you want to overlap data movement (DMA reads/writes to DRAM or host) with compute. Normally, enqueuing a program that performs data movement stalls until the previous compute program finishes, and vice versa, because dispatch synchronizes across the entire device.
+
+**Solution:** Partition the device into a "data mover" sub-device and a "compute" sub-device. Enqueue programs to each sub-device independently. Use global semaphores to coordinate handoffs — the compute kernel waits for the data-mover kernel to signal that a buffer is ready, and the data-mover kernel waits for the compute kernel to signal that a buffer has been consumed.
+
+```python
+import ttnn
+
+# --- Partition cores into DMA and compute groups ---
+dma_cores = ttnn.CoreRangeSet({
+    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+})
+compute_cores = ttnn.CoreRangeSet({
+    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(3, 3)),
+})
+
+sub_device_dma = ttnn.SubDevice([dma_cores])
+sub_device_compute = ttnn.SubDevice([compute_cores])
+
+sub_device_manager = device.create_sub_device_manager(
+    [sub_device_dma, sub_device_compute], 3200
+)
+device.load_sub_device_manager(sub_device_manager)
+
+# Global semaphores for cross-sub-device synchronization
+all_cores = dma_cores.merge(compute_cores)
+sem_data_ready = ttnn.create_global_semaphore(device, all_cores, initial_value=0)
+sem_data_consumed = ttnn.create_global_semaphore(device, all_cores, initial_value=0)
+
+# ... enqueue DMA program on sub_device_dma (SubDeviceId 0) ...
+#   Kernel logic: read data from DRAM -> L1, then increment sem_data_ready
+#                 wait on sem_data_consumed before reusing the buffer
+
+# ... enqueue compute program on sub_device_compute (SubDeviceId 1) ...
+#   Kernel logic: wait on sem_data_ready, process data, increment sem_data_consumed
+
+# --- Host-side: use events for fine-grained device-level synchronization ---
+# Record an event after compute finishes on sub-device 1
+event = ttnn.record_event(device, 0, [ttnn.SubDeviceId(1)])
+
+# Wait for compute completion before reading results back to host
+ttnn.wait_for_event(0, event)
+result = ttnn.to_torch(output_tensor, device=device)
+
+# Synchronize all sub-devices before teardown
+device.reset_sub_device_stall_group()
+ttnn.synchronize_device(device)
+
+device.clear_loaded_sub_device_manager()
+device.remove_sub_device_manager(sub_device_manager)
+```
+
+**Key synchronization decisions:**
+- The two sub-devices run their programs concurrently because dispatch only stalls within a sub-device, not across sub-devices.
+- Global semaphores (`sem_data_ready`, `sem_data_consumed`) are the inter-kernel coordination mechanism. These persist across program boundaries, so the DMA and compute kernels can signal each other regardless of which program iteration they are in.
+- `ttnn.record_event` with `sub_device_ids=[SubDeviceId(1)]` records an event that fires only when the compute sub-device's program finishes, without waiting for the DMA sub-device. This lets the host read back results as soon as they are ready.
+- This pattern generalizes to multi-stage pipelines: add more sub-devices and additional semaphores for each handoff point.
+
+### 4.3 Isolated Memory Allocation for Independent Workloads
+
+**Problem:** Two logically independent workloads share the same device. Because the default allocator manages L1 globally, allocating a sharded buffer for workload A on certain cores prevents workload B from allocating to the same address range on different cores, even though the buffers do not physically overlap. This forces a sequential allocate-run-free cycle that wastes time.
+
+**Solution:** Create a sub-device for each workload. When a sub-device manager is loaded with a non-zero local allocator size, each sub-device gets its own allocator. Buffers allocated on one sub-device's allocator are invisible to the other, so both workloads can allocate, run, and free independently.
+
+```python
+import ttnn
+
+# --- Define two non-overlapping sub-devices ---
+workload_a_cores = ttnn.CoreRangeSet({
+    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3)),
+})
+workload_b_cores = ttnn.CoreRangeSet({
+    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 3)),
+})
+
+sub_device_a = ttnn.SubDevice([workload_a_cores])
+sub_device_b = ttnn.SubDevice([workload_b_cores])
+
+# local_allocator_size > 0 creates independent per-sub-device allocators
+sub_device_manager = device.create_sub_device_manager(
+    [sub_device_a, sub_device_b], 3200
+)
+device.load_sub_device_manager(sub_device_manager)
+
+# --- Workload A: allocate and compute on sub_device_a ---
+device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
+input_a = ttnn.from_torch(
+    torch_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+    device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+)
+output_a = ttnn.relu(input_a)
+
+# --- Workload B: allocate and compute on sub_device_b concurrently ---
+device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+input_b = ttnn.from_torch(
+    torch_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+    device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+)
+output_b = ttnn.gelu(input_b)
+
+# --- Read results independently using events ---
+event_a = ttnn.record_event(device, 0, [ttnn.SubDeviceId(0)])
+event_b = ttnn.record_event(device, 0, [ttnn.SubDeviceId(1)])
+
+ttnn.wait_for_event(0, event_a)
+result_a = ttnn.to_torch(output_a, device=device)
+
+ttnn.wait_for_event(0, event_b)
+result_b = ttnn.to_torch(output_b, device=device)
+
+# --- Teardown ---
+device.reset_sub_device_stall_group()
+ttnn.synchronize_device(device)
+device.clear_loaded_sub_device_manager()
+device.remove_sub_device_manager(sub_device_manager)
+```
+
+**Key synchronization decisions:**
+- The `local_allocator_size` parameter (3200 in this example) is critical: a value of zero would keep a single global allocator, losing the isolation benefit. The value must be large enough to accommodate the buffers each sub-device needs.
+- Switching `set_sub_device_stall_group` between `[SubDeviceId(0)]` and `[SubDeviceId(1)]` ensures that host-side tensor operations (reads, writes, program launches) only stall on the relevant sub-device. Without this, a `from_torch` targeting workload B would stall waiting for workload A's programs to finish.
+- Each workload's buffers must be freed (tensors go out of scope or are explicitly deallocated) before `clear_loaded_sub_device_manager` is called, because clearing requires all local allocators to be empty.
+- This pattern is particularly useful for serving scenarios where multiple independent inference requests can be processed simultaneously on different partitions of the chip.
