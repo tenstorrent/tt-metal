@@ -74,13 +74,31 @@ SUPPORTED = {
     # Linear is the proven primary topology.
     "topology": [_Topology.Linear],
     # Index axis, canonicalized to NEGATIVE before the membership test.
-    # gather_dim=0 (page-contiguous concat) is the proven primary case: -4 for
-    # the rank-4 per-device shards in the acceptance test.
-    "gather_dim": [-4],
+    # gather_dim=0 (page-contiguous concat, -4) is the proven primary case;
+    # Refinement 2 added the strided concat addressing for the inner dims
+    # -3 (C), -2 (H), -1 (W). See the whole-page remap in the kernels /
+    # _gather_page_params. Two structural corners are refused (EXCLUSIONS).
+    "gather_dim": [-4, -3, -2, -1],
     "alignment": ["tile_aligned", "non_tile_aligned"],
 }
 
-EXCLUSIONS: list = []
+# Cells inside cartesian(SUPPORTED) the pure-byte-mover cannot express (whole-page
+# copy only; the op never tilizes/untilizes). Each is a structural gap a future
+# refinement can revisit — NOT a numeric near-miss or OOM.
+EXCLUSIONS: list = [
+    # TILE + gather along H, non-tile-aligned H: each shard tilizes H with its own
+    # trailing padding (Ht_shard tiles), but the gathered output packs H densely
+    # (Ht_out < N*Ht_shard), so N*pages_per_shard source pages != output pages —
+    # a whole-tile copy can't reconcile the counts. Needs a tilize/untilize repack
+    # the design forbids. Follow-up: Refinement 2a. (Only (1,1,48,64) hits this in
+    # the golden INPUTS — all other shapes have tile-aligned H.)
+    {"layout": ttnn.TILE_LAYOUT, "gather_dim": -2, "alignment": "non_tile_aligned"},
+    # ROW_MAJOR + gather along W: the RM page IS a W-row, so concat-along-W makes
+    # the output page N x larger and each device's row lands at a byte OFFSET
+    # inside it — a sub-page write the whole-page fabric egress can't express.
+    # Follow-up: Refinement 2b.
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "gather_dim": -1},
+]
 
 
 # Module-level GlobalSemaphore cache: created ONCE per mesh_device (+ one
@@ -202,7 +220,7 @@ def all_gather(
     sem = _get_or_create_semaphore(mesh_device)
     sem_addr = ttnn.get_global_semaphore_address(sem)
 
-    mesh_program_descriptor = create_mesh_program_descriptor(input_tensor, output_tensor, topology, sem_addr)
+    mesh_program_descriptor = create_mesh_program_descriptor(input_tensor, output_tensor, topology, sem_addr, gd)
     # Park the semaphore so the framework keeps its L1 alive across cache hits.
     mesh_program_descriptor.semaphores = [sem]
 

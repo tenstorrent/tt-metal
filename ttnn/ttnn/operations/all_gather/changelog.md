@@ -93,3 +93,52 @@
   — added `ttnn.bfloat8_b` to `DTYPES` + `PCC[bfloat8_b] = 0.99`, and taught
   `_torch_dtype` to reference bf8b in torch.bfloat16 (no native torch bf8b). Full
   suite 12/12 green on the WH sim.
+
+## Refinement 2 — gather_dim != 0 (strided concat addressing)
+
+- **Date**: 2026-07-02
+- **What was done**: added `-3, -2, -1` to `SUPPORTED["gather_dim"]`. Replaced the
+  hard-coded page-contiguous `out_page = c*P + p` in the reader (self-copy + relay
+  read-back) and writer (fabric `write_page`) with a general whole-page
+  concat-by-gather_dim remap:
+  `out_page(c,p) = high*(N·dim_j·inner) + (c·dim_j+mid)·inner + low`
+  where `block = dim_j·inner`, `high = p/block`, `mid = (p%block)/inner`,
+  `low = p%inner`. `dim_j` = the gathered axis's size in the shard's PAGE grid,
+  `inner` = product of page-grid dims inner to it. Host (`_gather_page_params`)
+  computes `(dim_j, inner_stride)` from the shard shape + layout + canonical
+  gather_dim and passes them as two RT args to reader and writer. Page grids:
+  TILE `[B,C,Ht,Wt]`, RM `[B,C,H]` (W lives inside the RM page). The remap reduces
+  to `c*P+p` for gather_dim=0. Verified against `torch.cat` for all gather_dims in
+  `test_all_gather_debug.py`. The remap is device-independent (depends only on the
+  slice id `c`), so store-and-forward relays to the same page range on every hop —
+  the CB balance and counting-semaphore logic are unchanged.
+- **Accuracy achieved**: identity gather, PCC ≈ 1.0 (bf16/f32 bit-exact; bf8b =
+  from_torch block-float quant only), same as gather_dim=0. Tolerances unchanged.
+- **Golden progress (WH sim)**: supported cells 40 → **141** (= 160 Linear cells
+  − 3 TILE-gd=-2-non-aligned − 16 RM-gd=-1, both EXCLUSIONS; 179 xfail = Ring +
+  the excluded corners; 64 INVALID). Validated ≈60 cells directly, **0 failures**,
+  spanning every gather_dim (−4/−3/−2/−1) × layout (TILE/RM) × dtype (bf16/f32/
+  bf8b) × alignment × tile-parity (Ht/Wt ∈ {1,2,3,4,8}, B ∈ {1,2,4}) including the
+  large (1,1,256,256) P=64 case. Both structural exclusions fire xfail-strict with
+  no XPASS drift; RM gd=-2 on non-aligned H=48 correctly PASSES (H is a page-grid
+  axis in RM).
+- **Deferred (structural gaps → EXCLUSIONS + follow-ups R2a/R2b in
+  op_requirements.md, NOT numeric/OOM)**:
+  - `{TILE, gather_dim=-2, non_tile_aligned}` — per-shard H-tile padding makes
+    `N·pages_per_shard` source tiles ≠ dense output tiles (e.g. (1,1,48,64):
+    32 vs 24). Needs an untilize→retile repack the "pure byte movement" design
+    forbids. Next lever: route gd=-2 TILE through an RM intermediate (RM gd=-2
+    already works) + a final tilize, or add a compute untilize/tilize stage
+    (design change → escalate). → **R2a**.
+  - `{ROW_MAJOR, gather_dim=-1}` — RM page IS a W-row, so concat-along-W is a
+    SUB-PAGE write (each device's row at byte offset `c·W·elem` inside the N×
+    output page); the whole-page fabric egress can't express it. Next lever: a
+    write-at-offset fabric unicast to `page_base + c·row_bytes` (verify 16B
+    alignment). → **R2b**.
+- **Issues encountered**: none numerically. One process interruption (my own tool
+  wall-clock, not a device hang) during validation batch 4 — the partial log
+  showed 18/18 green (odd tile counts Ht=3/Wt=3, B=4), no orphaned sim procs.
+- **Tests added**:
+  `tests/ttnn/unit_tests/operations/all_gather/test_all_gather_debug.py` (kept) —
+  pins the TILE/RM page grid (`buffer_num_pages` check on the local device) and
+  proves the `out_page` remap reconstructs `torch.cat` for every gather_dim.

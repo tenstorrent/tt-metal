@@ -8,8 +8,10 @@
 // (direction=0, flow toward chip i+1) and backward (direction=1, flow toward
 // chip i-1) worker cores; the direction CT arg selects the behaviour.
 //
-// Roles (chip id i, ring size N, gather_dim=0 page-contiguous concat):
-//   out_page(chip c, local page p) = c * pages_per_shard + p
+// Roles (chip id i, ring size N, concat along gather_dim):
+//   out_page(chip c, local page p) = gather_out_page(c, p, dim_j, inner_stride, N)
+//   (Refinement 2: strided concat addressing. For gather_dim=0 this reduces to
+//    c*pages_per_shard + p — the page-contiguous case. See gather_out_page.)
 //
 //   * Self-copy (forward reader ONLY, every device): read this device's own
 //     input shard and write it verbatim into its OWN output block i (local NoC).
@@ -26,6 +28,21 @@
 //   * Cache-reuse re-arm: reset the counting semaphore after the last wait.
 
 #include "api/dataflow/dataflow_api.h"
+
+// Whole-page concat-by-gather_dim addressing (Refinement 2). `dim_j` = the
+// gathered axis's size in the shard's page grid (TILE: [B,C,Ht,Wt]; RM:
+// [B,C,H]); `inner_stride` = product of page-grid dims INNER to the gathered
+// axis. Reduces to c*P+p for gather_dim=0 (dim_j=B_pages, inner_stride=P/B).
+// Verified against torch.cat in test_all_gather_debug.py. (Duplicated verbatim
+// in the writer — kept inline to avoid a JIT include-path dependency.)
+inline uint32_t gather_out_page(uint32_t c, uint32_t p, uint32_t dim_j, uint32_t inner_stride, uint32_t ring_size) {
+    const uint32_t block = dim_j * inner_stride;
+    const uint32_t high = p / block;
+    const uint32_t rem = p % block;
+    const uint32_t mid = rem / inner_stride;
+    const uint32_t low = rem % inner_stride;
+    return high * (ring_size * block) + (c * dim_j + mid) * inner_stride + low;
+}
 
 void kernel_main() {
     constexpr uint32_t cb_relay_pages = get_compile_time_arg_val(0);
@@ -49,6 +66,8 @@ void kernel_main() {
     const uint32_t pages_per_shard = get_arg_val<uint32_t>(ai++);
     const uint32_t page_size = get_arg_val<uint32_t>(ai++);
     const uint32_t counting_sem_addr = get_arg_val<uint32_t>(ai++);
+    const uint32_t dim_j = get_arg_val<uint32_t>(ai++);         // gathered-axis page size
+    const uint32_t inner_stride = get_arg_val<uint32_t>(ai++);  // pages inner to gathered axis
 
     const auto input = TensorAccessor(input_args, input_addr, page_size);
     const auto output = TensorAccessor(output_args, output_addr, page_size);
@@ -62,7 +81,8 @@ void kernel_main() {
         for (uint32_t p = 0; p < P; ++p) {
             noc_async_read(input.get_noc_addr(p), scratch, page_size);
             noc_async_read_barrier();
-            noc_async_write(scratch, output.get_noc_addr(my_chip_id * P + p), page_size);
+            const uint32_t out_p = gather_out_page(my_chip_id, p, dim_j, inner_stride, ring_size);
+            noc_async_write(scratch, output.get_noc_addr(out_p), page_size);
             noc_async_write_barrier();
         }
     }
@@ -85,7 +105,8 @@ void kernel_main() {
             for (uint32_t p = 0; p < P; ++p) {
                 cb_reserve_back(cb_relay_pages, 1);
                 const uint32_t l1 = get_write_ptr(cb_relay_pages);
-                noc_async_read(output.get_noc_addr(c * P + p), l1, page_size);
+                const uint32_t out_p = gather_out_page(c, p, dim_j, inner_stride, ring_size);
+                noc_async_read(output.get_noc_addr(out_p), l1, page_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_relay_pages, 1);
             }

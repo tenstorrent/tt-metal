@@ -28,6 +28,17 @@
 
 using namespace dataflow_kernel_lib::ccl;
 
+// Whole-page concat-by-gather_dim addressing (Refinement 2). See the matching
+// comment in all_gather_reader.cpp. Reduces to c*P+p for gather_dim=0.
+inline uint32_t gather_out_page(uint32_t c, uint32_t p, uint32_t dim_j, uint32_t inner_stride, uint32_t ring_size) {
+    const uint32_t block = dim_j * inner_stride;
+    const uint32_t high = p / block;
+    const uint32_t rem = p % block;
+    const uint32_t mid = rem / inner_stride;
+    const uint32_t low = rem % inner_stride;
+    return high * (ring_size * block) + (c * dim_j + mid) * inner_stride + low;
+}
+
 void kernel_main() {
     constexpr uint32_t cb_relay_pages = get_compile_time_arg_val(0);
     constexpr uint32_t direction = get_compile_time_arg_val(1);  // 0 = forward, 1 = backward
@@ -54,6 +65,8 @@ void kernel_main() {
     const uint32_t counting_sem_addr = get_arg_val<uint32_t>(ai++);
     const uint32_t target_noc_x = get_arg_val<uint32_t>(ai++);
     const uint32_t target_noc_y = get_arg_val<uint32_t>(ai++);
+    const uint32_t dim_j = get_arg_val<uint32_t>(ai++);         // gathered-axis page size
+    const uint32_t inner_stride = get_arg_val<uint32_t>(ai++);  // pages inner to gathered axis
 
     // Fabric connection arg block (laid out by append_ccl_fabric_rt_args); its
     // leading has_forward flag also encodes the send direction.
@@ -84,7 +97,8 @@ void kernel_main() {
         for (uint32_t p = 0; p < P; ++p) {
             cb_wait_front(cb_relay_pages, 1);
             const uint32_t l1 = get_read_ptr(cb_relay_pages);
-            writer.write_page(l1, c * P + p, output);
+            const uint32_t out_p = gather_out_page(c, p, dim_j, inner_stride, ring_size);
+            writer.write_page(l1, out_p, output);
             noc_async_writes_flushed();  // ensure the page was read from the CB slot before reuse
             cb_pop_front(cb_relay_pages, 1);
         }

@@ -49,6 +49,39 @@ def _round_up(value: int, mult: int) -> int:
     return ((value + mult - 1) // mult) * mult
 
 
+def _gather_page_params(input_tensor, gd_neg: int):
+    """Whole-page concat-by-gather_dim parameters (Refinement 2).
+
+    Returns ``(dim_j, inner_stride)`` in PAGE units for the reader/writer remap
+    ``out_page(c,p) = high*(N*dim_j*inner) + (c*dim_j+mid)*inner + low``. The page
+    grid is layout-specific:
+
+      * TILE : [B, C, Ht, Wt]   (page == one 32x32 tile)
+      * RM   : [B, C, H]        (page == one W-row; W is INSIDE the page)
+
+    ``dim_j`` = the gathered axis's size in that grid; ``inner_stride`` = product
+    of grid dims inner to it. For gather_dim=0 this yields (B_pages, P/B_pages),
+    i.e. the page-contiguous ``c*P+p``. validate() has already refused the two
+    structural gaps (RM+gd=-1 sub-page write; TILE+gd=-2 non-tile-aligned H), so
+    this only ever runs for whole-page-copyable cells.
+    """
+    shape = list(input_tensor.shape)
+    while len(shape) < 4:
+        shape = [1] + shape
+    B, C, H, W = shape[-4], shape[-3], shape[-2], shape[-1]
+    is_tile = input_tensor.layout == ttnn.TILE_LAYOUT
+    if is_tile:
+        grid = [B, C, _round_up(H, 32) // 32, _round_up(W, 32) // 32]
+    else:
+        grid = [B, C, H]  # page == W-row
+    page_axis = 4 + gd_neg  # 0=B 1=C 2=H 3=W
+    dim_j = grid[page_axis]
+    inner = 1
+    for a in range(page_axis + 1, len(grid)):
+        inner *= grid[a]
+    return dim_j, inner
+
+
 def _append_fabric_rt_args(rt_args_ref, src_id, neighbor_id, program, core, is_forward):
     """Mirror ttnn::ccl::dataflow::append_ccl_fabric_rt_args.
 
@@ -83,6 +116,8 @@ def _build_device_program(
     data_format,
     input_ta,
     output_ta,
+    dim_j,
+    inner_stride,
 ):
     """Build the ProgramDescriptor for device ``i`` on the line."""
     num_targets_fwd = num_devices - 1 - i  # devices reachable rightward (i+1..N-1)
@@ -135,6 +170,8 @@ def _build_device_program(
         pages_per_shard,
         page_size,
         sem_addr,
+        dim_j,  # gathered-axis page size (concat addressing)
+        inner_stride,  # pages inner to the gathered axis
     ]
 
     fwd_reader_rt = ttnn.RuntimeArgs()
@@ -185,6 +222,8 @@ def _build_device_program(
             sem_addr,
             fwd_noc.x,  # neighbour forward core noc x (counting-sem target)
             fwd_noc.y,
+            dim_j,  # gathered-axis page size (concat addressing)
+            inner_stride,  # pages inner to the gathered axis
         ]
     else:
         fwd_writer_rt[forward_core.x][forward_core.y] = []  # early-return writer reads nothing
@@ -200,6 +239,8 @@ def _build_device_program(
             sem_addr,
             bwd_noc.x,  # neighbour backward core noc x (counting-sem target)
             bwd_noc.y,
+            dim_j,  # gathered-axis page size (concat addressing)
+            inner_stride,  # pages inner to the gathered axis
         ]
     else:
         bwd_writer_rt[backward_core.x][backward_core.y] = []
@@ -243,6 +284,7 @@ def create_mesh_program_descriptor(
     output_tensor: ttnn.Tensor,
     topology: ttnn.Topology,
     sem_addr: int,
+    gather_dim: int,
 ) -> ttnn.MeshProgramDescriptor:
     mesh_device = input_tensor.device()
     num_devices = _num_line_devices(mesh_device)
@@ -252,6 +294,11 @@ def create_mesh_program_descriptor(
     page_size = input_tensor.buffer_page_size()
     pages_per_shard = input_tensor.buffer_num_pages()
     aligned_page_size = _round_up(page_size, l1_alignment)
+
+    # Concat-by-gather_dim page-remap parameters (same for every device: they
+    # depend only on the shard shape + layout + gather_dim). gather_dim is the
+    # canonical NEGATIVE index (-4..-1) from validate().
+    dim_j, inner_stride = _gather_page_params(input_tensor, gather_dim)
 
     # NoC coords of the two worker cores (uniform across the mesh) — the
     # counting-sem targets the SAME logical core on the neighbour device.
@@ -283,6 +330,8 @@ def create_mesh_program_descriptor(
             data_format,
             input_ta,
             output_ta,
+            dim_j,
+            inner_stride,
         )
         mesh_pd[ttnn.MeshCoordinateRange(coord_i, coord_i)] = program
 

@@ -105,7 +105,7 @@ combo genuinely fails the byte-copy (it should not), put that specific combo in
 Linear × gather_dim=0` cells pass on the WH sim; no regression in the existing
 22 acceptance + 8 precision cells.
 
-### [ ] Refinement 2 — gather_dim != 0 (strided concat addressing)
+### [x] Refinement 2 — gather_dim != 0 (strided concat addressing)
 
 **Goal**: add `-3, -2, -1` to `SUPPORTED["gather_dim"]`. For `gather_dim = 0`
 each device's shard maps to a *contiguous* output page block
@@ -135,6 +135,58 @@ writer/reader cited above.
 **Done when**: `SUPPORTED["gather_dim"]` includes `-3, -2, -1`; the
 `gather_dim ∈ {-3,-2,-1} × Linear` golden cells pass on the WH sim; gather_dim=0
 and all Phase-0 cells still pass.
+
+**Landed (2026-07-02)**: all three inner gather_dims added to SUPPORTED via a
+whole-page concat remap (`out_page(c,p) = high*(N*dim_j*inner) +
+(c*dim_j+mid)*inner + low`) in the reader + writer, keyed on host-computed
+`dim_j` (gathered-axis page size) + `inner_stride`. Validated on the WH sim
+across every gather_dim × layout × dtype × alignment × tile-parity × batch size
+(≈60 cells, 0 failures). **Two structural sub-cell corners deferred to EXCLUSIONS**
+(pure-byte-mover cannot express them without a tilize/untilize path the design
+forbids) — filed as R2a/R2b below.
+
+### [ ] Refinement 2a — TILE + gather_dim=-2 on non-tile-aligned H (retile path)
+
+**Goal**: remove `{layout: TILE, gather_dim: -2, alignment: non_tile_aligned}`
+from `EXCLUSIONS`. When H is not a multiple of 32, each per-device shard tilizes
+H with its OWN trailing tile padding (`Ht_shard` tiles), but the gathered output
+packs H densely (`Ht_out = ceil(N·H / 32) < N·Ht_shard`). So `N·pages_per_shard`
+source tiles ≠ output tiles (e.g. shard (1,1,48,64): 8·4=32 src tiles vs 24 out
+tiles) — a whole-tile copy cannot reconcile the counts. Only `(1,1,48,64)` hits
+this in the golden INPUTS (all other shapes have tile-aligned H).
+
+**Verifier notes / next code lever**: this needs an untilize→retile repack that
+the current "pure byte movement" kernels deliberately avoid. Concrete lever:
+route the gathered-along-H path through a ROW_MAJOR intermediate — reader
+untilizes each landed shard's real (unpadded) rows into row sticks in a scratch
+CB, the writer/self-copy places those sticks into the dense output row grid
+(RM gd=-2 already works — see R2), then a final tilize pass produces the TILE
+output. Alternatively, add a compute (TRISC) untilize/tilize stage. Either breaks
+the "no tilize/untilize" design invariant, so it must be escalated as a design
+change, not silently added. Sequence independently of R3.
+
+**Done when**: the exclusion is removed; `TILE × gather_dim=-2 ×
+non_tile_aligned` golden cells pass on the WH sim; all R2 cells still pass.
+
+### [ ] Refinement 2b — ROW_MAJOR + gather_dim=-1 (sub-page write)
+
+**Goal**: remove `{layout: ROW_MAJOR, gather_dim: -1}` from `EXCLUSIONS`. In RM
+the page IS a W-row, so concat-along-W makes the output page `N×` larger and each
+device's row lands at a BYTE OFFSET (`c · W · elem_size`) inside the output page
+— a sub-page write the whole-page fabric egress (`write_page` → page base
+address) cannot express.
+
+**Verifier notes / next code lever**: the write target is
+`output_accessor.get_noc_addr(out_row) + c·row_bytes` with payload `row_bytes`
+(not a whole page). Concrete lever: check whether the CCL fabric helper exposes a
+write-at-offset / arbitrary-address unicast (or drop to a raw
+`fabric noc_async_write` to `page_base + offset`), and verify `c·row_bytes` is
+16B-aligned (bf16 W=32 → 64 B, always aligned for the %8 last-dims here). The
+reader read-back must mirror the same offset. Confine to RM (TILE gd=-1 already
+works via whole-tile copy — see R2). Sequence independently of R3.
+
+**Done when**: the exclusion is removed; `ROW_MAJOR × gather_dim=-1` golden cells
+pass on the WH sim; all R2 cells still pass.
 
 ### [ ] Refinement 3 — Ring topology
 
