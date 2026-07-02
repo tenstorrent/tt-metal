@@ -255,7 +255,7 @@ python -m tracy -r -p -v --sync-host-device --dump-device-data-mid-run --check-e
   -m pytest -q -s models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_perf_signposts --tb=short
 ```
 
-Result: `1 passed`. Generated `tracy/optimized_multichip_ops_final.csv`, `tt_perf_report_prefill.*`, and `tt_perf_report_traced_decode.*`.
+Result: `1 passed`. Generated compressed raw ops artifact `optimized_multichip_ops_final.csv.gz`, `tt_perf_report_prefill.*`, and `tt_perf_report_traced_decode.*`.
 
 Tracy host CSV from that profiler run recorded prefill 2.944105 ms and traced decode 0.313698 ms with profiler overhead. The compact final non-profiler headline remains `perf_host_timings.csv` above.
 
@@ -299,6 +299,12 @@ The first `$stage-review` returned `more-work-needed`. An `$autofix` loop used `
 - Updated README and work log tied to the final default path.
 
 Final `$stage-review` rereview returned `clean-pass` with no required work. Reviewer noted two controlled anomalies, not blockers: Tracy trace-replay host timestamps precede replay signpost even though rows carry trace/replay session IDs, and process-exit nanobind refcount warnings occur after passing tests with clean device close and healthy `tt-smi`.
+
+Checkpoint commit:
+
+- Repo: `/home/ubuntu/tt-metal`
+- Branch: `agentic-research/fast-models-fast`
+- Stage checkpoint SHA: `bfa8d3c1bedd3ba1832122ab10bc58f8e24283ba`
 
 ## Final State
 

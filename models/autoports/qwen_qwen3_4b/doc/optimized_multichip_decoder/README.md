@@ -93,7 +93,7 @@ python -m tracy -r -p -v --sync-host-device --dump-device-data-mid-run --check-e
 
 Artifacts:
 
-- `tracy/optimized_multichip_ops_final.csv`
+- `optimized_multichip_ops_final.csv.gz` compressed raw Tracy ops CSV from the final capture
 - `tt_perf_report_prefill.csv`
 - `tt_perf_report_prefill.txt`
 - `tt_perf_report_prefill.console.log`
