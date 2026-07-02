@@ -243,6 +243,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use clean argmax instead of Gumbel-max sampling to avoid full-vocab Gumbel allocation in fit smokes",
     )
+    parser.add_argument(
+        "--host-gumbel-sampling",
+        action="store_true",
+        help="Generate Gumbel noise on host and inject it, avoiding device ttnn.rand allocation",
+    )
     return parser
 
 
@@ -256,6 +261,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args) -> int:
+    if args.argmax_sampling and args.host_gumbel_sampling:
+        raise ValueError("choose at most one of --argmax-sampling and --host-gumbel-sampling")
+
     zero_block_run = not args.build_only and (
         args.num_blocks == 0 or (args.num_blocks is None and args.max_new_tokens == 0)
     )
@@ -316,6 +324,8 @@ def _run(args) -> int:
             generate_kwargs.update(eos_token_id=None, stop_token_ids=[], decode_kwargs={"skip_special_tokens": True})
         if args.argmax_sampling:
             generate_kwargs["gumbel_noise_fn"] = lambda block_idx: (lambda step: None)
+        if args.host_gumbel_sampling:
+            generate_kwargs["use_host_gumbel_noise"] = True
         generation = generate_text_from_checkpoint_model_inputs(
             checkpoint_model_inputs,
             args.prompt,

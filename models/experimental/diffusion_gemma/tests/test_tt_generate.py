@@ -27,6 +27,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     make_seeded_gumbel_noise_fn,
     make_host_canvas_init_fn,
     make_seeded_host_canvas_init_fn,
+    make_seeded_host_gumbel_noise_fn,
     make_seeded_host_noise_tokens_fn,
     prefill_prompt_tokens,
     tokenize_prompt,
@@ -1527,6 +1528,55 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
     assert calls["generate"][4]["gumbel_noise_fn"] == "gumbel"
     assert calls["generate"][4]["noise_tokens_fn"] == "noise"
     assert calls["generate"][4]["logits_fn_builder"] == "builder"
+
+
+def test_generate_text_from_checkpoint_state_can_use_seeded_host_gumbel(monkeypatch):
+    calls = {}
+
+    class _Model:
+        mesh_device = "mesh"
+
+    def fake_host_gumbel_noise_fn(mesh_device, **kwargs):
+        calls["host_gumbel_noise"] = (mesh_device, kwargs)
+        return "host-gumbel"
+
+    def fail_device_gumbel_noise_fn(*args, **kwargs):
+        raise AssertionError("device Gumbel hook should not be used")
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    monkeypatch.setattr(G, "make_seeded_host_gumbel_noise_fn", fake_host_gumbel_noise_fn)
+    monkeypatch.setattr(G, "make_seeded_gumbel_noise_fn", fail_device_gumbel_noise_fn)
+
+    out = generate_text_from_checkpoint_state(
+        _Model(),
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        noise_tokens_fn="noise",
+        vocab_size=99,
+        gumbel_seed=321,
+        use_host_gumbel_noise=True,
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["host_gumbel_noise"] == (
+        "mesh",
+        {
+            "batch": 1,
+            "canvas_len": 4,
+            "vocab_size": 99,
+            "seed": 321,
+        },
+    )
+    assert calls["generate"]["gumbel_noise_fn"] == "host-gumbel"
 
 
 def test_generate_text_from_checkpoint_state_allows_zero_base_seed_for_default_hooks(monkeypatch):
@@ -3098,3 +3148,39 @@ def test_make_seeded_gumbel_noise_fn_generates_permuted_vocab_block_step_seeds(m
 def test_make_seeded_gumbel_noise_fn_rejects_nonpositive_seed(seed):
     with pytest.raises(ValueError, match="positive nonzero"):
         make_seeded_gumbel_noise_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=seed)
+
+
+def test_make_seeded_host_gumbel_noise_fn_generates_deterministic_noise(monkeypatch):
+    calls = []
+
+    def fake_host_gumbel_noise_to_device(mesh_device, noise):
+        calls.append((mesh_device, noise.clone()))
+        return f"host-gumbel-{len(calls)}"
+
+    monkeypatch.setattr(G, "host_gumbel_noise_to_device", fake_host_gumbel_noise_to_device)
+
+    noise_fn = make_seeded_host_gumbel_noise_fn("mesh", batch=1, canvas_len=2, vocab_size=3, seed=7)
+    assert noise_fn(0)(0) == "host-gumbel-1"
+    assert noise_fn(0)(1) == "host-gumbel-2"
+    assert noise_fn(1)(0) == "host-gumbel-3"
+
+    assert [mesh for mesh, _ in calls] == ["mesh", "mesh", "mesh"]
+    assert all(tuple(noise.shape) == (1, 2, 3) for _, noise in calls)
+    assert all(torch.isfinite(noise).all() for _, noise in calls)
+    assert not torch.equal(calls[0][1], calls[1][1])
+
+    replay_calls = []
+    monkeypatch.setattr(
+        G,
+        "host_gumbel_noise_to_device",
+        lambda mesh_device, noise: replay_calls.append((mesh_device, noise.clone())) or "replay",
+    )
+    replay_fn = make_seeded_host_gumbel_noise_fn("mesh", batch=1, canvas_len=2, vocab_size=3, seed=7)
+    replay_fn(0)(0)
+    assert torch.equal(calls[0][1], replay_calls[0][1])
+
+
+@pytest.mark.parametrize("seed", [-1, 1.5, True])
+def test_make_seeded_host_gumbel_noise_fn_rejects_invalid_seed(seed):
+    with pytest.raises(ValueError):
+        make_seeded_host_gumbel_noise_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=seed)

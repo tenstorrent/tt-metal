@@ -499,6 +499,41 @@ def make_seeded_host_noise_tokens_fn(
     return noise_tokens_for_block
 
 
+def make_seeded_host_gumbel_noise_fn(
+    mesh_device,
+    *,
+    batch: int,
+    canvas_len: int,
+    vocab_size: int,
+    seed: int,
+):
+    """Create seeded host-generated Gumbel hooks for ``generate_blocks``.
+
+    This preserves the injected-noise device sampler path while avoiding the
+    full-vocab ``ttnn.rand`` allocation. It is a RUN/debug path, not the released
+    on-device RNG path.
+    """
+    _check_random_token_args(batch, canvas_len, vocab_size)
+    seed = _validate_host_rand_seed(seed)
+
+    def gumbel_noise_for_block(block_idx: int):
+        if isinstance(block_idx, bool) or not isinstance(block_idx, Integral):
+            raise ValueError("host Gumbel block index must be an integer")
+
+        def gumbel_noise_for_step(step: int):
+            if isinstance(step, bool) or not isinstance(step, Integral):
+                raise ValueError("host Gumbel step index must be an integer")
+            generator = torch.Generator()
+            generator.manual_seed(seed + int(block_idx) * 1_000_003 + int(step))
+            u = torch.rand((batch, canvas_len, vocab_size), dtype=torch.float32, generator=generator)
+            gumbel = -torch.log(-torch.log(u + 1.0e-10) + 1.0e-10)
+            return host_gumbel_noise_to_device(mesh_device, gumbel)
+
+        return gumbel_noise_for_step
+
+    return gumbel_noise_for_block
+
+
 def make_seeded_gumbel_noise_fn(
     mesh_device,
     *,
@@ -1115,6 +1150,7 @@ def generate_text_from_checkpoint_state(
     gumbel_seed: int | None = None,
     noise_seed: int | None = None,
     batch: int = 1,
+    use_host_gumbel_noise: bool = False,
     adapter_kwargs: dict | None = None,
     logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
     generate_text_fn=generate_text,
@@ -1169,14 +1205,24 @@ def generate_text_from_checkpoint_state(
         if vocab_size is None:
             raise ValueError("gumbel_noise_fn requires vocab_size or tokenizer/model vocab metadata")
         gumbel_seed_value = gumbel_seed if gumbel_seed is not None else seed + 2
-        gumbel_seed_value = TS._validate_ttnn_rand_seed(gumbel_seed_value)
-        generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
-            tt_model.mesh_device,
-            batch=batch,
-            canvas_len=config.canvas_length,
-            vocab_size=vocab_size,
-            seed=gumbel_seed_value,
-        )
+        if use_host_gumbel_noise:
+            gumbel_seed_value = _validate_host_rand_seed(gumbel_seed_value)
+            generate_kwargs["gumbel_noise_fn"] = make_seeded_host_gumbel_noise_fn(
+                tt_model.mesh_device,
+                batch=batch,
+                canvas_len=config.canvas_length,
+                vocab_size=vocab_size,
+                seed=gumbel_seed_value,
+            )
+        else:
+            gumbel_seed_value = TS._validate_ttnn_rand_seed(gumbel_seed_value)
+            generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
+                tt_model.mesh_device,
+                batch=batch,
+                canvas_len=config.canvas_length,
+                vocab_size=vocab_size,
+                seed=gumbel_seed_value,
+            )
     if "eos_token_id" in generate_kwargs:
         _normalize_eos_token_ids(generate_kwargs["eos_token_id"])
     else:
