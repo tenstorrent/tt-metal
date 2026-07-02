@@ -49,10 +49,12 @@ from .test_pipeline_class_ideogram4 import PROMPT as DEFAULT_PROMPT
 PRESETS = ["V4_TURBO_12", "V4_DEFAULT_20", "V4_QUALITY_48"]
 PORT = 7860
 HEIGHT = WIDTH = 2048
-# The traced denoise path (device-resident latent) is the fast one and 2048px is a
-# constant shape here, so there is no per-length recompile-transition risk. Flip to
-# False if the board shows trace-capture flakiness across back-to-back generations.
-TRACED = True
+# Default UNTRACED. Although the total sequence length is padded-constant, the ring-joint
+# SDPA depends on logical_n (the real num_img + n_text), which varies with prompt length ->
+# it recompiles on each new prompt, and the pipeline recaptures the trace every __call__
+# anyway. So for a server with varying prompts, tracing buys nothing (you just pay the
+# per-call recapture). Traced only helps if the same prompt length repeats back-to-back.
+TRACED = False
 
 _PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Ideogram 4.0 — TT Blackhole</title>
