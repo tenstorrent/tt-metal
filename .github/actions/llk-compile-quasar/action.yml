@@ -14,6 +14,10 @@ inputs:
     description: '1-indexed shard to compile (must be <= test-splits).'
     required: false
     default: '1'
+  num-workers:
+    description: 'Number of pytest-xdist workers (-n). Defaults to "auto" (one per CPU). Set higher than nproc to overprovision and hide pytest collection overhead.'
+    required: false
+    default: 'auto'
 
 runs:
   using: composite
@@ -27,6 +31,7 @@ runs:
       shell: bash
       working-directory: tt_metal/tt-llk/tests/python_tests
       env:
+        LLK_BUILD_PARALLELISM: "0" # one g++ per worker
         CHIP_ARCH: quasar
       run: |
         echo "Compiling Quasar (group ${{ inputs.test-group }}/${{ inputs.test-splits }})..."
@@ -34,7 +39,7 @@ runs:
           --interval 1 \
           --label "Quasar compile (group ${{ inputs.test-group }}/${{ inputs.test-splits }})" \
           --output "$GITHUB_STEP_SUMMARY" \
-          -- pytest -q --compile-producer -n 10 \
+          -- pytest -q --compile-producer -n ${{ inputs.num-workers }} \
                 -m "${{ inputs.pytest-markers }}" \
                 --splits ${{ inputs.test-splits }} --group ${{ inputs.test-group }} \
                 --override-ini=log_cli=false --tb=short --timeout=60 \
