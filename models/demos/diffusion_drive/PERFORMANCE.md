@@ -132,11 +132,30 @@ convs are bound by **per-op device overhead** (fixed kernel/sharding setup), not
 matmul FLOPs — so halving the weight width and lowering fidelity touch nothing on the critical path.
 Reverted (env-gated `DD_CONV_BF8`/`DD_LOFI` knobs removed — dead weight with no gain).
 
+**(d) Tracing the DDIM decoder tail** (per-layer device-core trace, replayed 4× = 2 DDIM steps × 2 layers):
+
+| | median | avg | min |
+|---|---|---|---|
+| baseline (backbone + perception traced, DDIM eager) | 44.9 ms | 45.8 ms | 44.3 ms |
+| + DDIM decoder traced | 44.4 ms | 45.2 ms | 41.4 ms |
+
+**Correct but not worth it — ~1% median (within noise).** `ttnn.grid_sample` IS trace-legal (probe + full
+layer trace both PCC 1.000000), so the DDIM decoder *can* be traced (as per-layer micro-traces — the two
+layers can't share one trace because host code recomputes the grid coordinates between them). But the win
+is only ~1% median (min improved ~3 ms). Surprising, since the DDIM head is **37% of the forward** (17.5 ms
+— measured by decomposition). The reason: that 17.5 ms is **compute + host control-flow (sineembed /
+scheduler.step ×2 steps) + per-call from_torch/to_torch boundaries** (traj_feature/grid lifts, reg/cls
+reads ×4 layer calls), NOT the layer-core op-dispatch. A per-layer trace only collapses the core's internal
+dispatch — a small slice; it can't remove the boundary crossings (they sit at the per-layer host-glue seams
+it can't cross). Reverted — 119 lines of lazy-capture machinery for ~1% is not worth carrying.
+
 **Conclusion:** the backbone conv activations are small (≤512 ch, ≤64×256), so sharding/double-buffer/
 low-precision all fail for the same reason — **the model is per-op-overhead-bound, not compute/bandwidth/
-dispatch-bound.** That is why only *tracing* (which collapses per-op overhead wholesale, §3) helped, and
-why op-fusion, sharding, double-buffering, and bf8/LoFi were all measured neutral. The auto
-(`shard_layout=None`, bf16, HiFi2) config is the right default here.
+dispatch-bound.** *Tracing* is the only lever that helped, and only where a block is **dispatch-bound with a
+long contiguous device run** (the perception tail: −8.6%). Where a block is compute/host-glue/boundary-bound
+(the DDIM head, despite being 37%), even tracing barely moves it. So op-fusion, sharding, double-buffering,
+bf8/LoFi, and the DDIM-tail trace were all measured neutral-to-marginal; the auto (`shard_layout=None`,
+bf16, HiFi2) config + the backbone & perception traces are the right stopping point on one chip.
 
 ## 6. Context — end-to-end throughput is host-bound
 
