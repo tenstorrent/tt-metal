@@ -46,6 +46,7 @@ import os
 import struct
 import time
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -162,6 +163,26 @@ def _read_kv_chunk_table(timeout_s: int):
     return table
 
 
+def _read_device_map(timeout_s: int) -> dict:
+    """Read the runner's fabric_node -> ASIC unique_id device-map sidecar (JSON) so the device-less
+    UMD read (read_dram_umd) can select chips by unique_id without touching the ControlPlane. Returns
+    {(mesh_id, chip_id): unique_id}, or {} if absent. Polls like the table (runner writes it at setup)."""
+    import json
+
+    path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+    t0 = time.perf_counter()
+    while not os.path.exists(path):
+        if time.perf_counter() - t0 > timeout_s:
+            logger.warning(f"[producer] device map {path} not found after {timeout_s}s; skipping KV read.")
+            return {}
+        time.sleep(0.1)
+    with open(path) as mp:
+        raw = json.load(mp)
+    device_map = {tuple(int(x) for x in key.split(":")): int(uid) for key, uid in raw.items()}
+    logger.info(f"[producer] read device map {path}: {len(device_map)} chips")
+    return device_map
+
+
 def _connect_layer_ack_channel(timeout_s: int):
     """Attach (consumer side) to the runner's per-layer LayerAck channel. The single-rank runner
     creates `/tt_prefill_layer_acks_<service_id>` and injects 1 per layer (NUM_LAYERS per chunk);
@@ -203,32 +224,50 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     return got
 
 
-def _attach_mesh_for_read():
-    """Open the galaxy in THIS producer process so `read_device_chunk` resolves.
+def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
+    """Decode a [1, 1, 32, head_dim] bfp8_b TILE chunk (raw device bytes) to a torch float32
+    [32, head_dim] in PURE numpy — no ttnn tensor ops, so it never initializes tt-metal's device
+    context (which would start_device and block on the CHIP_IN_USE lock the runner holds). Validated
+    bit-exact against ttnn._ttnn.bfp_utils.unpack_bfp8. Per 1088-byte tile: [64 exponent bytes, one
+    per (face, row)] then [1024 mantissa bytes, (face, row, col)]; value = (-1)^sign * (mant & 0x7F) *
+    2^(exp - 133); face f = fr*2 + fc maps to tile rows fr*16+r, cols fc*16+c; tiles lie along the
+    head_dim (column) axis."""
+    tile = 32
+    n_tiles = head_dim // tile
+    b = np.frombuffer(raw, dtype=np.uint8).reshape(n_tiles, 1088)
+    exps = b[:, :64].astype(np.int32).reshape(n_tiles, 4, 16)
+    mants = b[:, 64:].reshape(n_tiles, 4, 16, 16)
+    signs = (mants >> 7).astype(np.int32)
+    m7 = (mants & 0x7F).astype(np.float32)
+    scale = np.exp2((exps - 133).astype(np.float32))[..., None]
+    vals = np.where(signs > 0, -(m7 * scale), m7 * scale)  # (T, face, row, col)
+    v = vals.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, tile, tile)
+    out = v.transpose(1, 0, 2).reshape(tile, n_tiles * tile)  # tile t -> cols [t*32:(t+1)*32]
+    return torch.from_numpy(np.ascontiguousarray(out))
 
-    read_device_chunk → resolve_device → GetActiveDevice requires the chips to be ACTIVE in this
-    process (device_manager.is_device_active() == device.is_initialized()); a device-less H2D
-    connect is not enough. CAVEAT: a plain open_mesh_device fully initializes (resets) the chips —
-    on one galaxy a live runner already owns them, so the correct mechanism is the non-destructive
-    `minimal` attach (device.cpp: "attaching to a hung chip"), which is not yet exposed to Python
-    (MeshDevice::create hardcodes minimal=false). Until that lands, this opt-in path is for setups
-    where the producer can legitimately open the galaxy. Returns the mesh device."""
-    from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import open_mesh_device
 
-    logger.warning(
-        "[producer] PREFILL_PRODUCER_CHECK_PCC=1: opening mesh to read KV — needs a non-destructive "
-        "'minimal' attach to coexist with a live runner (see _attach_mesh_for_read)."
-    )
-    return open_mesh_device(GLOBAL_MESH_SHAPE, VARIANT.model_config)
+def _resolve_unique_id(fabric_node_ids, device_map: dict) -> int:
+    """Return the ASIC unique_id for any replica fabric node present in the device map. Replicas hold
+    byte-identical KV, so any that is mapped works; add_device_group sorts the ids, so we can't assume
+    index 0 is a specific chip. Raises a clear error if none are mapped (e.g. a multi-rank table whose
+    remote device groups aren't in this single-rank/one-galaxy sidecar)."""
+    for fnid in fabric_node_ids:
+        key = (int(fnid.mesh_id), int(fnid.chip_id))
+        if key in device_map:
+            return device_map[key]
+    keys = [(int(f.mesh_id), int(f.chip_id)) for f in fabric_node_ids]
+    raise KeyError(f"no fabric node {keys} in device map ({len(device_map)} chips; single-rank/one-galaxy only)")
 
 
-def _read_kv_and_check_pcc(table, slot_id: int, n_chunks: int) -> float:
+def _read_kv_and_check_pcc(table, device_map: dict, slot_id: int, n_chunks: int) -> float:
     """Read each KV chunk back from the device via the table and PCC-check against the golden trace.
 
-    Mirrors test_kimi_kv_cache_mock (per (layer, position, slot) read_device_chunk →
-    tensor_from_bfp8_bytes) and kv_cache_pcc_check's golden handling (nope direct; pe re-interleaved
-    HF→Meta). The kimi table maps natural positions → block-cyclic storage, so iterating natural
-    positions yields natural order with no un-rotation. Requires the mesh open in this process."""
+    Mirrors test_kimi_kv_cache_mock's read + kv_cache_pcc_check's golden handling (nope direct; pe
+    re-interleaved HF→Meta). The kimi table maps natural positions → block-cyclic storage, so iterating
+    natural positions yields natural order with no un-rotation. Reads over UMD via read_dram_umd (chip
+    picked by ASIC unique_id from `device_map`) and decodes bfp8→float in pure numpy — no ttnn tensor
+    ops — so the whole path is device-less and concurrent with the runner (no mesh open, no
+    start_device), the way the migration worker reads a live server's KV."""
     from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import _load_golden_kv_post, resolve_trace_dir
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
@@ -236,7 +275,6 @@ def _read_kv_and_check_pcc(table, slot_id: int, n_chunks: int) -> float:
     KVPE_HEAD_DIM = 576  # qk_rope_head_dim(64) + kv_lora_rank(512); same for DeepSeek and Kimi
     KV_LORA = 512
     chunk_tok = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    chunk_shape = [1, 1, chunk_tok, KVPE_HEAD_DIM]
     total_len = n_chunks * CHUNK_SIZE
     threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
@@ -247,9 +285,14 @@ def _read_kv_and_check_pcc(table, slot_id: int, n_chunks: int) -> float:
     for layer in range(NUM_LAYERS):
         rows = []
         for pos in range(0, total_len, chunk_tok):
-            raw = table.read_device_chunk(layer=layer, position=pos, slot=slot_id)
-            chunk = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw, chunk_shape)
-            rows.append(ttnn.to_torch(chunk).to(torch.float32).reshape(chunk_tok, KVPE_HEAD_DIM))
+            # Resolve this chunk's chip: table lookup -> fabric_node -> ASIC unique_id (device map),
+            # then read its DRAM over UMD device-lessly (no mesh open, concurrent with the runner).
+            loc = table.lookup(layer, pos, slot_id)
+            unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+            raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+            # Decode bfp8 -> float in PURE numpy (no ttnn tensor ops) so we never init tt-metal's
+            # device context (which would start_device and block on the CHIP_IN_USE lock the runner holds).
+            rows.append(_decode_bfp8_chunk(raw, KVPE_HEAD_DIM))
         dev = torch.cat(rows, dim=0)[:total_len]  # natural order (table un-rotates block-cyclic)
         g = _load_golden_kv_post(trace_dir, layer, total_len)
         _, pcc_nope = comp_pcc(g[:, :KV_LORA], dev[:, :KV_LORA])
@@ -353,17 +396,17 @@ def main() -> None:
     _drain_layer_acks(ack_channel, expected_acks)
 
     # Optionally read the generated KV cache back via the table and PCC-check vs the golden trace.
-    # read_device_chunk needs the galaxy open in THIS process, so this is opt-in (see _attach_mesh_for_read).
+    # read_dram_umd reads over UMD (like the migration worker) — device-less, no mesh open, concurrent
+    # with the runner. Opt-in via PREFILL_PRODUCER_CHECK_PCC; needs the runner's device-map sidecar.
     if os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1" and kv_table is not None:
-        mesh_device = None
         try:
-            mesh_device = _attach_mesh_for_read()
-            _read_kv_and_check_pcc(kv_table, slot_id=slot_id, n_chunks=n_chunks)
+            device_map = _read_device_map(timeout_s)
+            if device_map:
+                _read_kv_and_check_pcc(kv_table, device_map, slot_id=slot_id, n_chunks=n_chunks)
+            else:
+                logger.error("[producer] no device map available; skipping KV read/PCC.")
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
-        finally:
-            if mesh_device is not None:
-                ttnn.close_mesh_device(mesh_device)
     elif os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1":
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
 
