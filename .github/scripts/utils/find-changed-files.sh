@@ -137,9 +137,18 @@ while IFS= read -r FILE; do
                MODEL_CHARTS_CHANGED=true
             fi
             ;;
-        models/**)
+        # Compiled sources under models/ (e.g. custom device kernels in
+        # models/demos/*/unified_kernels/*.hpp) DO affect the build graph.
+        # Must come before the models/** catch-all (first-match-wins).
+        models/**/*.@(h|hpp|c|cpp))
             MODELS_CHANGED=true
             ANY_CODE_CHANGED=true
+            ;;
+        # Non-C++ files under models/ (python tests, pipeline yaml, docs) don't
+        # affect the compiled build graph, so they must NOT force an ASan rebuild
+        # or clang-tidy scan. Still flag models-changed so model-test pipelines fire.
+        models/**)
+            MODELS_CHANGED=true
             ;;
         .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml)
             BUILD_WORKFLOWS_CHANGED=true
