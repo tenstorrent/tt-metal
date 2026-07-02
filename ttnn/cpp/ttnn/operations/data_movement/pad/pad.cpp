@@ -6,6 +6,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
@@ -14,6 +15,73 @@
 #include "pad.hpp"
 
 namespace ttnn::operations::data_movement::detail {
+
+namespace {
+
+inline bool is_width_or_block_sharded(const MemoryConfig& mc) {
+    const auto layout = mc.memory_layout();
+    return mc.is_sharded() &&
+           (layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED);
+}
+
+// Route through to_memory_config composite only when native kernels cannot handle the input.
+//
+// All L1 WIDTH/BLOCK sharded inputs are handled natively:
+//   - TILE layout: tile factories use TensorAccessor page_id addressing, resolved transparently
+//     by the Device 2.0 API for any sharded buffer.
+//   - RM layout: noc_async_*_sharded in the default RM factory iterates across per-row pages
+//     regardless of tile alignment; the front_padding kernel branch reads into a temp buffer
+//     and memmoves to the correct L1 offset, so width front-pad is also handled natively.
+//
+// DRAM-sharded W/B inputs use to_memory_config → pad → (optional) to_memory_config/interleaved_to_sharded.
+// sharded_to_interleaved is L1-only, so to_memory_config is used instead (mirrors repeat.cpp).
+inline bool needs_pad_composite_fallback(const ttnn::Tensor& input_tensor) {
+    if (!is_width_or_block_sharded(input_tensor.memory_config())) {
+        return false;
+    }
+    return !input_tensor.memory_config().is_l1();  // DRAM-sharded edge case only
+}
+
+ttnn::Tensor pad_via_interleaved_composite(
+    const ttnn::Tensor& input_tensor,
+    std::span<const uint32_t> output_padded_shape,
+    std::span<const uint32_t> input_tensor_start,
+    const float value,
+    const bool use_multicore,
+    const MemoryConfig& output_memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+    // sharded_to_interleaved is L1-only; DRAM-sharded W/B inputs use to_memory_config (mirrors repeat.cpp).
+    auto interleaved_input = ttnn::to_memory_config(input_tensor, interleaved_config, std::nullopt);
+
+    MemoryConfig working_output =
+        output_memory_config.is_sharded()
+            ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, output_memory_config.buffer_type()}
+            : output_memory_config;
+
+    ttnn::Shape out_shape{output_padded_shape};
+    ttnn::Shape start{input_tensor_start};
+    auto padded = ttnn::prim::pad(
+        interleaved_input,
+        out_shape,
+        out_shape,
+        start,
+        value,
+        working_output,
+        use_multicore,
+        std::nullopt,
+        sub_core_grids);
+
+    if (output_memory_config.is_sharded()) {
+        if (output_memory_config.is_l1()) {
+            return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
+        }
+        return ttnn::to_memory_config(padded, output_memory_config, std::nullopt);
+    }
+    return padded;
+}
+
+}  // namespace
 
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
@@ -66,7 +134,19 @@ ttnn::Tensor pad_impl(
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    if (input_tensor.is_sharded() && input_tensor.memory_config().memory_layout() != TensorMemoryLayout::ND_SHARDED &&
+    if (needs_pad_composite_fallback(input_tensor)) {
+        return pad_via_interleaved_composite(
+            input_tensor,
+            output_padded_shape,
+            input_tensor_start,
+            value,
+            use_multicore,
+            output_memory_config,
+            sub_core_grids);
+    }
+
+    if (input_tensor.is_sharded() &&
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::ND_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         auto total_height = [](const auto& shape) {
