@@ -31,6 +31,13 @@ Memory Config
 Operations
 **********
 
+.. note::
+
+   Prefer the regular ``ttnn`` API for new code. ``ttnn.operations.moreh``
+   remains available for compatibility, backward paths, and a small set of edge
+   cases, but it is deprecated. See :doc:`moreh` for migration guidance and the
+   current replacement mapping.
+
 Core
 ====
 

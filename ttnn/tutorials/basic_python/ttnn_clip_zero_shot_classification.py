@@ -504,7 +504,10 @@ def main():
             text_features = self.encode_text(tokens)  # [batch_text, embed_dim]
             image_features = self.encode_image(image)  # [batch_image, embed_dim]
 
-            # Normalize features to unit vectors for cosine similarity
+            # Normalize features to unit vectors for cosine similarity.
+            # This tutorial still uses moreh.norm because regular TT-NN does
+            # not yet expose a clear drop-in replacement for this vector norm
+            # flow.
             # L2 norm: ||x||_2 = sqrt(sum(x_i^2))
             norm_image_features = ttnn.operations.moreh.norm(image_features, p=2.0, dim=1, keepdim=True)
             norm_text_features = ttnn.operations.moreh.norm(text_features, p=2.0, dim=1, keepdim=True)
