@@ -191,6 +191,29 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         pad2_num_links,
         MAX_PAD2_NUM_LINKS);
 
+    // Fabric-mux worker count (reach link BW; see PLAN_NP_FABRIC_MUX_IMPL.md). One worker per link
+    // caps at ~1.4 GB/s; the eth link (~12.5 GB/s Linear) is only saturated by multiple workers feeding
+    // it through a mux core. Worker count follows tt-metal's all_gather heuristic by W data-moved per
+    // (link,direction): >256KB=>4, 4KB..256KB=>2, else 1. Computed now; wiring is staged (mux path is
+    // gated on num_w_workers>1, still under construction — default stays 1 worker = current shipping op).
+    {
+        const uint32_t w_h_total_est = input_halo_dim_size + 2 * op.np_padding_h;
+        const uint64_t w_rows_est = static_cast<uint64_t>(outer_dim_size) * w_h_total_est;  // W interior rows/dir
+        const uint64_t w_bytes_per_link_dir =
+            (pad2_num_links > 0) ? (w_rows_est * op.np_pad2_left * page_size / pad2_num_links) : 0;
+        uint32_t num_w_workers = 1;
+        if (w_bytes_per_link_dir > 256u * 1024u) {
+            num_w_workers = 4;
+        } else if (w_bytes_per_link_dir > 4u * 1024u) {
+            num_w_workers = 2;
+        }
+        log_debug(
+            tt::LogOp,
+            "np_halo mux: W bytes/(link,dir)={}, heuristic num_w_workers={} (mux wiring staged)",
+            w_bytes_per_link_dir,
+            num_w_workers);
+    }
+
     // H fabric cores occupy column 0, rows [0, num_h_fabric_cores). W fabric cores
     // follow in the same column. This gives conv3d a clean rectangular grid
     // (cols [1, grid.x)) instead of the L-shape produced by a first-row layout.

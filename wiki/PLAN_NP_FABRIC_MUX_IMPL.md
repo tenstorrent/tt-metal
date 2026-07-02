@@ -26,9 +26,24 @@ Data regime here (~1MB/link) wants 4 workers/link (all_gather default_workers he
 - core alloc pattern (:333-360): per (link,dir): 1 mux core + N worker cores; worker0 = termination master
 - worker send: build_connection_to_fabric_endpoint + fabric_async_write (tt_fabric_mux_interface.hpp)
 
+## Concrete obstacles found while wiring (each must be solved)
+1. CORE PLACEMENT: NP fabric cores are column-0-only (factory ~L194-197). Mux+N workers per (link,dir)
+   need a 2D core region (e.g. ttnn::ccl::choose_worker_cores like all_gather) — touches H+W layout.
+2. SHARED-KERNEL CT LAYOUT: np_writer.cpp is ONE kernel shared by H and W cores with a fixed CT-arg
+   layout. The mux needs 5 extra writer CT args (num_buffers, buf_size, status_addr, term_signal_addr,
+   num_mux_clients) + ~10 RT args. Adding them shifts the layout for H cores too. => FORK a W-mux writer
+   kernel (np_w_mux_writer.cpp) for the mux path; leave np_writer for H + the 1-worker W fallback.
+3. MUX TERMINATION: workers must handshake (wait num_mux_clients-1) then signal the mux kernel to
+   terminate (get_status/termination_signal addresses). Hang-prone; must match tt_fabric_mux exactly.
+
 ## State
 - [x] Branch created; template studied; root cause source-verified
-- [ ] Factory: add W_WORKERS_PER_LINK const + mux core/config scaffolding (gated, default 1 = no-op)
+- [x] WIP scaffold committed (6b326507e26); ExecPlan
+- [x] Factory: data-driven num_w_workers computed + logged (buildable, no behavior change yet)
+- [ ] Resolve obstacle 1: 2D core placement for mux+workers
+- [ ] Resolve obstacle 2: fork np_w_mux_writer.cpp with mux CT/RT args + fabric_async_write send
+- [ ] Factory: allocate mux+worker cores, FabricMuxConfig, mux kernel, per-worker row split + conn args
+- [ ] Resolve obstacle 3: mux termination handshake
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
 - [ ] np_writer: gated mux-connection send path for W (build_connection + fabric_async_write)
 - [ ] np_phase2_w_reader: N reader cores (already range-parameterized)
