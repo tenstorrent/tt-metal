@@ -76,6 +76,9 @@ class Gemma4VisionRotaryEmbedding(Module):
         self._cos_axis = freqs.cos()  # (P, unique_per_dim)
         self._sin_axis = freqs.sin()  # (P, unique_per_dim)
 
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError("Gemma4VisionRotaryEmbedding is used via get_cos_sin(pixel_position_ids).")
+
     def get_cos_sin(self, pixel_position_ids: torch.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Args:

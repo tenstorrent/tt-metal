@@ -89,6 +89,9 @@ class Gemma4RotaryEmbedding(Module):
         freqs = torch.outer(positions, inv_freq)
         return freqs.cos(), freqs.sin()
 
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError("Gemma4RotaryEmbedding is used via get_cos_sin(layer_type, position_ids).")
+
     def get_cos_sin(
         self,
         layer_type: str,
