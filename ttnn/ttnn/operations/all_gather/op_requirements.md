@@ -62,22 +62,36 @@
 
 ## Refinement queue
 
-`TARGET − SUPPORTED` is non-empty on three axes. Each missing `(axis, value)`
-pair below appears in exactly one refinement; `bf8b × ROW_MAJOR` is structurally
-INVALID (skipped, not queued).
+**Current state (2026-07-02 re-verification): `SUPPORTED` now equals `TARGET` on
+every axis.** Refinements 1 (bfloat8_b), 2 (`gather_dim ∈ {-3,-2,-1}`), and 3
+(`Topology.Ring`) have landed; `TARGET − SUPPORTED = ∅` was confirmed
+programmatically for `dtype`, `layout`, `topology`, `gather_dim`, and
+`alignment`. There are **no `(axis, missing_value)` pairs** left.
 
-| Axis | TARGET | SUPPORTED (Phase 0) | Gap → Refinement |
-|------|--------|---------------------|------------------|
-| dtype | bf16, f32, **bf8b** | bf16, f32 | bf8b → **R1** |
-| gather_dim | -4, **-3, -2, -1** | -4 | -3,-2,-1 → **R2** |
-| topology | Linear, **Ring** | Linear | Ring → **R3** |
-| layout | TILE, ROW_MAJOR | (both) | ∅ |
+| Axis | TARGET | SUPPORTED (now) | Gap |
+|------|--------|-----------------|-----|
+| dtype | bf16, f32, bf8b | bf16, f32, bf8b | ∅ |
+| layout | TILE, ROW_MAJOR | TILE, ROW_MAJOR | ∅ |
+| topology | Linear, Ring | Linear, Ring | ∅ |
+| gather_dim | -4, -3, -2, -1 | -4, -3, -2, -1 | ∅ |
 | alignment | tile_aligned, non_tile_aligned | (both) | ∅ |
 
-None of these map onto a current implementation-skill (the inventory covers
+The queue is therefore **EXCLUSIONS-driven only**: two structural sub-cell
+corners inside SUPPORTED that the pure-byte-mover cannot express without a repack
+the design forbids. Each active refinement below removes one `EXCLUSIONS` cell
+(moving its `xfail_expected` golden cells to passing). `bf8b × ROW_MAJOR` stays
+structurally INVALID (skipped, not queued).
+
+Neither corner maps onto a current implementation skill (the inventory covers
 single-device compute precision, in-kernel layouts, interleaved multi-core, and
-L1 budget — none cover CCL fabric axis expansions), so all three are
-verifier-authored with full goal + done-when.
+L1 budget — none cover CCL fabric sub-page addressing or cross-gather retile), so
+both are verifier-authored with full goal + done-when.
+
+> **Golden verifier (2026-07-02):** representative sampled run (24-cell Linear
+> cross-section of shape `(1,1,48,64)`, all axes + both EXCLUSIONS + INVALID):
+> **15 supported_pass / 5 xfail_expected / 4 invalid_skipped, all loud categories
+> 0** (`eval/results/all_gather/verifier_report.json`). Analytical full cartesian:
+> 282 / 38 / 64. Every `xfail_expected` cell maps to R2a or R2b — no queue gap.
 
 ### [x] Refinement 1 — bfloat8_b dtype
 
@@ -239,36 +253,26 @@ only changes HOW data moves). The existing bidirectional kernels use only
 adjacent 1-hop transfers, which `ccl_dm_route(Ring)` resolves identically to
 Linear — so `topology=Ring` gathers correctly through the same kernels, with no
 wraparound needed and none possible. The modular-wraparound is a PERF
-optimization (identical result), deferred as R3a below.
-
-### [ ] Refinement 3a — single-direction modular-wraparound ring (perf; ring-capable HW)
-
-**Goal**: implement the design's efficient ring pattern — a single forward
-worker per device that sends to `(i+1) mod N` (1 hop) with the wraparound edge
-`N-1 → 0`, replacing the bidirectional line pattern when `topology=Ring` AND the
-ring is physically closed. Slice-walk becomes modular
-(`actual_slice_chip_id = (my_chip_id - k) mod N`). This is a PERF change (the
-Ring OUTPUT is already correct via the line pattern — see R3), so it has NO
-failing golden cell on the current sim.
-
-**Verifier notes / blocker**: NOT verifiable on the only all_gather sim topology
-(`wh_t3k_allmmio_all_gather`, physical T3K line — `ccl_dm_route(Ring)` gives a
-7-hop wraparound, proven in `test_all_gather_ring_probe.py`). Needs a physically
-ring-capable topology (e.g. a WH-ring / BH-torus mesh-graph + `FABRIC_1D_RING`,
-as `point_to_point`'s Ring test used on the BH 8xP150 torus). Next steps: (1) add
-a ring-capable WH sim topology to `scripts/multidevice_sim_topologies.yaml` (or
-run on ring HW); (2) gate the modular single-direction path on a 1-hop wraparound
-route; (3) re-confirm counting-sem increment/wait counts under wraparound. Until
-a ring-capable topology exists, this is pure perf with no verifiable cell.
-
-**Done when**: on a ring-capable topology, `topology=Ring` uses the
-single-direction modular wraparound (verified 1-hop wraparound route) and gathers
-correctly; the line pattern remains the fallback for non-closed 1-D meshes.
+optimization (identical result), recorded as an out-of-queue design-method / perf
+item below — it has **no failing golden cell** (Ring already passes), so per the
+queue's hard rule it is a `verification_report.md` recommendation, not a
+runner-parsed `Refinement` entry.
 
 ---
 
 ## Out-of-queue (recorded in `verification_report.md`, not refinements)
 
+- **Single-direction modular-wraparound ring (design-method gap; PERF; HW-gated).**
+  The design specifies a single forward worker per device sending to `(i+1) mod N`
+  with the `N-1 → 0` wraparound. R3 instead serves `Topology.Ring` correctly
+  through the topology-agnostic bidirectional adjacent-hop kernels — the **output
+  is identical** and `Topology.Ring` is in SUPPORTED and passes. The wraparound
+  method is pure perf with **no failing cell**, and it is **unverifiable** on the
+  only all_gather sim topology (`wh_t3k_allmmio_all_gather` is a physical T3K
+  *line*; `ccl_dm_route(Ring)` gives a 7-hop wraparound under both `FABRIC_1D` and
+  `FABRIC_1D_RING`, proven in `test_all_gather_ring_probe.py`). Reviving it needs
+  a ring-capable topology in `scripts/multidevice_sim_topologies.yaml` (or ring
+  HW). Full write-up in `verification_report.md` → Recommendations §2.
 - **Sharded memory config** — `validate()` rejects sharded input; TARGET has no
   `memory_config` axis, so not a refinement candidate until `/golden-tests`
   widens TARGET.

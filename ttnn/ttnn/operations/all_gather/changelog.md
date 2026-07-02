@@ -184,3 +184,60 @@
   (kept) — probes `ccl_dm_route` Ring vs Linear routes (incl. the 7→0 wraparound)
   under FABRIC_1D and FABRIC_1D_RING; documents the sim's line limitation with
   evidence.
+
+## Verification pass — post-R1/R2/R3 re-verification
+
+- **Date**: 2026-07-02
+- **What was done**: full verifier re-pass on the current (post-Refinements
+  1/2/3) state. Confirmed `SUPPORTED == TARGET` on every axis programmatically
+  (`TARGET − SUPPORTED = ∅` for dtype, layout, topology, gather_dim, alignment).
+  Re-ran the golden suite + `eval.verify_supported`, the precision baseline, the
+  tricky acceptance paths, and added a small harness-independent extended device
+  test. No code change was required — the current kernels/host reviewed clean.
+- **Registry conformance (re-confirmed)**: INPUT_TAGGERS (`alignment` +
+  `tag_alignment`, signature `(inputs, axes)`), SUPPORTED (all 5 gated axes,
+  equal to TARGET), EXCLUSIONS (2 structural corners), validate() (first line,
+  SUPPORTED-then-EXCLUSIONS order, negative gather_dim canonicalization), and
+  **no INVALID symbol in the op file** — all correct. INVALID audit (feature_spec
+  `{bf8b, ROW_MAJOR}`): well-formed (single-tensor coupling, universe-must-change,
+  canonical entry present). EXCLUSIONS audit: both `{TILE,gd=-2,non_tile_aligned}`
+  and `{ROW_MAJOR,gd=-1}` are legitimate single-tensor-coupling structural corners
+  (correctly EXCLUSIONS, not INVALID).
+- **Golden verifier (WH sim, `verify_supported`)**: representative sampled run
+  (24-cell Linear cross-section of shape `(1,1,48,64)` — every dtype × both
+  layouts × all 4 gather_dims + both EXCLUSIONS + the INVALID): **15
+  supported_pass / 5 xfail_expected / 4 invalid_skipped, and every loud category
+  0** (supported_fail / xpass_drift / xfail_wrong_mode / supported_marked_xfail /
+  invalid_unexpected). A wider 36-cell partial run (adding Ring) reached 20
+  passed / 7 xfailed / 0 failed / 0 xpassed — same clean signal, Ring included.
+  Analytical full cartesian (harness `feature_matrix`): 282 supported_pass / 38
+  xfail_expected (EXCLUSIONS) / 64 invalid_skipped. Artifact:
+  `eval/results/all_gather/verifier_report.json`.
+- **Accuracy (re-measured, current code)**: precision baseline 12/12 green —
+  bf16 and f32 `max_abs = mean_abs = rel_rms = 0` (bit-for-bit) across shapes
+  {(1,1,32,32),(1,1,64,128),(1,1,96,64),(1,1,256,256)}; bf8b `max_abs = 0.03125`,
+  `mean_abs ≈ 0.006`, `rel_rms ≈ 0.0077` (from_torch block-float quant only).
+- **Regression checks on current (post-R2/R3) kernels**: the program-cache
+  two-call re-arm test and the `output_tensor` path both PASS; the new extended
+  test (`test_all_gather_extended.py`, 4 cells) covering gd=-1 TILE Linear,
+  gd=-2 RM Linear, gd=-1 TILE Ring, and bf8b gd=0 TILE Linear all PASS — R2/R3
+  introduced no regression.
+- **Design conformance**: the writer's omission of the design's Phase-1 startup
+  barrier remains a sound, empirically-confirmed simplification (persistent
+  output + in-order fabric delivery + counting sem + reader end-reset; avoids the
+  helper's shared-pooled-header footgun). Ring served by the topology-agnostic
+  adjacent-hop kernels rather than the design's modular-wraparound method
+  (identical output; wraparound unexercisable on the line sim). Both documented
+  in `verification_report.md` → Design Conformance / Recommendations.
+- **Queue changes**: R1/R2/R3 remain `[x]` (landed). Active queue is **R2a**
+  (TILE gd=-2 non-tile-aligned retile) + **R2b** (RM gd=-1 sub-page write) — both
+  move `EXCLUSIONS` cells to passing. **R3a relocated out of the runner-parsed
+  queue** into `op_requirements.md` → Out-of-queue and `verification_report.md`
+  → Recommendations §2: the single-direction modular-wraparound ring is perf-only
+  (Ring already passes → no failing cell) and unverifiable on the T3K line sim,
+  so per the queue's hard rule it is a recommendation, not a `Refinement` entry.
+- **Issues encountered**: none. No code fix required; no hang, no regression.
+- **Tests added**:
+  `tests/ttnn/unit_tests/operations/all_gather/test_all_gather_extended.py` — a
+  small, harness-independent device regression guard for the refined axes (the
+  immutable acceptance spec only covers gather_dim=0/Linear).
