@@ -94,6 +94,31 @@ Key layers above tt-llk:
 2. **Compute API** (`tt_metal/hw/inc/api/compute/`) — update if the public interface changes
 3. **TTNN bypass files** — some TTNN operations directly include LLK headers, bypassing the API
 
+## Code Style — Conciseness (MANDATORY for all kernel / LLK / compute edits)
+
+The corresponding Cursor rule lives at `.cursor/rules/llk-code-conciseness.mdc` (under `tt_metal/tt-llk/`). Apply the same checklist here. Reviewers consistently flag these three anti-patterns in AI-generated code; do NOT produce them.
+
+### 1. Do NOT duplicate code across `if` / `if constexpr` / `#if` branches
+Factor the shared part out into a local; only the differing subexpression stays per-branch. Hoist loop-invariant and branch-invariant lookups (e.g. `g_dfb_interface[operand_id]`, `tc_slots[tc_idx].rd_entry_idx`, `get_operand_*`) OUT of per-tile loops and `if`/`else` arms.
+
+### 2. Extend the existing function — do NOT add a parallel near-duplicate
+If you need a variant of an existing LLK / `llk_api` / compute-API function, add a default-valued parameter or template parameter to the existing function so existing call sites keep compiling. Remove the older signature once the new one subsumes it. Do NOT add unused template parameters solely to mirror another architecture's signature; if a parameter is only carried for arch parity, mark it `[[maybe_unused]]` and document why.
+
+### 3. Search tt-llk before writing a new helper
+Before introducing a helper at the metal/ckernels layer, search:
+- `tt_llk_wormhole_b0/{llk_lib,common/inc}/`, `tt_llk_blackhole/{llk_lib,common/inc}/`, `tt_llk_quasar/{llk_lib,common/inc}/`
+- `tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/`
+- `tt_metal/hw/inc/api/compute/`
+
+Use `Grep` / `Glob`, or dispatch the appropriate sage agent (`sage-wormhole` / `sage-blackhole` / `sage-quasar`) via the `arch-lookup` skill. If a similar helper exists under a different name, reuse or rename it instead of adding a parallel one. Do not expose a new public API method when the work belongs in an existing one (or in a `static` local helper in the same file).
+
+### Pre-completion checklist
+- [ ] No `if` / `if constexpr` / `#if` arm duplicates code the other arm also runs.
+- [ ] Loop-invariant and branch-invariant computations are hoisted.
+- [ ] No two functions in the touched file (or its arch siblings) differ only by added parameters / template args — the older one is removed and call sites use defaults.
+- [ ] No new helper that an existing tt-llk / `llk_api` / compute-API function already provides.
+- [ ] No unused template parameters added solely to mirror another architecture's signature.
+
 ## MCP Integration
 
 This repo uses three MCP servers: DeepWiki, Atlassian (Confluence), and Glean.

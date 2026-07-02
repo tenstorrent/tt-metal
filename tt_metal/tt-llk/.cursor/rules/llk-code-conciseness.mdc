@@ -1,0 +1,95 @@
+---
+description: Anti-verbosity rules for LLK / Tensix kernel and compute code. Reuse existing tt-llk helpers, extend existing functions instead of duplicating, factor invariants out of branches.
+globs: **/*.{h,hpp,cpp}
+alwaysApply: false
+---
+
+# LLK / Compute Kernel Code Conciseness
+
+Generated code in this repo (kernels, LLK API layers, compute API headers, LLK tests) MUST be terse. Reviewers consistently flag the same anti-patterns. Avoid them upfront.
+
+## 1. Do NOT duplicate code across `if` / `if constexpr` / `#if` branches
+
+If two branches call the SAME function and differ only in a value being passed (especially a `constexpr` value being passed as a template / non-type-template argument), drop the branch entirely and forward the value into the call. The compiler will instantiate the right specialization.
+
+```cpp
+// BAD — branches differ only in the template argument
+if constexpr (flag_en) {
+    _llk_foo_<true>(...);
+} else {
+    _llk_foo_<false>(...);
+}
+
+// GOOD — forward the value directly; no branch, no duplication
+_llk_foo_<flag_en>(...);
+```
+
+The same applies when the only difference is a runtime argument, a constant, a single function name selected by a `constexpr` predicate, etc. — extract the differing piece, do not re-emit the surrounding call.
+
+Also hoist loop-invariant and branch-invariant lookups (e.g. `g_dfb_interface[operand_id]`, `tc_slots[tc_idx].rd_entry_idx`, `get_operand_*`) OUT of per-tile loops and out of `if`/`else`/`#if` arms when both arms compute the same value.
+
+## 2. Extend the existing function — do NOT add a parallel near-duplicate
+
+If you need a variant of an existing LLK / metal API function with one or two more arguments or template parameters, modify the existing function (add a default-valued parameter or template parameter so existing call sites keep compiling). Do NOT leave a second function with the smaller signature alongside it.
+
+```cpp
+// BAD — parallel functions, near-identical bodies
+inline void llk_foo_(uint32_t dst_index);
+
+template <DataCopyType type = DataCopyType::A2D>
+inline void llk_foo_(uint32_t dst_index, uint32_t operand = 0);
+
+// GOOD — single function; defaults preserve old call sites
+template <DataCopyType type = DataCopyType::A2D>
+inline void llk_foo_(uint32_t dst_index, uint32_t operand = 0);
+```
+
+Do NOT add unused/dummy template parameters "for symmetry" with another arch (WH/BH↔Quasar) — only carry parameters the function actually uses. If a parameter is genuinely required only for arch parity, mark it `[[maybe_unused]]` and document it.
+
+## 3. Search tt-llk before writing a new helper
+
+Before introducing a helper at the metal/ckernels layer, search the tt-llk tree for one that already exists or can be lightly extended:
+
+- `tt_llk_wormhole_b0/{llk_lib,common/inc}/`
+- `tt_llk_blackhole/{llk_lib,common/inc}/`
+- `tt_llk_quasar/{llk_lib,common/inc}/`
+
+Also check the matching layers in tt-metal (paths relative to repo root):
+- `tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/`
+- `tt_metal/hw/inc/api/compute/`
+
+Use Grep / Glob (or the appropriate sage subagent — `sage-wormhole`, `sage-blackhole`, `sage-quasar`) to confirm. If a similar helper exists under a different name (e.g. `is_32bit_format` vs a new `quasar_unary_bcast_unpack_to_dest_enabled`), reuse / rename it instead of adding a parallel one. Do not expose a new public API method when the work belongs in an existing one (or in a `static` / unnamed-namespace local helper in the same file).
+
+## 4. Audit every template / compile-time arg on touched functions
+
+For every function you add or modify, audit each template parameter and `constexpr` argument:
+
+- If the parameter is **never read** in the body, mark the corresponding usage `[[maybe_unused]]` (or drop the parameter entirely if no caller depends on it for overload selection / arch parity).
+- If the parameter IS used, but the implementation only handles a subset of its valid values, add a `static_assert` that pins down the supported permutations. Untested / unimplemented permutations must fail at compile time, not silently miscompile or fall through.
+
+```cpp
+// BAD — only ROW / COL are actually implemented, but NONE / SCALAR compile and silently do the wrong thing
+template <BroadcastType BCAST>
+inline void _llk_foo_() {
+    // implementation only correct for ROW and COL
+}
+
+// GOOD — illegal permutations are rejected at compile time
+template <BroadcastType BCAST>
+inline void _llk_foo_() {
+    static_assert(BCAST == BroadcastType::ROW || BCAST == BroadcastType::COL,
+                  "_llk_foo_ only supports BroadcastType::ROW / COL");
+    // implementation
+}
+```
+
+Apply the same pattern to bool / enum template params with limited support, to `is_fp32_dest_acc_en`-style flags that aren't wired through every code path, and to `APPROXIMATE` / `ITERATIONS` / similar params that are accepted but not actually exercised.
+
+## Reviewer checklist (apply BEFORE finishing the edit)
+
+- [ ] No `if` / `if constexpr` / `#if` arm duplicates code that the other arm also runs.
+- [ ] Loop-invariant and branch-invariant computations are hoisted (compute once, reuse).
+- [ ] No two functions in the touched file (or its arch siblings) differ only by added parameters / template args — the older one is removed and call sites use defaults.
+- [ ] No new helper that an existing tt-llk / `llk_api` / compute-API function already provides; reused where possible.
+- [ ] Every template / compile-time arg on touched functions is either used, marked `[[maybe_unused]]`, or constrained by a `static_assert` that pins down the supported permutations.
+- [ ] No unused template parameters added solely to mirror another architecture's signature.
