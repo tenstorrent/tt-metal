@@ -350,8 +350,7 @@ def run_component(component: str, mode: str = "single") -> dict:
             try:
                 from scripts.tt_hw_planner.parallelism import mesh_graph_descriptor_path
 
-                _chips = int(os.environ.get("TT_HW_PLANNER_MESH_CHIPS", "0") or "0")
-                _mgd = mesh_graph_descriptor_path(_chips, str(_REPO))
+                _mgd = mesh_graph_descriptor_path(int(_SHARD_TP), str(_REPO))
                 if _mgd:
                     os.environ["TT_MESH_GRAPH_DESC_PATH"] = _mgd
             except Exception:
