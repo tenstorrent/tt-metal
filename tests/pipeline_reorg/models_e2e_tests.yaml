@@ -290,7 +290,7 @@
 - name: Qwen2.5-VL-32B e2e tests
   cmd: |
     export MESH_DEVICE=T3K
-    pytest --timeout 900 -s models/common/tests/modules/sampling/test_sampling_1d.py -k "topk_allgather_trace_ab"
+    pytest --timeout 1200 -s models/common/tests/modules/sampling/test_sampling_1d.py -k "topk_allgather_trace_ab or candidate_gather_semaphore_clobber"
   model: qwen2.5-vl-32b
   skus:
     wh_llmbox_perf:

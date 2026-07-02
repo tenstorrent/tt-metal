@@ -1806,3 +1806,154 @@ def test_topk_allgather_trace_ab(ttnn_mesh_device, gather_op, vocab_size):
         f"top-1 tokens on {sum(1 for m in mismatch_counts if m)} / {NUM_REPLAYS} replays "
         f"(true-mismatch counts {mismatch_counts})."
     )
+
+
+# ==============================================================================
+# Minimal CLOBBER repro — candidate gather under semaphore contention (#48469).
+# ==============================================================================
+#
+# The plain A/B above (topk -> gather -> offsets, alone in a trace) is clean for BOTH ops.
+# amorrisonTT's hypothesis (#48469): the prim ttnn.all_gather barrier/data semaphore is being
+# *clobbered* by other CCL ops that coexist in the captured graph. The isolated test has nothing
+# to clobber it. This test adds BACKGROUND all_gather ops (separate DRAM tensors) into the SAME
+# captured trace, interleaved around the candidate gather, to create that contention — mimicking
+# the many per-layer all_gathers present in a real decode trace.
+#
+# The A/B variable is still ONLY the candidate (sampling) gather op:
+#   - "prim":  ttnn.all_gather                          (pre-#48404)
+#   - "async": ttnn.experimental.all_gather_async + bar (the fix)
+# Background ops are fixed prim all_gathers in both arms (they exist regardless in a real model).
+# Hypothesis: prim candidate gather is corrupted under contention; async is not.
+
+_CLOBBER_TRACE_REGION_SIZE = 48 << 20
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [{"mesh_shape": (1, 8), "trace_region_size": _CLOBBER_TRACE_REGION_SIZE}],
+    ids=["1x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize("gather_op", ["prim", "async"])
+@pytest.mark.parametrize("num_bg", [8, 32], ids=["bg8", "bg32"])
+@pytest.mark.parametrize("vocab_size", [pytest.param(152064, id="v152064")])
+def test_candidate_gather_semaphore_clobber(ttnn_mesh_device, gather_op, num_bg, vocab_size):
+    from models.common.modules.tt_ccl import get_tt_ccl
+
+    mesh_device = ttnn_mesh_device
+    cluster_shape = tuple(mesh_device.shape)
+    num_devices = max(cluster_shape)
+    per_device_vocab = vocab_size // num_devices
+    B, K, NUM_REPLAYS = 32, 32, 10
+    cluster_axis = None if 1 in cluster_shape else 0
+
+    torch.manual_seed(42)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    shard_dims = (None, -1) if cluster_shape[-1] >= cluster_shape[-2] else (-1, None)
+    logits_tt = ttnn.from_torch(
+        logits_host, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+    )
+    replicate_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=cluster_shape)
+    local_indices_host = torch.zeros(1, 1, B, per_device_vocab, dtype=torch.int32)
+    for i in range(per_device_vocab):
+        local_indices_host[:, :, :, i] = i
+    local_indices_tt = ttnn.from_torch(
+        local_indices_host, device=mesh_device, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=replicate_mapper, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    offsets_host = torch.zeros(1, 1, B, K * num_devices, dtype=torch.int64)
+    for d in range(num_devices):
+        offsets_host[:, :, :, d * K : (d + 1) * K] = d * per_device_vocab
+    index_offsets_tt = ttnn.from_torch(
+        offsets_host, device=mesh_device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=replicate_mapper, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Background tensors: per-device [1,1,32,64] sharded, gathered along dim 3 -> contention ops.
+    bg_inputs = []
+    for j in range(num_bg):
+        bg_host = torch.randn(1, 1, B, 64 * num_devices, dtype=torch.bfloat16)
+        bg_inputs.append(ttnn.from_torch(
+            bg_host, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+        ))
+
+    ccl = get_tt_ccl(mesh_device) if gather_op == "async" else None
+
+    def _prim_gather(t):
+        return ttnn.all_gather(t, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                               cluster_axis=cluster_axis, topology=ttnn.Topology.Linear)
+
+    def _candidate_gather(t):
+        if gather_op == "prim":
+            return _prim_gather(t)
+        return ttnn.experimental.all_gather_async(
+            t, persistent_output_buffer=None, dim=3,
+            multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Linear,
+            barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10, num_workers_per_link=1, num_buffers_per_channel=2,
+        )
+
+    def _pipeline():
+        # background contention BEFORE
+        for j in range(num_bg // 2):
+            ttnn.deallocate(_prim_gather(bg_inputs[j]))
+        topk_values, topk_indices = ttnn.topk(logits_tt, k=K, dim=-1, indices_tensor=local_indices_tt)
+        gathered_values = _candidate_gather(topk_values)
+        # background contention BETWEEN the two candidate gathers
+        for j in range(num_bg // 2, num_bg):
+            ttnn.deallocate(_prim_gather(bg_inputs[j]))
+        gathered_indices = _candidate_gather(topk_indices)
+        gathered_indices_int32 = ttnn.typecast(gathered_indices, dtype=ttnn.int32)
+        global_indices = ttnn.add(index_offsets_tt, gathered_indices_int32, dtype=ttnn.int32)
+        return gathered_values, global_indices
+
+    logits_bf16 = logits_host.squeeze().bfloat16()
+    bf16_expected = torch.zeros(B, dtype=torch.long)
+    for b in range(B):
+        best_val, best_idx = float("-inf"), 0
+        for s in range(num_devices):
+            shard = logits_bf16[b, s * per_device_vocab : (s + 1) * per_device_vocab]
+            li = shard.float().argmax().item()
+            lv = shard[li].float().item()
+            if lv > best_val:
+                best_val, best_idx = lv, s * per_device_vocab + li
+        bf16_expected[b] = best_idx
+
+    def _device_top1(gv, gi):
+        vh = to_torch_auto_compose(gv).squeeze()[:B]
+        ih = to_torch_auto_compose(gi).squeeze()[:B]
+        pos = vh.float().argmax(dim=-1)
+        return torch.tensor([ih[b, pos[b]].item() for b in range(B)], dtype=torch.long)
+
+    gv, gi = _pipeline()
+    ttnn.synchronize_device(mesh_device)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    try:
+        gv, gi = _pipeline()
+    finally:
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    mismatch_counts = []
+    for r in range(NUM_REPLAYS):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        dt = _device_top1(gv, gi)
+        mm = 0
+        for b in range(B):
+            if dt[b].item() != bf16_expected[b].item():
+                if logits_bf16[b, dt[b].item()].float().item() < logits_bf16[b, bf16_expected[b].item()].float().item():
+                    mm += 1
+        mismatch_counts.append(mm)
+    ttnn.release_trace(mesh_device, trace_id)
+
+    print(f"[clobber gather_op={gather_op} num_bg={num_bg} mesh={cluster_shape}] "
+          f"true-mismatch counts per replay: {mismatch_counts}")
+    assert all(mm == 0 for mm in mismatch_counts), (
+        f"gather_op={gather_op} num_bg={num_bg}: candidate gather corrupted under contention on "
+        f"{sum(1 for m in mismatch_counts if m)}/{NUM_REPLAYS} replays (counts {mismatch_counts})."
+    )
