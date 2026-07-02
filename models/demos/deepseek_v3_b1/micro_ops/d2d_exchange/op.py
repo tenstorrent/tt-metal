@@ -168,7 +168,10 @@ def _build_exchange_program(
         page_size_per_link = page_size // num_fwd_links
         num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
         partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
-        packet_header_cb_num_pages = num_fwd_links + num_bwd_links
+        num_downstream_headers_per_link = 2 if partial_packet_size_per_link > 0 else 1
+        num_downstream_header_pages = num_fwd_links * num_downstream_headers_per_link if use_fabric_on_sender else 0
+        num_upstream_header_pages = num_bwd_links if use_fabric_on_receiver else 0
+        packet_header_cb_num_pages = num_downstream_header_pages + num_upstream_header_pages
         packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
         packet_header_cb_desc = ttnn.CBDescriptor(
@@ -538,16 +541,18 @@ class SocketInterface:
         num_whole_fabric_packets_per_link = 0
         partial_packet_size = 0
 
-        # 2 forward headers (one per RISC) + 2 backward headers (one per RISC, if fabric on receiver)
-        num_fwd_headers = 2
-        num_bwd_headers = 2 if use_fabric_on_receiver else 0
+        downstream_header_ring_size = 2 if use_fabric_on_sender else 0
+        brisc_num_upstream_headers = len(brisc_socket_addrs) if use_fabric_on_receiver else 0
+        ncrisc_num_upstream_headers = len(ncrisc_socket_addrs) if use_fabric_on_receiver else 0
+        brisc_num_headers = downstream_header_ring_size + brisc_num_upstream_headers
+        ncrisc_num_headers = downstream_header_ring_size + ncrisc_num_upstream_headers
 
         packet_header_cb_desc = None
         if use_fabric_on_receiver or use_fabric_on_sender:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
             num_whole_fabric_packets_per_link = self.upstream_page_size // fabric_max_payload_size
             partial_packet_size = self.upstream_page_size % fabric_max_payload_size
-            packet_header_cb_num_pages = num_fwd_headers + num_bwd_headers
+            packet_header_cb_num_pages = brisc_num_headers + ncrisc_num_headers
             packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
             packet_header_cb_desc = ttnn.CBDescriptor(
@@ -592,20 +597,20 @@ class SocketInterface:
 
         # BRISC (Writer/NOC0) gets ceil(N/2) sockets; NCRISC (Reader/NOC1) gets floor(N/2).
         # Giving the odd-one-out to BRISC ensures local NOC writes use NOC0 addresses.
-        # BRISC kernel: handles sockets 0..brisc_count-1, packet header slots 0-1, fabric link 0
+        # Packet-header storage is partitioned per RISC:
+        # - optional downstream header ring first
+        # - then one upstream-ack header per handled socket
+        brisc_pkt_hdr_slot_start = 0
         brisc_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_ranges,
-            compile_time_args=_build_ct_args(brisc_socket_addrs, 0, 0),
+            compile_time_args=_build_ct_args(brisc_socket_addrs, 0, brisc_pkt_hdr_slot_start),
             config=ttnn.WriterConfigDescriptor(),
         )
 
-        # NCRISC kernel: handles sockets brisc_count..N-1, packet header slots 2-3, fabric link 1
-        if use_fabric_on_sender and not use_fabric_on_receiver:
-            ncrisc_pkt_hdr_slot_start = 1
-        else:
-            ncrisc_pkt_hdr_slot_start = 2
+        # NCRISC kernel: handles sockets brisc_count..N-1 and starts after BRISC's header slice.
+        ncrisc_pkt_hdr_slot_start = brisc_num_headers
         ncrisc_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
