@@ -107,28 +107,6 @@ def enumerate_parallelism(chips: int, explore_pp: bool = False) -> List[Parallel
     return out
 
 
-_MGD_BY_CHIPS = {
-    2: "p300_mesh_graph_descriptor.textproto",
-    4: "p300_x2_mesh_graph_descriptor.textproto",
-}
-
-
-def mesh_graph_descriptor_path(chips, repo_root):
-    try:
-        n = int(chips)
-    except (TypeError, ValueError):
-        return None
-    if n <= 1:
-        return None
-    from pathlib import Path as _Path
-
-    name = _MGD_BY_CHIPS.get(n)
-    if not name:
-        return None
-    p = _Path(repo_root) / "tt_metal" / "fabric" / "mesh_graph_descriptors" / name
-    return str(p) if p.is_file() else None
-
-
 def select_parallelism(chips: int, kernel_report) -> ParallelConfig:
     """Turn per-TP kernel viability into a chosen TP x DP split for `chips`.
 
