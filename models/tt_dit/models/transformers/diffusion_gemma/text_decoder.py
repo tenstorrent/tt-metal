@@ -183,6 +183,12 @@ class DiffusionGemmaDecoderModel(Module):
         if owned_signal:
             ttnn.deallocate(self_conditioning_signal)
 
+        # Lift to 4D ``1BND`` so the layer stack sees consistent rank. embed_tokens +
+        # self_conditioning produce 3D [B, S, H]; the attention path emits 4D via unsqueeze
+        # after concat_heads. Same fix pattern as text_encoder._forward_from_embeds.
+        if len(h.shape) == 3:
+            h = ttnn.unsqueeze(h, 0)
+
         # Decoder positions continue after the encoder cache, so use them directly.
         cos_sin = {
             layer_type: self.rope.get_cos_sin(layer_type, decoder_position_ids) for layer_type in set(self.layer_types)

@@ -170,6 +170,56 @@ def test_encoder_text_model(
     tt_h, _per_layer_kv = tt_encoder(tt_input_ids, position_ids, tt_masks)
     tt_h_torch = local_device_to_torch(tt_h).squeeze(0)
 
+    # Diagnostic: run the TT encoder layer-by-layer, comparing each layer's output vs the
+    # HF equivalent. Localizes which layer introduces divergence.
+    def _pcc_pair(a, b):
+        a = a.detach().flatten().to(torch.float64)
+        b = b.detach().flatten().to(torch.float64)
+        cov = torch.cov(torch.stack([a, b])).numpy()
+        return (cov[0, 1] / (math.sqrt(cov[0, 0]) * math.sqrt(cov[1, 1]))).item()
+
+    import math
+
+    with torch.no_grad():
+        hf_full = hf_encoder(
+            input_ids=input_ids,
+            attention_mask=None,
+            position_ids=position_ids,
+            past_key_values=None,
+            output_hidden_states=True,
+        )
+    hf_hidden_all = hf_full.hidden_states  # tuple: [initial_embed, after_layer0, ..., after_layerN]
+    logger.info(f"HF hidden_states count = {len(hf_hidden_all)}")
+
+    # Run TT layer by layer and log per-layer PCC.
+    tt_h_layer = tt_encoder.embed_tokens(tt_input_ids)
+    tt_embed_torch = local_device_to_torch(tt_h_layer).float()
+    if tt_embed_torch.ndim == 4:
+        tt_embed_torch = tt_embed_torch.squeeze(0)
+    logger.info(
+        f"[embed] TT shape={tuple(tt_embed_torch.shape)}, HF shape={tuple(hf_hidden_all[0].shape)}, PCC={_pcc_pair(hf_hidden_all[0], tt_embed_torch)*100:.4f}%"
+    )
+    if len(tt_h_layer.shape) == 3:
+        tt_h_layer = ttnn.unsqueeze(tt_h_layer, 0)
+    cos_sin = {lt: tt_encoder.rope.get_cos_sin(lt, position_ids) for lt in set(tt_encoder.layer_types)}
+    for i in range(tt_encoder.num_hidden_layers):
+        lt = tt_encoder.layer_types[i]
+        cos, sin = cos_sin[lt]
+        tt_h_layer, _, _ = tt_encoder.layers[i](
+            tt_h_layer,
+            cos,
+            sin,
+            attention_mask=tt_masks.get(lt),
+            encoder_kv=None,
+        )
+        tt_h_i = local_device_to_torch(tt_h_layer).float()
+        if tt_h_i.ndim == 4:
+            tt_h_i = tt_h_i.squeeze(0)
+        hf_h_i = hf_hidden_all[i + 1].float()
+        logger.info(
+            f"[layer {i} type={lt}] TT shape={tuple(tt_h_i.shape)}, HF shape={tuple(hf_h_i.shape)}, PCC={_pcc_pair(hf_h_i, tt_h_i)*100:.4f}%"
+        )
+
     logger.info(f"hf_last: {hf_last.shape}, tt_h: {tt_h_torch.shape}")
     assert_quality(hf_last, tt_h_torch, pcc=PCC_THRESHOLD)
 

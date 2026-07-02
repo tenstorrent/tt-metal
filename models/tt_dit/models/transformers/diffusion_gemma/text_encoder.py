@@ -169,6 +169,12 @@ class DiffusionGemmaEncoderTextModel(Module):
         cos_sin = {layer_type: self.rope.get_cos_sin(layer_type, position_ids) for layer_type in set(self.layer_types)}
 
         h = inputs_embeds
+        # Layers + attention are written for the tt_dit 4D ``1BND`` convention. embed_tokens
+        # and multimodal-merged embeddings arrive as 3D [B, S, H]. Lift to 4D once here so
+        # the layer stack (attention returns 4D via unsqueeze after concat_heads) has
+        # consistent-rank residual adds.
+        if len(h.shape) == 3:
+            h = ttnn.unsqueeze(h, 0)
         per_layer_kv: list[tuple[ttnn.Tensor, ttnn.Tensor]] = []
         for i in range(self.num_hidden_layers):
             layer_type = self.layer_types[i]
