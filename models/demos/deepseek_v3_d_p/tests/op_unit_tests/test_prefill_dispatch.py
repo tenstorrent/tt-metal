@@ -97,6 +97,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 
 def run_dispatch(
     mesh_device,
+    model_name,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -134,17 +135,12 @@ def run_dispatch(
     if (fp8_output or fp8_input) and is_wormhole_b0():
         pytest.skip("fp8 (input or output) not supported on Wormhole hardware")
 
-    # The fp8-scaled and on-device-cast paths quantize per 128-element block, so both the cast op and
-    # the dispatch scale tail require emb_dim % 128 == 0. gpt-oss (emb_dim=2880) is not a multiple of
-    # 128. Warn always so the gap is visible, and skip in CI to keep it green until support lands.
-    if (fp8_scaled_input or cast_input) and emb_dim % 128 != 0:
-        msg = (
-            f"fp8-scaled/cast dispatch requires emb_dim % 128 == 0; emb_dim={emb_dim} is unsupported. "
-            "Tracking: https://github.com/tenstorrent/tt-metal/issues/48780"
-        )
+    # The fp8-scaled path (per-token scales in the metadata tail) is validated only for these models;
+    # every other model is skipped on this path.
+    if fp8_scaled_input and model_name not in ("dsv3", "dsv4_pro", "dsv4_flash", "kimi_k26"):
+        msg = "fp8-scaled dispatch supported only for dsv3/dsv4_pro/dsv4_flash/kimi; see https://github.com/tenstorrent/tt-metal/issues/48780"
         logger.warning(msg)
-        if is_ci_env or is_ci_v2_env:
-            pytest.skip(msg)
+        pytest.skip(msg)
 
     # CI exercises exactly three representative dispatch flavors; every other dtype/layout
     # combination is covered locally but skipped in CI to bound device time. Each flavor pins a
@@ -516,15 +512,16 @@ def dispatch_shape_params():
     params = []
     for name, config, extended in DISPATCH_MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
-        # (seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok,
+        # (model_name, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok,
         #  dispatch_buffer_capacity_factor, run_pcc_check)
         params.append(
             pytest.param(
-                32, config.EMB_SIZE, config.NUM_ROUTED_EXPERTS // 16, 4, 4, True, marks=marks, id=f"{name}-pcc"
+                name, 32, config.EMB_SIZE, config.NUM_ROUTED_EXPERTS // 16, 4, 4, True, marks=marks, id=f"{name}-pcc"
             )
         )
         params.append(
             pytest.param(
+                name,
                 640,
                 config.EMB_SIZE,
                 config.NUM_ROUTED_EXPERTS // 4,
@@ -545,7 +542,7 @@ def dispatch_cast_perf_shape_params():
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "model_name, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     dispatch_shape_params(),
 )
 @pytest.mark.parametrize(
@@ -575,6 +572,7 @@ def dispatch_cast_perf_shape_params():
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
+    model_name,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -594,6 +592,7 @@ def test_ttnn_dispatch(
 ):
     run_dispatch(
         mesh_device,
+        model_name,
         seq_len_per_chip,
         emb_dim,
         num_routed_experts,
@@ -614,7 +613,7 @@ def test_ttnn_dispatch(
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "model_name, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     dispatch_cast_perf_shape_params(),
 )
 @pytest.mark.parametrize(
@@ -624,6 +623,7 @@ def test_ttnn_dispatch(
 )
 def test_ttnn_cast_then_dispatch(
     mesh_device,
+    model_name,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -640,6 +640,7 @@ def test_ttnn_cast_then_dispatch(
     for every perf shape, so run_dispatch returns right after the dispatch op)."""
     run_dispatch(
         mesh_device,
+        model_name,
         seq_len_per_chip,
         emb_dim,
         num_routed_experts,
