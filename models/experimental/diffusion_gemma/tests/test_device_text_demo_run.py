@@ -8,7 +8,11 @@ This pins the canonical short-prompt, small-context multi-block hardware run
 so future changes cannot silently break "prompt -> committed blocks -> decoded
 text" without crashing. Output *correctness* is explicitly deferred (#48291);
 the RUN gate is a clean exit + the ``DG_TEXT_DEMO_SUCCESS`` marker, not text
-quality.
+quality. The test disables EOS stopping so degenerate EOS-heavy output still
+commits the requested two blocks and exercises cross-block KV / position
+advancement. ``max_seq_len`` must cover ``prompt + 2 * canvas``; use 1024 so
+the second block's RoPE/cache slices do not overrun after the 32-token-aligned
+prompt prefix.
 
 Run on QB2::
 
@@ -56,7 +60,7 @@ def test_short_prompt_two_block_run_exits_clean():
         "--mesh",
         os.environ.get("MESH_DEVICE", "P150x4"),
         "--max-seq-len",
-        "512",
+        "1024",
         "--canvas-length",
         "256",
         "--max-denoising-steps",
@@ -67,6 +71,7 @@ def test_short_prompt_two_block_run_exits_clean():
         "2",
         "--seed",
         "0",
+        "--disable-eos-stop",
     ]
     num_layers = os.environ.get("DG_TEXT_DEMO_NUM_LAYERS")
     if num_layers is not None:
