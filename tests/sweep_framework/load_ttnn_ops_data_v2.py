@@ -166,8 +166,8 @@ def _load_private_key():
     )
 
 
-def _get_read_connection():
-    """Connection for read/reconstruct queries (Snowflake)."""
+def _connect(autocommit=None):
+    """Open a Snowflake connection (keypair auth; SSO externalbrowser fallback)."""
     import snowflake.connector
 
     params = dict(
@@ -177,6 +177,8 @@ def _get_read_connection():
         warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "PUBLIC"),
         database=SNOWFLAKE_DATABASE,
     )
+    if autocommit is not None:
+        params["autocommit"] = autocommit
     pkey = _load_private_key()
     if pkey is not None:
         params["private_key"] = pkey
@@ -184,31 +186,18 @@ def _get_read_connection():
         params["authenticator"] = "externalbrowser"
         params["client_store_temporary_credential"] = True
     return snowflake.connector.connect(**params)
+
+
+def _get_read_connection():
+    """Connection for read/reconstruct queries (Snowflake)."""
+    return _connect()
 
 
 def _get_write_connection():
-    """Connection for write/load queries (Snowflake).
-
-    Mirrors _get_read_connection. Autocommit is disabled so load_data's
+    """Connection for write/load queries. Autocommit is disabled so load_data's
     explicit commit()/rollback() (and the dry_run rollback) behave predictably.
     """
-    import snowflake.connector
-
-    params = dict(
-        account=os.environ["SNOWFLAKE_ACCOUNT"],
-        user=os.environ["SNOWFLAKE_USER"],
-        role=os.environ.get("SNOWFLAKE_ROLE", "SELF_SERVE"),
-        warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "PUBLIC"),
-        database=SNOWFLAKE_DATABASE,
-        autocommit=False,
-    )
-    pkey = _load_private_key()
-    if pkey is not None:
-        params["private_key"] = pkey
-    else:
-        params["authenticator"] = "externalbrowser"
-        params["client_store_temporary_credential"] = True
-    return snowflake.connector.connect(**params)
+    return _connect(autocommit=False)
 
 
 def _qualified_schema(schema):
@@ -729,40 +718,6 @@ def get_or_create_trace_run(
         trace_run_cache[trace_uid] = new_id
 
     return trace_run_cache[trace_uid]
-
-
-def link_trace_run_configuration_model(cur, trace_run_id, config_id, model_id, execution_count, schema=DEFAULT_SCHEMA):
-    """Insert canonical per-trace per-config per-model execution counts."""
-    _validate_schema(schema)
-    S = _schema_prefix(schema)
-    # No ON CONFLICT: SELECT existing count, then additive UPDATE or INSERT.
-    cur.execute(
-        f"""
-        SELECT execution_count FROM {S}.trace_run_configuration_model
-        WHERE trace_run_id = %s AND configuration_id = %s AND model_id = %s
-        """,
-        (trace_run_id, config_id, model_id),
-    )
-    row = cur.fetchone()
-    if row is not None:
-        cur.execute(
-            f"""
-            UPDATE {S}.trace_run_configuration_model
-            SET last_seen_ts = CURRENT_TIMESTAMP(),
-                execution_count = execution_count + %s
-            WHERE trace_run_id = %s AND configuration_id = %s AND model_id = %s
-            """,
-            (execution_count, trace_run_id, config_id, model_id),
-        )
-    else:
-        cur.execute(
-            f"""
-            INSERT INTO {S}.trace_run_configuration_model
-                (trace_run_id, configuration_id, model_id, execution_count, first_seen_ts, last_seen_ts)
-            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
-            """,
-            (trace_run_id, config_id, model_id, execution_count),
-        )
 
 
 def _alloc_ids_bulk(cur, schema, table, count):
