@@ -242,7 +242,7 @@ jobs:
             validation_success=false
 
             echo "--- Resetting cards with tt-smi ---"
-            if mpirun --pernode tt-smi -glx_reset; then
+            if mpirun --pernode tt-smi -r; then
               reset_success=true
             else
               echo "WARNING: Reset failed on attempt $attempt"
