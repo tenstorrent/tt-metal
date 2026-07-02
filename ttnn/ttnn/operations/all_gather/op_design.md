@@ -104,11 +104,13 @@ Teardown: every writer ends with `stream.drain()` (NoC write barrier + atomic ba
 
 | Semantic Name | Index | Page Size | Num Pages | Format | Producer | Consumer | Lifetime |
 |---------------|-------|-----------|-----------|--------|----------|----------|----------|
-| `cb_relay_pages` | 16 | `round_up(input.buffer_page_size(), l1_alignment)` | `2 * pages_per_packet` (double-buffered chunk; `pages_per_packet = 1` for the per-page primary path → 2) | input dtype | reader (NCRISC): seed pages from input DRAM + relayed pages read back from output DRAM | writer (BRISC): fabric `write_page` (+ local self-copy on the forward core) | whole kernel |
+| `cb_relay_pages` | 16 | `round_up(input.buffer_page_size(), l1_alignment)` | `2 * pages_per_packet` (double-buffered chunk; `pages_per_packet = 1` for the per-page primary path → 2) | input dtype | reader (NCRISC): seed pages from input DRAM + relayed pages read back from output DRAM | writer (BRISC): fabric `write_page` | whole kernel |
+| `cb_self_copy` | 24 | `round_up(input.buffer_page_size(), l1_alignment)` | 2 (allocated double-buffered; the forward reader `cb_reserve_back(.., 1)` once and reuses the one write ptr across all `P` pages) | input dtype | forward reader (NCRISC): stages one input page for the local self-copy | forward reader (NCRISC): same kernel `noc_async_write`s it to its own output block `i` (no cross-kernel consumer — intra-kernel scratch) | whole kernel |
 
 Notes:
-- One `cb_relay_pages` instance per worker core (same index 16 on both the forward and backward cores; each core has its own program-local CB).
-- **CB sync invariant:** every page the reader `cb_push_back`es is `cb_wait_front`+`cb_pop_front`ed by the writer. The reader must NOT push the seed pages on a line-end device whose writer does not forward in that direction (gate the seed push on `num_targets_<dir> > 0`), or the CB fills and the reader blocks. Push count == pop count per direction.
+- One `cb_relay_pages` instance per worker core (same index 16 on both the forward and backward cores; each core has its own program-local CB). Likewise one `cb_self_copy` per core (index 24), but it is exercised ONLY by the **forward reader** (`direction == 0`); the descriptor allocates it on both cores for a uniform CB set, and the backward reader never touches it.
+- **CB sync invariant (`cb_relay_pages`):** every page the reader `cb_push_back`es is `cb_wait_front`+`cb_pop_front`ed by the writer. The reader must NOT push the seed pages on a line-end device whose writer does not forward in that direction (gate the seed push on `num_targets_<dir> > 0`), or the CB fills and the reader blocks. Push count == pop count per direction.
+- **`cb_self_copy` is intra-kernel scratch, deliberately NOT push/pop balanced.** The forward reader reserves the slot once, then loops `read input page → write to own output block i` reusing the same L1 write pointer; there is no producer/consumer split across kernels, so it is never `cb_push_back`ed. It exists solely because on the generic_op path every kernel-local L1 working buffer is a CB (there is no unmanaged scratch region for the `noc_async_read`→`noc_async_write` staging).
 - No tilize/untilize, no compute CBs, no scaler — pure data movement.
 
 ## API Mapping
