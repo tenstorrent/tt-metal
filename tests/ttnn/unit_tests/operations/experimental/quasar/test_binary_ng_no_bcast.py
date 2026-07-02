@@ -75,7 +75,7 @@ def _width_sharded_config(shard_shape, core_grid):
 
 # Op table: name -> (ttnn fn, torch golden). add/subtract take the FPU compute kernel; multiply and
 # divide route the SFPU compute kernel by default (is_binary_sfpu_op is true unless fast-approx mode),
-# as does any fp32 op. SFPU builds+runs on Wormhole and Quasar (only fp32 and lhs-activation skip on Quasar — see _run).
+# as does any fp32 op. SFPU builds+runs on Wormhole and Quasar (only fp32 add/sub auto-skip on Quasar — see _run).
 _OPS = {
     "add": (lambda: ttnn.experimental.quasar.add, torch.add),
     "subtract": (lambda: ttnn.experimental.quasar.subtract, torch.subtract),
@@ -182,11 +182,21 @@ _BIG2_HEIGHT_G = _height_sharded_config([8 * 32, 32 * 32], ttnn.CoreRangeSet({tt
 _BIG2_WIDTH_G = _width_sharded_config([32 * 32, 8 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 1), (3, 1))}))
 
 
-def _relu(acts):
-    return [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)] if acts else []
+# Fused activations exercised by the op, each with its torch golden. A lhs (pre) activation applies to
+# operand A before the binary op; a post activation applies to the result. RELU is ResNet50's fused
+# residual activation; SILU is Llama's SwiGLU gate (models/tt_transformers/tt/mlp.py emits
+# ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])).
+_ACT_GOLDEN = {
+    ttnn.UnaryOpType.RELU: torch.relu,
+    ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
+}
 
 
-def _run(device, op_name, mem_config, dtype_tt, shape, lhs_relu=False, post_relu=False, pcc=None):
+def _act(act_type):
+    return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
+
+
+def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=None, pcc=None):
     if _on_quasar():
         # The SFPU compute kernel builds and runs on Quasar: the int-SFPU op headers it does not need
         # are #ifndef ARCH_QUASAR-guarded, the no-broadcast operand switch uses copy_tile_to_dst_init_short
@@ -209,19 +219,19 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_relu=False, post_relu
         b = b * 0.5 + 2.0
 
     # Golden: lhs activation applies before the binary op, post activation after.
-    a_golden = torch.relu(a) if lhs_relu else a
+    a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
     golden = torch_fn(a_golden, b)
-    if post_relu:
-        golden = torch.relu(golden)
+    if post_act is not None:
+        golden = _ACT_GOLDEN[post_act](golden)
 
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
     b_tt = ttnn.from_torch(b, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
 
     kwargs = {"memory_config": mem_config, "dtype": dtype_tt}
-    if post_relu:
-        kwargs["activations"] = _relu(True)
-    if lhs_relu:
-        kwargs["input_tensor_a_activations"] = _relu(True)
+    if post_act is not None:
+        kwargs["activations"] = _act(post_act)
+    if lhs_act is not None:
+        kwargs["input_tensor_a_activations"] = _act(lhs_act)
 
     out_tt = ttnn_fn(a_tt, b_tt, **kwargs)
     out_torch = ttnn.to_torch(out_tt)
@@ -275,7 +285,14 @@ def _run_mixed(device, op_name, a_mem, b_mem, out_mem, dtype_tt, shape=_MIXED_SH
 def test_no_bcast_interleaved(device, op_name, dtype_tt, post_relu):
     # The key new path: DRAM-interleaved inputs/output route through the dual-mode reader/writer
     # (TensorAccessor NoC) + split_work_to_cores placement + non-borrowed DFB rings.
-    _run(device, op_name, ttnn.DRAM_MEMORY_CONFIG, dtype_tt, _INTERLEAVED_SHAPE, post_relu=post_relu)
+    _run(
+        device,
+        op_name,
+        ttnn.DRAM_MEMORY_CONFIG,
+        dtype_tt,
+        _INTERLEAVED_SHAPE,
+        post_act=ttnn.UnaryOpType.RELU if post_relu else None,
+    )
 
 
 @pytest.mark.parametrize("op_name", ["add", "subtract", "multiply"])
@@ -290,7 +307,7 @@ def test_no_bcast_sharded(device, op_name, layout, post_relu):
     else:
         mem_config = _block_sharded_config(_BLOCK_SHARD, _BLOCK_GRID)
         shape = _BLOCK_SHAPE
-    _run(device, op_name, mem_config, ttnn.bfloat16, shape, post_relu=post_relu)
+    _run(device, op_name, mem_config, ttnn.bfloat16, shape, post_act=ttnn.UnaryOpType.RELU if post_relu else None)
 
 
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
@@ -306,7 +323,31 @@ def test_no_bcast_lhs_activation(device, op_name, layout):
     else:
         mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
         shape = _HEIGHT_SHAPE
-    _run(device, op_name, mem_config, ttnn.bfloat16, shape, lhs_relu=True, post_relu=True)
+    _run(
+        device,
+        op_name,
+        mem_config,
+        ttnn.bfloat16,
+        shape,
+        lhs_act=ttnn.UnaryOpType.RELU,
+        post_act=ttnn.UnaryOpType.RELU,
+    )
+
+
+@pytest.mark.parametrize("layout", ["interleaved", "height"])
+def test_no_bcast_lhs_silu_swiglu(device, layout):
+    # Llama 3.2 1B SwiGLU: a multiply with a fused lhs SiLU -- silu(a) * b -- the exact binary-op
+    # activation the model emits (models/tt_transformers/tt/mlp.py: ttnn.mul(w1_out, w3_out,
+    # input_tensor_a_activations=[ttnn.UnaryOpType.SILU])). Same lhs-activation self-loop as
+    # test_no_bcast_lhs_activation, but with SiLU (an SFPU activation, no packer fast-path) on the SFPU
+    # multiply kernel and no post activation (SwiGLU is just silu(a)*b). bf16; interleaved and height-sharded.
+    if layout == "interleaved":
+        mem_config = ttnn.DRAM_MEMORY_CONFIG
+        shape = _INTERLEAVED_SHAPE
+    else:
+        mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
+        shape = _HEIGHT_SHAPE
+    _run(device, "multiply", mem_config, ttnn.bfloat16, shape, lhs_act=ttnn.UnaryOpType.SILU, pcc=0.99)
 
 
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
@@ -392,8 +433,8 @@ def test_no_bcast_mixed_strategy_and_grid(device, op_name, a_mem, b_mem, out_mem
     # Prove the factory has NO restriction on the non-borrowed operands: different shard STRATEGIES per
     # operand (Height/Width/Block) and DIFFERENT core grids per operand both route through the NoC
     # (TensorAccessor) path. bf16 add => FPU compute kernel; bf16 multiply => SFPU kernel. On Quasar this
-    # passing is itself proof of v2 routing (the descriptor path cannot run on Quasar); on Wormhole, where
-    # the descriptor path would also pass, _run_mixed additionally asserts the DFB factory was used.
+    # passing is itself proof of v2 routing (the descriptor path cannot run on Quasar); on Wormhole the
+    # descriptor path would also pass, so there it checks numerical correctness rather than v2 selection.
     pcc = 0.99 if op_name == "multiply" else None
     _run_mixed(device, op_name, a_mem, b_mem, out_mem, ttnn.bfloat16, pcc=pcc)
 

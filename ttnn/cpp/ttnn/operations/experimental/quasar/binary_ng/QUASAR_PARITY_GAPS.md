@@ -49,7 +49,7 @@ Each is a `return false` in `matches_metal_v2_slice`; WH handles it via the desc
 | Sharding ≠ L1 height/block (width-sharded, DRAM-sharded) | rejected |
 | Mismatched a/b/out shard specs (grid/shape/orientation) | requires identical |
 | Zero-volume (degenerate) | rejected; moot — `skip_launch` no-ops volume==0 |
-| **Subtile broadcast** (scalar/row/col) | *out of no-broadcast scope, but the single largest WH-vs-Quasar surface — the next porting milestone* |
+| **Subtile broadcast** (scalar/row/col) | out of no-broadcast scope; the single largest WH-vs-Quasar surface and the next porting milestone. **LLK foundation is ready** — `unary_bcast` is ported + sim-certified (bf16 scalar/col/row) on Quasar (see §6); the remaining gap is op-side wiring, not foundation. |
 
 ## 2. Admitted by the gate but hard-errors on Quasar  [ARCH] / [PORT]
 
@@ -111,13 +111,39 @@ rhs pre-activation (only lhs is tested) · block-sharded **+** activation · div
 larger / nD interleaved shapes (group-2 / nD-stride path) · isclose/max/min · int32 add ·
 interleaved program-cache-hit. (Uneven height/block shards ARE covered by the resnet canary.)
 
+## 6. Subtile-broadcast foundation (`unary_bcast`) — Quasar-ready (probed 2026-07-01)
+
+Subtile broadcast is the next milestone (§1). Its LLK + compute-API foundation on Quasar was audited and
+**sim-certified**, so the remaining work is **op-side wiring**, not a foundation port.
+
+- **Ported across all 3 layers**, on both our tt-llk pin and `origin/main`:
+  - Compute API `tt_metal/hw/inc/api/compute/bcast.h` — `unary_bcast` / `_init` / `_uninit` carry
+    `#ifdef ARCH_QUASAR` branches (landed via #41329 "Unary Broadcast Quasar"; byte-identical on main).
+  - Metal wrappers `hw/ckernels/quasar/metal/llk_api/{llk_unpack_A_api.h, llk_math_unary_datacopy_api.h}` —
+    `if constexpr` route the non-NONE case to `_llk_unpack_unary_broadcast_operands_*` /
+    `_llk_math_eltwise_unary_broadcast_*`.
+  - Core LLK `tt_llk_quasar/llk_lib/{llk_unpack_unary_broadcast_operands.h, llk_math_unary_broadcast.h}` —
+    real per-type SCALAR/ROW/COL bodies, no `#ifndef ARCH_QUASAR` no-ops.
+- **Sim-certified GREEN** (`release_qsr` libttsim.so, via `run_test.sh`): `test_unary_broadcast_quasar.py`
+  bf16 **scalar / column / row** all PASS (exit 0).
+- **Caveats — design around these:**
+  - **fp32 not wired.** The Quasar branch forces `unpack_to_dest=false` / `EN_32BIT_DEST=false`; the LLK test
+    disables fp32 (`# Buggy functionality for Float32 (unpack_to_dest=True) tbd`). Start bf16 (same theme as §3).
+  - **`reconfigure_unary_bcast` is a no-op on Quasar** (entirely under `#ifndef ARCH_QUASAR`) — init per bcast
+    type instead of relying on mid-program reconfigure.
+  - **A2D / movA2D bcast variant is unsupported** on Quasar (static_assert); `unary_bcast` uses the B2D / SrcB
+    path, so it is unaffected — do not route A2D.
+- **Op-side work to enable it:** relax `matches_metal_v2_slice` (currently rejects `SubtileBroadcastType != NONE`,
+  §1) and have the factory/kernel emit the `unary_bcast` pre-broadcast of the smaller operand.
+
 ## Priorities
 
 1. **SFPU add/sub port** (§3) — un-blocks fp32 add/sub; shared-file change + WH/BH regression check.
 2. **Gate hygiene** (§2) — optionally reject Quasar-unsupported formats/int-SFPU ops with a clear
    "unsupported on Quasar" message rather than a deep throw/compile error.
 3. **Coverage** (§5) — add Quasar test cases to lock down the rest of the bf16 slice.
-4. **Subtile broadcast** (§1) — the next major Quasar porting milestone beyond no-broadcast.
+4. **Subtile broadcast** (§1, §6) — the next major Quasar porting milestone beyond no-broadcast; the
+   LLK/compute-API foundation is ready and sim-certified (§6), so this is op-side wiring (gate + factory/kernel).
 
 ## Systemic lesson
 

@@ -540,9 +540,11 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // tensor-tensor, TILE slice — FPU and SFPU, any dtype (lhs/rhs must match), full lhs/rhs/post
     // activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
     // read/written over the NoC) OR L1-sharded (height/block/width). The DFB kernels are per-operand
-    // capable (reader: SRC_SHARDED / SRC_SHARDED_B; writer: DST_SHARDED), so a sharded operand whose
-    // grid matches the op's core set is BORROWED (its resident L1 shard backs the DFB, no NoC work)
-    // while every other operand is read/written over the NoC via a sharding-aware TensorAccessor.
+    // capable (reader: SRC_SHARDED / SRC_SHARDED_B; writer: DST_SHARDED). The factory borrows
+    // all-or-nothing: only when all three operands are L1-sharded on one matching grid are their resident
+    // L1 shards borrowed to back the DFBs (no NoC work); otherwise — any interleaved operand, mixed
+    // strategies, or a divergent grid — NONE are borrowed and every operand is read/written over the NoC
+    // via a sharding-aware TensorAccessor.
     // Everything else falls through to the descriptor path; this predicate is the correctness boundary.
     // Deferred to the descriptor (not handled by the factory): tensor-scalar, where-op, quantization,
     // row-major (non-TILE), and mixed lhs/rhs dtype.

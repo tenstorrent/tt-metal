@@ -54,6 +54,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
@@ -192,7 +193,7 @@ m2::DataflowBufferSpec make_dfb(
         .num_entries = num_entries,
         .data_format_metadata = df,
         .tile_format_metadata = tile,
-        .borrowed_from = borrowed,
+        .borrowed_from = std::move(borrowed),
     };
 }
 
