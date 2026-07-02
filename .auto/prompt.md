@@ -95,9 +95,42 @@ Never lower a threshold to force a pass — that is cheating. If PCC is low, fix
 - Do not overfit / cheat: real HF reference, real config dims, real thresholds.
 - Keep tests fast where possible (small batch, representative seq lens).
 
-## What's Been Tried
-(empty — session start. Update after each module: what mapped cleanly to TTTv2, what needed a
-custom class, PCC achieved, and any dtype/layout/eps gotchas.)
+## What's Been Tried (updated through Module 9)
+**Strategy validated: the entire ACE-Step DiT backbone = 3 custom TTTv2-pattern classes +
+pure TTTv2 reuse + one ttnn RoPE op.** All modules PCC-pass vs the genuine HF reference.
+
+Pure TTTv2 reuse (ZERO custom code):
+- M1 RMSNorm  -> RMSNorm1D (eps 1e-6 via from_config; simple ctor defaults 1e-5). PCC 0.9999.
+- M2 MLP      -> MLP1D(w1=gate,w2=down,w3=up) SiLU. HF Linear [out,in] .transpose to [in,out]. 0.9999.
+- M3 RoPE     -> ttnn.experimental.rotary_embedding_hf (HF rotate_half convention, NOT the
+                Meta-permute rotary_embedding_llama). cos/sin [1,1,seq,head_dim] TILE. 0.9999.
+
+Custom classes in tt/ (follow TTTv2 contract; reuse ttnn ops + RMSNorm1D/MLP1D inside):
+- tt/attention.py  AceStepAttention — bidirectional GQA (16/8), per-head qk-norm via RMSNorm1D,
+    rotary_embedding_hf, ttnn SDPA is_causal=False. ONE class covers 3 modes: full-self,
+    sliding-self (window=128 via additive 4D mask), cross (kv from encoder, no RoPE). M4/5/6.
+- tt/timestep_embedding.py  TimestepEmbedding — host sinusoidal(256) + device Linears +
+    time_proj->6x modulation. temb & timestep_proj both 0.999. M7.
+- tt/encoder_layer.py  AceStepEncoderLayer — pre-norm self-attn+MLP+residuals (full+sliding). M8.
+- tt/dit_layer.py  AceStepDiTLayer — AdaLN (scale_shift_table+temb).chunk(6) gated residuals +
+    self + cross + MLP. THE core generative block. PCC>=0.98. M9.
+
+Key gotchas learned:
+- Reference loading: `uv pip install vector_quantize_pytorch` INTO the venv (not ~/.local);
+  apg_guidance.py is absent from snapshot -> stubbed in reference/hf_reference.py; MUST set
+  `cfg._attn_implementation='eager'` or HF attention crashes KeyError:None.
+- Commit flow: pre-commit black reformats files and aborts the FIRST commit; run `git add -A &&
+  git commit` a SECOND time. NEVER use --amend with hooks. (Local autoresearch git automation
+  can't reach the remote repo — commit manually on remote; ignore the local 'git add failed'.)
+- Harness: autoresearch runs LOCALLY (mac); repo is REMOTE. measure runs via
+  `ssh -o BatchMode=yes sjc-snva-tp100 'cd <repo> && ./.auto/measure.sh'`. Edit with ssh_*.
+
+## Remaining (bring-up order)
+- M10 AceStepLyricEncoder: Linear(text_hidden_dim=1024->hidden) + N=8 AceStepEncoderLayer + norm.
+- M11 stack of DiT layers (24) — verify multi-layer accumulation stays PCC>=0.97.
+- M12+ timbre encoder, attention pooler, FSQ (ResidualFSQ), 1D VAE audio decoder
+  (biggest from-scratch pieces — check models/tt_dit/models/audio_vae + layers/audio_ops.py FIRST).
+- Full DiT model + pipeline wiring.
 
 ## Key gotchas to remember
 - ACE-Step uses **per-head q/k RMSNorm** (Qwen3-style) — Attention1D may need qk-norm wired in.
