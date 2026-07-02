@@ -15,6 +15,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 
+#include <functional>
+
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
@@ -1180,14 +1182,22 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
-    ComputeHardwareConfig compute_hw{
-        ComputeGen2Config{
+    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
+        if (device_arch == tt::ARCH::QUASAR) {
+            return ComputeGen2Config{
+                .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+                .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+                .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
+                .math_approx_mode = false,
+            };
+        }
+        return ComputeGen1Config{
             .math_fidelity = get_math_fidelity(device_compute_kernel_config),
             .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
             .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
             .math_approx_mode = false,
-        },
-    };
+        };
+    });
 
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
