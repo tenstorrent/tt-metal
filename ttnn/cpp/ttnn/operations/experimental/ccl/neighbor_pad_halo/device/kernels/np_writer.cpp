@@ -299,23 +299,33 @@ void kernel_main() {
         return iter < pad2_right_sticks || iter >= (num_sticks_to_read - pad2_left_sticks);
     };
 
-    // W-path per-batch two-pass reorder dims (common args [4],[5], W-writer only; gated progress>0).
+    // W-path interior-first reorder dims (common args [4],[5], W-writer only). Parsed for every W-writer
+    // (the factory always sets [4],[5]); used by W_TWO_PASS (progress>0) and the progress==0 halo path.
     uint32_t w_input_H = 0, w_pad_h = 0, w_h_total = 1, w_row_stride = 0, w_slice_frames = 0;
-    if constexpr (is_w_fabric_writer && progress_t_batch_size > 0) {
+    bool w_interior_first_p0 = false;
+    if constexpr (is_w_fabric_writer) {
         w_input_H = get_common_arg_val<uint32_t>(4);
         w_pad_h = get_common_arg_val<uint32_t>(5);
         w_h_total = w_input_H + 2 * w_pad_h;
         w_row_stride = num_sticks_per_halo_dim * output_halo_dim_size;
         w_slice_frames = (w_h_total > 0) ? (outer_dim_size / w_h_total) : 0;
+        // Lockstep with np_phase2_w_reader: progress==0 reorders interior-first when frames align.
+        w_interior_first_p0 = (progress_t_batch_size == 0) && (outer_dim_size == w_slice_frames * w_h_total);
     }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     uint32_t l1_buf_offset = 0;                       // L1 intermediate: accumulates across all outer_dims (no reuse)
     uint32_t inc_offset = outer_dim_offset_start_id;  // recv-commit cursor, advances per committed od
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
-        // Global two-pass: whole slice as one batch -> ALL interior rows first, then ALL corners.
+        // Interior-first reorder: ALL interior rows then ALL corners (lockstep with the W reader).
         uint32_t eff_offset = outer_dim_offset;
-        if constexpr (is_w_fabric_writer && progress_t_batch_size > 0 && W_TWO_PASS) {
+        bool w_use_reorder = false;
+        if constexpr (is_w_fabric_writer && progress_t_batch_size > 0) {
+            w_use_reorder = W_TWO_PASS;
+        } else if constexpr (is_w_fabric_writer) {
+            w_use_reorder = w_interior_first_p0;
+        }
+        if (w_use_reorder) {
             uint32_t frame_in_slice, hp;
             np_reorder_batch(outer_dim, w_slice_frames, w_input_H, w_pad_h, frame_in_slice, hp);
             const uint32_t reordered = frame_in_slice * w_h_total + hp;

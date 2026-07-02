@@ -92,18 +92,7 @@ void kernel_main() {
     (void)output_row_width;
     (void)pad2_left;
 
-    // H->W ordering:
-    //  - progress_t_batch_size > 0 (fused conv path): corner reads gate per-batch on HT/HB below, so no
-    //    upfront barrier is needed.
-    //  - progress_t_batch_size == 0 (halo-only op): no per-batch gate, so wait here for all H writers'
-    //    Phase-2 barrier signal (barrier_count = num_h_fabric_cores) before reading any corner from the
-    //    halo buffer's H-section. Mirrors the standalone phase2_w_reader Phase-2 barrier.
-    if constexpr (progress_t_batch_size == 0) {
-        if (barrier_count > 0) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
-        }
-    } else {
+    if constexpr (progress_t_batch_size > 0) {
         (void)barrier_sem_addr;
         (void)barrier_count;
     }
@@ -115,10 +104,26 @@ void kernel_main() {
     const uint32_t sticks_per_batch = progress_t_batch_size * h_total;
     // Frames in this core's slice (link-local; the partial last batch lives here when T % N != 0).
     const uint32_t slice_frames = (h_total > 0) ? (outer_dim_size / h_total) : 0;
-    // Global two-pass layout: interior rows [0, interior_rows) then corner rows. A conv batch's W-pad
-    // is complete only after its corners are written (corner pass), so signal w_region_sem there.
+    // Interior-first layout: rows [0, interior_rows) are H-independent (read from INPUT), then corner
+    // rows [interior_rows, ...) (read from the halo H-section). Signal / barrier at the transition.
     const uint32_t interior_rows = slice_frames * input_H_dev;
     const uint32_t corner_rows_per_batch = progress_t_batch_size * 2 * padding_h;
+
+    // H->W ordering (progress==0, halo-only, no conv):
+    //   Fast path (interior_first_p0): frames align to this core's slice, so np_reorder_batch below emits
+    //   ALL interior rows first (overlapping the H exchange), then ALL corners. The H->W barrier is then
+    //   taken ONCE at the interior->corner transition (outer_dim == interior_rows) below.
+    //   Fallback (partial last frame): reorder can't cover a partial frame safely, so read linearly and
+    //   take the H->W barrier upfront here.
+    // (progress>0 fused path gates corners per-batch on HT/HB and ignores this barrier.)
+    const bool interior_first_p0 =
+        (progress_t_batch_size == 0) && (barrier_count > 0) && (outer_dim_size == slice_frames * h_total);
+    if constexpr (progress_t_batch_size == 0) {
+        if (!interior_first_p0 && barrier_count > 0) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
+        }
+    }
 
     // Main loop: read W-boundary sticks → CB for the paired writer.
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
@@ -126,9 +131,14 @@ void kernel_main() {
         // its corners) for FULL batches; linear for the partial last batch (and when not batching).
         uint32_t t_idx;
         uint32_t h_padded;
-        if constexpr (progress_t_batch_size > 0 && W_TWO_PASS) {
-            // Global two-pass: whole slice as one batch -> ALL interior rows first, then ALL corners.
-            // W runs its H-independent interior free while H produces; corners come after H is done.
+        bool use_reorder;
+        if constexpr (progress_t_batch_size > 0) {
+            use_reorder = W_TWO_PASS;
+        } else {
+            use_reorder = interior_first_p0;
+        }
+        if (use_reorder) {
+            // Interior rows first (H-independent), corners last. W does interior work while H produces.
             uint32_t frame_in_slice;
             np_reorder_batch(outer_dim, slice_frames, input_H_dev, padding_h, frame_in_slice, h_padded);
             t_idx = (outer_dim_start / h_total) + frame_in_slice;
@@ -138,6 +148,14 @@ void kernel_main() {
             h_padded = global_idx % h_total;
         }
         const bool h_interior = (h_padded >= padding_h && h_padded < padding_h + input_H_dev);
+
+        // progress==0 fast path: take the H->W barrier ONCE at the first corner row (all interior done).
+        if constexpr (progress_t_batch_size == 0) {
+            if (interior_first_p0 && outer_dim == interior_rows) {
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
+            }
+        }
 
         // A non-interior row is a corner stick built from H-halo. Before reading it, wait this
         // frame's H batch committed across ALL H-links (the W-reader's frames span the H partition).
