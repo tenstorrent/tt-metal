@@ -1072,8 +1072,15 @@ targets:
             status: active
             perf:
               prefill_time_to_first_token: 616
-              decode_t/s/u: 17.76
-              decode_t/s: 568.19
+              # decode t/s/u is very variable on wh_llmbox_perf: observed 13.8-23.7 t/s/u across
+              # runs (13.8-15.0 in tier-3 28399874211; 20.67 in 28376088185; 23.71 in 28529922983)
+              # -- a ~1.7x swing. Center at 19.0 with a wide 0.35 tolerance -> band [12.35, 25.65]
+              # covers the full observed range so the gate stops flapping in both directions.
+              # (Heavy path via #48404, force-argmax off.) If it still flaps, omit like gemma-3-27b.
+              decode_t/s/u: 19.0
+              decode_t/s: 608.0
+              decode_t_s_tolerance: 0.35
+              decode_t_s_u_tolerance: 0.35
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
