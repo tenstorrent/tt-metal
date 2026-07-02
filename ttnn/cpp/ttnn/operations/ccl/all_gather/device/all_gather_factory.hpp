@@ -14,11 +14,13 @@ namespace ttnn::operations::ccl {
 
 struct AllGatherFactory {
     struct shared_variables_t {
-        std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
-        tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
-        tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
-        tt::tt_metal::GlobalSemaphore barrier_sem;
-        uint32_t ring_index = 0;
+        // Every conveyor core (forward and backward). Direction is a runtime arg, so one reader kernel and one
+        // writer kernel are compiled and shared across all of them.
+        std::vector<tt::tt_metal::CoreCoord> worker_cores;
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
+        tt::tt_metal::GlobalSemaphore data_valid_sem;
+        tt::tt_metal::GlobalSemaphore ready_sem;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -43,7 +45,8 @@ private:
         const ttnn::MeshCoordinate& sender_device_coord,
         const AllGatherInputs& tensor_args,
         const Tensor& output_tensor,
-        const tt::tt_metal::GlobalSemaphore& barrier_sem);
+        const tt::tt_metal::GlobalSemaphore& data_valid_sem,
+        const tt::tt_metal::GlobalSemaphore& ready_sem);
 };
 
 }  // namespace ttnn::operations::ccl

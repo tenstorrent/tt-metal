@@ -13,227 +13,124 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 #include <cstdint>
-#include <array>
-#include <type_traits>
 #include <utility>
 
 #include "common.hpp"
 
 using address_t = uint32_t;
 
+// Store-and-forward writer: CB consumer, owns all fabric. It only ever sends (never waits on a semaphore --
+// its sole backpressure is wait_front). Each relay iteration drains the CB and unicasts the stripe one hop to
+// the neighbor's output (same address); iteration 0 also materializes this device's own slice into local
+// output. Signals downstream via data_valid after each stripe; sends its one-shot "alive" ready inc up front.
 void kernel_main() {
-    ///////////////////////////////////////////////////
-    // COMPILE TIME ARGS
-    ///////////////////////////////////////////////////
     constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
     constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
     constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
-    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(3);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(8);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(9) != 0;
-    constexpr auto output_tensor_args = TensorAccessorArgs<10>();
+    constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
+    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
 
-    constexpr bool enable_fabric = (num_connections > 0);
-    constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
 
-    ///////////////////////////////////////////////////
-    // RUNTIME ARGS
-    ///////////////////////////////////////////////////
     size_t arg_idx = 0;
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_chunk_in_stripe_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_byte_offset = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_byte_offset_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_output_chunks = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
-    const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t line_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_e_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_w_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_spine_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t line_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_e_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_w_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_spine_hops_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t slice_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
+    const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const address_t ready_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
+    const uint8_t own_noc_x = get_arg_val<uint32_t>(arg_idx++);  // data_valid target: neighbor's mirror core
+    const uint8_t own_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const uint8_t paired_noc_x = get_arg_val<uint32_t>(arg_idx++);  // ready target (init only)
+    [[maybe_unused]] const uint8_t paired_noc_y = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
+
+    // A direction with no neighbor (a line endpoint) relays nothing; no fabric connection was appended.
+    if (num_iters == 0) {
+        return;
+    }
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
     CircularBuffer cb(cb0_id);
 
-    ///////////////////////////////////////////////////
-    // FABRIC INIT
-    ///////////////////////////////////////////////////
-
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-    if constexpr (enable_fabric) {
-        open_connections(fabric_connection, num_connections, arg_for_fab);
+    open_connections(fabric_connection, 1, arg_for_fab);
+    FabricWriter<output_chunk_size, packet_size> fabric(noc, fabric_connection);
+
+    // One 1-hop atomic-inc route reused for both the "alive" ready inc and the per-stripe data_valid signal.
+    uint8_t sem_route_id = PacketHeaderPool::allocate_header_n(1);
+    uint8_t num_hops[1] = {1};
+    fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        fabric_connection, sem_route_id, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+
+    // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
+    // paired writer start writing into our output. Our own reader does the matching wait.
+    if constexpr (do_init_barrier) {
+        uint64_t paired_ready_addr = safe_get_noc_addr(paired_noc_x, paired_noc_y, ready_sem, 0);
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{paired_ready_addr, 0});
     }
 
-    // Build ranges + ranges_alt arrays.
-    // Connection order matches host: line (W) first, then rect (N) — only active ones are present,
-    // indexed 0..num_connections-1.
-    FabricRange ranges[2] = {};      // [0] = W-line; [1] = N-rect (Fabric_2D only)
-    FabricRange ranges_alt[2] = {};  // [0] = W-line; [1] = N-rect (Fabric_2D only)
-#ifdef FABRIC_2D
-    {
-        uint32_t idx = 0;
-        if (line_hops > 0) {
-            ranges[idx] = FabricRange{0, line_hops, 0, 0};
-            ranges_alt[idx] = FabricRange{0, line_hops_alt, 0, 0};
-            ++idx;
-        }
-        if (rect_spine_hops > 0) {
-            ranges[idx] = FabricRange{rect_e_hops, rect_w_hops, rect_spine_hops, 0};
-            ranges_alt[idx] = FabricRange{rect_e_hops_alt, rect_w_hops_alt, rect_spine_hops_alt, 0};
-            ++idx;
-        }
-    }
-#else
-    // 1D: exactly one of (line_hops, rect_spine_hops) is nonzero — that's the active axis.
-    ranges[0] = (line_hops != 0) ? line_hops : rect_spine_hops;
-    ranges_alt[0] = (line_hops != 0) ? line_hops_alt : rect_spine_hops_alt;
-#endif
+    const uint64_t downstream_data_valid_addr = safe_get_noc_addr(own_noc_x, own_noc_y, data_valid_sem, 0);
 
-    // Allocate header and set state for data sends
-    FabricWriter<output_chunk_size, packet_size, load_balance_across_alt_routes> fabric(
-        noc, fabric_connection, num_connections, ranges, ranges_alt);
+    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
 
-    // Allocate header and set state for semaphore sends
-    uint8_t sem_route_id = 0;
-    if constexpr (enable_fabric) {
-        sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-        uint8_t starts[1] = {1};
+    uint32_t stripe = initial_stripe;
+    for (uint32_t iter = 0; iter < num_iters; ++iter) {
+        const bool last = (iter == num_iters - 1);
+        it.init(stripe, last ? final_start : slice_start, last ? final_count : slice_count);
+        const bool local_copy = (iter == 0) && (do_local_write != 0);
 
-        fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            fabric_connection,
-            sem_route_id,
-#ifndef FABRIC_2D
-            starts,
-#endif
-            ranges,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0u,    // ignore
-                1u});  // increment 1
-    }
-
-    // Initialization barrier:
-    // In some cases we don't have a guarantee that the output tensor has been allocated
-    // on remote devices (every device's command queue executes asynchronously). So we wait
-    // for this kernel to begin execution on all remote devices before sending any data.
-    //
-    // Mechanism:
-    // Each worker core syncs with its mirror core (the same core) on all remote devices.
-    // Reader fires sem increment forward, and also owns sem wait + decrement.
-    // Writer fires sem increment backward, and implicitly gets blocked waiting for CB to
-    // contain valid data.
-    if constexpr (do_init_barrier && enable_fabric) {
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-    }
-
-    ///////////////////////////////////////////////////
-    // MAIN
-    ///////////////////////////////////////////////////
-
-    // "iterator" for output_tensor:
-    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
-    // (see the "Page indexing" glossary in all_gather_factory.cpp)
-    // Returns {output_page_id, byte_offset} for the current chunk, then advances.
-    // Supports any gather dim, any N-D shape, any shard spec.
-    uint32_t output_page_id = output_page_id_start;
-    uint32_t output_page_byte_off = output_page_byte_offset_start;
-    uint32_t output_chunks_sent = 0;
-    uint32_t output_chunk_in_stripe = output_chunk_in_stripe_start;
-    auto valid_output_chunk = [&]() __attribute__((always_inline)) { return output_chunks_sent < num_output_chunks; };
-    auto next_output_chunk = [&]() __attribute__((always_inline)) {
-        std::pair<uint32_t, uint32_t> loc{output_page_id, output_page_byte_off};
-        output_chunks_sent++;
-        if (++output_chunk_in_stripe == output_chunks_per_stripe) {
-            output_chunk_in_stripe = 0;
-            output_page_id += output_page_stripe_jump;
-            output_page_byte_off = output_page_byte_offset;
-        } else {
-            output_page_byte_off += output_chunk_size;
-            if (output_page_byte_off == output_page_size) {
-                output_page_byte_off = 0;
-                output_page_id++;
+        while (it.valid()) {
+            cb.wait_front(1);
+            uint32_t l1_read_addr = cb.get_read_ptr();
+            for (uint32_t i = 0; i < outputs_per_cb_page && it.valid(); ++i) {
+                auto [page_id, byte_off] = it.next();
+                uint64_t neighbor_addr =
+                    tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, byte_off);
+                fabric.async_write(l1_read_addr, neighbor_addr);
+                if (local_copy) {
+                    // Own shard -> own output stripe (same address). Posted write on a separate VC so it
+                    // doesn't contend with the fabric writes on the same NOC.
+                    noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
+                        CoreLocalMem<uint32_t>(l1_read_addr),
+                        output_tensor_accessor,
+                        output_chunk_size,
+                        {},
+                        {.page_id = page_id, .offset_bytes = byte_off},
+                        {.vc = NOC_UNICAST_WRITE_VC + 1});
+                }
+                l1_read_addr += output_chunk_size;
             }
-        }
-        return loc;
-    };
-
-    while (valid_output_chunk()) {
-        cb.wait_front(1);
-        auto l1_read_addr = cb.get_read_ptr();
-
-        for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_chunk(); ++i) {
-            auto [page_id, page_byte_offset] = next_output_chunk();
-            // Fabric write
-            auto fabric_tensor_page_addr =
-                tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, page_byte_offset);
-            if constexpr (enable_fabric) {
-                fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
+            if (local_copy) {
+                noc.async_writes_flushed<NocOptions::POSTED>();
             }
-
-            // Local write.
-            // For local writes use posted writes (to skip waiting for ack) on different virtual channel
-            // (to avoid interfering with Fabric writes on same noc)
-            noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
-                CoreLocalMem<uint32_t>(l1_read_addr),
-                output_tensor_accessor,
-                output_chunk_size,
-                {},
-                {.page_id = page_id, .offset_bytes = page_byte_offset},
-                {.vc = NOC_UNICAST_WRITE_VC + 1});
-
-            l1_read_addr += output_chunk_size;
+            fabric.async_writes_flushed();
+            cb.pop_front(1);
         }
 
-        noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes
-        if constexpr (enable_fabric) {
-            fabric.async_writes_flushed();  // wait for Fabric writes
-        }
-        cb.pop_front(1);
-    }
-
-    ///////////////////////////////////////////////////
-    // CLEANUP
-    ///////////////////////////////////////////////////
-
-    // Completion barrier:
-    // We must only exit this op after guaranteeing that all remote data has arrived.
-    //
-    // Mechanism:
-    // Each worker core sends a sem to its mirror core (the same core) on all remote devices. The sem
-    // is sent after all data sends on a particular link, so it's correctly ordered at the receiver.
-    // Reader fires sem increment forward, and also owns sem wait + decrement.
-    // Writer fires sem increment backward, and exits immediately.
-    if constexpr (enable_fabric) {
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        // Tell the downstream neighbor this stripe has landed. Ordered after the data on this connection, so
+        // its reader can safely read the stripe once it observes the increment.
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
             sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{downstream_data_valid_addr, 0});
+
+        stripe = (stripe + stripe_step) % num_devices;
     }
 
-    if constexpr (enable_fabric) {
-        close_connections(fabric_connection);
-    }
+    close_connections(fabric_connection);
     noc.async_write_barrier();
 }
