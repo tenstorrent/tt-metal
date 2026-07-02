@@ -480,18 +480,34 @@ def run_chunked_transformer_padded_trace(
     effective_cache_path = weight_cache_path / f"{sp}x{tp}"
     experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
     assert TtPrefillTransformer.check_cache_complete(
-        effective_cache_path, num_layers, experts_per_chip=experts_per_chip,
+        effective_cache_path,
+        num_layers,
+        experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     transformer = TtPrefillTransformer(
-        mesh_device=mesh_device, config=config, model_cfg=variant.model_config, state_dict={},
-        num_layers=num_layers, seq_len=CHUNK, max_seq_len=seq_len_cache, dispatch_buffer_capacity_factor=8,
-        num_links=num_links, topology=topology, sp_axis=sp_axis, tp_axis=tp_axis, is_balanced=False,
-        gate_fallback_mode=gate_fallback_mode, weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True, is_chunked=True, slot_num=1,
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=variant.model_config,
+        state_dict={},
+        num_layers=num_layers,
+        seq_len=CHUNK,
+        max_seq_len=seq_len_cache,
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        gate_fallback_mode=gate_fallback_mode,
+        weight_cache_path=effective_cache_path,
+        lm_head_is_column_parallel=True,
+        is_chunked=True,
+        slot_num=1,
         # kv_only_last_layer -> device-only forward (no host readback) so ttnn trace can capture it.
-        kv_only_last_layer=True, overlap_shared_expert_with_dispatch=True,
+        kv_only_last_layer=True,
+        overlap_shared_expert_with_dispatch=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
     ttnn.synchronize_device(mesh_device)
@@ -516,8 +532,13 @@ def run_chunked_transformer_padded_trace(
 
     def _make_cache():
         return init_kvpe_cache(
-            kvpe_cache_head_dim=kvpe_dim, mesh_device=mesh_device, seq_len=seq_len_cache,
-            mesh_shape=mesh_shape, sp_axis=sp_axis, num_kvpe_cache_layers=num_layers, num_users=1,
+            kvpe_cache_head_dim=kvpe_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_layers,
+            num_users=1,
         )
 
     sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None))
@@ -527,50 +548,86 @@ def run_chunked_transformer_padded_trace(
     cache_A = _make_cache()
     for (ks, e), tok in zip(starts, chunk_tok_host):
         tt_tokens = ttnn.from_torch(
-            tok, device=mesh_device, dtype=ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper,
+            tok,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=sp_mapper,
         )
         transformer.forward(
-            tt_tokens, cache_A, actual_isl=e - ks,
-            actual_start=ks, actual_end=e, cache_user_id=0, metadata=None,
+            tt_tokens,
+            cache_A,
+            actual_isl=e - ks,
+            actual_start=ks,
+            actual_end=e,
+            cache_user_id=0,
+            metadata=None,
         )
         ttnn.deallocate(tt_tokens)
     ttnn.synchronize_device(mesh_device)
     logger.info("[padded-trace] PASS A (untraced scalar) done; recording per-layer KV PCC vs golden")
     _, pcc_A = _record_kv_cache_pcc(
-        trace_dir, layout, cache_A, mesh_device, sp, num_layers, seq_len_cache, total_len,
-        kvpe_dim, config.kv_lora_rank, return_per_layer=True,
+        trace_dir,
+        layout,
+        cache_A,
+        mesh_device,
+        sp,
+        num_layers,
+        seq_len_cache,
+        total_len,
+        kvpe_dim,
+        config.kv_lora_rank,
+        return_per_layer=True,
     )
     ttnn.deallocate(cache_A)
 
     # ---- PASS B: metadata trace captured ONCE, replayed per split ----
     cache_B = _make_cache()  # persistent (captured) cache
     trace_input = ttnn.from_torch(
-        chunk_tok_host[0], device=mesh_device, dtype=ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper,
+        chunk_tok_host[0],
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=sp_mapper,
     )
+
     # Per-element-tensor metadata: 3 persistent 1-element tensors (slot_id, actual_start, actual_end).
     def _meta1_dev(val):
         return ttnn.from_torch(
-            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1), device=mesh_device,
-            dtype=ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.ROW_MAJOR_LAYOUT,
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=rep_mapper,
         )
 
     def _meta1_host(val):
         return ttnn.from_torch(
             torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
-            dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep_mapper,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep_mapper,
         )
 
     trace_metadata = (_meta1_dev(0), _meta1_dev(starts[0][0]), _meta1_dev(starts[0][1]))
-    tok_host_tt = [ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper) for t in chunk_tok_host]
+    tok_host_tt = [
+        ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper)
+        for t in chunk_tok_host
+    ]
     meta_host_tt = [(_meta1_host(0), _meta1_host(ks), _meta1_host(e)) for (ks, e) in starts]
 
     def _fwd_meta():
         transformer.forward(
-            trace_input, cache_B, actual_isl=CHUNK,
-            actual_start=None, actual_end=None, cache_user_id=0, metadata=trace_metadata,
+            trace_input,
+            cache_B,
+            actual_isl=CHUNK,
+            actual_start=None,
+            actual_end=None,
+            cache_user_id=0,
+            metadata=trace_metadata,
         )
 
     controller = SubDeviceTraceController(mesh_device)
@@ -597,8 +654,17 @@ def run_chunked_transformer_padded_trace(
         ttnn.deallocate(t)
     logger.info("[padded-trace] PASS B (metadata trace) done; recording per-layer KV PCC vs golden")
     _, pcc_B = _record_kv_cache_pcc(
-        trace_dir, layout, cache_B, mesh_device, sp, num_layers, seq_len_cache, total_len,
-        kvpe_dim, config.kv_lora_rank, assert_threshold=LAYER_PCC_THRESHOLD,
+        trace_dir,
+        layout,
+        cache_B,
+        mesh_device,
+        sp,
+        num_layers,
+        seq_len_cache,
+        total_len,
+        kvpe_dim,
+        config.kv_lora_rank,
+        assert_threshold=LAYER_PCC_THRESHOLD,
         assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
         return_per_layer=True,
     )
@@ -824,12 +890,12 @@ def run_chunked_transformer_no_pcc(
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     if verify_kv_cache_pcc:
-        assert use_trace, "verify_kv_cache_pcc checks the TRACED forward's KV output; requires use_trace=True"
-        # The scalar/pinned trace path can only populate chunk 0, so it stays single-chunk. The metadata
-        # path advances the per-chunk scalars on-device, so it can fill the whole cache across n_chunks and
-        # PCC the full [0:n_chunks*CHUNK] valid region against the golden kv_post_transform.
+        # KV-cache PCC runs on one of: the traced metadata path (use_trace+use_metadata), the EAGER
+        # metadata path (use_metadata, no trace — the determinism BASELINE the traced number must match),
+        # or the single-chunk scalar trace path. The scalar/pinned trace path can only populate chunk 0.
+        assert use_metadata or use_trace, "verify_kv_cache_pcc needs the metadata path or the trace path"
         if not use_metadata:
-            assert n_chunks == 1, "KV-cache PCC on the scalar trace path is single-chunk (chunk 0)"
+            assert use_trace and n_chunks == 1, "scalar KV-cache PCC is single-chunk traced (chunk 0)"
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -944,7 +1010,103 @@ def run_chunked_transformer_no_pcc(
     # Per-chunk replay timings (metadata trace path only); surfaced in the perf JSON below.
     per_chunk_seconds = []
 
-    if use_trace and use_metadata:
+    if verify_kv_cache_pcc and use_metadata and not use_trace:
+        # ------------- EAGER METADATA MULTI-CHUNK KV-PCC (no trace) — DETERMINISM BASELINE -------------
+        # Identical forward to the traced metadata path (per-chunk scalars read on-device from the
+        # persistent metadata tensor), but run eagerly per chunk instead of capture+replay. This is the
+        # reference the traced KV-PCC must match: if the traced number differs materially, the trace
+        # machinery introduced non-determinism (not the per-element metadata ops).
+        trace_input = ttnn.from_torch(
+            chunk_tok_host[0],
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+        )
+
+        def _meta1_dev(val):
+            return ttnn.from_torch(
+                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        def _meta1_host(val):
+            return ttnn.from_torch(
+                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        eager_metadata = (_meta1_dev(0), _meta1_dev(0), _meta1_dev(CHUNK))
+        tok_host_tt = [
+            ttnn.from_torch(
+                chunk_tok_host[c],
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+            for c in range(n_chunks)
+        ]
+        meta_host_tt = [
+            (_meta1_host(0), _meta1_host(c * CHUNK), _meta1_host(c * CHUNK + CHUNK)) for c in range(n_chunks)
+        ]
+
+        per_iter_seconds = []
+        profiler.start("tt_forward")
+        signpost("PROFILE_MEASURE_START")
+        for it in range(num_iters):
+            iter_start = time.time()
+            for c in range(n_chunks):
+                ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
+                for src, dst in zip(meta_host_tt[c], eager_metadata):
+                    ttnn.copy_host_to_device_tensor(src, dst)
+                chunk_start = time.time()
+                transformer.forward(
+                    trace_input,
+                    tt_kvpe_cache,
+                    actual_isl=CHUNK,
+                    actual_start=None,
+                    actual_end=None,
+                    cache_user_id=0,
+                    metadata=eager_metadata,
+                    return_intermediates=False,
+                )
+                ttnn.synchronize_device(mesh_device)
+                dt = time.time() - chunk_start
+                per_chunk_seconds.append(dt)
+                logger.info(f"  iter {it} chunk {c} (eager metadata): {dt:.3f} seconds")
+            per_iter_seconds.append(time.time() - iter_start)
+        profiler.end("tt_forward")
+        signpost("PROFILE_MEASURE_END")
+
+        kv_min_pcc = _record_kv_cache_pcc(
+            trace_dir,
+            layout,
+            tt_kvpe_cache,
+            mesh_device,
+            sp,
+            num_layers,
+            SEQ_CACHE,
+            total_len,
+            kvpe_dim,
+            config.kv_lora_rank,
+            assert_threshold=KV_CACHE_PCC_THRESHOLD,
+            assert_layer_depth=GATED_LAYER_DEPTH,
+        )
+        logger.success(
+            f"[eager KV PCC] min KV-cache PCC over {num_layers} layers ({n_chunks} chunks) = "
+            f"{kv_min_pcc:.6f} (layers 0..{GATED_LAYER_DEPTH} asserted >= {KV_CACHE_PCC_THRESHOLD})"
+        )
+        ttnn.deallocate(trace_input)
+        for t in eager_metadata:
+            ttnn.deallocate(t)
+    elif use_trace and use_metadata:
         # ---------------------- METADATA MULTI-CHUNK TRACE PATH (N chunks) ----------------------
         # Capture the forward ONCE, then replay it for every chunk. The per-chunk scalars
         # (slot/actual_start/actual_end) are NOT baked into the captured command stream — the trace-safe
@@ -964,19 +1126,25 @@ def run_chunked_transformer_no_pcc(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
         )
+
         # Per-element-tensor metadata: 3 persistent 1-element uint32 replicated-DRAM tensors
         # (slot_id, actual_start, actual_end), seeded with chunk 0; updated in place per chunk.
         def _meta1_dev(val):
             return ttnn.from_torch(
-                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1), device=mesh_device,
-                dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
         def _meta1_host(val):
             return ttnn.from_torch(
                 torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
-                dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
         trace_metadata = (_meta1_dev(0), _meta1_dev(0), _meta1_dev(CHUNK))
@@ -992,7 +1160,9 @@ def run_chunked_transformer_no_pcc(
             )
             for c in range(n_chunks)
         ]
-        meta_host_tt = [(_meta1_host(0), _meta1_host(c * CHUNK), _meta1_host(c * CHUNK + CHUNK)) for c in range(n_chunks)]
+        meta_host_tt = [
+            (_meta1_host(0), _meta1_host(c * CHUNK), _meta1_host(c * CHUNK + CHUNK)) for c in range(n_chunks)
+        ]
 
         def _forward_meta():
             # actual_start/actual_end = None: every per-chunk scalar comes from `metadata` on-device.
@@ -1713,6 +1883,63 @@ def test_kimi_prefill_transformer_chunked_trace_kv_pcc(
         num_iters=1,  # one pass fills the cache [0:n_chunks*CHUNK]; more iters re-walk for timing only
         routing_use_l1_small_for_semaphores=True,
         use_trace=True,
+        use_metadata=True,
+        verify_kv_cache_pcc=True,
+    )
+
+
+# EAGER (no-trace) counterpart of test_..._trace_kv_pcc: same metadata forward + same KV-cache PCC, run
+# op-by-op instead of captured/replayed. This is the DETERMINISM BASELINE — the traced KV-PCC must match
+# this number closely (a material gap would mean the trace machinery, not the per-element metadata ops,
+# introduced non-determinism). Same params/threshold as the traced test.
+@pytest.mark.parametrize("n_chunks", [1, 11], ids=["chunks1", "chunks11"])
+@pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                "l1_small_size": 512,
+                "trace_region_size": 256 * 1024 * 1024,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_prefill_transformer_chunked_notrace_kv_pcc(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_links,
+    topology,
+):
+    run_chunked_transformer_no_pcc(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        num_iters=1,
+        routing_use_l1_small_for_semaphores=True,
+        use_trace=False,  # eager per-chunk forward — no capture/replay
         use_metadata=True,
         verify_kv_cache_pcc=True,
     )
