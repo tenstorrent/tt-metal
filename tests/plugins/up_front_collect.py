@@ -119,6 +119,11 @@ class _AttrPatch:
         return False
 
 
+# (home_module, attr) -> (orig_callable, [modules exposing it]). Memoizes the
+# sys.modules walk in _RebindPatch across bodies (see __enter__).
+_REBIND_TARGET_CACHE = {}
+
+
 class _RebindPatch:
     """Reversibly rebind EVERY module attr that ``is`` ``home_module.attr`` to ``build(original)``.
 
@@ -137,13 +142,30 @@ class _RebindPatch:
         if self._orig is None:
             return self
         replacement = self._build(self._orig)
-        for m in list(sys.modules.values()):
-            try:
-                if getattr(m, self._attr, None) is self._orig:
-                    self._patched.append(m)
-                    setattr(m, self._attr, replacement)
-            except Exception:
-                pass
+        # The set of modules exposing this attr (via `from x import y`) is stable
+        # across test bodies — modules are imported once, before the first body.
+        # Walking all of sys.modules on every body was the dominant capture cost
+        # (~14ms/body: 5 rebind patches x thousands of modules). Memoize the
+        # target list keyed by (home_module, attr) + the original's identity;
+        # re-walk only if the original object changed (re-import). A module
+        # imported *after* the cache is built just keeps its real attr for that
+        # body — harmless (the op is already stashed before the verifier runs).
+        key = (self._home_module, self._attr)
+        cached = _REBIND_TARGET_CACHE.get(key)
+        if cached is not None and cached[0] is self._orig:
+            targets = cached[1]
+        else:
+            targets = []
+            for m in list(sys.modules.values()):
+                try:
+                    if getattr(m, self._attr, None) is self._orig:
+                        targets.append(m)
+                except Exception:
+                    pass
+            _REBIND_TARGET_CACHE[key] = (self._orig, targets)
+        for m in targets:
+            setattr(m, self._attr, replacement)
+        self._patched = targets
         return self
 
     def __exit__(self, *exc):
