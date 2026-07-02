@@ -49,7 +49,8 @@ struct SendContext {
     uint16_t dst_mesh_id;
     uint32_t seed;
     tt_l1_ptr uint32_t* payload_start_ptr;
-    volatile tt_l1_ptr uint32_t* credit_handshake_ptr;
+    volatile tt_l1_ptr uint32_t* granted_credits_ptr;
+    uint32_t credits_consumed;
     uint32_t num_receiver_slots;
     uint32_t receiver_slot_id;
     uint64_t bytes_sent;
@@ -112,17 +113,15 @@ FORCE_INLINE void send_packet_steady(SendContext& ctx) {
         ctx.sender.template flush<true>();
         ctx.has_flushed = true;
     }
-    while (ctx.credit_handshake_ptr[0] == 0) {
+    while (ctx.granted_credits_ptr[0] == ctx.credits_consumed) {
         invalidate_l1_cache();
     }
     ctx.seed = prng_next(ctx.seed);
     fill_packet_data(ctx.payload_start_ptr, ctx.packet_payload_size_bytes / 16, ctx.seed);
 
-    // Use local atomic instead of noc_semaphore_inc to avoid clobbering the
-    // stateful SYNC cmd buf (write_at_cmd_buf) that noc_semaphore_inc uses internally.
-    // The receiver returns credits via remote NOC atomic inc to this address, which
-    // is safe because __atomic_fetch_sub is atomic on the local core.
-    __atomic_fetch_sub(ctx.credit_handshake_ptr, 1, __ATOMIC_RELAXED);
+    // Receiver returns credits by monotonically incrementing granted_credits_ptr.
+    // Keep consumption local so WH does not need a RISC-V atomic decrement.
+    ctx.credits_consumed += 1;
 
     send_one_packet<Stateful>(ctx);
 
@@ -159,11 +158,12 @@ void kernel_main() {
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(packet_header_buffer_address), sizeof(PACKET_HEADER_TYPE));
 
-    auto credit_handshake_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_handshake_address);
-    credit_handshake_ptr[0] = num_receiver_slots;
+    auto granted_credits_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_handshake_address);
+    granted_credits_ptr[0] = num_receiver_slots;
 
     auto payload_start_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(payload_buffer_address);
     uint64_t bytes_sent = 0;
+    uint32_t credits_consumed = 0;
     uint32_t receiver_slot_id = 0;
 
     if constexpr (kUseStatefulLane) {
@@ -189,7 +189,8 @@ void kernel_main() {
         .dst_mesh_id = dst_mesh_id,
         .seed = seed,
         .payload_start_ptr = payload_start_ptr,
-        .credit_handshake_ptr = credit_handshake_ptr,
+        .granted_credits_ptr = granted_credits_ptr,
+        .credits_consumed = credits_consumed,
         .num_receiver_slots = num_receiver_slots,
         .receiver_slot_id = receiver_slot_id,
         .bytes_sent = bytes_sent,
@@ -237,8 +238,9 @@ void kernel_main() {
 
     noc_async_write_barrier();
 
+    const uint32_t expected_granted_credits = num_receiver_slots + num_packets;
     if constexpr (!kEagerStaging) {
-        while (credit_handshake_ptr[0] != num_receiver_slots) {
+        while (granted_credits_ptr[0] != expected_granted_credits) {
             invalidate_l1_cache();
         }
     }
@@ -246,7 +248,7 @@ void kernel_main() {
     sender.close();
 
     if constexpr (kEagerStaging) {
-        while (credit_handshake_ptr[0] != num_receiver_slots) {
+        while (granted_credits_ptr[0] != expected_granted_credits) {
             invalidate_l1_cache();
         }
     }

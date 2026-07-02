@@ -698,9 +698,10 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
         << tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     auto routing_selection = select_routing_selection(fixture, test_case);
-    ASSERT_TRUE(routing_selection.has_value())
-        << "Case " << test_case.name << " could not find a sender device and routing direction that satisfied the "
-        << "mux-v2 setup requirements";
+    if (!routing_selection.has_value()) {
+        GTEST_SKIP() << "Case " << test_case.name
+                     << " could not find enough worker cores and remote receivers for the mux-v2 setup requirements";
+    }
 
     const auto run_seed = make_time_seed();
     auto sender_receiver_assignments =

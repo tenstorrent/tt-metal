@@ -69,10 +69,12 @@ inline void try_forward_channel_packet(
     uint8_t noc,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection) {
     if constexpr (DrainMode) {
+        WAYPOINT("FDWS");
         while (cached_downstream_free_slots == 0) {
             fabric_connection.wait_for_empty_write_slot();
             cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
         }
+        WAYPOINT("FDWE");
     } else {
         if (cached_downstream_free_slots == 0) {
             wait_until_downstream_slot_available(shared_trid_ring, cached_downstream_free_slots, fabric_connection);
@@ -147,6 +149,7 @@ inline void run_forwarder(ForwarderContext& context) {
     const uint8_t data_noc_cmd_buf = fabric_connection.get_stateful_send_data_noc_cmd_buf();
     uint32_t cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
 
+    WAYPOINT("FSTY");
     while (shared_control_ptr->drain_initiated == 0) {
         for (uint32_t service_pass = 0;
              service_pass < kForwarderServiceBurstSize && shared_control_ptr->drain_initiated == 0;
@@ -158,18 +161,30 @@ inline void run_forwarder(ForwarderContext& context) {
         }
     }
 
+    WAYPOINT("FDRN");
     shared_control_ptr->forwarder_stop_tracking = 1;
-    noc_clear_packet_tag(noc, data_noc_cmd_buf);
+    DEVICE_PRINT("Forwarder entering drain phase after manager initiated drain\n");
     while (true) {
         if (!service_channels<true>(context, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection)) {
             break;
         }
     }
+    noc_clear_packet_tag(noc, data_noc_cmd_buf);
+    WAYPOINT("FEMP");
+    WAYPOINT("FCLS");
+    DEVICE_PRINT("Forwarder finished draining all channels, closing connection\n");
     fabric_connection.close();
+    DEVICE_PRINT("Forwarder closed connection\n");
+    WAYPOINT("FCLD");
+    WAYPOINT("FBRW");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    WAYPOINT("FBRD");
 
+    WAYPOINT("FDON");
     shared_control_ptr->forwarder_done = 1;
+
+    DEVICE_PRINT("Forwarder exiting\n");
 }
 
 }  // namespace tt::tt_fabric::mux_v2::kernel

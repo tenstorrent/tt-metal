@@ -83,9 +83,12 @@ void kernel_main() {
         }
     }
 
+    DEVICE_PRINT("Sender reached the barrier, waiting for start cycle: {}\n", start_signal_ptr[0]);
     const uint32_t start_cycle = start_signal_ptr[0];
     while (!reached_start_cycle(start_cycle)) {
     }
+
+    DEVICE_PRINT("Sender starting after the delay\n");
 
     sender.open();
 
@@ -99,6 +102,8 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
     uint32_t cached_free_write_slots = 0;
 
+    DEVICE_PRINT("Sender starting to send {} packets of size {} bytes\n", num_packets, packet_payload_size_bytes);
+
     for (uint32_t packet_idx = 0; packet_idx < num_packets; ++packet_idx) {
         while (cached_free_write_slots == 0) {
             cached_free_write_slots = sender.get_num_free_write_slots();
@@ -108,8 +113,10 @@ void kernel_main() {
             packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
         cached_free_write_slots--;
     }
+    DEVICE_PRINT("Sender finished sending all packets\n");
 
     sender.close();
+    DEVICE_PRINT("Sender closed\n");
     const uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     const uint64_t bytes_sent = static_cast<uint64_t>(num_packets) * packet_payload_size_bytes;
 
@@ -119,5 +126,8 @@ void kernel_main() {
     test_results[TT_FABRIC_CYCLES_INDEX] = static_cast<uint32_t>(cycles_elapsed);
     test_results[TT_FABRIC_CYCLES_INDEX + 1] = static_cast<uint32_t>(cycles_elapsed >> 32);
 
-    noc_async_full_barrier();
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+
+    DEVICE_PRINT("Sender exiting\n");
 }

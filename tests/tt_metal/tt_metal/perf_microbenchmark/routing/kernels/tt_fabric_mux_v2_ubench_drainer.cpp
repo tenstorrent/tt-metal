@@ -58,8 +58,10 @@ void kernel_main() {
     worker_interface.template cache_producer_noc_addr<true>();
     worker_interface.notify_worker_of_read_counter_update();
 
+    WAYPOINT("DOPN");
     uint64_t remaining_packets = expected_total_packets;
     while (remaining_packets != 0) {
+        WAYPOINT("DWPK");
         while (get_ptr_val(upstream_free_slots_stream_id) == NUM_BUFFERS) {
             invalidate_l1_cache();
         }
@@ -70,12 +72,19 @@ void kernel_main() {
         remaining_packets -= 1;
     }
 
+    DEVICE_PRINT("Drainer finished draining {} packets\n", expected_total_packets);
+
+    WAYPOINT("DEMP");
+    WAYPOINT("DWTU");
     while (!worker_interface.has_worker_teardown_request()) {
         invalidate_l1_cache();
     }
     worker_interface.template teardown_worker_connection<true, true>();
 
+    WAYPOINT("DTER");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     status_ptr[0] = tt::tt_fabric::DrainerStatus::TERMINATED;
+
+    DEVICE_PRINT("Drainer exiting after draining {} packets\n", expected_total_packets);
 }
