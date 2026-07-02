@@ -12,7 +12,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 
 # Test for 1x16 mesh (16 devices in a row)
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, cluster_axis",
     [
@@ -65,7 +64,6 @@ def test_ccl_ddr_smoke_test_1x16(
     ag_output_shape,
     cluster_axis,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -79,7 +77,6 @@ def test_ccl_ddr_smoke_test_1x16(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,

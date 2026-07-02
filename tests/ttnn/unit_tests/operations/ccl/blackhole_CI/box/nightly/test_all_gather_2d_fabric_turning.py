@@ -12,7 +12,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
-@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("ag_output_shape", [[1, 1, 256, 256]])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -40,7 +39,6 @@ def test_all_gather_2d_fabric_turning(
     bh_2d_mesh_device,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -76,7 +74,6 @@ def test_all_gather_2d_fabric_turning(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,

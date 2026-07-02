@@ -238,13 +238,13 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-Layout.TILE-DataType.BFLOAT16-mesh_device0]
   # 10 iteration trace test with fabric ring (dit_shape now in test_all_gather, no barrier parameters)
-  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
-  # pytest tests/nightly/t3000/2d_ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
+  # pytest tests/nightly/t3000/2d_ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_2d_linear-perf-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0]
   # training shapes - Re-enable this test when we have more T3K availability
-  # pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0-1link]
+  # pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0]
 
   # reduce scatter: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # sharded intermediate case with cluster axis 1

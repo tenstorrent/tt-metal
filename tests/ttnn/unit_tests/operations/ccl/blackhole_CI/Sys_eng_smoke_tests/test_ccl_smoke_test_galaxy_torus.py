@@ -13,7 +13,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 # Test uses 3.932GB of space per device to nearly fill the dram
 @run_for_n_dev(32)
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, cluster_axis",
     [
@@ -67,7 +66,6 @@ def test_ccl_ddr_smoke_test(
     ag_output_shape,
     cluster_axis,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -85,7 +83,6 @@ def test_ccl_ddr_smoke_test(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -102,7 +99,6 @@ def test_ccl_ddr_smoke_test(
 # Test utilizes 1'478'492.16 bytes per core to nearly maximize 1.5MB size
 @run_for_n_dev(32)
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, cluster_axis, ag_input_dtype",
     [
@@ -155,7 +151,6 @@ def test_ccl_other_smoke_test(
     ag_output_shape,
     cluster_axis,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -177,7 +172,6 @@ def test_ccl_other_smoke_test(
             submesh_device,
             ag_output_shape,
             dim,
-            num_links,
             ag_input_dtype,
             layout,
             mem_config_input,

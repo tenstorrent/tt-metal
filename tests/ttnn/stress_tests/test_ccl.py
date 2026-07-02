@@ -11,7 +11,6 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -70,7 +69,6 @@ def test_ccl_ddr_smoke_test(
     ag_output_shape,
     cluster_axis,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -93,7 +91,6 @@ def test_ccl_ddr_smoke_test(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -110,7 +107,6 @@ def test_ccl_ddr_smoke_test(
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -188,7 +184,6 @@ def test_ccl_other_smoke_test(
     ag_output_shape,
     cluster_axis,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -215,7 +210,6 @@ def test_ccl_other_smoke_test(
             submesh_device,
             ag_output_shape,
             dim,
-            num_links,
             ag_input_dtype,
             layout,
             mem_config_input,

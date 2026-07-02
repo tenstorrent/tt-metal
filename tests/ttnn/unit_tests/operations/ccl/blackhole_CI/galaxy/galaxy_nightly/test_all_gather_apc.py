@@ -21,7 +21,6 @@ from models.common.utility_functions import (
         (2, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -69,7 +68,6 @@ def test_all_gather_2D_line(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -83,7 +81,6 @@ def test_all_gather_2D_line(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -104,7 +101,6 @@ def test_all_gather_2D_line(
         (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -144,7 +140,6 @@ def test_all_gather_4D_line(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -158,7 +153,6 @@ def test_all_gather_4D_line(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -180,7 +174,6 @@ def test_all_gather_4D_line(
         (4, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT, 0),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -220,7 +213,6 @@ def test_all_gather_everything_ring(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -237,7 +229,6 @@ def test_all_gather_everything_ring(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,

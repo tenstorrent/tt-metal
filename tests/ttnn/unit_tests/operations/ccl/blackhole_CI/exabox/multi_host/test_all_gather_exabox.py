@@ -11,7 +11,6 @@ Tests cover:
 - Multiple fabric configs (FABRIC_1D, FABRIC_1D_RING) and topologies (Linear, Ring)
 - Both cluster axes (0 and 1)
 - DRAM and L1 memory configs
-- num_links variation (1 and 2 links for BH Galaxy)
 - bfloat16, bfloat8_b, and float32 dtypes
 """
 
@@ -82,7 +81,6 @@ def _run_all_gather_test(
     buffer_type,
     dtype,
     enable_trace,
-    num_links=None,
 ):
     tt_input, torch_reference, output_mem_config = _get_tensors(
         input_shape, tuple(mesh_device.shape), dim, cluster_axis, buffer_type, dtype, ttnn.TILE_LAYOUT, mesh_device
@@ -135,7 +133,6 @@ FABRIC_TOPOLOGY_COMBOS = [
 @pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
@@ -153,11 +150,8 @@ def test_all_gather_16x4(
     input_shape,
     dtype,
     buffer_type,
-    num_links,
 ):
-    _run_all_gather_test(
-        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace, num_links=num_links
-    )
+    _run_all_gather_test(mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +168,6 @@ def test_all_gather_16x4(
 @pytest.mark.parametrize("mesh_device", [pytest.param((32, 4), id="32x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
@@ -192,8 +185,5 @@ def test_all_gather_32x4(
     input_shape,
     dtype,
     buffer_type,
-    num_links,
 ):
-    _run_all_gather_test(
-        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace, num_links=num_links
-    )
+    _run_all_gather_test(mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace)

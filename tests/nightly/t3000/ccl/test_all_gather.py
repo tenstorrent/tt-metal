@@ -89,11 +89,11 @@ def run_all_gather_impl(
     mesh_device,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
+    num_links=1,
     all_gather_topology=None,
     num_iters=1,
     enable_trace=True,
@@ -357,7 +357,6 @@ def run_all_gather_impl(
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_persistent_buffers, pcc_threshold",
     [
@@ -413,7 +412,6 @@ def run_all_gather_impl(
 )
 def test_all_gather(
     mesh_device,
-    num_links,
     ag_output_shape,
     dim,
     layout,
@@ -429,7 +427,6 @@ def test_all_gather(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -443,7 +440,6 @@ def test_all_gather(
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -491,7 +487,6 @@ def test_all_gather(
 )
 def test_all_gather_subgrid(
     mesh_device,
-    num_links,
     ag_output_shape,
     dim,
     layout,
@@ -506,7 +501,6 @@ def test_all_gather_subgrid(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -518,7 +512,6 @@ def test_all_gather_subgrid(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
@@ -579,7 +572,6 @@ def test_all_gather_subgrid(
 )
 def test_all_gather_training_shapes(
     mesh_device,
-    num_links,
     ag_output_shape,
     dim,
     layout,
@@ -593,7 +585,6 @@ def test_all_gather_training_shapes(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -607,9 +598,9 @@ def test_all_gather_training_shapes(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_links, layout, ag_input_dtype",
+    "layout, ag_input_dtype",
     [
-        (1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -681,7 +672,6 @@ def test_all_gather_training_shapes(
 )
 def test_all_gather_sharded_to_sharded(
     mesh_device,
-    num_links,
     layout,
     ag_input_dtype,
     ag_output_shape,
@@ -714,7 +704,6 @@ def test_all_gather_sharded_to_sharded(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -727,9 +716,9 @@ def test_all_gather_sharded_to_sharded(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_links, layout, ag_input_dtype",
+    "layout, ag_input_dtype",
     [
-        (1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -784,7 +773,6 @@ def test_all_gather_sharded_to_sharded(
 )
 def test_all_gather_sharded_to_interleaved(
     mesh_device,
-    num_links,
     layout,
     ag_input_dtype,
     ag_output_shape,
@@ -809,7 +797,6 @@ def test_all_gather_sharded_to_interleaved(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -821,9 +808,9 @@ def test_all_gather_sharded_to_interleaved(
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "num_links, layout, ag_input_dtype",
+    "layout, ag_input_dtype",
     [
-        (1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -878,7 +865,6 @@ def test_all_gather_sharded_to_interleaved(
 )
 def test_all_gather_interleaved_to_sharded(
     mesh_device,
-    num_links,
     layout,
     ag_input_dtype,
     ag_output_shape,
@@ -903,7 +889,6 @@ def test_all_gather_interleaved_to_sharded(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -926,7 +911,6 @@ def _l1_width_sharded(shard_height, shard_width, num_cores):
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)], ids=["rm_bf16"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, mem_config_input, mem_config_ag",
@@ -986,7 +970,6 @@ def _l1_width_sharded(shard_height, shard_width, num_cores):
 )
 def test_all_gather_page_indexing(
     mesh_device,
-    num_links,
     layout,
     ag_input_dtype,
     ag_output_shape,
@@ -998,7 +981,6 @@ def test_all_gather_page_indexing(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -1011,7 +993,6 @@ def test_all_gather_page_indexing(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
@@ -1052,7 +1033,6 @@ def test_all_gather_2x4(
     mesh_device,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -1065,7 +1045,6 @@ def test_all_gather_2x4(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -1352,11 +1331,11 @@ def test_all_gather_async_broadcast(
         mesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,

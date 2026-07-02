@@ -22,7 +22,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
         (2, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -82,7 +81,6 @@ def test_all_gather_subcore_grid(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -99,7 +97,6 @@ def test_all_gather_subcore_grid(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -121,7 +118,6 @@ def test_all_gather_subcore_grid(
         (2, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -169,7 +165,6 @@ def test_all_gather_2D_line(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -185,7 +180,6 @@ def test_all_gather_2D_line(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -206,7 +200,6 @@ def test_all_gather_2D_line(
         (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -247,7 +240,6 @@ def test_all_gather_4D_line(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -262,7 +254,6 @@ def test_all_gather_4D_line(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -283,7 +274,6 @@ def test_all_gather_4D_line(
         ([1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -322,7 +312,6 @@ def test_all_gather_ring(
     bh_1d_mesh_device,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -339,7 +328,6 @@ def test_all_gather_ring(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -360,7 +348,6 @@ def test_all_gather_ring(
         (2, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
@@ -399,7 +386,6 @@ def test_all_gather_8D_vertical(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -414,7 +400,6 @@ def test_all_gather_8D_vertical(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -429,7 +414,6 @@ def test_all_gather_8D_vertical(
 
 @skip_for_wormhole_b0("This test is for blackhole")
 @skip_for_n_or_less_dev(3)
-@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape,dim",
     [
@@ -485,7 +469,6 @@ def test_all_gather_failing_shapes(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -500,7 +483,6 @@ def test_all_gather_failing_shapes(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,

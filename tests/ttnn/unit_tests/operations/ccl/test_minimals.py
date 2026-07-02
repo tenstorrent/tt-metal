@@ -39,7 +39,6 @@ def run_allgather_only_with_trace(
     mesh_device,
     input_tensor_mesh,
     dim,
-    num_links,
     output_mem_config,
     ccl_semaphore_handles,
     barrier_semaphore_handles,
@@ -110,7 +109,6 @@ def run_all_gather_impl(
     num_devices,
     output_shape,
     dim,
-    num_links,
     input_dtype,
     layout,
     function_level_defaults,
@@ -241,7 +239,6 @@ def run_all_gather_impl(
             mesh_device,
             input_tensor_mesh_list[0],
             dim,
-            num_links,
             output_mem_config,
             ccl_semaphore_handles=ccl_semaphore_handles,
             barrier_semaphore_handles=barrier_semaphore_handles,
@@ -347,7 +344,6 @@ def run_all_gather_impl(
         ),
     ],
 )
-@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
@@ -364,7 +360,6 @@ def test_all_gather_only(
     num_devices,
     output_shape,
     dim,
-    num_links,
     input_dtype,
     layout,
     num_iters,
@@ -381,7 +376,6 @@ def test_all_gather_only(
         num_devices,
         output_shape,
         dim,
-        num_links,
         input_dtype,
         layout,
         function_level_defaults,
@@ -413,7 +407,6 @@ def test_all_gather_only(
         ),
     ],
 )
-@pytest.mark.parametrize("num_links", [3])
 @pytest.mark.parametrize(
     "input_dtype",
     [
@@ -437,7 +430,6 @@ def test_bh_trace_ag(
     num_devices,
     output_shape,
     dim,
-    num_links,
     trace_mode,
     input_dtype,
     layout,
@@ -458,7 +450,6 @@ def test_bh_trace_ag(
         num_devices,
         output_shape,
         dim,
-        num_links,
         input_dtype,
         layout,
         function_level_defaults,

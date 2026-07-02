@@ -28,7 +28,6 @@ def validate_test(num_devices, topology, shape, cluster_axis):
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -90,7 +89,6 @@ def test_all_gather_linear_2D_nightly(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -108,7 +106,6 @@ def test_all_gather_linear_2D_nightly(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -123,7 +120,6 @@ def test_all_gather_linear_2D_nightly(
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -177,7 +173,6 @@ def test_all_gather_linear_4D_nightly(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -195,7 +190,6 @@ def test_all_gather_linear_4D_nightly(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -210,7 +204,6 @@ def test_all_gather_linear_4D_nightly(
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout",
     [
@@ -262,7 +255,6 @@ def test_all_gather_ring_nightly(
     bh_1d_mesh_device,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -281,7 +273,6 @@ def test_all_gather_ring_nightly(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -296,7 +287,6 @@ def test_all_gather_ring_nightly(
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -367,7 +357,6 @@ def test_all_gather_broken(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -385,7 +374,6 @@ def test_all_gather_broken(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,

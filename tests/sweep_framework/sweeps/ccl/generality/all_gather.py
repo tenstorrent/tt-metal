@@ -61,7 +61,6 @@ LEAD_MODEL_SHARD_SPECS = [
 GENERALITY_PARAMETERS = {
     "mesh_shape": list(mesh_shape_iterator(NUM_DEVICES)),
     "fabric_config": FABRIC_CONFIGS,
-    "num_links": [1],
     "input_shape": [
         [1, 1, 32, 32],
         [1, 1, 32, 31],
@@ -86,7 +85,6 @@ parameters = {
     "lead_model_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
         "input_shape": [
             [1, 1, 32, 1440],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
             [1, 1, 32, 32],  # Qwen3, Llama on Glx, DeepSeek dim:3 cluster_axis: 1
@@ -169,7 +167,6 @@ def run(
     input_shape,
     dim,
     cluster_axis,
-    num_links,
     input_dtype,
     layout,
     buffer_type,

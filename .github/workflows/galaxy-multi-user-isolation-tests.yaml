@@ -118,7 +118,7 @@ jobs:
             # ("Device N init: failed to initialize FW") due to a BH-specific firmware layer issue,
             # not a tt-metal issue. Since this CI only needs one representative test to verify
             # inter-container isolation, we narrow down to a single test combination to avoid the problem.
-            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and 2_links and not DRAM'"
+            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}

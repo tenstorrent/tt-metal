@@ -116,11 +116,11 @@ def test_all_gather_async(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -203,11 +203,11 @@ def test_all_gather_deepseek(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -294,7 +294,6 @@ def test_all_gather_async_broadcast_rejects_noncontiguous_width_gather(
         submesh_device.reset_sub_device_stall_group()
 
 
-@pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
@@ -341,7 +340,6 @@ def test_all_gather_big_mesh(
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -357,7 +355,6 @@ def test_all_gather_big_mesh(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -372,7 +369,6 @@ def test_all_gather_big_mesh(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
@@ -415,7 +411,6 @@ def test_all_gather_quad_host_mesh(
     mesh_device,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -430,7 +425,6 @@ def test_all_gather_quad_host_mesh(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -442,7 +436,6 @@ def test_all_gather_quad_host_mesh(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "input_shape, gather_dim, cluster_axis,layout, ag_input_dtype",
     [
@@ -491,7 +484,6 @@ def test_all_gather_4x32_sanity(
     input_shape,
     gather_dim,
     cluster_axis,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -535,7 +527,6 @@ def test_all_gather_4x32_sanity(
     # assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
 
 
-@pytest.mark.parametrize("num_links", [1, 3, 4], ids=["1links", "3links", "4links"])
 @pytest.mark.parametrize(
     "ag_output_shape, gather_dim, cluster_axis,layout, ag_input_dtype",
     [
@@ -586,7 +577,6 @@ def test_all_gather_async_wan_galaxy_4x32(
     ag_output_shape,
     gather_dim,
     cluster_axis,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
@@ -852,11 +842,11 @@ def test_all_gather_llama70b_decode_mlp(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -950,11 +940,11 @@ def test_all_gather_llama70b_prefill_sdpa(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -1049,11 +1039,11 @@ def test_all_gather_llama70b_prefill_mlp(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -1145,11 +1135,11 @@ def test_all_gather_llama70b_prefill_layernorm(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -1245,11 +1235,11 @@ def test_all_gather_llama70b_batch_head_coverage(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -1341,11 +1331,11 @@ def test_all_gather_llama70b_cluster_axis0(
         submesh_device,
         ag_output_shape,
         dim,
-        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
