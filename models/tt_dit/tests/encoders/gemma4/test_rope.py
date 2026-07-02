@@ -43,8 +43,7 @@ ALLCLOSE_RTOL = 1e-2
 )
 def test_gemma4_rope(mesh_device: ttnn.MeshDevice, num_links: int, layer_type: str, seq_len: int) -> None:
     """Verify our RoPE output matches the actual HF Gemma4TextRotaryEmbedding."""
-    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaTextConfig
-    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextConfig, Gemma4TextRotaryEmbedding
 
     torch.manual_seed(0)
 
@@ -56,7 +55,7 @@ def test_gemma4_rope(mesh_device: ttnn.MeshDevice, num_links: int, layer_type: s
     full_partial_rotary = 0.25
     max_position_embeddings = max(seq_len * 2, 8192)
 
-    hf_config = DiffusionGemmaTextConfig(
+    hf_config = Gemma4TextConfig(
         head_dim=sliding_head_dim,
         global_head_dim=full_head_dim,
         max_position_embeddings=max_position_embeddings,
