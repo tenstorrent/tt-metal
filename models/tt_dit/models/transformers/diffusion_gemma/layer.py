@@ -68,6 +68,8 @@ class DiffusionGemmaLayer(Module):
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         # Self-attention (single class, sliding-or-full layer-type).
         self.self_attn = Gemma4Attention(
@@ -184,6 +186,13 @@ class DiffusionGemmaLayer(Module):
         # Dense MLP path.
         h_dense = self.pre_feedforward_layernorm(hidden_states)
         h_dense = self.mlp(h_dense)
+        # GatedMLP emits TP-fractured hidden (RowParallel's reduce_scatter). Gather back
+        # to replicated before the norm + combine + residual, which all expect the full
+        # hidden dim.
+        if self.parallel_config.tensor_parallel.factor > 1:
+            h_dense = self.ccl_manager.all_gather_persistent_buffer(
+                h_dense, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
         h_dense = self.post_feedforward_layernorm_1(h_dense)
 
         # MoE path — router gets RAW residual; experts get pre_feedforward_layernorm_2'd input.

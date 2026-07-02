@@ -223,9 +223,22 @@ class GatedMLP(Module):
             state["down_proj.weight"] = torch.nn.functional.pad(w, (0, pad_n))
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Replicated [B, S, hidden] → replicated [B, S, hidden]."""
-        gate = self.gate_proj(x, parallel_config=self.parallel_config)
-        up = self.up_proj(x, parallel_config=self.parallel_config)
+        """Replicated [B, S, hidden] → TP-fractured [B, S, hidden / tp] on the last dim.
+
+        gate/up: ColParallelLinear. Input replicated → output N-fractured on the
+        intermediate axis. No ``parallel_config`` kwarg (that path would trigger a fused
+        all-gather-matmul expecting K-fractured input, which we don't have).
+
+        down: RowParallelLinear. Input is K-fractured on intermediate (matches ColParallel
+        output), and RowParallel's internal ``reduce_scatter`` sums the partials and
+        scatters on the hidden axis — final output is N-fractured on ``hidden_size / tp``.
+
+        The caller is responsible for any all-gather it needs to feed downstream ops
+        (residual adds, RMSNorm) that expect the full replicated hidden dim. Matches
+        ParallelFeedForward's contract; keeps this module's CCL behavior explicit.
+        """
+        gate = self.gate_proj(x)
+        up = self.up_proj(x)
         gated = ttnn.multiply(gate, up)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)

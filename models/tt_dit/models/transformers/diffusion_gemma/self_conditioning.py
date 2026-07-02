@@ -34,6 +34,7 @@ class DiffusionGemmaSelfConditioning(Module):
         super().__init__()
         self.parallel_config = parallel_config
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
 
         self.pre_norm = RMSNorm(
             embedding_dim=hidden_size,
@@ -69,6 +70,12 @@ class DiffusionGemmaSelfConditioning(Module):
         normed = self.pre_norm(self_conditioning_signal)
         sc_signal = self.gated_mlp(normed)
         ttnn.deallocate(normed)
+        # GatedMLP emits TP-fractured hidden; gather so the residual add against
+        # replicated ``inputs_embeds`` (and the post_norm reduction) sees the full hidden dim.
+        if self.parallel_config.tensor_parallel.factor > 1:
+            sc_signal = self.ccl_manager.all_gather_persistent_buffer(
+                sc_signal, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
         combined = ttnn.add(inputs_embeds, sc_signal)
         ttnn.deallocate(sc_signal)
         out = self.post_norm(combined)

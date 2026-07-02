@@ -47,6 +47,8 @@ class Gemma4VisionEncoderLayer(Module):
         parallel_config: DiTParallelConfig,
     ) -> None:
         super().__init__()
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         self.self_attn = Gemma4VisionAttention(
             hidden_size=hidden_size,
@@ -78,6 +80,20 @@ class Gemma4VisionEncoderLayer(Module):
         self.pre_feedforward_layernorm = RMSNorm(**norm_kwargs)
         self.post_feedforward_layernorm = RMSNorm(**norm_kwargs)
 
+    def _prepare_torch_state(self, state: dict) -> None:
+        """Rewrite HF's ``mlp.<proj>.linear.<name>`` keys to our flat ``mlp.<proj>.<name>``.
+
+        HF's Gemma4 vision MLP wraps each Linear in a small container whose actual
+        weight lives under ``.linear`` (same pattern as Gemma4VisionAttention). The MLP is
+        our tt_dit ``GatedMLP`` which expects flat ``gate_proj.weight`` / ``up_proj.weight`` /
+        ``down_proj.weight``, so strip the extra ``.linear.`` segment before descending.
+        """
+        for proj in ("gate_proj", "up_proj", "down_proj"):
+            for suffix in ("weight", "bias"):
+                src = f"mlp.{proj}.linear.{suffix}"
+                if src in state:
+                    state[f"mlp.{proj}.{suffix}"] = state.pop(src)
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -101,6 +117,13 @@ class Gemma4VisionEncoderLayer(Module):
         residual = hidden_states
         h = self.pre_feedforward_layernorm(hidden_states)
         h = self.mlp(h)
+        # GatedMLP output is TP-fractured on the hidden axis (RowParallel's reduce_scatter);
+        # gather back to replicated so the post-FF norm reduction sees the full hidden dim
+        # and the residual add matches ``residual``'s replicated layout.
+        if self.parallel_config.tensor_parallel.factor > 1:
+            h = self.ccl_manager.all_gather_persistent_buffer(
+                h, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
         h = self.post_feedforward_layernorm(h)
         hidden_states = ttnn.add(residual, h)
         ttnn.deallocate(h)

@@ -44,8 +44,21 @@ class DiffusionGemmaMultimodalEmbedder(Module):
             mesh_device=mesh_device,
         )
 
+        # Accuracy-first compute config (matches the pattern used across the diffusion_gemma
+        # port): HiFi4 for max bf16 matmul fidelity, fp32_dest_acc_en=True for fp32
+        # accumulators, packer_l1_acc=False to skip the packer's lossy L1 accumulation over
+        # the multimodal_hidden_size=1152 reduction. Applied to both the pre-projection
+        # RMSNorm and the projection matmul so this bridge doesn't drop precision.
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
     def forward(self, inputs_embeds: ttnn.Tensor) -> ttnn.Tensor:
-        normed = self.embedding_pre_projection_norm(inputs_embeds)
-        out = self.embedding_projection(normed)
+        normed = self.embedding_pre_projection_norm(inputs_embeds, compute_kernel_config=self.compute_config)
+        out = self.embedding_projection(normed, compute_kernel_config=self.compute_config)
         ttnn.deallocate(normed)
         return out
