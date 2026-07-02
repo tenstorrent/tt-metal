@@ -24,7 +24,7 @@ wav = pipe.generate_song("upbeat synthwave, driving bass, nostalgic",
 # wav: torch [1, 2, samples] @ 48 kHz stereo — write with soundfile.write("song.wav", ...)
 ```
 
-That's the whole customer surface: **two lines**. `generate_song` handles tokenization, the text
+That's the whole surface: **two lines**. `generate_song` handles tokenization, the text
 encoder, conditioning, the denoise loop and VAE decode internally. Lower-level stages
 (`encode_prompt`, `generate`, `decode`) remain available for advanced use.
 
