@@ -54,6 +54,7 @@ def run_one(
     mesh_rows: int = MESH_ROWS,
     mesh_cols: int = MESH_COLS,
     kv_cache_dtype: str = "auto",
+    cache_dir: str | None = None,
 ) -> dict:
     """Run one (ISL, batch_size) combination; return metrics or error."""
     min_cache = isl + MAX_NEW_TOKENS
@@ -77,6 +78,13 @@ def run_one(
         str(mesh_cols),
         "--kv-cache-dtype",
         kv_dtype,
+    ]
+    # Expert weights are cached sharded for the exact device grid; the "d8" cache key does
+    # not distinguish WH 2x4 from 1x8, so 1x8 needs its own cache dir (else shards land on a
+    # non-existent MeshCoordinate([1,0])). BH 1x4 ("d4") never collides.
+    if cache_dir:
+        cmd += ["--cache-dir", cache_dir]
+    cmd += [
         "--phase",
         "both",
         "--enable-trace",
@@ -114,13 +122,15 @@ def run_one(
         env["GLM4_MOE_LITE_EXPERTS_TT_DTYPE"] = os.environ["GLM4_MOE_LITE_EXPERTS_TT_DTYPE"]
     if os.environ.get("GLM4_MOE_LITE_MOE_FP32_ACC"):
         env["GLM4_MOE_LITE_MOE_FP32_ACC"] = os.environ["GLM4_MOE_LITE_MOE_FP32_ACC"]
-    env["GLM4_MOE_LITE_HEAD_PARALLEL_KVB2"] = "1"
+    # Head-parallel needs num_attention_heads=20 divisible by tp_size. True on BH 1x4 (tp=4)
+    # but NOT on WH 1x8 (tp=8); setdefault so the WH baseline can disable it via the environment.
+    env.setdefault("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "1")
     env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
     env["GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED"] = "1"
     # env["GLM4_MOE_LITE_MOE_SPARSE_DEBUG"] = "1"
     env["GLM4_MOE_LITE_MOE_DISPATCH_IMPL"] = "all_to_all"
     env["GLM4_MOE_LITE_SHARDED_DECODE_NORM"] = "1"
-    env["GLM4_MOE_LITE_HEAD_PARALLEL_ATTN"] = "1"
+    env.setdefault("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "1")
     env["GLM4_MOE_LITE_MOE_FAST_REMAP"] = "1"
     env["GLM4_MOE_LITE_DECODE_FUSE_QA_NORM"] = "0"
     env["GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE"] = "1"
@@ -617,6 +627,12 @@ def main() -> int:
     ap.add_argument("--mesh-rows", type=int, default=MESH_ROWS, help="Mesh rows (default %(default)s)")
     ap.add_argument("--mesh-cols", type=int, default=MESH_COLS, help="Mesh cols (default %(default)s)")
     ap.add_argument(
+        "--cache-dir",
+        default=None,
+        help="TT weight cache dir passed to the runner. Use a dedicated dir per device grid "
+        "(WH 1x8 must not reuse the 2x4 'd8' cache).",
+    )
+    ap.add_argument(
         "--kv-cache-dtype",
         choices=("auto", "bf16", "bf8"),
         default="auto",
@@ -697,6 +713,7 @@ def main() -> int:
                 mesh_rows=args.mesh_rows,
                 mesh_cols=args.mesh_cols,
                 kv_cache_dtype=args.kv_cache_dtype,
+                cache_dir=args.cache_dir,
             )
             results.append(r)
             # Write CSV after each run so partial results survive if the process is killed

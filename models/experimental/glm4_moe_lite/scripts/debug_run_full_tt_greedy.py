@@ -256,6 +256,14 @@ def main() -> int:
         "mesh_shape": ttnn.MeshShape(mesh_rows, mesh_cols),
         "dispatch_core_config": dispatch_cfg,
     }
+    # Traced decode needs a trace region reserved at open time; without it EnqueueTrace
+    # fails to allocate. Match the pipeline test's proven values (30 MB WH / 35 MB BH) and
+    # use 2 command queues for the async sampling-trace path.
+    if bool(args.enable_trace):
+        from models.common.utility_functions import is_wormhole_b0
+
+        open_kwargs["trace_region_size"] = 30_000_000 if is_wormhole_b0() else 35_000_000
+        open_kwargs["num_command_queues"] = 2
     if device_ids is not None:
         open_kwargs["physical_device_ids"] = device_ids
     mesh_device = ttnn.open_mesh_device(**open_kwargs)

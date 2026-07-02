@@ -107,6 +107,44 @@ def hf_prefill_last_token_logits(model: AutoModelForCausalLM, input_ids: torch.T
     return outputs.logits[:, -1:, :vocab_size].to(dtype=torch.float32)
 
 
+# Shared with scripts/pcc_vs_hf.py so the (slow, CPU) HF ground-truth is computed once per ISL
+# and reused by later runs — critical for fast PCC re-checks during optimization.
+HF_REF_CACHE_DIR = os.path.join(TT_METAL_HOME, "models/experimental/glm4_moe_lite/experiments/hf_ref")
+
+
+def hf_prefill_last_token_logits_cached(
+    snapshot_dir: Path, encoded_prompt: list[int], vocab_size: int, *, tag: str = "corpus"
+) -> torch.Tensor:
+    """HF last-token prefill logits [1,1,vocab] with on-disk caching (see scripts/pcc_vs_hf.py).
+
+    On a cache hit (same input_ids + vocab) the HF model is NOT loaded at all. Cache path/format
+    match pcc_vs_hf.py so entries are interchangeable between the two.
+    """
+    seq_len = len(encoded_prompt)
+    input_ids = torch.tensor([encoded_prompt], dtype=torch.long)
+    cache_path = Path(HF_REF_CACHE_DIR) / f"hf_prefill_lasttok_{tag}_isl{seq_len}.pt"
+    if cache_path.exists():
+        blob = torch.load(cache_path)
+        if (
+            int(blob.get("vocab", -1)) == int(vocab_size)
+            and blob["input_ids"].shape == input_ids.shape
+            and torch.equal(blob["input_ids"], input_ids)
+        ):
+            return blob["hf_logits"].to(torch.float32)
+    hf_model = load_hf_causal_lm(snapshot_dir)
+    hf_logits = hf_prefill_last_token_logits(hf_model, input_ids, vocab_size).clone()
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {"input_ids": input_ids, "vocab": int(vocab_size), "seq_len": int(seq_len), "hf_logits": hf_logits},
+        cache_path,
+    )
+    del hf_model
+    import gc
+
+    gc.collect()
+    return hf_logits
+
+
 @torch.no_grad()
 def hf_decode_logits(
     model: AutoModelForCausalLM,
@@ -233,6 +271,9 @@ def apply_wh_tp1_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLM4_MOE_LITE_ATTN_DP", "0")
     monkeypatch.setenv("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "0")  # 20 heads not divisible by TP=8
     monkeypatch.setenv("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "0")
+    # Chunk prefill so ISL>=512 fits WH L1 (unchunked overflows the MoE-gate matmul CB at M>128).
+    # Matches the batch-1 baseline config; verified numerically equivalent to unchunked prefill.
+    monkeypatch.setenv("GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE", "128")
 
 
 def apply_single_layer_env(monkeypatch: pytest.MonkeyPatch) -> None:

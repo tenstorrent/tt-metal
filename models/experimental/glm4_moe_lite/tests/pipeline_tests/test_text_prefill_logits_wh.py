@@ -27,6 +27,7 @@ Run:
 from __future__ import annotations
 
 import bz2
+import os
 
 import pytest
 import torch
@@ -43,6 +44,7 @@ from models.experimental.glm4_moe_lite.tests.pipeline_tests.test_utils import (
     create_runner,
     fabric_1d_trace_device_params,
     hf_prefill_last_token_logits,
+    hf_prefill_last_token_logits_cached,
     load_hf_causal_lm,
     load_tokenizer,
     mesh_shape_param,
@@ -65,8 +67,9 @@ def _wh_prefill_logits_pcc(seq_len, batch_size, page_params, mesh_device, pcc_re
     if len(encoded_prompt) < seq_len:
         pytest.skip(f"Prompt corpus shorter than seq_len={seq_len}")
 
-    hf_model = load_hf_causal_lm(snap)
-    vocab_size = int(hf_model.config.vocab_size)
+    # HF ground truth, cached to disk (skips the slow CPU HF model load on a cache hit).
+    vocab_size = 154880
+    ref_logits = hf_prefill_last_token_logits_cached(snap, encoded_prompt, vocab_size)
     block_size = int(page_params["page_block_size"])
     total_tokens = seq_len + 32
     max_seq_len = compute_max_seq_len(total_tokens, block_size)
@@ -84,8 +87,6 @@ def _wh_prefill_logits_pcc(seq_len, batch_size, page_params, mesh_device, pcc_re
         kv_cache=kv_cache,
         seq_pad_multiple=int(page_params["page_block_size"]),
     )
-    hf_input = torch.tensor([encoded_prompt], dtype=torch.long)
-    ref_logits = hf_prefill_last_token_logits(hf_model, hf_input, vocab_size)
     tt_logits_cmp = tt_logits[:, :1, :vocab_size].to(dtype=torch.float32)
     passing, pcc_val = comp_pcc(ref_logits, tt_logits_cmp, pcc_required)
     logger.info(comp_allclose(ref_logits, tt_logits_cmp))
@@ -176,10 +177,23 @@ def test_text_prefill_logits_wh(
 WH_TP1_PCC_REQUIRED = 0.93
 
 
+# ISLs to check TP=1 prefill accuracy across. The HF reference runs on CPU with O(n^2)
+# attention, so very long ISLs (>=16K) become impractically slow / host-RAM heavy — those are
+# opt-in via GLM4_MOE_LITE_PCC_ISLS. Default sweep stays CPU-feasible (<=4K).
+_DEFAULT_TP1_ISLS = (128, 512, 1024, 2048, 4096)
+
+
+def _tp1_isls():
+    env = os.environ.get("GLM4_MOE_LITE_PCC_ISLS", "").strip()
+    if env:
+        return tuple(int(x) for x in env.replace(",", " ").split())
+    return _DEFAULT_TP1_ISLS
+
+
 @torch.no_grad()
 @run_for_wormhole_b0()
-@pytest.mark.timeout(7200)
-@pytest.mark.parametrize("seq_len", (128,), ids=["128"])
+@pytest.mark.timeout(14400)
+@pytest.mark.parametrize("seq_len", _tp1_isls(), ids=lambda s: str(s))
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("page_params", [{"page_block_size": 64, "page_max_num_blocks": 1024}])
 @pytest.mark.parametrize("device_params", fabric_1d_trace_device_params(num_command_queues=2), indirect=True)
@@ -195,8 +209,10 @@ def test_text_prefill_logits_wh_tp1_1x8(
 ):
     """WH TENSOR-PARALLEL (TP=1) prefill logits PCC on the 1x8 mesh (fixture opens MeshShape(1,8)).
 
-    Validates the fix for the 2x4 TP=1 accuracy bug: run all 8 chips as a 1D 1x8 mesh so the MoE
-    all-reduce is single-axis (the working BH path). Head-parallel disabled (20 heads not div 8).
+    Validates the fix for the 2x4 TP=1 accuracy bug across ISLs: run all 8 chips as a 1D 1x8 mesh
+    so the MoE all-reduce is single-axis (the working BH path). Head-parallel disabled (20 heads
+    not div 8); prefill chunked to 128 so ISL>=512 fits WH L1. Uses the real tale-of-two-cities
+    corpus (190K tokens) truncated to seq_len, compared vs HF ground truth.
     """
     if int(mesh_device.shape[0]) != 1:
         pytest.skip(f"TP=1 1x8 test requires a 1xN mesh; got {tuple(mesh_device.shape)}.")
@@ -205,4 +221,4 @@ def test_text_prefill_logits_wh_tp1_1x8(
         seq_len, batch_size, page_params, mesh_device, WH_TP1_PCC_REQUIRED, "pipeline_prefill_logits_wh_tp1"
     )
     logger.info(f"[WH TP=1 1x8] Prefill last-token logits PCC (seq_len={seq_len}): {pcc_val}")
-    assert passing, f"[WH TP=1 1x8] Prefill logits PCC {pcc_val} below {WH_TP1_PCC_REQUIRED}."
+    assert passing, f"[WH TP=1 1x8] Prefill logits PCC {pcc_val} below {WH_TP1_PCC_REQUIRED} at seq_len={seq_len}."
