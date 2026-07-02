@@ -92,7 +92,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     sfpi::vInt new_exp = xpoly_exp + k_int;               // Shift by 2^k
 
     // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
     v_if(new_exp > 0) { result = sfpi::setexp(x_poly, new_exp); }
     v_endif;
 
@@ -147,7 +147,7 @@ constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
-    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -5.54259443 (torch saturation)
+    sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
 
     v_if(x > -5.54259443f) {
@@ -309,7 +309,7 @@ inline void calculate_gelu() {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
-            sfpi::vFloat result = sfpi::vConst0;  // default 0 for x <= GELU_SAT
+            sfpi::vFloat result = 0.0f;  // default 0 for x <= GELU_SAT
             v_if(x > GELU_SAT) {
                 sfpi::vFloat scaled = x * INV_SQRT2;
                 scaled = sfpi::min(scaled, 10.0f);
@@ -370,13 +370,7 @@ inline void calculate_gelu_tanh() {
         sfpi::vFloat inner = x + kx3;
 
         sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
-
-        // Handle +-0 using the sign of x to prevent 1 ULP difference.
-        // NOTE: vConst0 is a vCReg<vFloat>, not a vFloat. copysgn's overloads are
-        // constrained templates whose argument deduction does not apply the implicit
-        // vCReg->vFloat conversion, so materialize a real vFloat first.
-        sfpi::vFloat zero = sfpi::vConst0;
-        sfpi::vFloat result = sfpi::copysgn(zero, x);
+        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
             // Saturated positive tail: gelu_tanh(x) = x.
@@ -447,10 +441,10 @@ constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
-    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.375
+    sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
-    v_if(x >= 3.1719f) { result = sfpi::vConst1; }
+    v_if(x >= 3.1719f) { result = 1.0f; }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
