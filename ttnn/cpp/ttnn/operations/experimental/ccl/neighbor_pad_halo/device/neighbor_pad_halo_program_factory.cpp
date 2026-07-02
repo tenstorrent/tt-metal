@@ -670,6 +670,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
             w_reader_kernel_id = CreateKernel(program, kdir + "np_phase2_w_reader.cpp", worker_crset, mux_reader_cfg);
             w_writer_kernel_id = CreateKernel(program, kdir + "np_w_mux_writer.cpp", worker_crset, mux_writer_cfg);
+            // Reader common args (CRTA[0]=halo addr, [1]=barrier_sem, [2]=w_neighbor_sem) — MUST be set on
+            // the mux reader too, else barrier_sem_addr is unset and the H->W barrier wait never completes.
+            SetCommonRuntimeArgs(
+                program,
+                w_reader_kernel_id,
+                {halo_buffer->address(), op.barrier_semaphore.address(), op.w_neighbor_semaphore.address()});
             SetCommonRuntimeArgs(
                 program,
                 w_writer_kernel_id,
@@ -710,9 +716,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     const uint32_t extra_wk = rows_this_link % num_w_workers;
                     const uint32_t pw = w_dir ? op.np_pad2_right : op.np_pad2_left;
                     const uint32_t section_base = w_dir ? w_section_wright_base : w_section_wleft_base;
+                    // Opposite-direction worker core (same link, same worker index): this device's dir-d
+                    // writer sends to the neighbor, whose RECEIVING reader is its dir-(1-d) worker. NOC
+                    // coords are device-independent, so we target the local opposite-dir worker's coords.
+                    const uint32_t opp_s = w_link * 2 + (1 - w_dir);
                     for (uint32_t wk = 0; wk < num_w_workers; wk++) {
                         CoreCoord wc = mux_worker_cores[s * num_w_workers + wk];
-                        CoreCoord wc_vc = mux_worker_virtual[s * num_w_workers + wk];
+                        CoreCoord opp_vc = mux_worker_virtual[opp_s * num_w_workers + wk];
                         const uint32_t wk_start = base_link_start + wk * per_wk + std::min(wk, extra_wk);
                         const uint32_t wk_count = per_wk + (wk < extra_wk ? 1 : 0);
                         // Reader RT args (same layout as the standard W reader).
@@ -729,7 +739,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         // NOT the mux core: the recv-sem + startup-barrier incs land on the reader that waits them.
                         std::vector<uint32_t> w_rt = {
                             section_base + wk_start * pw, wk_count,
-                            wc_vc.x, wc_vc.y, wc_vc.x, wc_vc.y,
+                            opp_vc.x, opp_vc.y, opp_vc.x, opp_vc.y,
                             static_cast<uint32_t>(is_first_w_device), static_cast<uint32_t>(is_last_w_device), w_dir,
                             0u, static_cast<uint32_t>(w_dir ? w_backward_device_offset : w_forward_device_offset)};
                         ttnn::ccl::fabric_mux_connection_rt_args(
