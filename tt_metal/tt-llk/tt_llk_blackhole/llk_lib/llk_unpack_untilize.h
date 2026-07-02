@@ -145,13 +145,9 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
  * @param face_r_dim: Rows per face, used to compute the restored datum count and Y stride.
  * @note Call @ref _llk_unpack_untilize_init_ before this function.
  */
-inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
+inline void _llk_unpack_untilize_uninit_([[maybe_unused]] const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t face_r_dim)
 {
     llk::san::operation_uninit<llk::san::Operation::UnpackUntilize>();
-
-    const DataFormat dst_format           = static_cast<DataFormat>(unpack_dst_format & 0x3);
-    const std::uint32_t unpA_ch1_x_stride = dst_format == DataFormat::Float32 ? 4 : dst_format == DataFormat::Float16 ? 2 : 1;
-    const std::uint32_t unpA_ch1_y_stride = FACE_C_DIM * face_r_dim * unpA_ch1_x_stride;
 
     // Check that unpacker is done (all contexts freed up) before starting hw configuration
     wait_for_idle();
@@ -162,10 +158,12 @@ inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, 
     // Wait for cfg to be free to edit
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFF>(1);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
+    // Restore the unpacker config saved by _llk_unpack_untilize_init_ (full words via WRCFG, matching WH).
+    // The previous code wrote hardcoded defaults (FACE_DIM_16x16 / descriptor+1 = 1) and a recomputed
+    // Ystride, clobbering any non-default prior state (and the descriptor RMW only touched the low 16 bits).
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 
     TTI_NOP;
 }
