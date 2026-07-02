@@ -14,7 +14,6 @@ import math
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
@@ -590,5 +589,17 @@ def test_group_norm_interleaved_welford_all_config(
     )
     out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
 
-    passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert passing, f"interleaved welford {in_dtype} gamma={gb_dtype} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.06, 0.015
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.02, 0.004
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

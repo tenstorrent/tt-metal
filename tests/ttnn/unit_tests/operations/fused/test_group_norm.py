@@ -13,7 +13,6 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
@@ -1592,10 +1591,20 @@ def test_group_norm_sharded_welford_all_config(
         ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
     )
 
-    passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert (
-        passing
-    ), f"sharded welford {in_dtype} gamma={gb_dtype} {layout} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta/layout matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.06, 0.015
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.02, 0.004
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1667,8 +1676,20 @@ def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype, N, C, H, W, 
         ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
     )
 
-    passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert passing, f"sharded legacy {in_dtype} gamma={gb_dtype} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.09, 0.035
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.08, 0.035
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 # Legacy (non-welford) FP32 GroupNorm on DRAM-interleaved input. Interleaved analog of
@@ -1727,5 +1748,17 @@ def test_group_norm_legacy_fp32_interleaved(
         inplace=False,
     )
     out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
-    passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert passing, f"interleaved legacy {in_dtype} gamma={gb_dtype} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.10, 0.03
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.03, 0.01
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
