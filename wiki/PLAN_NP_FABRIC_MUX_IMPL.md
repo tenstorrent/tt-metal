@@ -162,7 +162,20 @@ different cluster axes -> independent eth links, so H-mux adds N workers on the 
 W=4 DEFERRED: golden says +2% over W=2 (plateau), and it hangs on the num_links=2 shape (mux resource at
 4 concurrent channels; not L1/num_buffers — persists at num_buffers=1). Auto-cap stays at 2.
 H-MUX STEPS (mirror the proven W-mux; reuse mux machinery):
-  [x] np_h_mux_writer.cpp — H per-row bank-major send via stateful API + mux lifecycle (committed, JIT-only)
+  [x] np_h_mux_writer.cpp — H per-row bank-major send, stateful API, mux lifecycle, H->W barrier inc to
+      W-reader cores, COMPACT H-section addressing (h_base + (od*padding+pad_id)*W_dev + w). JIT-only.
+  REMAINING factory wiring (atomic edit, then device bring-up — cannot add gated vars piecemeal, -Werror):
+   - use_h_mux + num_h_workers (min(heuristic,2), zeros, TT_NP_H_MUX/TT_NP_H_WORKERS) + H mux/worker core
+     lists in cols after the W-mux block (h_mux_col = use_w_mux?2+num_w_workers:1).
+   - guard standard H reader/writer creation + per-core loop with if(!use_h_mux); add the mux branch:
+     np_h_reader + np_h_mux_writer on H worker cores; frames split across workers (NO 8-align needed — H
+     coalesce is within-row); FabricMuxConfig + tt_fabric_mux kernel; ccl::fabric_mux_connection_{ct,rt}.
+   - per worker pass h_base = (dir?h_bot:h_top section base) + frame_start*padding*W_dev; recv-sem +
+     barrier same-dir targeting (writer args NOT dir-swapped -> has_neighbor=dir?!first:!last).
+   - W reader barrier_count := total H mux workers (currently num_h_fabric_cores); the H writer already
+     signals the W-mux reader cores (factory L534), so keep that path for the count.
+   - STARTUP BARRIER: try dropping (as W-mux did); if PCC section-diff shows stale H-section, restore it.
+   - BRING-UP: TT_NP_H_MUX=1 + 1 worker PCC (section-diff) -> multi-worker -> perf. Expect ~660->~380us.
   [ ] Factory: place H mux+worker cores in free columns (W-mux uses cols 1..1+num_w_workers; H-mux goes
       after). Fork np_h_reader onto H worker cores with frames split 8-aligned. Wire mux cfg + CT/RT.
   [ ] H recv: per-worker h_neighbor_sem (neighbor's N H-readers each wait their frame count) + same-dir
