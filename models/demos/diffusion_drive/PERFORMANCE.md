@@ -117,11 +117,26 @@ applied to the whole model, end-to-end traced forward:
 Median improves ~1.5% but the **average regresses** (higher variance) — within noise, not a robust win.
 PCC unchanged. Reverted.
 
-**Conclusion:** the backbone conv activations are small (≤512 ch, ≤64×256), so sharding/double-buffer
-overhead cancels the parallelism benefit — the same "tensors too small for a sharding win" outcome seen on
-sibling small models. The auto (`shard_layout=None`) interleaved path is the right default here. The real
-lever would be a genuine L1-resident chain, which this build's `ttnn.conv2d` does not expose at these
-shapes (it re-interleaves the output regardless).
+**(c) bfloat8_b conv weights + LoFi math fidelity** (`Conv2dConfig(weights_dtype=bfloat8_b)` +
+`compute_config=init_device_compute_kernel_config(..., MathFidelity.LoFi)`), whole conv path, traced:
+
+| | median | avg | min |
+|---|---|---|---|
+| baseline (bf16 + HiFi2) | 44.9 ms | 45.8 ms | 44.3 ms |
+| + bf8 + LoFi | 46.7 ms | 49.1 ms | 44.8 ms |
+
+**No gain — if anything slightly worse.** Crucially, **PCC held** (checkpoint trajectory 0.999900, stage3_6
+scores 0.998) — so bf8/LoFi are accuracy-safe; they just don't help *latency*. This was the hypothesis-test
+for "the backbone is conv-matmul/bandwidth-bound, so low precision should help." It **isn't**: the small
+convs are bound by **per-op device overhead** (fixed kernel/sharding setup), not by weight bandwidth or
+matmul FLOPs — so halving the weight width and lowering fidelity touch nothing on the critical path.
+Reverted (env-gated `DD_CONV_BF8`/`DD_LOFI` knobs removed — dead weight with no gain).
+
+**Conclusion:** the backbone conv activations are small (≤512 ch, ≤64×256), so sharding/double-buffer/
+low-precision all fail for the same reason — **the model is per-op-overhead-bound, not compute/bandwidth/
+dispatch-bound.** That is why only *tracing* (which collapses per-op overhead wholesale, §3) helped, and
+why op-fusion, sharding, double-buffering, and bf8/LoFi were all measured neutral. The auto
+(`shard_layout=None`, bf16, HiFi2) config is the right default here.
 
 ## 6. Context — end-to-end throughput is host-bound
 
