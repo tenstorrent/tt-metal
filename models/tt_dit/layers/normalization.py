@@ -360,7 +360,7 @@ class DistributedLayerNorm(Module):
 
         # Fused Welford LayerNorm device op. weight/bias (static or adaLN, bf16 or fp32) are
         # consumed natively in-op — fp32 affine keeps the modulation precision adaLN needs.
-        return ttnn.experimental.wan_fused_distributed_rmsnorm(
+        return ttnn.experimental.wan_fused_distributed_layernorm(
             x,
             self.mesh_axis,
             self.mesh_device,
@@ -368,12 +368,11 @@ class DistributedLayerNorm(Module):
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 ("ln", tuple(x.shape)),
-                lambda: ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                lambda: ttnn.experimental.wan_fused_distributed_layernorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
                     num_links=self.ccl_manager.num_links,
-                    norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
                 ),
             ),
             epsilon=self.norm_eps,
@@ -382,8 +381,6 @@ class DistributedLayerNorm(Module):
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             dtype=dtype,
-            use_device_op=True,
-            norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
             reciprocals=self._ensure_fused_ln_recip(x),
         )
 

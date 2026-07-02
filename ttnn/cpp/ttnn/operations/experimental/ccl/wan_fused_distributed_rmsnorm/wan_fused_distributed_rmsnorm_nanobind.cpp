@@ -14,28 +14,18 @@
 namespace ttnn::operations::experimental::ccl {
 
 void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
-    nb::enum_<ttnn::experimental::WanFusedNormType>(mod, "WanFusedNormType")
-        .value("RMS", ttnn::experimental::WanFusedNormType::RMS, "RMSNorm: x * rsqrt(E[x^2] + eps)")
-        .value(
-            "LAYERNORM",
-            ttnn::experimental::WanFusedNormType::LAYERNORM,
-            "Welford LayerNorm: (x - mean) * rsqrt(var + eps), with bias");
-
     ttnn::bind_function<"wan_fused_distributed_rmsnorm", "ttnn.experimental.">(
         mod,
         R"doc(
             Fused distributed RMSNorm for Wan2.2 attention.
 
-            Composes three stages into one call:
-              1. `wan_fused_rmsnorm_pre_allgather` — per-row partial sum-of-squares in fp32.
-              2. All-gather of the partial statistics across `cluster_axis`.
-              3. `wan_fused_rmsnorm_post_allgather` — finalize normalization, optionally
-                 split heads, apply RoPE, and cast output dtype.
+            One fused device op (per-chip reader/compute/writer with a fabric-forwarder
+            all-gather): per-row partial sum-of-squares, all-gather of the partial stats
+            across `cluster_axis`, then finalize x * rsqrt(E[x^2] + eps) with optional head
+            split, RoPE, and output-dtype cast.
 
-            By default (`use_device_op=true`) runs the fused single device op (one program:
-            per-chip reader/compute/writer with a fabric-forwarder all-gather). Pass
-            `use_device_op=false` to chain the three primitives instead (RMS-only legacy
-            baseline, kept for A/B comparison).
+            Pass `use_device_op=false` to chain the three composite primitives instead
+            (RMS-only legacy baseline, kept for A/B comparison).
         )doc",
         &ttnn::experimental::wan_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
@@ -58,21 +48,51 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("use_device_op") = true,
-        nb::arg("norm_type") = ttnn::experimental::WanFusedNormType::RMS,
+        nb::arg("use_device_op") = true);
+
+    ttnn::bind_function<"wan_fused_distributed_layernorm", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Fused distributed Welford LayerNorm for Wan2.2 attention.
+
+            Same fused device op / fabric all-gather as `wan_fused_distributed_rmsnorm`,
+            but computes a numerically-stable Welford mean/variance and applies
+            (x - mean) * rsqrt(var + eps) with optional weight/bias, head split, RoPE, and
+            output-dtype cast. Only the fused device op path exists for LayerNorm.
+
+            Pass `reciprocals` (== ttnn.create_layer_norm_reciprocals) to let the Welford
+            LLK do an array load of 1/(N+1) instead of a soft-float divide per sample.
+        )doc",
+        &ttnn::experimental::wan_fused_distributed_layernorm,
+        nb::arg("input_tensor"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("topology") = ttnn::ccl::Topology::Ring,
+        nb::arg("epsilon") = 1e-5,
+        nb::arg("num_heads_per_device") = 1,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("transformation_mat") = nb::none(),
+        nb::arg("rope_cos") = nb::none(),
+        nb::arg("rope_sin") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("persistent_output_buffer") = nb::none(),
+        nb::arg("num_preferred_links") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("reciprocals") = nb::none());
 
     ttnn::bind_function<"wan_fused_distributed_rmsnorm_create_stats_buffer", "ttnn.experimental.">(
         mod,
         R"doc(
-            Allocate the persistent stats DRAM scratch buffer required by the
-            device op's all-gather path (TP>1, whole-row norm). Returns None when
-            the op reduces locally and needs no scratch (TP=1 or per_head_norm),
-            in which case the device op also doesn't require a buffer.
-
-            The returned tensor must be held by the caller across launches and
-            passed in via the `persistent_output_buffer` kwarg to
-            `wan_fused_distributed_rmsnorm`.
+            Allocate the persistent stats DRAM scratch buffer required by
+            `wan_fused_distributed_rmsnorm`'s all-gather path (TP>1, whole-row norm).
+            Returns None when the op reduces locally and needs no scratch (TP=1 or
+            per_head_norm). Hold the returned tensor across launches and pass it in via
+            the `persistent_output_buffer` kwarg.
         )doc",
         &ttnn::experimental::wan_fused_distributed_rmsnorm_create_stats_buffer,
         nb::arg("input_tensor"),
@@ -85,8 +105,28 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("weight") = nb::none(),
         nb::arg("transformation_mat") = nb::none(),
         nb::arg("rope_cos") = nb::none(),
-        nb::arg("rope_sin") = nb::none(),
-        nb::arg("norm_type") = ttnn::experimental::WanFusedNormType::RMS);
+        nb::arg("rope_sin") = nb::none());
+
+    ttnn::bind_function<"wan_fused_distributed_layernorm_create_stats_buffer", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Allocate the persistent stats DRAM scratch buffer required by
+            `wan_fused_distributed_layernorm`'s all-gather path. LayerNorm transports 2
+            stats/token (mean+var) vs RMS's 1, so this buffer is 2x wider than the RMS
+            one — use this variant for LayerNorm ops. Returns None when the op needs no
+            scratch (TP=1).
+        )doc",
+        &ttnn::experimental::wan_fused_distributed_layernorm_create_stats_buffer,
+        nb::arg("input_tensor"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("num_heads_per_device") = 1,
+        nb::arg("num_links") = 1,
+        nb::arg("weight") = nb::none(),
+        nb::arg("transformation_mat") = nb::none(),
+        nb::arg("rope_cos") = nb::none(),
+        nb::arg("rope_sin") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

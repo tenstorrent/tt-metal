@@ -371,11 +371,30 @@ def _call_op(
 ):
     if per_head_norm is None:
         per_head_norm = cfg.per_head_norm
-    norm_type = (
-        ttnn.experimental.WanFusedNormType.LAYERNORM
-        if cfg.norm == "layernorm"
-        else ttnn.experimental.WanFusedNormType.RMS
-    )
+    trans = inp["trans"] if rope else None
+    cos = inp["cos"] if rope else None
+    sin = inp["sin"] if rope else None
+    out_dtype = ttnn.float32 if cfg.out_dtype == "fp32" else None  # None => bf16 (current default)
+    if cfg.norm == "layernorm":
+        # LayerNorm is now its own op (no per_head_norm / use_device_op knob; always device op).
+        return ttnn.experimental.wan_fused_distributed_layernorm(
+            inp["x"],
+            tp_axis,
+            submesh,
+            sem,
+            topology=topology,
+            epsilon=NORM_EPS,
+            num_heads_per_device=cfg.heads,
+            weight=weight,
+            bias=bias,
+            transformation_mat=trans,
+            rope_cos=cos,
+            rope_sin=sin,
+            dtype=out_dtype,
+            persistent_output_buffer=pob,
+            num_preferred_links=num_links,
+            reciprocals=inp.get("recip"),
+        )
     return ttnn.experimental.wan_fused_distributed_rmsnorm(
         inp["x"],
         tp_axis,
@@ -386,16 +405,14 @@ def _call_op(
         num_heads_per_device=cfg.heads,
         weight=weight,
         bias=bias,
-        transformation_mat=(inp["trans"] if rope else None),
-        rope_cos=(inp["cos"] if rope else None),
-        rope_sin=(inp["sin"] if rope else None),
-        dtype=(ttnn.float32 if cfg.out_dtype == "fp32" else None),  # None => bf16 (current default)
+        transformation_mat=trans,
+        rope_cos=cos,
+        rope_sin=sin,
+        dtype=out_dtype,
         persistent_output_buffer=pob if use_device_op else None,
         num_preferred_links=num_links,
         use_device_op=use_device_op,
         per_head_norm=per_head_norm,
-        norm_type=norm_type,
-        reciprocals=(inp.get("recip") if norm_type == ttnn.experimental.WanFusedNormType.LAYERNORM else None),
     )
 
 
@@ -465,6 +482,20 @@ def _run_baseline(inp, submesh, sem, cfg, topology, tp_axis, op_override):
 def _make_pob(inp, submesh, cfg, num_links, tp_axis):
     # Pass weight/RoPE + num_links so the stats-buffer geometry (chunk/window sizing
     # and the num_workers link-rounding) matches the program; a mismatch corrupts the AG.
+    # LayerNorm transports 2 stats/token (mean+var) vs RMS's 1, so it needs its own
+    # (2x-wide) stats-buffer variant.
+    if cfg.norm == "layernorm":
+        return ttnn.experimental.wan_fused_distributed_layernorm_create_stats_buffer(
+            inp["x"],
+            tp_axis,
+            submesh,
+            num_heads_per_device=cfg.heads,
+            num_links=num_links,
+            weight=inp.get("weight"),
+            transformation_mat=inp.get("trans"),
+            rope_cos=inp.get("cos"),
+            rope_sin=inp.get("sin"),
+        )
     return ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
         inp["x"],
         tp_axis,
