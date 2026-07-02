@@ -30,8 +30,8 @@ from ttnn._ttnn.operations.normalization import (
 # groupnorm_input_mask.cpp  create_group_norm_input_mask_impl():
 #   TT_FATAL — num_cores_across_channel must be > 0
 # ---------------------------------------------------------------------------
-def test_input_mask_num_cores_across_channel_zero():
-    with pytest.raises(RuntimeError, match="num_cores_across_channel must be > 0"):
+def test_input_mask_num_cores_across_channel_zero(expect_error):
+    with expect_error(RuntimeError, "num_cores_across_channel must be > 0"):
         create_group_norm_input_mask(
             num_channel=256,
             num_groups=32,
@@ -44,8 +44,8 @@ def test_input_mask_num_cores_across_channel_zero():
 # groupnorm_input_mask.cpp  create_group_norm_input_mask_impl():
 #   TT_FATAL — num_groups must be divisible by num_cores_across_channel
 # ---------------------------------------------------------------------------
-def test_input_mask_num_groups_not_divisible_by_num_cores():
-    with pytest.raises(RuntimeError, match="must be divisible by num_cores_across_channel"):
+def test_input_mask_num_groups_not_divisible_by_num_cores(expect_error):
+    with expect_error(RuntimeError, "must be divisible by num_cores_across_channel"):
         create_group_norm_input_mask(
             num_channel=256,
             num_groups=32,
@@ -58,8 +58,8 @@ def test_input_mask_num_groups_not_divisible_by_num_cores():
 # groupnorm_nanobind.cpp  _find_expected_dram_grid (wrapper):
 #   RuntimeError — no valid DRAM grid (calls find_expected_dram_grid)
 # ---------------------------------------------------------------------------
-def test_find_expected_dram_grid_no_valid_grid():
-    with pytest.raises(RuntimeError, match="Cannot find a valid DRAM group-norm grid"):
+def test_find_expected_dram_grid_no_valid_grid(expect_error):
+    with expect_error(RuntimeError, "Cannot find a valid DRAM group-norm grid"):
         _find_expected_dram_grid(
             max_x=8,
             max_y=8,
@@ -72,31 +72,6 @@ def test_find_expected_dram_grid_no_valid_grid():
 # ===========================================================================
 #  Device-dependent tests (use TT-Sim simulated device)
 # ===========================================================================
-
-
-# ---------------------------------------------------------------------------
-# groupnorm.cpp  get_mask_tensor():
-#   TT_FATAL — num_virtual_cols == 0 (non-L1 buffer path; DRAM height-sharded skips validate_dram_grid)
-# ---------------------------------------------------------------------------
-def test_get_mask_tensor_num_virtual_cols_zero(device):
-    torch_x = torch.randn(1, 1, 32, 48, dtype=torch.bfloat16)
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        (32, 48),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    dram_height_sharded = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.DRAM,
-        shard_spec,
-    )
-    x = ttnn.interleaved_to_sharded(
-        ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        dram_height_sharded,
-    )
-
-    with pytest.raises(RuntimeError, match="Cannot determine num_virtual_cols"):
-        ttnn.group_norm(x, num_groups=16, core_grid=ttnn.CoreGrid(x=1, y=1), inplace=True)
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +100,9 @@ def test_get_mask_tensor_num_virtual_cols_zero(device):
         ),
     ],
 )
-def test_validate_dram_grid(input_shape, num_groups, core_grid, msg_pattern, device):
+def test_validate_dram_grid(input_shape, num_groups, core_grid, msg_pattern, device, expect_error):
     x = ttnn.empty(input_shape, dtype=ttnn.DataType.BFLOAT16, device=device)
-    with pytest.raises(RuntimeError, match=msg_pattern):
+    with expect_error(RuntimeError, msg_pattern):
         ttnn.group_norm(x, num_groups=num_groups, core_grid=core_grid, inplace=False)
 
 
@@ -154,13 +129,13 @@ def test_validate_dram_grid(input_shape, num_groups, core_grid, msg_pattern, dev
         ),
     ],
 )
-def test_num_out_blocks_exceeds_block_ht(input_shape, core_grid, num_out_blocks, device):
+def test_num_out_blocks_exceeds_block_ht(input_shape, core_grid, num_out_blocks, device, expect_error):
     x = ttnn.from_torch(
         torch.randn(*input_shape, dtype=torch.bfloat16),
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
-    with pytest.raises(RuntimeError, match=r"num_out_blocks.*must be in"):
+    with expect_error(RuntimeError, r"num_out_blocks.*must be in"):
         ttnn.group_norm(
             x,
             num_groups=32,

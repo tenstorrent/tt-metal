@@ -493,7 +493,8 @@ class GroupNorm(Module):
         kwargs = dict(
             weight=self.weight.data,
             bias=self.bias.data,
-            input_mask=self.mask.data,
+            # Mask synthesized in the writer kernel (see #48640). self.mask.data still
+            # holds the host-built tensor for save/load compatibility; not passed here.
             num_groups=self.num_groups,
             epsilon=self.eps,
             core_grid=self.core_grid,
@@ -618,7 +619,7 @@ class GroupNorm3D(Module):
             # -1 = built-in chunk heuristic. Default 1 (with pinned core_grid) overflows L1
             # at large gathered spatial.
             num_out_blocks=-1,
-            input_mask=self.mask.data,
+            # Mask synthesized in the writer kernel (see #48640).
             weight=self.weight.data,
             bias=self.bias.data,
             epsilon=self.eps,

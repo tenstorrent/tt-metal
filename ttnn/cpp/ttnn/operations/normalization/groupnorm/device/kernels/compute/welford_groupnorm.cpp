@@ -440,7 +440,17 @@ void kernel_main() {
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
-                        cb_xmm.reserve_back(2);
+                        // Reorder: `((x − μ) · rsqrt) · mask`. Bit-equivalent to
+                        // `((x − μ) · mask) · rsqrt` for mask ∈ {0.0, 1.0}, but
+                        // puts mask on the RHS row-source of mul_tiles_bcast_rows —
+                        // so synthesized row-0-only mask data is sufficient.
+                        //
+                        // All three sub-steps read/write the SAME cb_xmm slot; there
+                        // is no producer/consumer handoff between them (all math),
+                        // so we hold one reserve for the whole recipe and push once
+                        // at the end. Splitting into per-step reserve/push measurably
+                        // regressed the DRAM Welford path (see #48640 bisect).
+                        cb_xmm.reserve_back(1);
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
@@ -454,33 +464,36 @@ void kernel_main() {
                         pack_tile(dst0, cb_xmm_id);
                         tile_regs_release();
 
-                        // // b. 1/[sqrt(Var + eps)] * mask
+                        // // b. (x - u) * 1/[sqrt(Var + eps)]
+                        mul_tiles_bcast_scalar_init_short(cb_xmm_id, cb_ex2pe_id);
+                        reconfig_data_format(cb_in0_id, cb_xmm_id, cb_ex_global_id, cb_ex2pe_id);
+                        tile_regs_acquire();
+                        mul_tiles_bcast_scalar(cb_xmm_id, cb_ex2pe_id, 0, g, dst0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(dst0, cb_xmm_id);
+                        tile_regs_release();
+
+                        // // c. [(x - u) * rsqrt] * mask  (mask is the RHS row-source ✅)
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
-                        mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
-                        reconfig_data_format_srcb(cb_ex_global_id, cb_ex2pe_id);
+                        mul_bcast_rows_init_short(cb_xmm_id, cb_input_mask_id);
+                        reconfig_data_format_srcb(cb_ex2pe_id, cb_input_mask_id);
                         tile_regs_acquire();
-                        mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
+                        mul_tiles_bcast_rows(cb_xmm_id, cb_input_mask_id, 0, mask_index, dst0);
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(dst0, cb_xmm_id);
                         tile_regs_release();
-                        cb_xmm.push_back(2);
 
-                        // // c. a * b
-                        cb_xmm.wait_front(2);
-                        mul_tiles_init(cb_xmm_id, cb_xmm_id);
-                        reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
-                        tile_regs_acquire();
-                        mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
-                        tile_regs_commit();
-                        cb_xmm.pop_front(2);
-                        cb_xmm.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, cb_xmm_id);
-                        tile_regs_release();
                         cb_xmm.push_back(1);
+
+                        // Restore srcb to cb_xmm so step (d) and downstream code
+                        // see srcb in the same format the original pre-reorder
+                        // path did. Critical when the mask CB is BFP8: leaving
+                        // srcb set to BFP8 would misread cb_xmm bf16 bytes.
+                        reconfig_data_format_srcb(cb_input_mask_id, cb_xmm_id);
 
                         // // d. Add to cb_xmm_id (accumulate results)
                         // // First we get the result in dst0

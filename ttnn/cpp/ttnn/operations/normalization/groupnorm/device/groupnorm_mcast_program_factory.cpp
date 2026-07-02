@@ -298,7 +298,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    uint32_t in_mask_CB_size = use_welford ? input_mask.value().physical_volume() * input_mask.value().element_size()
+    // Welford writer reserves block_w * num_groups_per_core tiles up-front
+    // and the compute kernel waits on all of them; non-Welford double-buffers
+    // block_wt tiles. When the mask is synthesized in-L1 we have no caller
+    // tensor to size against — the Welford expression below works either way.
+    uint32_t in_mask_CB_size = use_welford ? input_mask_num_tiles_per_core * in_mask_single_tile_size
                                            : block_wt * in_mask_single_tile_size * 2;
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;
     uint32_t interm_block_tiles_group_1 = in0_block_tiles_group_1;
@@ -316,7 +320,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
-        xmm_CB_size_group_1 = single_tile_size * 3;
+        // cb_xmm double buffer. After the Welford mask-multiply reorder
+        // (`((x − μ) · rsqrt) · mask`), only one tile is live in cb_xmm at
+        // a time, so the allocation drops from 3 to 2.
+        xmm_CB_size_group_1 = single_tile_size * 2;
     }
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
@@ -533,6 +540,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_groups_per_core", num_groups_per_core},
         {"num_batches_per_core", num_batches_per_core_group_1},
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_channels_per_group", num_channels_per_group},
         {"num_tiles_per_batch", per_core_Mt_group_1 * Wt / num_batches_per_core_group_1},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
@@ -574,12 +582,25 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    std::map<std::string, std::string> writer_defines;
+    // See groupnorm_sharded_program_factory.cpp for the mask data path
+    // selection (synthesize / partial read / full read). Synthesis fires
+    // only when the caller did not pass an input_mask tensor.
+    const bool synth_mask = !input_mask.has_value();
+    if (synth_mask) {
+        writer_defines["MASK_SYNTHESIZE"] = "1";
+        writer_defines["MASK_NUM_COLS_PER_GROUP"] = std::to_string(num_channels_per_group);
+    } else if (input_mask.has_value() && mask_format_supports_partial_read(in_mask_cb_data_format)) {
+        writer_defines["MASK_PARTIAL_READ"] = "1";
+    }
+
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = writer_kernel;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores_group_1;
     writer_desc.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc.named_compile_time_args = to_named_args_mcast(writer_named_compile_time_args_group_1);
+    writer_desc.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -862,7 +883,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             }}},
         });
     }
-    if (input_mask.has_value()) {
+    if (input_mask.has_value() || synth_mask) {
         constexpr uint32_t in_mask_cb_index = tt::CBIndex::c_28;
         desc.cbs.push_back(CBDescriptor{
             .total_size = in_mask_CB_size,

@@ -66,6 +66,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
                 negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB's used in the sharded version of the kernel by overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).
                 use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance.
+                synthesize_negative_mask (bool, optional): Defaults to `False`. Sharded-only opt-in for the negative-mask L1 overlap trick without allocating a DRAM tensor: the writer kernel synthesizes the inverted per-group {1.0, 0.0} selector directly in L1 (same recurrence as the positive-mask synthesis path). Mutually exclusive with :attr:`negative_mask` — pass either a tensor OR this flag, not both.
                 reciprocals (ttnn.Tensor, optional): Defaults to `None`. FP32 tensor containing pre-computed reciprocal values. Only valid when ``use_welford`` is True. Must be sharded to L1 using the legacy ``ShardSpec`` representation, with the shard grid matching the compute :attr:`core_grid`. Interleaved tensors and ``NdShardSpec`` sharding are currently not supported for the :attr:`reciprocals` tensor.
 
             Returns:
@@ -140,7 +141,8 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("num_out_blocks") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("negative_mask") = nb::none(),
-        nb::arg("use_welford") = false);
+        nb::arg("use_welford") = false,
+        nb::arg("synthesize_negative_mask") = false);
     mod.def(
         "create_group_norm_input_mask",
         [](int64_t num_channel,

@@ -333,7 +333,8 @@ Tensor group_norm(
     std::optional<Tensor> beta,
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
-    std::optional<Tensor> reciprocals) {
+    std::optional<Tensor> reciprocals,
+    bool synthesize_negative_mask) {
     if (negative_mask.has_value()) {
         TT_FATAL(
             negative_mask.value().storage_type() == StorageType::DEVICE,
@@ -343,6 +344,9 @@ Tensor group_norm(
             negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
         TT_FATAL(input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
     }
+    TT_FATAL(
+        !(synthesize_negative_mask && negative_mask.has_value()),
+        "synthesize_negative_mask=True is mutually exclusive with a caller-supplied negative_mask tensor.");
     using OperationType = GroupNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = eps,
@@ -351,6 +355,7 @@ Tensor group_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .use_welford = use_welford,
+        .synthesize_negative_mask = synthesize_negative_mask,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input = input,
