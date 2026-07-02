@@ -65,6 +65,8 @@ def chunk_gated_delta_rule_seq_adapter(
     device=None,
     cached_masks=None,
     valid_len=None,
+    qkv_head_dims=None,  # (Hq, K, H, V): when set, q/k/v are FLAT [B,T,Hq*K]/[B,T,Hq*K]/[B,T,H*V]
+    return_o_bh=False,  # when True, return o RAW as [BH,T,V] (skip the head-major->token-major relayout)
 ):
     """Drop-in replacement for chunk_gated_delta_rule_ttnn that runs the C++
     chunk-parallel `gated_delta_attn_seq` kernel.
@@ -77,17 +79,27 @@ def chunk_gated_delta_rule_seq_adapter(
     """
     B = q.shape[0]
     T = q.shape[1]
-    H = v.shape[2]  # value-head count (Nv): beta/g/v/output/state all use this
-    Hq = q.shape[2]  # q/k head count — may be < H (GQA). When < H, q/k are L2-normed + transformed
-    # at Hq heads (3x less work for a 4:1 ratio) and expanded to H AFTER, via a cheap dim-0 block
-    # repeat (no untilize). No-op when Hq == H (the pre-expanded path / 9B) → fully backward-compatible.
-    K = q.shape[3]
-    V = v.shape[3]
+    if qkv_head_dims is not None:
+        # FLAT inputs: q/k [B,T,Hq*K], v [B,T,H*V]. The caller skips its (expensive TILE) head-split
+        # reshape — _to_bhtd's post-untilize reshape splits heads for free, and l2_norm(q/k) is deferred
+        # into _to_bhtd (bf16 TILE [BH,T,K], per-head over K == the pre-split norm, bit-identical).
+        Hq, K, H, V = qkv_head_dims
+        _defer_l2 = True
+    else:
+        H = v.shape[2]  # value-head count (Nv): beta/g/v/output/state all use this
+        Hq = q.shape[2]  # q/k head count — may be < H (GQA). When < H, q/k are L2-normed + transformed
+        # at Hq heads (3x less work for a 4:1 ratio) and expanded to H AFTER, via a cheap dim-0 block
+        # repeat (no untilize). No-op when Hq == H (the pre-expanded path / 9B) → fully backward-compatible.
+        K = q.shape[3]
+        V = v.shape[3]
+        _defer_l2 = False
     BH = B * H
 
-    # L2-norm q/k (the seq kernel does NOT normalize; it only scales q internally).
-    q = l2_norm_ttnn(q, dim=-1)
-    k = l2_norm_ttnn(k, dim=-1)
+    # L2-norm q/k (the seq kernel does NOT normalize; it only scales q internally). For flat inputs
+    # this is deferred into _to_bhtd (see _defer_l2) so it lands on the split [BH,T,K] tensor.
+    if not _defer_l2:
+        q = l2_norm_ttnn(q, dim=-1)
+        k = l2_norm_ttnn(k, dim=-1)
 
     # OPT (prefill): run the seq-major<->head-major relayout DATA MOVEMENT (untilize->permute) in L1
     # so the actual head-shuffle is L1<->L1 and the untilize/tilize each get one side in L1. But LAND
@@ -97,12 +109,16 @@ def chunk_gated_delta_rule_seq_adapter(
     # relayout (no kernel running then), so L1 there is safe. Intermediate=_L1, kernel-input=_DRAM.
     _L1 = ttnn.L1_MEMORY_CONFIG
 
-    def _to_bhtd(t, D, Hh):  # [B,T,Hh,D] -> [B*Hh,T,D] float32 TILE (ROW_MAJOR-correct)
+    def _to_bhtd(t, D, Hh, l2=False):  # [B,T,Hh,D] (or flat [B,T,Hh*D]) -> [B*Hh,T,D] float32 TILE
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)  # untilize -> L1
-        t = ttnn.reshape(t, [B, T, Hh, D])
+        t = ttnn.reshape(t, [B, T, Hh, D])  # head-split (free row-major reshape; a no-op if already 4D)
         t = ttnn.permute(t, (0, 2, 1, 3))  # [B,Hh,T,D] shuffle in L1
         t = ttnn.reshape(t, [B * Hh, T, D])
         t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # land kernel input in DRAM (CB room)
+        if l2:
+            # per-head L2-norm on the split [BH,T,D] bf16 tile — same elements/last-dim as the pre-split
+            # norm, so bit-identical; kept in bf16 before the fp32 cast to match the reference chunk path.
+            t = l2_norm_ttnn(t, dim=-1)
         if t.dtype != ttnn.float32:
             t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
         return t
@@ -117,8 +133,8 @@ def chunk_gated_delta_rule_seq_adapter(
             t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
         return t
 
-    q_bh = _to_bhtd(q, K, Hq)
-    k_bh = _to_bhtd(k, K, Hq)
+    q_bh = _to_bhtd(q, K, Hq, l2=_defer_l2)
+    k_bh = _to_bhtd(k, K, Hq, l2=_defer_l2)
     v_bh = _to_bhtd(v, V, H)
     if Hq != H:
         # GQA late expand: replicate each q/k head rf times along the BH (outer, non-tile) axis —
@@ -150,11 +166,16 @@ def chunk_gated_delta_rule_seq_adapter(
         valid_len=valid_len,
     )
 
-    # o [BH,T,V] -> [B,T,H,V]  (shuffle in L1, land in DRAM — feeds the out-proj matmul's CBs downstream)
-    o = ttnn.to_layout(o_bh, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)
-    o = ttnn.reshape(o, [B, H, T, V])
-    o = ttnn.permute(o, (0, 2, 1, 3))  # [B,T,H,V]
-    o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_DRAM)
+    # o [BH,T,V] -> [B,T,H,V]  (shuffle in L1, land in DRAM — feeds the out-proj matmul's CBs downstream).
+    # return_o_bh: hand back the raw [BH,T,V] so the caller can fuse this relayout with its own per-head
+    # rms_norm + head-flatten (rms_norm over V commutes with the value-preserving shuffle) into one pass.
+    if return_o_bh:
+        o = o_bh
+    else:
+        o = ttnn.to_layout(o_bh, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)
+        o = ttnn.reshape(o, [B, H, T, V])
+        o = ttnn.permute(o, (0, 2, 1, 3))  # [B,T,H,V]
+        o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_DRAM)
 
     # final_state [BH,K,V] -> [B,H,K,V]. DEFAULT casts to bf16 (the decode recurrent_state dtype).
     # QWEN_GDN_FP32_STATE=1: keep the inter-chunk state at full fp32 precision. In chunk-outer prefill
@@ -323,14 +344,23 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     # ---- DEFAULT: stable Horner-form Neumann series  R = I + (-N) @ R  (forward-substitution) ----
     neg_N = ttnn.neg(N, memory_config=mc)  # -N (strictly lower)
     ttnn.deallocate(N)
-    R = ttnn.add(eye_1cc, neg_N, memory_config=mc)  # R_1 = I - N  ([batch,C,C])
+    # Pre-broadcast the identity to [batch,C,C] so the per-iteration Horner add is a plain elementwise
+    # op instead of a [1,C,C]->[batch,C,C] broadcast (measured -4% prefill ttft, numerically identical —
+    # the add dominates the inverse loop and the broadcast was ~5x its compute). batch==1 callers keep
+    # the original tensor (the add is already non-broadcast, and repeat would just add an op).
+    _eye = eye_1cc
+    if batch > 1:
+        _eye = ttnn.repeat(eye_1cc, ttnn.Shape([batch, 1, 1]))
+    R = ttnn.add(_eye, neg_N, memory_config=mc)  # R_1 = I - N  ([batch,C,C])
     for _ in range(C - 2):  # R_1 -> R_{C-1} = sum_{j=0}^{C-1} (-N)^j  (exact: N^C = 0)
         NR = ttnn.matmul(neg_N, R, memory_config=mc, compute_kernel_config=_hifi_cfg)  # (-N) @ R
-        R_new = ttnn.add(eye_1cc, NR, memory_config=mc)  # I + (-N) @ R
+        R_new = ttnn.add(_eye, NR, memory_config=mc)  # I + (-N) @ R
         ttnn.deallocate(NR)
         ttnn.deallocate(R)
         R = R_new
     ttnn.deallocate(neg_N)
+    if _eye is not eye_1cc:
+        ttnn.deallocate(_eye)
 
     # L_inv = (I+N)^{-1} @ D^{-1} via column scaling
     L_inv = ttnn.multiply(R, D_inv_col, memory_config=mc)

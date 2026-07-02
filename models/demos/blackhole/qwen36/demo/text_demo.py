@@ -259,7 +259,7 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(128, 50, False, 1, id="paged_128"),
         pytest.param(4096, 100, True, 1, id="traced_4k"),
         pytest.param(4096, 100, False, 1, id="paged_4k"),
-        pytest.param(8192, 5, True, 1, id="traced_8k"),
+        pytest.param(8192, 100, True, 1, id="traced_8k"),
         pytest.param(8192, 100, False, 1, id="paged_8k"),
         pytest.param(16384, 100, True, 1, id="traced_16k"),
         pytest.param(32768, 100, True, 1, id="traced_32k"),
@@ -293,7 +293,7 @@ def test_demo_text(
         max_batch_size=1,
         max_seq_len=max_seq_len,
         # n_layers=4,  # uncomment for fast iteration; default uses 32-layer config
-        layer_indices=[0, 3],  # uncomment to run ONLY these specific checkpoint layers (profiling)
+        # layer_indices=[0, 3],  # uncomment to run ONLY these specific checkpoint layers (profiling)
     )
     logger.info(f"Model load: {time.time() - t0:.1f}s")
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
