@@ -370,6 +370,9 @@ inline void calculate_gelu_tanh() {
         sfpi::vFloat inner = x + kx3;
 
         sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
+        sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(scaled);
+        // reload due to register pressure
+        x = sfpi::dst_reg[0];
         sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
@@ -377,8 +380,7 @@ inline void calculate_gelu_tanh() {
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(scaled);
-            sfpi::vFloat half_x = 0.5f * sfpi::dst_reg[0];
+            sfpi::vFloat half_x = 0.5f * x;
             result = half_x * t + half_x;
         }
         v_endif;
