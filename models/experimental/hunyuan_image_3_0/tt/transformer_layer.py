@@ -50,6 +50,7 @@ class HunyuanTtDecoderLayer(LightweightModule):
         tp_factor: int = 1,
         sp_axis: int = 0,
         sp_factor: int = 1,
+        weight_cache_path=None,
     ):
         super().__init__()
         self.device = device
@@ -57,7 +58,12 @@ class HunyuanTtDecoderLayer(LightweightModule):
 
         prefix = f"model.layers.{layer_num}"
         self.input_layernorm = HunyuanTtRMSNorm(
-            device, hidden_size, state_dict, f"{prefix}.input_layernorm", eps=rms_norm_eps
+            device,
+            hidden_size,
+            state_dict,
+            f"{prefix}.input_layernorm",
+            eps=rms_norm_eps,
+            weight_cache_path=weight_cache_path,
         )
         self.self_attn = HunyuanTtAttention(
             device,
@@ -70,6 +76,7 @@ class HunyuanTtDecoderLayer(LightweightModule):
             use_qk_norm=use_qk_norm,
             eps=rms_norm_eps,
             weight_dtype=weight_dtype,
+            weight_cache_path=weight_cache_path,
             ccl_manager=ccl_manager,
             tp_axis=tp_axis,
             tp_factor=tp_factor,
@@ -77,7 +84,12 @@ class HunyuanTtDecoderLayer(LightweightModule):
             sp_factor=sp_factor,
         )
         self.post_attention_layernorm = HunyuanTtRMSNorm(
-            device, hidden_size, state_dict, f"{prefix}.post_attention_layernorm", eps=rms_norm_eps
+            device,
+            hidden_size,
+            state_dict,
+            f"{prefix}.post_attention_layernorm",
+            eps=rms_norm_eps,
+            weight_cache_path=weight_cache_path,
         )
         # MoE: expert-parallel (sharded, resident) when a CCLManager is provided
         # for a mesh device; otherwise the single-device dense/streaming MoE.
@@ -96,6 +108,7 @@ class HunyuanTtDecoderLayer(LightweightModule):
                 weight_dtype=weight_dtype,
                 sp_axis=sp_axis,
                 sp_factor=sp_factor,
+                weight_cache_path=weight_cache_path,
             )
         else:
             self.mlp = HunyuanTtMoE(
@@ -109,6 +122,7 @@ class HunyuanTtDecoderLayer(LightweightModule):
                 norm_topk_prob=norm_topk_prob,
                 weight_dtype=weight_dtype,
                 stream_experts=stream_experts,
+                weight_cache_path=weight_cache_path,
             )
 
     def forward(
