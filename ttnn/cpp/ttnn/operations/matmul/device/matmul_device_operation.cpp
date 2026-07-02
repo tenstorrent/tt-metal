@@ -542,6 +542,8 @@ bool get_broadcast_batch(
 // TODO(#44529): convert this back to TT_FATAL once all callers have been updated.
 void warn_if_allowed_worker_cores_missing(
     const std::optional<operations::matmul::MatmulProgramConfig>& program_config, std::string_view entry_point) {
+    /* The following spammed CI logs too much and with AI details can be figured out.
+     * Leave in to convert to TT_FATAL in the future.
     if (!program_config.has_value()) {
         return;
     }
@@ -561,6 +563,7 @@ void warn_if_allowed_worker_cores_missing(
             }
         },
         program_config.value());
+        */
 }
 
 // Cross-validate a DRAM-sender global_cb's geometry against the matmul + weight shape.
