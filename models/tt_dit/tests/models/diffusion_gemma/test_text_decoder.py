@@ -42,8 +42,8 @@ ALLCLOSE_RTOL = 5e-2
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("encoder_len", [32])
-@pytest.mark.parametrize("canvas_len", [32])
+@pytest.mark.parametrize("encoder_len", [128])
+@pytest.mark.parametrize("canvas_len", [128])
 def test_decoder_text_model(
     mesh_device: ttnn.MeshDevice,
     tp_axis: int,
@@ -62,25 +62,28 @@ def test_decoder_text_model(
     torch.manual_seed(0)
     dtype = torch.float32
 
+    # Real Gemma4 hyperparameters — the demos/gemma4 sparse_matmul kernel is compiled for
+    # these shapes; substantially smaller (e.g. hidden=256) causes it to hang. Weights are
+    # still random-init so no HF checkpoint is required.
     text_config = DiffusionGemmaTextConfig(
         vocab_size=1024,
-        hidden_size=256,
-        intermediate_size=64,
-        moe_intermediate_size=64,
-        num_attention_heads=8,
-        num_key_value_heads=4,
+        hidden_size=2816,
+        intermediate_size=2816,
+        moe_intermediate_size=2112,
+        num_attention_heads=16,
+        num_key_value_heads=8,
         num_global_key_value_heads=2,
-        head_dim=32,
-        global_head_dim=32,
+        head_dim=256,
+        global_head_dim=512,
         num_experts=8,
-        top_k_experts=2,
+        top_k_experts=4,
         num_hidden_layers=6,
-        sliding_window=64,
+        sliding_window=1024,
         rms_norm_eps=1e-6,
         hidden_activation="gelu_pytorch_tanh",
         attention_bias=False,
         attention_dropout=0.0,
-        max_position_embeddings=2048,
+        max_position_embeddings=8192,
         pad_token_id=0,
     )
     hf_config = DiffusionGemmaConfig(text_config=text_config, vision_config=None)

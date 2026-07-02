@@ -26,36 +26,39 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch, typed_tensor
 from ....utils.test import line_params, ring_params
 
-# Decoder layer = encoder layer + cross-attention to a pre-populated encoder KV cache.
-# Extrapolated from the encoder layer test (PCC 99.94%, max abs ~0.53); the cross-attn
-# concat + expanded KV may add slight drift on top. Not yet run — thresholds match
-# test_layer.py; tighten once observed values are known.
-PCC_THRESHOLD = 0.999
-ALLCLOSE_ATOL = 5.5e-1
-ALLCLOSE_RTOL = 5e-2
+# Decoder layer = encoder layer with cross-attention concat over pre-populated encoder KV.
+# Observed: PCC 99.9472% (sliding) / 99.9420% (full), max abs 0.273 / 0.365. Tight to observed
+# with modest headroom for bf16 accumulator jitter.
+PCC_THRESHOLD = 0.9994
+ALLCLOSE_ATOL = 4e-1
+ALLCLOSE_RTOL = 3e-2
 
 
 def _build_tiny_config(num_layers: int = 6):
+    """Match sizes used by ``test_layer.py``: real Gemma4 shapes so the demos/gemma4
+    sparse_matmul kernel doesn't hang on shape-mismatched compiled binaries at tiny sizes.
+    Weights are still random-init — no HF checkpoint required.
+    """
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaTextConfig
 
     return DiffusionGemmaTextConfig(
-        hidden_size=256,
-        intermediate_size=64,
-        moe_intermediate_size=64,
-        num_attention_heads=8,
-        num_key_value_heads=4,
+        hidden_size=2816,
+        intermediate_size=2816,
+        moe_intermediate_size=2112,
+        num_attention_heads=16,
+        num_key_value_heads=8,
         num_global_key_value_heads=2,
-        head_dim=32,
-        global_head_dim=32,
+        head_dim=256,
+        global_head_dim=512,
         num_experts=8,
-        top_k_experts=2,
+        top_k_experts=4,
         num_hidden_layers=num_layers,
-        sliding_window=64,
+        sliding_window=1024,
         rms_norm_eps=1e-6,
         hidden_activation="gelu_pytorch_tanh",
         attention_bias=False,
         attention_dropout=0.0,
-        max_position_embeddings=2048,
+        max_position_embeddings=8192,
     )
 
 
