@@ -1616,6 +1616,72 @@ def test_indexer_score_qb_both_axes_seq(mesh_device, case_id, heads, expect_erro
         ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cluster_axis=0, **kw)
 
 
+# ---- Mid-slab-boundary STRADDLE (drives the need for the straddle geometry, #48500 slice #2) ----
+# A NON-slab-aligned chunk_start makes each device's queries cross a cache-slab boundary, so the causal
+# diagonal must JUMP by (chunk_global - cl) at q-row (cl - offset). Scaled-down stand-in for the maxedge
+# iter2 case in test_mla (iters_isl=[2560,2592,5120] -> chunk_start 5152, offset 32): here sp=2,
+# chunk_global=1280, cl=640, chunk_start=704 (= cumulative 384+320) -> offset 64 (2 tiles), so q-tiles 18-19
+# straddle. The CURRENT op has no straddle (linear diagonal) -> this FAILS until the straddle is carved in.
+ST_CHUNK = 1280  # global chunk (tokens); per-shard cl = ST_CHUNK/sp
+ST_CS = 704  # mid-slab chunk_start (704 % 640 = 64 offset); the 384+320 cumulative of the maxedge stand-in
+ST_T = 3840  # cache length: whole chunks (3*1280) covering the fullest device's straddled window
+
+
+def _straddle_ref(q_g, k_nat, w_g, sp, chunk_global, chunk_start, t_len):
+    """Per-SP-rank straddled reference over natural-order K, mirroring the op's deduce_causal_geometry /
+    update_padded_kv_cache rotation. Device r's q-row 0 sits at base = chunk_start + r*Sq; with offset =
+    base % cl, rows >= (cl - offset) jump by (chunk_global - cl)."""
+    heads, gq = q_g.shape[1], q_g.shape[2]
+    sq = gq // sp  # per-device query rows
+    cl = chunk_global // sp
+    refs = []
+    for r in range(sp):
+        base = chunk_start + r * sq
+        offset = base % cl
+        straddle_row = cl - offset
+        sl = slice(r * sq, (r + 1) * sq)
+        qh, kh, wh = q_g[:, :, sl, :].float(), k_nat[:, 0].float(), w_g[:, :, sl, :].float()
+        score = torch.zeros(1, sq, t_len)
+        for h in range(heads):
+            score += torch.relu(qh[:, h] @ kh.transpose(-2, -1)) * wh[:, h]
+        s = torch.arange(sq)
+        pos = base + s + torch.where(s >= straddle_row, chunk_global - cl, 0)  # straddled natural position
+        future = torch.arange(t_len).unsqueeze(0) > pos.unsqueeze(1)
+        refs.append(score.masked_fill(future, float("-inf")).unsqueeze(1))
+    return torch.cat(refs, dim=2)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 1)], ids=["sp2"], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_straddle(mesh_device, case_id, heads):
+    """Mid-slab-boundary straddle on a REAL sp=2 mesh: block-cyclic K + a non-slab-aligned chunk_start (704,
+    offset 64) makes each device's queries straddle a slab boundary, so the causal diagonal must jump by
+    (chunk_global - cl) at q-row (cl - offset). This FAILS on the current op (linear diagonal, wrong -inf map);
+    the straddle geometry carved from #48500 makes it pass. Scaled stand-in for maxedge iter2 (test_mla)."""
+    sp = 2
+    q_g, k_nat, w_g = _global_inputs(heads, ST_CHUNK, ST_T, seed=42)
+    k_bc = _to_slab(k_nat, sp, ST_CHUNK)
+    mesh_shape = tuple(mesh_device.shape)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    out = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        chunk_start_idx=ST_CS,  # explicit, mid-slab -> offset 64
+        cluster_axis=0,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=ST_CHUNK // sp,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0),
+    )
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)))
+    ref = _straddle_ref(q_g, k_nat, w_g, sp, ST_CHUNK, ST_CS, ST_T)
+    assert_indexer_match(out_t, ref, ST_CHUNK, ST_T, check_neg=True)
+
+
 @pytest.mark.parametrize("mesh_device", [(QB_SP, 1)], ids=["sp4"], indirect=True)
 def test_indexer_score_qb_msa_block_cyclic(mesh_device):
     """MSA (raw dot, constant scale, num_groups=1) over a REAL SP=4 block-cyclic K cache: sp read from
