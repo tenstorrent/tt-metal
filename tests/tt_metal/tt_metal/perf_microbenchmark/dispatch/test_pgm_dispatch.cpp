@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,11 +26,10 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
@@ -690,7 +689,10 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        size_t trace_region_size = 1'000'000'000;
+        // load_prefetcher_test captures hundreds of programs in a single trace to overflow the
+        // prefetcher cache; the captured trace is ~1.03 GB on wormhole_b0 (refs #46983), so the
+        // region must comfortably exceed 1 GB.
+        size_t trace_region_size = 1'500'000'000;
         std::string arch_name = tt::tt_metal::hal::get_arch_name();
         if (arch_name == std::string("blackhole")) {
             // Blackhole has more cores, so we need more room to store RTAs.

@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
@@ -17,6 +17,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "dispatch_query_manager.hpp"
 #include "device_command.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -24,7 +25,7 @@ enum NOC : uint8_t;
 
 namespace tt::tt_metal {
 
-HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC /*noc_index*/) :
+HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
     id_(id), manager_(device->sysmem_manager()), device_(device) {
     ZoneScopedN("CommandQueue_constructor");
 
@@ -33,8 +34,8 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC /*noc_index*/) 
 
     CoreCoord enqueue_program_dispatch_core;
     CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
-        // dispatch_s exists with this configuration. Workers write to dispatch_s
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        // dispatch_s exists with this configuration. Workers write to dispatch_s.
         enqueue_program_dispatch_core =
             MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
     } else {
@@ -55,12 +56,15 @@ uint32_t HWCommandQueue::id() const { return this->id_; }
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
 void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
-    uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) {
-    program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_dispatch_sems);
-    program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
+    uint32_t num_dispatch_sems,
+    const vector_aligned<uint32_t>& noc_mcast_unicast_data,
+    tt::stl::Span<const uint32_t> workers_per_sub_device) {
+    program_dispatch::set_num_worker_sems_on_dispatch(
+        this->manager_, id_, num_dispatch_sems, workers_per_sub_device);
+    program_dispatch::set_go_signal_noc_data_on_dispatch(noc_mcast_unicast_data, this->manager_, id_);
 }
 
-IDevice* HWCommandQueue::device() { return this->device_; }
+Device* HWCommandQueue::device() { return this->device_; }
 
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
     return this->virtual_enqueue_program_dispatch_core_;
@@ -72,7 +76,8 @@ void HWCommandQueue::terminate() {
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB =
+        MetalContext::instance(this->device_->get_context_id()).hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);

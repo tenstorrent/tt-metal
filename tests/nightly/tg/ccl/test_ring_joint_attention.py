@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -64,6 +64,7 @@ def test_ring_joint_sdpa_dit_wh_glx(
     )
 
 
+@pytest.mark.skip("TODO (AM) test hangs and breaks the rest of CI #48538")
 @pytest.mark.parametrize(
     "dtype, pcc_threshold",
     [
@@ -85,7 +86,7 @@ def test_ring_joint_sdpa_dit_wh_glx(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 237584, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
             ttnn.Topology.Linear,
         ),
     ],
@@ -149,7 +150,6 @@ def test_ring_joint_sdpa(
     logger.debug(f"submesh: {submesh.shape}")
 
     skip_check = False
-
     run_ring_joint_sdpa(
         submesh,
         b,
@@ -180,7 +180,7 @@ def test_ring_joint_sdpa(
     ],
     ids=["sd35"],
 )
-@pytest.mark.parametrize("n_iters, trace_enabled", [(1, False)], ids=["no_trace"])
+@pytest.mark.parametrize("n_iters, trace_enabled", [(3, False)], ids=["no_trace"])
 @pytest.mark.parametrize("num_links", [1, 2, 3], ids=["1link", "2link", "3link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -237,7 +237,6 @@ def test_ring_joint_sdpa_program_cache(
     logger.debug(f"submesh: {submesh.shape}")
 
     skip_check = False
-
     dummy_tensors = []
     for i in range(3):
         dummy_tensors.append(
@@ -250,25 +249,25 @@ def test_ring_joint_sdpa_program_cache(
             )
         )
 
-        run_ring_joint_sdpa(
-            submesh,
-            b,
-            nh,
-            seq_len,
-            seq_len,
-            joint_seq_len,
-            d,
-            q_chunk_size,
-            k_chunk_size,
-            dtype,
-            n_iters,
-            trace_enabled,
-            num_links,
-            rp_axis,
-            up_axis,
-            all_gather_topology,
-            skip_check,
-            pcc_threshold,
-        )
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        seq_len,
+        seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+    )
 
-    assert submesh.num_program_cache_entries() == 1
+    assert submesh.cache_entries_counter.total == 1

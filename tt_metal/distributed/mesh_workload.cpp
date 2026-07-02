@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
 #include <mesh_buffer.hpp>
+#include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -103,6 +104,9 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().validate_circular_buffer_region(mesh_device);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(mesh_device);
+    // Metal 2.0 scratchpads stack on the DFB allocations, so must allocate them AFTER the DFBs are placed.
+    // Their locations are passed as implicit CRTAs, so allocate them BEFORE generate_dispatch_commands snapshots.
+    program.impl().allocate_scratchpads(mesh_device);
     program.impl().validate_dataflow_buffer_region(mesh_device);
 }
 
@@ -148,6 +152,13 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
         // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
         // primarily for test workloads, where a program may not have an attached kernel.
         if (max_kernel_bin_buf_size) {
+            // We can't load while capturing a trace, it needs to already be in program cache.
+            const bool is_capturing_trace = mesh_cq.trace_id().has_value();
+            TT_FATAL(
+                !is_capturing_trace,
+                "Cannot load new binaries during trace capture."
+                "This program is not yet in program cache. Warm up before capturing a trace."
+                "See the operation's hash signature for arguments that must match.");
             // Allocate a MeshBuffer for kernel binaries on each device. This buffer is replicated along the MeshDevice
             // and matches the max kernel binary size across programs.
             DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {
@@ -238,16 +249,6 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
         ret = ret || (program.impl().runs_on_noc_unicast_only_cores());
     }
     return ret;
-}
-
-bool MeshWorkloadImpl::kernel_binary_always_stored_in_ringbuffer() {
-    // Return true if kernel binaries cannot be placed in a ring buffer for
-    // any program in the MeshWorkload
-    bool stored_in_ring_buf = true;
-    for (auto& [device_range, program] : programs_) {
-        stored_in_ring_buf &= program.impl().kernel_binary_always_stored_in_ringbuffer();
-    }
-    return stored_in_ring_buf;
 }
 
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
@@ -419,7 +420,12 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        extract_context_id(mesh_device),
+        mesh_device,
+        kernels_getter,
+        kernel_groups_getter,
+        semaphores_getter,
+        programs);
 
     set_finalized();
 }

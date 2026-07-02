@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dummy_mesh_command_queue.hpp"
-#include "tt_metal/common/thread_pool.hpp"
+#include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/impl/threading/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <mesh_workload.hpp>
@@ -12,7 +13,11 @@ namespace tt::tt_metal::distributed {
 
 DummyMeshCommandQueue::DummyMeshCommandQueue(
     MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)) {}
+    MeshCommandQueueBase(
+        mesh_device,
+        id,
+        create_passthrough_thread_pool(mesh_device->impl().get_context_id()),
+        std::move(lock_api_function)) {}
 
 std::optional<MeshTraceId> DummyMeshCommandQueue::trace_id() const { return std::nullopt; }
 
@@ -26,7 +31,8 @@ bool DummyMeshCommandQueue::write_shard_to_device(
     const void* /*src*/,
     const std::optional<BufferRegion>& /*region*/,
     tt::stl::Span<const SubDeviceId> /*sub_device_ids*/,
-    std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/) {
+    std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/,
+    const tt::tt_metal::CoreRangeSet* /*logical_core_filter*/) {
     // No-op for inactive rank; no pinned memory used
     return false;
 }
@@ -43,7 +49,9 @@ void DummyMeshCommandQueue::read_shard_from_device(
 }
 
 void DummyMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/, bool /*blocking*/) {
+    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/,
+    bool /*blocking*/,
+    std::vector<MemoryPin> /*memory_pins*/) {
     // No-op for inactive rank
 }
 
@@ -77,6 +85,14 @@ void DummyMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& /*sync_event
     // No-op for inactive rank
 }
 
+void DummyMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> /*targets*/,
+    uint32_t /*value*/,
+    bool /*blocking*/,
+    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    // No-op for inactive rank: no local device to signal.
+}
+
 void DummyMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
     // No-op for inactive rank
 }
@@ -85,7 +101,8 @@ void DummyMeshCommandQueue::reset_worker_state(
     bool /*reset_launch_msg_state*/,
     uint32_t /*num_sub_devices*/,
     const vector_aligned<uint32_t>& /*go_signal_noc_data*/,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& /*core_go_message_mapping*/) {
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& /*core_go_message_mapping*/,
+    tt::stl::Span<const uint32_t> /*workers_per_sub_device*/) {
     // No-op for inactive rank
 }
 

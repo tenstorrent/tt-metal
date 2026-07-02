@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -14,10 +15,12 @@
 #include "api/compute/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "ckernel_sfpu_sigmoid.h"
+#include "ckernel_sfpu_silu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 #endif
 
@@ -56,13 +59,18 @@ struct Matmul {
     struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC): out_w (output width in tiles), transpose, fused_activation
-    template <uint32_t out_w_, bool transpose_ = false, uint32_t fused_activation_ = 0>
+    template <
+        uint32_t out_w_,
+        bool transpose_ = false,
+        uint32_t fused_activation_ = 0,
+        bool fused_activation_approx_mode_ = false>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
         static constexpr bool transpose = transpose_;
         static constexpr FusedActivation fused_activation = static_cast<FusedActivation>(fused_activation_);
         static constexpr bool fuse_sigmoid = fused_activation == FusedActivation::SIGMOID;
         static constexpr bool fuse_silu = fused_activation == FusedActivation::SILU;
+        static constexpr bool fused_activation_approx_mode = fused_activation_approx_mode_;
     };
 
     // ========================================================================
@@ -75,12 +83,13 @@ struct Matmul {
     // Writer args (BRISC): none (BRISC is no-op)
     struct WriterArgs {};
 
-    // Compute args (TRISC): [in0, in1, out, num_tiles]
+    // Compute args (TRISC): [in0, in1, out, num_tiles, in1_address_override]
     struct ComputeArgs {
         uint32_t in0;
         uint32_t in1;
         uint32_t out;
         uint32_t k_num_tiles;
+        uint32_t in1_address_override = 0;  // byte address; overrides in1 read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -93,7 +102,7 @@ struct Matmul {
     //   pop_in0 - whether to pop in0 after compute (default true)
     //   pop_in1 - whether to pop in1 after compute (default true)
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool pop_in0, bool pop_in1>
+    template <typename CTArgs, bool IsActiveCore, bool pop_in0, bool pop_in1, bool skip_reconfig = false>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -114,26 +123,35 @@ struct Matmul {
             constexpr bool dense_packing = true;
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
-
-            reconfig_data_format<false, true>(args.in1, args.in0);
-            pack_reconfig_data_format<true>(args.out);
+            constexpr bool fuse_activation = CTArgs::fuse_sigmoid || CTArgs::fuse_silu;
+            if constexpr (!skip_reconfig) {
+                reconfig_data_format<false, true>(args.in1, args.in0);
+                pack_reconfig_data_format<true>(args.out);
+            }
+            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
+            if constexpr (!fuse_activation && !skip_reconfig) {
+                pack_block_contiguous_init(args.out);
+            }
 
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
+            if (args.in1_address_override > 0) {
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(args.in1, args.in1_address_override); }));
+            } else {
+                cb_wait_front(args.in1, args.k_num_tiles * out_w);
+            }
             cb_wait_front(args.in0, args.k_num_tiles);
-            cb_wait_front(args.in1, args.k_num_tiles * out_w);
 
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
-
-            if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
+            if constexpr (fuse_activation) {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
-                    PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<true>()));
+                    PACK(SFPU_UNARY_INIT_FN(
+                        sigmoid, ckernel::sfpu::sigmoid_init, (CTArgs::fused_activation_approx_mode)));
                 } else {
-                    PACK((ckernel::llk_math_eltwise_unary_sfpu_silu_init<true>()));
+                    PACK(SFPU_UNARY_INIT_FN(silu, ckernel::sfpu::silu_init, (CTArgs::fused_activation_approx_mode)));
                 }
 
                 // Per-tile: matmul -> activation on PACK -> pack
@@ -145,17 +163,29 @@ struct Matmul {
                     tile_regs_commit();
 
                     // Run activation on PACK thread
-                    TTI_SEMWAIT(
+                    PACK(TTI_SEMWAIT(
                         p_stall::STALL_TDMA | p_stall::STALL_CFG,
                         semaphore::t6_sem(semaphore::MATH_PACK),
-                        p_stall::STALL_ON_ZERO);
+                        p_stall::STALL_ON_ZERO));
                     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                     // Use 2 iterations for 1x32 tiny tiles
                     if constexpr (CTArgs::fuse_sigmoid) {
-                        PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid<true, false, 2>(0, (int)VectorMode::R)));
+                        PACK(SFPU_UNARY_CALL(
+                            DST_SYNC_MODE,
+                            DST_ACCUM_MODE,
+                            calculate_sigmoid,
+                            (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
+                            0 /*dst_index*/,
+                            VectorMode::R));
                     } else {
-                        PACK((ckernel::llk_math_eltwise_unary_sfpu_silu<true, false, 2>(0, (int)VectorMode::R)));
+                        PACK(SFPU_UNARY_CALL(
+                            DST_SYNC_MODE,
+                            DST_ACCUM_MODE,
+                            calculate_silu,
+                            (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
+                            0 /*dst_index*/,
+                            VectorMode::R));
                     }
 
                     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -172,11 +202,10 @@ struct Matmul {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                for (uint32_t dst_idx = 0; dst_idx < out_w; dst_idx++) {
-                    pack_tile(dst_idx, args.out, dst_idx);
-                }
+                pack_block_contiguous(0, args.out, out_w);
                 tile_regs_release();
             }
+            cb_push_back(args.out, out_w);
 
             custom_mm_block_uninit<dense_packing>();
 
@@ -187,8 +216,6 @@ struct Matmul {
             if constexpr (pop_in1) {
                 cb_pop_front(args.in1, args.k_num_tiles * out_w);
             }
-
-            cb_push_back(args.out, out_w);
 #endif
         }
     };  // class Op

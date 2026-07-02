@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -155,6 +155,9 @@ public:
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
     void add_dispatch_set_num_worker_sems(uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
+
+    void add_dispatch_set_sub_device_worker_counts(
+        tt::stl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_go_signal_noc_data(
         const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);

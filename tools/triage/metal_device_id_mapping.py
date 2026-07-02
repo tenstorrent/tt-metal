@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -85,7 +85,7 @@ class MetalDeviceIdMapping:
 @triage_singleton
 def run(args, context: Context) -> MetalDeviceIdMapping:
     inspector_data = get_inspector_data(args, context)
-    return MetalDeviceIdMapping(inspector_data, context.devices.values())
+    return MetalDeviceIdMapping(inspector_data, list(context.devices.values()))
 
 
 if __name__ == "__main__":

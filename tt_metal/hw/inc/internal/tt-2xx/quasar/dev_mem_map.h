@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,8 @@
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
 #define MEM_L1_SIZE (4 * 1024 * 1024)
+// Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
+// Both require the cache coherence system. Only plain loads/stores with fences work uncached.
 #define MEM_L1_UNCACHED_BASE (MEM_L1_BASE + MEM_L1_SIZE)  // upper 4MBs bypass cache
 
 #define MEM_ETH_BASE 0x0
@@ -40,20 +42,20 @@
 #define MEM_DRAM_SIZE (4177920 * 1024U)
 #define MEM_LOCAL_BASE 0x0802000
 
-// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be at least 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
-// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be at least 4 * (NUM_DRAM_BANKS +
 // NUM_L1_BANKS)
 #define MEM_BANK_OFFSET_SIZE 1024
 
 /////////////
 // Firmware/kernel code holes
 #define MEM_DM_FIRMWARE_SIZE (1024 * 12)
-#define MEM_TRISC_FIRMWARE_SIZE (1024 * 4)
+#define MEM_TRISC_FIRMWARE_SIZE (1024 * 5)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
 #define MEM_TRISC_KERNEL_SIZE (1024 * 24)
 #define MEM_DM_GLOBAL_SIZE (1024 * 2)
-#define MEM_TRISC_GLOBAL_SIZE (1024 * 3)
+#define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
 #define MEM_TRISC_LOCAL_OFFSET (0x2000)
@@ -61,17 +63,10 @@
 #define NUM_DM_CORES 8
 #define NUM_TRISC_CORES 4
 
-#define MEM_TRISC0_FIRMWARE_SIZE 4096
-#define MEM_TRISC1_FIRMWARE_SIZE 4096
-#define MEM_TRISC2_FIRMWARE_SIZE 4096
-#define MEM_TRISC3_FIRMWARE_SIZE 4096
-
 #define MEM_TRISC0_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC1_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC2_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC3_KERNEL_SIZE (24 * 1024)
-
-#define MEM_ZEROS_SIZE 512
 
 #define MEM_LLK_DEBUG_SIZE 1024
 
@@ -84,7 +79,7 @@
 #define MEM_L1_ARC_FW_SCRATCH_SIZE 16
 
 // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-// time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
+// time. If one port on the recipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
 // Each noc has 16B to store value written out by inline writes.
@@ -97,11 +92,10 @@
 #define MEM_MAILBOX_BASE 16
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 57424
+#define MEM_MAILBOX_SIZE 58480
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
-#define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
-#define MEM_LLK_DEBUG_BASE (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
+#define MEM_LLK_DEBUG_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
 #define MEM_DM0_LOCAL_BASE (MEM_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DM1_LOCAL_BASE (MEM_DM0_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
@@ -112,28 +106,30 @@
 #define MEM_DM6_LOCAL_BASE (MEM_DM5_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DM7_LOCAL_BASE (MEM_DM6_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
 
-#define MEM_DM_FIRMWARE_BASE (MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE)
+#define MEM_INTERRUPT_TABLE_BASE ((MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE + 255) & ~255)
+#define MEM_INTERRUPT_TABLE_SIZE (64 * 4)
+
+#define MEM_DM_FIRMWARE_BASE (MEM_INTERRUPT_TABLE_BASE + MEM_INTERRUPT_TABLE_SIZE)
 #define MEM_TRISC0_FIRMWARE_BASE (MEM_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_TRISC1_FIRMWARE_BASE (MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
 #define MEM_TRISC2_FIRMWARE_BASE (MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
 #define MEM_TRISC3_FIRMWARE_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
 #define MEM_DM_GLOBAL_BASE (MEM_TRISC3_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
-#define MEM_TRISC0_GLOBAL_BASE (MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE)
-#define MEM_TRISC1_GLOBAL_BASE (MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)
-#define MEM_TRISC2_GLOBAL_BASE (MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)
-#define MEM_TRISC3_GLOBAL_BASE (MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)
-#define MEM_DM_LOCAL_BASE (MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)
-#define MEM_DM_KERNEL_BASE (MEM_DM_LOCAL_BASE + MEM_DM_LOCAL_SIZE * NUM_DM_CORES)
-#define MEM_TRISC0_KERNEL_BASE (MEM_DM_KERNEL_BASE + MEM_DM_KERNEL_SIZE * NUM_DM_CORES)
-#define MEM_TRISC1_KERNEL_BASE (MEM_TRISC0_KERNEL_BASE + MEM_TRISC_KERNEL_SIZE)
-#define MEM_TRISC2_KERNEL_BASE (MEM_TRISC1_KERNEL_BASE + MEM_TRISC_KERNEL_SIZE)
-#define MEM_TRISC3_KERNEL_BASE (MEM_TRISC2_KERNEL_BASE + MEM_TRISC_KERNEL_SIZE)
+#define MEM_TRISC0_GLOBAL_BASE (MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE * NUM_DM_CORES + MEM_DM_GLOBAL_SIZE)
+#define MEM_TRISC1_GLOBAL_BASE (MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
+#define MEM_TRISC2_GLOBAL_BASE (MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
+#define MEM_TRISC3_GLOBAL_BASE (MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
+#define MEM_DM_LOCAL_BASE (MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
+// kernels are loaded as part of kernel_config at MEM_MAP_END or after
+// linker needs an address that doesn't overlap any of the FW and data sections
+// so just give an address outside of physical memory
+#define MEM_KERNEL_BASE (4 * 1024 * 1024)
 
 #define MEM_TRISC_LOCAL_BASE (MEM_LOCAL_BASE)
 
 #define MEM_NOC_COUNTER_SIZE 4
 #define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
-#define MEM_NOC_COUNTER_BASE (MEM_TRISC3_KERNEL_BASE + MEM_TRISC_KERNEL_SIZE)
+#define MEM_NOC_COUNTER_BASE (MEM_DM_LOCAL_BASE + MEM_DM_LOCAL_SIZE * NUM_DM_CORES)
 
 // Fabric transaction counters (similar to NoC counters)
 // 3 barrier types × 8 DMs × 4 bytes = 96 bytes; +16 bytes padding = 112 bytes total (16-byte aligned, Quasar has 8 DMs)
@@ -203,7 +199,7 @@
 #define MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH (MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
 #define MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH (MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
 
-#define MEM_BANK_TO_NOC_SCRATCH (MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DM_LOCAL_SIZE)
+#define MEM_BANK_TO_NOC_SCRATCH (MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
 #define MEM_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 
 // Scratch area for logical to virtual coordinate mapping.

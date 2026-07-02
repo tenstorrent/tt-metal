@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -171,6 +171,12 @@ template tt::tt_metal::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
     const ttnn::distributed::TensorToMesh*);
 template tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
     const std::vector<int32_t>&,
+    const ttnn::Shape&,
+    ttnn::distributed::MeshDevice*,
+    ttnn::Layout,
+    const ttnn::distributed::TensorToMesh*);
+template tt::tt_metal::Tensor from_vector<uint16_t, ttnn::DataType::UINT16>(
+    const std::vector<uint16_t>&,
     const ttnn::Shape&,
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,

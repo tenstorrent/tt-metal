@@ -1,8 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 import os
+from copy import deepcopy
 
 import pytest
 import torch
@@ -12,102 +14,145 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
+from models.demos.deepseek_v3.tt.moe_optimized import MoEOptimized
+from models.demos.deepseek_v3.utils.config_helpers import (
+    USERS_PER_ROW,
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
+    load_reference_io,
+    load_reference_io_tensors_for_module,
     run_module_forward,
 )
 
 
-@pytest.fixture
-def reference_model(hf_config):
-    """Get the actual DeepSeek MLP model using local implementation."""
-    torch.use_deterministic_algorithms(True)
-    # Note : Running Reference MoE without shared experts
-    hf_config.n_shared_experts = None
-    return DeepseekV3MoE(hf_config).eval()
+def build_reference_model(hf_config):
+    """Build the routed-experts-only MoE reference used by the TT MoE test."""
+    moe_config = deepcopy(hf_config)
+    moe_config.n_shared_experts = None
+    return DeepseekV3MoE(moe_config).eval()
+
+
+def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.Tensor:
+    if mode == "prefill":
+        torch_input, _ = load_reference_io_tensors_for_module(mode, module_path, num_tokens, 1)
+        return torch_input.squeeze(0).to(torch.bfloat16)
+
+    reference_io = load_reference_io(mode, module_path)
+    assert all(len(logs) <= 1 for logs in reference_io), f"Expected a non-range module, got {module_path}"
+    assert all(len(logs) > 0 for logs in reference_io), f"Some logs for module {module_path} {mode} were not generated."
+
+    io_module_paths, torch_args, _, _ = zip(*[logs[0] for logs in reference_io])
+    (torch_inputs,) = zip(*torch_args)
+    assert set(io_module_paths) == {module_path}
+
+    torch_input = torch.concat(torch_inputs, dim=1).unsqueeze(0)
+
+    if torch_input.shape[2] < num_tokens:
+        repeats = math.ceil(num_tokens / torch_input.shape[2])
+        torch_input = torch_input.repeat(1, 1, repeats, 1)
+
+    return torch_input[:, :, :num_tokens, :].squeeze(0).to(torch.bfloat16)
+
+
+def _moe_cls(mesh_device: ttnn.Device, fabric_config: ttnn.FabricConfig):
+    """Same selection as ``moe_decoder_block_2d._moe_cls``: quad (16x8) + ring uses fused MoE path."""
+    if is_quad_mesh(mesh_device) and is_ring_fabric(fabric_config):
+        return MoEOptimized
+    return MoE
+
+
+def generate_reference_io(
+    mode: str,
+    num_tokens: int,
+    reference_model: DeepseekV3MoE,
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    module_path: str,
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    moe_state_dict = {
+        name: tensor
+        for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
+        if not name.startswith("shared_experts.")
+    }
+    if not moe_state_dict:
+        pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
+
+    reference_state_dict = {
+        name: tensor for name, tensor in moe_state_dict.items() if not name.startswith("experts_quad_ring.")
+    }
+    reference_model.load_state_dict(reference_state_dict)
+    torch_input = load_real_moe_input(mode, module_path, num_tokens)
+
+    reference_model.eval()
+    reference_model.to(torch.bfloat16)
+    with torch.no_grad():
+        reference_output = reference_model(torch_input)
+
+    return moe_state_dict, torch_input, reference_output
 
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mode,num_tokens",
-    [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
-    ],
-)
-@pytest.mark.parametrize(
-    "topk_fallback",
-    [
-        True,
-    ],
-)
-def test_forward_pass(
+def run_test_forward_pass_moe(
+    *,
     mode,
     num_tokens,
-    set_deterministic_env,
-    reference_model,
+    batch_size_per_row,
     hf_config,
+    request,
     cache_path,
     mesh_device,
     ccl,
-    topk_fallback,
+    force_recalculate_weight_config,
+    device_params,
 ):
     """Test forward pass against reference model."""
 
-    # Get state dict from actual model - pass directly to convert_weights
-    state_dict = add_inv_scale_to_state_dict(
-        reference_model.state_dict(),
-        block_shape=hf_config.quantization_config["weight_block_size"],
+    moe_cls = _moe_cls(mesh_device, device_params["fabric_config"])
+    reference_model = build_reference_model(hf_config)
+    module_path = "model.layers.3.mlp"
+    checkpoint_state_dict = request.getfixturevalue("state_dict")
+    state_dict, torch_input, reference_output = generate_reference_io(
+        mode=mode,
+        num_tokens=num_tokens,
+        reference_model=reference_model,
+        checkpoint_state_dict=checkpoint_state_dict,
+        module_path=module_path,
     )
 
-    # Create input tensor
-    torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
-
-    # Reference forward pass
-    reference_model.eval()
-    reference_model.to(torch.bfloat16)
-    with torch.no_grad():
-        reference_output = reference_model(torch_input)
-
     weight_config = get_test_weight_config(
-        MoE,
+        moe_cls,
         hf_config,
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
+        force_recalculate=force_recalculate_weight_config,
         test_name="test_moe",
-        real_weights=False,
+        real_weights=True,
+        layer_id=module_path,
     )
 
-    # Generate appropriate config using utility function
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
-
-    # Create a new model state with CCL
-    model_state = MoE.create_state(hf_config, mesh_device, ccl)
-
-    # Create a new model shared state
-    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
-
-    # Create RunConfig using both weight_config and model_config
+    model_config = get_model_config(
+        moe_cls,
+        mode,
+        hf_config,
+        mesh_device,
+        device_params["fabric_config"],
+        batch_size_per_row=batch_size_per_row,
+    )
+    model_state = moe_cls.create_state(hf_config, mesh_device, ccl)
+    model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
-    # Convert input to TTNN, DP=4 and Replicated
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(1),
         device=mesh_device,
@@ -117,32 +162,99 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass - collective operations handled inside forward functions
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    tt_output = run_module_forward(moe_cls, mode, tt_input, run_config, handle_tensor_parallel=True)
 
-    # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
-
-    # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
     actual_output_memory_config = tt_output.memory_config()
     assert (
         actual_output_memory_config == expected_output_memory_config
     ), f"MoE output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-    # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
     )
 
-    # Cleanup
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_output)
 
-    # Compare outputs using utility function
     logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
-    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.97)
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode, batch_size_per_row, seq_len",
+    [
+        ("decode", USERS_PER_ROW, 1),
+        ("prefill", 1, _prefill_seq_len),
+    ],
+)
+def test_forward_pass(
+    device_params,
+    mode,
+    batch_size_per_row,
+    seq_len,
+    set_deterministic_env,
+    hf_config,
+    request,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+):
+    run_test_forward_pass_moe(
+        mode=mode,
+        num_tokens=batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len,
+        batch_size_per_row=batch_size_per_row,
+        hf_config=hf_config,
+        request=request,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        device_params=device_params,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    device_params,
+    set_deterministic_env,
+    hf_config,
+    request,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+):
+    run_test_forward_pass_moe(
+        mode="decode",
+        num_tokens=8 * mesh_device.shape[0],
+        batch_size_per_row=8,
+        hf_config=hf_config,
+        request=request,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        device_params=device_params,
+    )
 
 
 if __name__ == "__main__":

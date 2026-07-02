@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace sfpi;
 namespace ckernel {
@@ -36,7 +37,7 @@ inline void calculate_remainder(const uint value, const uint recip) {
 
         vFloat quotient;
         vInt exp = exexp(v * recip_val);
-        v_if(exp < 0) { quotient = vConst0; }
+        v_if(exp < 0) { quotient = 0.0f; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
@@ -58,7 +59,7 @@ inline void calculate_remainder(const uint value, const uint recip) {
 
         v_if(value_tmp < 0 && v != 0) { v = v + value_tmp; }
         v_endif;
-        v = setsgn(v, value_tmp);
+        v = copysgn(v, value_tmp);
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 

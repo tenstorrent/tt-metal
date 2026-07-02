@@ -1,0 +1,44 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Test kernel: drives hash_cb_trisc() (scalar TRISC FNV-1a-32) over the
+// input CB. Used by tests/tt_metal/tt_metal/debug_tools/dprint/test_cb_hash.cpp.
+
+#define DEBUG_CB_HASH 1
+
+#include <cstdint>
+
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/debug/cb_hash.h"
+
+void kernel_main() {
+    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    uint32_t label = get_compile_time_arg_val(1);
+
+    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+
+    tile_regs_acquire();
+    cb_wait_front(tt::CBIndex::c_0, per_core_tile_cnt);
+    cb_reserve_back(tt::CBIndex::c_16, per_core_tile_cnt);
+
+    // The hash probe: scalar FNV-1a-32 over the L1 bytes of CB0.
+    hash_cb_trisc(tt::CBIndex::c_0, per_core_tile_cnt, label);
+
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+        copy_tile(tt::CBIndex::c_0, b, b);
+    }
+
+    tile_regs_commit();
+    tile_regs_wait();
+
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+        pack_tile(b, tt::CBIndex::c_16);
+        cb_pop_front(tt::CBIndex::c_0, 1);
+        cb_push_back(tt::CBIndex::c_16, 1);
+    }
+
+    tile_regs_release();
+}

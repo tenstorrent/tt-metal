@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <variant>
+#include <span>
 #include <vector>
 #include <filesystem>
 
@@ -27,6 +28,7 @@
 #include <nlohmann/json.hpp>
 #include <enchantum/scoped.hpp>
 #include <tt_stl/type_name.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 // NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
@@ -62,6 +64,15 @@ struct is_specialization<Ref<Args...>, Ref> : std::true_type {};
 
 template <typename Test, template <typename...> class Ref>
 constexpr bool is_specialization_v = detail::is_specialization<Test, Ref>::value;
+
+template <typename T>
+struct is_span : std::false_type {};
+
+template <typename T, std::size_t Extent>
+struct is_span<std::span<T, Extent>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_span_v = is_span<T>::value;
 
 // Forward Declare hash_object
 namespace hash {
@@ -348,7 +359,7 @@ std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
     return os;
 }
 
-static std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
+inline std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
     os << path.c_str();
     return os;
 }
@@ -517,6 +528,153 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
 }
 
 template <typename T>
+struct count_object_of_type_t;
+
+template <typename object_t, typename T>
+std::size_t count_object_of_type(T&& object) {
+    return count_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(std::forward<T>(object));
+}
+
+template <typename T>
+    requires(not ttsl::concepts::Reflectable<std::decay_t<T>>) and (not requires { std::decay_t<T>::attribute_names; })
+struct count_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(T&& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(T&& /*value*/) const {
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(const T& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(const T& /*value*/) const {
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
+    }
+};
+
+template <typename T>
+struct count_object_of_type_t<std::optional<T>> {
+    template <typename object_t>
+    std::size_t operator()(const std::optional<T>& value) const {
+        if (value.has_value()) {
+            return count_object_of_type<object_t>(value.value());
+        }
+        return 0;
+    }
+};
+
+template <typename T>
+struct count_object_of_type_t<std::vector<T>> {
+    template <typename object_t>
+    std::size_t operator()(const std::vector<T>& value) const {
+        std::size_t count = 0;
+        for (auto& tensor : value) {
+            count += count_object_of_type<object_t>(tensor);
+        }
+        return count;
+    }
+};
+
+template <typename T, auto N>
+struct count_object_of_type_t<std::array<T, N>> {
+    template <typename object_t>
+    std::size_t operator()(const std::array<T, N>& value) const {
+        std::size_t count = 0;
+        for (auto& tensor : value) {
+            count += count_object_of_type<object_t>(tensor);
+        }
+        return count;
+    }
+};
+
+template <typename... Ts>
+struct count_object_of_type_t<std::tuple<Ts...>> {
+    template <typename object_t>
+    std::size_t operator()(const std::tuple<Ts...>& value) const {
+        std::size_t count = 0;
+        [&count, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
+            ((count += count_object_of_type<object_t>(std::get<Ns>(value))), ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+        return count;
+    }
+};
+
+template <typename T>
+    requires requires { std::decay_t<T>::attribute_names; }
+struct count_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(T&& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(T&& object) const {
+        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+        return count_object_of_type<object_t>(object.attribute_values());
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(const T& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(const T& object) const {
+        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+        return count_object_of_type<object_t>(object.attribute_values());
+    }
+};
+
+template <typename T>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>>
+struct count_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(T&& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(T&& object) const {
+        std::size_t count = 0;
+        reflect::for_each(
+            [&count, &object](auto I) { count += count_object_of_type<object_t>(reflect::get<I>(object)); }, object);
+        return count;
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(const T& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(const T& object) const {
+        std::size_t count = 0;
+        reflect::for_each(
+            [&count, &object](auto I) { count += count_object_of_type<object_t>(reflect::get<I>(object)); }, object);
+        return count;
+    }
+};
+
+template <typename T>
 struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
@@ -567,8 +725,8 @@ template <typename T>
 struct visit_object_of_type_t<std::vector<T>> {
     template <typename object_t>
     void operator()(auto&& callback, const std::vector<T>& value) const {
-        for (auto& tensor : value) {
-            visit_object_of_type<object_t>(callback, tensor);
+        for (const auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
         }
     }
 };
@@ -577,8 +735,8 @@ template <typename T, auto N>
 struct visit_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
     void operator()(auto&& callback, const std::array<T, N>& value) const {
-        for (auto& tensor : value) {
-            visit_object_of_type<object_t>(callback, tensor);
+        for (const auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
         }
     }
 };
@@ -651,6 +809,110 @@ struct visit_object_of_type_t<T> {
     void operator()(auto&& callback, const T& object) const {
         reflect::for_each(
             [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); },
+            object);
+    }
+};
+
+template <typename T>
+struct update_object_of_type_t;
+
+/**
+* Recursively visits all elements in `object` that are instances of `object_t`,
+* calls the `callback` function with those instance in anticipation for an inplace modification.
+ */
+template <typename object_t, typename T>
+void update_object_of_type(auto&& callback, T& object) {
+    update_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), object);
+}
+
+template <typename T>
+    requires(not ttsl::concepts::Reflectable<std::decay_t<T>>) and (not requires { std::decay_t<T>::attribute_names; })
+struct update_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& /*callback*/, T& /*value*/) const {
+        throw std::runtime_error(fmt::format("Unsupported update of object of type: {}", get_type_name<T>()));
+    }
+};
+
+template <typename T>
+struct update_object_of_type_t<std::optional<T>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::optional<T>& value) const {
+        if (value.has_value()) {
+            update_object_of_type<object_t>(callback, value.value());
+        }
+    }
+};
+
+template <typename T>
+struct update_object_of_type_t<std::vector<T>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::vector<T>& value) const {
+        for (auto& element : value) {
+            update_object_of_type<object_t>(callback, element);
+        }
+    }
+};
+
+template <typename T, auto N>
+struct update_object_of_type_t<std::array<T, N>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::array<T, N>& value) const {
+        for (auto& element : value) {
+            update_object_of_type<object_t>(callback, element);
+        }
+    }
+};
+
+template <typename... Ts>
+struct update_object_of_type_t<std::tuple<Ts...>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::tuple<Ts...>& value) const {
+        [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (update_object_of_type<object_t>(callback, std::get<Ns>(value)), ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+    }
+};
+
+template <typename T>
+    requires requires { std::decay_t<T>::attribute_names; }
+struct update_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& callback, T& object) const {
+        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+        update_object_of_type<object_t>(callback, object.attribute_values());
+    }
+};
+
+template <typename T>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>>
+struct update_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& callback, T& object) const {
+        reflect::for_each(
+            [&callback, &object](auto I) { update_object_of_type<object_t>(callback, reflect::get<I>(object)); },
             object);
     }
 };
@@ -953,146 +1215,24 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
 
 }  // namespace ttsl
 
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+// fmt::formatter specializations for standard containers, enums, filesystem::path,
+// and SmallVector are provided by the lightweight <tt_stl/fmt.hpp> header (included above)
+// so that translation units that only need formatting can avoid the heavy <reflect> and
+// <nlohmann/json.hpp> includes.
+//
+// The formatters below are for types that require the full reflection machinery.
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+template <typename T>
+struct fmt::formatter<
+    T,
+    char,
+    std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T> && !ttsl::is_strong_type_v<T>>> {
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::is_enum_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const T& value, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << value;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <>
-struct fmt::formatter<std::filesystem::path> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::filesystem::path& path, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << path;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::optional<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::optional<T>& optional, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << optional;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename... Ts>
-struct fmt::formatter<std::variant<Ts...>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::variant<Ts...>& variant, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << variant;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::reference_wrapper<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::reference_wrapper<T> reference, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << reference;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename... Ts>
-struct fmt::formatter<std::tuple<Ts...>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::tuple<Ts...>& tuple, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << tuple;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T, std::size_t N>
-struct fmt::formatter<std::array<T, N>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::array<T, N>& array, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << array;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::vector<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::vector<T>& vector, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << vector;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::set<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::set<T>& set, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << set;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename K, typename V>
-struct fmt::formatter<std::map<K, V>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << map;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename K, typename V>
-struct fmt::formatter<std::unordered_map<K, V>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::unordered_map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << map;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -1102,25 +1242,12 @@ template <typename T>
         ttsl::concepts::Reflectable<T> and
         not(std::integral<T> or std::is_array_v<T> or ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T, size_t PREALLOCATED_SIZE>
-struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
-        -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -1234,6 +1361,15 @@ inline hash_t hash_object(const T& object) noexcept {
             hash = hash_objects(hash, element);
         }
         return hash;
+    } else if constexpr (is_span_v<T>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::span of type {}\n", get_type_name<T>());
+        }
+        hash_t hash = 0;
+        for (const auto& element : object) {
+            hash = hash_objects(hash, element);
+        }
+        return hash;
     } else if constexpr (is_specialization_v<T, std::set>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
@@ -1290,10 +1426,146 @@ inline hash_t hash_object(const T& object) noexcept {
     }
 }
 
+// Fold one value's hash into a running seed with the splitmix64 finalizer (David Stafford's
+// "variant 13"), a strong 64-bit mixer. Shared by every combiner in this header (hash_objects and
+// hash_combine) so their mixing behavior is identical.
+//
+// The previous combiner was the classic boost::hash_combine
+// (`seed ^= h + 0x9e3779b9 + (seed << 6) + (seed >> 2)`). Its avalanche is poor for the small,
+// structured integers that dominate our cache keys (tensor shapes, dtypes), so distinct sequences
+// collided in 64 bits -- e.g. shapes [3, 17, 1, 1] and [1, 152, 1, 1] hashed identically, causing
+// wrong program-cache hits (issue #45821).
+//
+// The multiply-xorshift finalizer is the state of the art for 64-bit hash mixing (boost >=1.81 and
+// abseil use mixers of the same family, with different constants); we inline it with only <cstdint>
+// arithmetic so tt_stl pulls in no extra dependency. 0x9e3779b97f4a7c15 is the 64-bit golden-ratio
+// increment (the 64-bit analog of the old 0x9e3779b9), which keeps the fold order-dependent and
+// gives a non-trivial result for an all-zero input.
+inline hash_t mix_into(hash_t seed, hash_t value_hash) noexcept {
+    hash_t x = seed + 0x9e3779b97f4a7c15ULL + value_hash;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
 template <typename... Types>
 inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
-    ([&seed](const auto& arg) { seed ^= hash_object(arg) + 0x9e3779b9 + (seed << 6) + (seed >> 2); }(args), ...);
+    ([&seed](const auto& arg) { seed = mix_into(seed, hash_object(arg)); }(args), ...);
     return seed;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Canonical key encoding (collision-free companion to hash_objects).
+//
+// hash_objects folds a key down to 64 bits, which can collide (issue #45821). For a cache that
+// must NEVER return a wrong entry, the 64-bit hash selects a bucket and an EXACT comparison of
+// the key resolves collisions -- the textbook hash-map contract. append_canonical builds that
+// exact key: a byte string whose traversal mirrors hash_object branch-for-branch, so it
+// distinguishes precisely the inputs the hash combines (same coverage => no spurious misses, no
+// missed collisions) and contains no volatile data (addresses, buffers) -- only the structural
+// values, just like the hash.
+//
+// Encoding is exact for every type on the op-key path: integers, enums, floating point,
+// std::string, the compile-time-attribute / reflect aggregates, and the standard containers
+// (length-prefixed; unordered_map sorted by key to stay order-invariant, mirroring hash_object).
+// The one lossy leaf is a type exposing ONLY to_hash(): its 8 hash bytes are appended, so for
+// such a type equality degrades to hash equality -- no worse than today, and none occur on the
+// tensor/shape path (TensorSpec is walked structurally down to the shape integers).
+inline void append_bytes(std::string& out, const void* p, std::size_t n) {
+    out.append(static_cast<const char*>(p), n);
+}
+
+template <typename T>
+inline void append_canonical(std::string& out, const T& object);
+
+template <typename... Types>
+inline void append_canonical_all(std::string& out, const Types&... args) {
+    (append_canonical(out, args), ...);
+}
+
+template <typename T>
+inline void append_canonical(std::string& out, const T& object) {
+    out.push_back('\x1f');  // unit separator: disambiguates adjacent leaves/fields
+    if constexpr (std::numeric_limits<T>::is_integer) {
+        append_bytes(out, &object, sizeof(object));
+    } else if constexpr (std::is_enum_v<T>) {
+        const auto v = static_cast<std::underlying_type_t<T>>(object);
+        append_bytes(out, &v, sizeof(v));
+    } else if constexpr (std::is_floating_point_v<T>) {
+        append_bytes(out, &object, sizeof(object));
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        append_bytes(out, object.data(), object.size());
+    } else if constexpr (ttsl::reflection::detail::supports_compile_time_attributes_v<T>) {
+        std::apply([&out](const auto&... a) { (append_canonical(out, a), ...); }, object.attribute_values());
+    } else if constexpr (is_specialization_v<T, std::tuple>) {
+        std::apply([&out](const auto&... a) { (append_canonical(out, a), ...); }, object);
+    } else if constexpr (is_specialization_v<T, std::pair>) {
+        append_canonical(out, object.first);
+        append_canonical(out, object.second);
+    } else if constexpr (is_specialization_v<T, std::optional>) {
+        const char has = object.has_value() ? 1 : 0;
+        out.push_back(has);
+        if (object.has_value()) {
+            append_canonical(out, object.value());
+        }
+    } else if constexpr (is_specialization_v<T, std::variant>) {
+        const std::uint64_t index = object.index();
+        append_bytes(out, &index, sizeof(index));
+        std::visit([&out](const auto& value) { append_canonical(out, value); }, object);
+    } else if constexpr (is_specialization_v<T, std::reference_wrapper>) {
+        append_canonical(out, object.get());
+    } else if constexpr (std::is_same_v<T, std::vector<bool>>) {
+        // std::vector<bool> is a bit-packed specialization: iterating yields a proxy reference
+        // (not bool&), so it can't go through the generic vector branch.
+        // (hash_object never reaches its own vector branch for this type because
+        // std::hash<std::vector<bool>> exists and the is_std_hashable_v branch wins first.)
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (bool element : object) {
+            append_canonical(out, element);
+        }
+    } else if constexpr (is_specialization_v<T, std::vector> || is_specialization_v<T, std::set> || is_span_v<T>) {
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (const auto& element : object) {
+            append_canonical(out, element);
+        }
+    } else if constexpr (is_specialization_v<T, std::map>) {
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (const auto& [key, value] : object) {
+            append_canonical(out, key);
+            append_canonical(out, value);
+        }
+    } else if constexpr (is_specialization_v<T, std::unordered_map>) {
+        // Sort by key so the encoding is order-invariant, mirroring hash_object.
+        std::vector<typename T::const_iterator> iterators;
+        iterators.reserve(object.size());
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            iterators.push_back(it);
+        }
+        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) {
+            return a->first < b->first;
+        });
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (const auto& it : iterators) {
+            append_canonical(out, it->first);
+            append_canonical(out, it->second);
+        }
+    } else if constexpr (ttsl::concepts::Reflectable<T>) {
+        reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
+    } else if constexpr (ttsl::reflection::detail::supports_to_hash_v<T>) {
+        const hash_t h = object.to_hash();  // lossy leaf (see note above)
+        append_bytes(out, &h, sizeof(h));
+    } else if constexpr (detail::is_std_hashable_v<T>) {
+        const std::size_t h = std::hash<T>{}(object);  // lossy fallback
+        append_bytes(out, &h, sizeof(h));
+    } else {
+        static_assert(ttsl::concepts::always_false_v<T>, "Type doesn't support ttsl::hash::canonical_key");
+    }
 }
 
 }  // namespace detail
@@ -1308,11 +1580,24 @@ inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
     return detail::hash_objects(DEFAULT_SEED, args...);
 }
 
-// Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
+// Exact, collision-free encoding of `args` for use as a program-cache key alongside the 64-bit
+// hash: two argument packs produce the same string iff the hash traversal cannot distinguish
+// them. See detail::append_canonical.
+template <typename... Types>
+inline std::string canonical_key(const Types&... args) {
+    std::string out;
+    detail::append_canonical_all(out, args...);
+    return out;
+}
+
+// std::hash-based combiner used by the hand-written program-descriptor hashers (generic_op,
+// program_descriptors, fd_kernel, ...). Uses the same strong mixer as hash_objects so these
+// program-cache-relevant hashes get the same collision resistance (issue #45821).
 template <typename T>
 void hash_combine(std::size_t& seed, const T& value) {
     std::hash<T> hasher;
-    seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed = static_cast<std::size_t>(
+        detail::mix_into(static_cast<ttsl::hash::hash_t>(seed), static_cast<ttsl::hash::hash_t>(hasher(value))));
 }
 
 }  // namespace ttsl::hash

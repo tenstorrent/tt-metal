@@ -1,33 +1,48 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_model_traced_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
+)
+
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("div", all_cases=False)
+model_traced_params = loader.get_suite_parameters("div")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
+        "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_shape": [(1, 1, 32, 32)],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],
+        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
 
@@ -36,71 +51,156 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config=None,
-    scalar=None,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
+    output_memory_config=None,
+    storage_type="StorageType::DEVICE",
+    arg1=None,  # May contain scalar value or second input
+    rounding_mode=None,  # Optional rounding mode
+    memory_config=None,  # Alternative memory_config parameter
     *,
     device,
-    **kwargs,
+    **kwargs,  # Accept scalar, placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
-    if isinstance(input_shape, dict):
-        shape = (
-            tuple(input_shape["self"])
-            if isinstance(input_shape.get("self"), (list, tuple))
-            else input_shape.get("self", (1, 1, 32, 32))
+    # Extract kwargs
+    scalar = kwargs.get("scalar", None)
+    # V2 traces the scalar divisor positionally as arg1 (e.g. ttnn.div(x, 16384));
+    # use it when no explicit `scalar` kwarg, else the golden/device default to 2.0.
+    if scalar is None and isinstance(arg1, (int, float)):
+        scalar = arg1
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+
+    # Check if device is a mesh device (from fixture)
+    is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+
+    # Forward rounding_mode / memory_config when the master trace recorded them
+    # (dropping them is a rounding_mode/memory_config extra_key diff vs master).
+    if rounding_mode is not None and rounding_mode != "__ABSENT__" and "rounding_mode" not in op_kwargs:
+        op_kwargs["rounding_mode"] = rounding_mode
+    if memory_config is not None and memory_config != "__ABSENT__" and "memory_config" not in op_kwargs:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value as _pdv
+
+        op_kwargs["memory_config"] = (
+            _pdv("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
         )
-        shape_b = input_shape.get("other")
-        if shape_b is not None:
-            shape_b = tuple(shape_b) if isinstance(shape_b, (list, tuple)) else shape_b
-    elif isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-        shape_b = None
+
+    # V2 format provides separate shapes for each input
+    shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else input_b_shape
+
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(shape_a)
+
+    # Apply the traced rounding_mode (e.g. "floor") to the golden too, else the
+    # device floors but the golden doesn't -> PCC fail.
+    _rm = rounding_mode if rounding_mode in ("floor", "trunc") else None
+
+    # Check if this is a scalar div operation (shape_b is None or scalar is provided)
+    if shape_b is None or scalar is not None:
+        # Tensor-scalar div: use the scalar value directly
+        # If scalar is None but shape_b is None, default to scalar=2.0
+        scalar_value = scalar if scalar is not None else 2.0
+        torch_output_tensor = torch.div(torch_input_tensor_a, scalar_value, rounding_mode=_rm)
+        is_scalar_div = True
     else:
-        shape = (1, 1, 32, 32)
-        shape_b = None
-
-    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
-        shape
-    )
-
-    if scalar is not None:
-        divisor = scalar
-    elif shape_b is not None:
-        divisor = gen_func_with_cast_tt(
-            partial(torch_random, low=1, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
+        # Tensor-tensor div: generate second tensor
+        torch_input_tensor_b = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)
+        torch_output_tensor = torch.div(torch_input_tensor_a, torch_input_tensor_b, rounding_mode=_rm)
+        is_scalar_div = False
+
+    # Check if storage_type is HOST - if so, don't pass device to from_torch
+    is_host = storage_type and "HOST" in str(storage_type)
+
+    # Create first tensor (with mesh support if device is mesh)
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            # Use mesh with placement
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            # Regular single-device tensor
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
     else:
-        divisor = 2.0
-
-    torch_output = ttnn.get_golden_function(ttnn.div)(torch_input, divisor)
-
-    input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
-    )
-
-    if isinstance(divisor, torch.Tensor):
-        divisor_tensor = ttnn.from_torch(
-            divisor,
-            dtype=input_b_dtype or input_a_dtype,
-            layout=input_b_layout or input_a_layout,
-            device=device,
-            memory_config=input_b_memory_config or input_a_memory_config,
-        )
-    else:
-        divisor_tensor = divisor
+        # Host storage
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.div(input_tensor, divisor_tensor, memory_config=output_memory_config or input_a_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+
+    if is_scalar_div:
+        # Tensor-scalar div: pass scalar directly
+        scalar_value = scalar if scalar is not None else 2.0
+        output_tensor = ttnn.div(input_tensor_a, scalar_value, **op_kwargs)
+    else:
+        # Tensor-tensor div: convert second tensor and div
+        if not is_host:
+            if is_mesh_device and input_b_tensor_placement:
+                # Use mesh with placement for second tensor
+                input_tensor_b = create_tensor_on_mesh(
+                    torch_input_tensor_b,
+                    device,
+                    input_b_dtype,
+                    input_b_layout,
+                    input_b_memory_config,
+                    input_b_tensor_placement,
+                )
+            else:
+                # Regular single-device tensor
+                input_tensor_b = ttnn.from_torch(
+                    torch_input_tensor_b,
+                    dtype=input_b_dtype,
+                    layout=input_b_layout,
+                    device=device,
+                    memory_config=input_b_memory_config,
+                )
+        else:
+            # Host storage
+            input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
+
+        output_tensor = ttnn.div(input_tensor_a, input_tensor_b, **op_kwargs)
+
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]
+    # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+    return [pcc, e2e_perf]

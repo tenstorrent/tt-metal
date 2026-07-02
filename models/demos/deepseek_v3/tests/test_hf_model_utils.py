@@ -1,0 +1,684 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import safetensors.torch
+import torch
+
+from models.demos.deepseek_v3.utils.hf_model_utils import (
+    _default_quad_ring_shard_maps,
+    default_quad_ring_model_path,
+    default_stacked_dequantized_model_path,
+    index_model_weights,
+    load_weight_from_weights_dict,
+    materialize_model_weights,
+    prepare_model_state_dict,
+    save_dequantized_hf_checkpoint,
+    save_quad_ring_hf_checkpoint,
+    unload_weight_from_weights_dict,
+)
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+
+pytestmark = pytest.mark.t3k_compat
+
+
+def _write_index(model_dir: Path, weight_map: dict[str, str]) -> None:
+    index = {"metadata": {}, "weight_map": weight_map}
+    (model_dir / "model.safetensors.index.json").write_text(json.dumps(index))
+
+
+def _dequantize_reference_tensor(
+    tensor: torch.Tensor,
+    inv_scale: torch.Tensor,
+    block_shape: tuple[int, ...],
+) -> torch.Tensor:
+    original_shape = tuple(tensor.shape)
+    padded_shape = tuple(inv_scale.shape[i] * block_shape[i] for i in range(tensor.ndim))
+    original_slices = tuple(slice(0, size) for size in original_shape)
+
+    out = tensor.float()
+    if padded_shape != original_shape:
+        padded = torch.zeros(padded_shape, dtype=out.dtype)
+        padded[original_slices] = out
+        out = padded
+
+    interleaved_shape: list[int] = []
+    scale_broadcast_shape: list[int] = []
+    for dim, block_dim in enumerate(block_shape):
+        blocks = inv_scale.shape[dim]
+        interleaved_shape.extend([blocks, block_dim])
+        scale_broadcast_shape.extend([blocks, 1])
+
+    out_view = out.reshape(*interleaved_shape)
+    out_view.mul_(inv_scale.float().reshape(*scale_broadcast_shape))
+    return out_view.reshape(*padded_shape)[original_slices]
+
+
+def _create_quantized_checkpoint(model_dir: Path) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "config.json").write_text(json.dumps({"quantization_config": {"weight_block_size": [2, 2]}}))
+    (model_dir / "tokenizer_config.json").write_text(json.dumps({"tokenizer_class": "DeepSeekTokenizer"}))
+
+    quantized_weight = torch.tensor(
+        [
+            [1.0, -2.0, 3.0],
+            [4.0, -5.0, 6.0],
+            [7.0, -8.0, 9.0],
+        ],
+        dtype=torch.float32,
+    ).to(torch.float8_e4m3fn)
+    inverse_scale = torch.tensor(
+        [
+            [0.5, 1.0],
+            [2.0, 4.0],
+        ],
+        dtype=torch.float32,
+    )
+    plain_weight = torch.tensor([[0.25, -0.5], [1.5, -2.0]], dtype=torch.float32)
+    integer_weight = torch.tensor([1, 2, 3], dtype=torch.int32)
+
+    shard1 = model_dir / "model-00001-of-00002.safetensors"
+    shard2 = model_dir / "model-00002-of-00002.safetensors"
+    safetensors.torch.save_file(
+        {
+            "w_quant": quantized_weight,
+            "w_quant_scale_inv": inverse_scale,
+            "w_plain": plain_weight,
+        },
+        str(shard1),
+    )
+    safetensors.torch.save_file({"w_int": integer_weight}, str(shard2))
+    _write_index(
+        model_dir,
+        {
+            "w_quant": shard1.name,
+            "w_quant_scale_inv": shard1.name,
+            "w_plain": shard1.name,
+            "w_int": shard2.name,
+        },
+    )
+    return quantized_weight, inverse_scale, plain_weight, integer_weight
+
+
+def test_save_dequantized_hf_checkpoint_exports_bf16_weights(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = tmp_path / "deepseek-source-dequantized"
+    quantized_weight, inverse_scale, plain_weight, integer_weight = _create_quantized_checkpoint(source_dir)
+
+    saved_path = save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=False)
+
+    assert saved_path == output_dir.resolve()
+    assert (output_dir / "config.json").is_file()
+    assert (output_dir / "tokenizer_config.json").is_file()
+
+    output_index = json.loads((output_dir / "model.safetensors.index.json").read_text())
+    assert set(output_index["weight_map"]) == {"w_quant", "w_plain", "w_int"}
+    assert "w_quant_scale_inv" not in output_index["weight_map"]
+
+    state_dict = load_state_dict(output_dir, "")
+    try:
+        expected_quantized = _dequantize_reference_tensor(quantized_weight, inverse_scale, (2, 2)).to(torch.bfloat16)
+
+        assert "w_quant_scale_inv" not in state_dict
+        assert state_dict["w_quant"].dtype == torch.bfloat16
+        assert torch.equal(state_dict["w_quant"], expected_quantized)
+        assert state_dict["w_plain"].dtype == torch.bfloat16
+        assert torch.equal(state_dict["w_plain"], plain_weight.to(torch.bfloat16))
+        assert torch.equal(state_dict["w_int"], integer_weight)
+    finally:
+        state_dict.close()
+
+
+def test_save_dequantized_hf_checkpoint_can_export_legacy_format_with_moe_metadata(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = tmp_path / "deepseek-source-dequantized"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "quantization_config": {"weight_block_size": [2, 2]},
+                "n_routed_experts": 2,
+                "first_k_dense_replace": 0,
+                "num_hidden_layers": 1,
+            }
+        )
+    )
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.0.down_proj.weight": torch.tensor([[9.0, 10.0], [11.0, 12.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.down_proj.weight": torch.tensor(
+            [[13.0, 14.0], [15.0, 16.0]], dtype=torch.float32
+        ),
+        "model.layers.0.mlp.experts.0.up_proj.weight": torch.tensor([[17.0, 18.0], [19.0, 20.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.up_proj.weight": torch.tensor([[21.0, 22.0], [23.0, 24.0]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    saved_path = save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=False)
+
+    assert saved_path == output_dir.resolve()
+    output_index = json.loads((output_dir / "model.safetensors.index.json").read_text())
+    assert set(output_index["weight_map"]) == set(expert_tensors)
+    assert not any("experts_stacked" in key for key in output_index["weight_map"])
+
+
+def test_save_dequantized_hf_checkpoint_defaults_to_stacked_export(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(json.dumps({"quantization_config": {"weight_block_size": [2, 2]}}))
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    saved_path = save_dequantized_hf_checkpoint(source_dir)
+
+    assert saved_path == output_dir.resolve()
+    output_index = json.loads((output_dir / "model.safetensors.index.json").read_text())
+    assert "model.layers.0.mlp.experts_stacked.gate_proj.weight" in output_index["weight_map"]
+    assert "model.layers.0.mlp.experts.0.gate_proj.weight" not in output_index["weight_map"]
+
+
+def test_default_quad_ring_model_path_appends_suffix() -> None:
+    assert default_quad_ring_model_path(Path("/tmp/deepseek-stacked")) == Path("/tmp/deepseek-stacked-quad-ring")
+    assert default_quad_ring_model_path(Path("/tmp/deepseek-stacked-quad-ring")) == Path(
+        "/tmp/deepseek-stacked-quad-ring"
+    )
+
+
+def test_default_quad_ring_shard_maps_match_legacy_deepseek_layout() -> None:
+    w0_w1_shard_map, w2_shard_map = _default_quad_ring_shard_maps(hidden_size=7168, intermediate_size=2048)
+
+    assert w0_w1_shard_map == [6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5]
+    assert w2_shard_map == [(2, 2), (3, 1), (3, 1), (2, 2), (3, 1), (3, 1)] * 2
+
+
+def test_save_quad_ring_hf_checkpoint_adds_prepared_expert_tensors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_dir = tmp_path / "deepseek-source-stacked"
+    output_dir = tmp_path / "deepseek-source-stacked-quad-ring"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "hidden_size": 2,
+                "n_routed_experts": 2,
+                "first_k_dense_replace": 0,
+                "num_hidden_layers": 1,
+            }
+        )
+    )
+
+    shard = source_dir / "stacked-experts-layer-00000.safetensors"
+    stacked_tensors = {
+        "model.layers.0.mlp.experts_stacked.gate_proj.weight": torch.ones((2, 3, 2), dtype=torch.bfloat16),
+        "model.layers.0.mlp.experts_stacked.down_proj.weight": torch.full((2, 3, 2), 2.0, dtype=torch.bfloat16),
+        "model.layers.0.mlp.experts_stacked.up_proj.weight": torch.full((2, 3, 2), 3.0, dtype=torch.bfloat16),
+        "lm_head.weight": torch.full((1, 2), 0.5, dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(stacked_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in stacked_tensors})
+
+    prepared_w0_w1 = torch.arange(12 * 1 * 2 * 3 * 4 * 128, dtype=torch.bfloat16).reshape(12, 1, 2, 3, 4, 128)
+    prepared_w2 = torch.arange(12 * 1 * 2 * 5 * 6 * 128, dtype=torch.bfloat16).reshape(12, 1, 2, 5, 6, 128)
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.utils.hf_model_utils._prepare_quad_ring_expert_tensors",
+        lambda *args, **kwargs: (prepared_w0_w1, prepared_w2),
+    )
+
+    saved_path = save_quad_ring_hf_checkpoint(source_dir, output_model_path=output_dir, num_devices=1)
+
+    assert saved_path == output_dir.resolve()
+    output_index = json.loads((output_dir / "model.safetensors.index.json").read_text())
+    source_index = json.loads((source_dir / "model.safetensors.index.json").read_text())
+
+    quad_ring_w0_w1_key = "model.layers.0.mlp.experts_quad_ring.w0_w1.weight"
+    quad_ring_w2_key = "model.layers.0.mlp.experts_quad_ring.w2.weight"
+    assert quad_ring_w0_w1_key in output_index["weight_map"]
+    assert quad_ring_w2_key in output_index["weight_map"]
+    quad_ring_shard_name = output_index["weight_map"][quad_ring_w0_w1_key]
+    assert quad_ring_shard_name == output_index["weight_map"][quad_ring_w2_key]
+    assert (output_dir / quad_ring_shard_name).is_file()
+
+    quad_ring_shard = safetensors.torch.load_file(str(output_dir / quad_ring_shard_name))
+    assert torch.equal(quad_ring_shard[quad_ring_w0_w1_key], prepared_w0_w1)
+    assert torch.equal(quad_ring_shard[quad_ring_w2_key], prepared_w2)
+    assert output_index["weight_map"]["lm_head.weight"] == shard.name
+    assert quad_ring_w0_w1_key not in source_index["weight_map"]
+    assert quad_ring_w2_key not in source_index["weight_map"]
+
+
+def test_save_quad_ring_hf_checkpoint_resumes_from_existing_shards(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_dir = tmp_path / "deepseek-source-stacked"
+    output_dir = tmp_path / "deepseek-source-stacked-quad-ring"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "hidden_size": 2,
+                "n_routed_experts": 2,
+                "first_k_dense_replace": 0,
+                "num_hidden_layers": 1,
+            }
+        )
+    )
+
+    stacked_shard = source_dir / "stacked-experts-layer-00000.safetensors"
+    stacked_tensors = {
+        "model.layers.0.mlp.experts_stacked.gate_proj.weight": torch.ones((2, 3, 2), dtype=torch.bfloat16),
+        "model.layers.0.mlp.experts_stacked.down_proj.weight": torch.full((2, 3, 2), 2.0, dtype=torch.bfloat16),
+        "model.layers.0.mlp.experts_stacked.up_proj.weight": torch.full((2, 3, 2), 3.0, dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(stacked_tensors, str(stacked_shard))
+    _write_index(source_dir, {key: stacked_shard.name for key in stacked_tensors})
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_dir / "config.json", output_dir / "config.json")
+    shutil.copy2(source_dir / "model.safetensors.index.json", output_dir / "model.safetensors.index.json")
+    shutil.copy2(stacked_shard, output_dir / stacked_shard.name)
+
+    quad_ring_shard = output_dir / "quad-ring-experts-layer-00000.safetensors"
+    quad_ring_w0_w1_key = "model.layers.0.mlp.experts_quad_ring.w0_w1.weight"
+    quad_ring_w2_key = "model.layers.0.mlp.experts_quad_ring.w2.weight"
+    prepared_w0_w1 = torch.arange(12 * 1 * 2 * 3 * 4 * 128, dtype=torch.bfloat16).reshape(12, 1, 2, 3, 4, 128)
+    prepared_w2 = torch.arange(12 * 1 * 2 * 5 * 6 * 128, dtype=torch.bfloat16).reshape(12, 1, 2, 5, 6, 128)
+    safetensors.torch.save_file(
+        {
+            quad_ring_w0_w1_key: prepared_w0_w1,
+            quad_ring_w2_key: prepared_w2,
+        },
+        str(quad_ring_shard),
+    )
+
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.utils.hf_model_utils._prepare_quad_ring_expert_tensors",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("existing shard should have been reused")),
+    )
+
+    saved_path = save_quad_ring_hf_checkpoint(source_dir, output_model_path=output_dir, num_devices=1)
+
+    assert saved_path == output_dir.resolve()
+    output_index = json.loads((output_dir / "model.safetensors.index.json").read_text())
+    assert output_index["weight_map"][quad_ring_w0_w1_key] == quad_ring_shard.name
+    assert output_index["weight_map"][quad_ring_w2_key] == quad_ring_shard.name
+
+
+def test_save_dequantized_hf_checkpoint_can_stack_experts(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(json.dumps({"quantization_config": {"weight_block_size": [2, 2]}}))
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.0.down_proj.weight": torch.tensor([[9.0, 10.0], [11.0, 12.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.down_proj.weight": torch.tensor(
+            [[13.0, 14.0], [15.0, 16.0]], dtype=torch.float32
+        ),
+        "model.layers.0.mlp.experts.0.up_proj.weight": torch.tensor([[17.0, 18.0], [19.0, 20.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.up_proj.weight": torch.tensor([[21.0, 22.0], [23.0, 24.0]], dtype=torch.float32),
+        "lm_head.weight": torch.tensor([[0.5, -0.5]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    saved_path = save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
+
+    assert saved_path == output_dir.resolve()
+    output_index = json.loads((output_dir / "model.safetensors.index.json").read_text())
+    assert "model.layers.0.mlp.experts.0.gate_proj.weight" not in output_index["weight_map"]
+    assert "model.layers.0.mlp.experts_stacked.gate_proj.weight" in output_index["weight_map"]
+    assert output_index["weight_map"]["model.layers.0.mlp.experts_stacked.gate_proj.weight"].startswith(
+        "stacked-experts-layer-"
+    )
+
+    state_dict = load_state_dict(output_dir, "")
+    try:
+        stacked_view = state_dict.view_with_prefix("model.layers.0.mlp.experts_stacked.")
+        assert "model.layers.0.mlp.experts_stacked.gate_proj.weight" not in state_dict
+        assert "gate_proj.weight" in stacked_view
+        stacked_gate = stacked_view["gate_proj.weight"]
+        expected_gate = torch.stack(
+            [
+                expert_tensors["model.layers.0.mlp.experts.0.gate_proj.weight"].to(torch.bfloat16),
+                expert_tensors["model.layers.0.mlp.experts.1.gate_proj.weight"].to(torch.bfloat16),
+            ]
+        )
+        assert stacked_gate.dtype == torch.bfloat16
+        assert torch.equal(stacked_gate, expected_gate)
+        assert "model.layers.0.mlp.experts.0.gate_proj.weight" in state_dict
+        assert torch.equal(
+            state_dict["model.layers.0.mlp.experts.0.gate_proj.weight"],
+            expert_tensors["model.layers.0.mlp.experts.0.gate_proj.weight"].to(torch.bfloat16),
+        )
+        assert torch.equal(state_dict["lm_head.weight"], expert_tensors["lm_head.weight"].to(torch.bfloat16))
+    finally:
+        state_dict.close()
+
+
+def test_save_dequantized_hf_checkpoint_rewrites_dequantized_shards_when_stacking_experts(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(json.dumps({"quantization_config": {"weight_block_size": [2, 2]}}))
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.bfloat16),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.bfloat16),
+        "lm_head.weight": torch.tensor([[0.5, -0.5]], dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
+
+    rewritten_shard = safetensors.torch.load_file(str(output_dir / shard.name))
+    assert set(rewritten_shard) == {"lm_head.weight"}
+
+    stacked_shard = safetensors.torch.load_file(str(output_dir / "stacked-experts-layer-00000.safetensors"))
+    assert set(stacked_shard) == {"model.layers.0.mlp.experts_stacked.gate_proj.weight"}
+    assert torch.equal(
+        stacked_shard["model.layers.0.mlp.experts_stacked.gate_proj.weight"],
+        torch.stack(
+            [
+                expert_tensors["model.layers.0.mlp.experts.0.gate_proj.weight"],
+                expert_tensors["model.layers.0.mlp.experts.1.gate_proj.weight"],
+            ]
+        ),
+    )
+
+
+def test_save_dequantized_hf_checkpoint_rejects_incomplete_stacked_expert_groups(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(
+        json.dumps({"quantization_config": {"weight_block_size": [2, 2]}, "n_routed_experts": 2})
+    )
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    with pytest.raises(ValueError, match="do not match n_routed_experts=2"):
+        save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
+
+
+def test_save_dequantized_hf_checkpoint_rejects_missing_required_moe_projection_groups(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "quantization_config": {"weight_block_size": [2, 2]},
+                "n_routed_experts": 2,
+                "first_k_dense_replace": 0,
+                "num_hidden_layers": 2,
+            }
+        )
+    )
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.0.down_proj.weight": torch.tensor([[9.0, 10.0], [11.0, 12.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.down_proj.weight": torch.tensor(
+            [[13.0, 14.0], [15.0, 16.0]], dtype=torch.float32
+        ),
+        "model.layers.0.mlp.experts.0.up_proj.weight": torch.tensor([[17.0, 18.0], [19.0, 20.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.up_proj.weight": torch.tensor([[21.0, 22.0], [23.0, 24.0]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    with pytest.raises(ValueError, match="missing required expert projections"):
+        save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
+
+
+def test_materialize_model_weights_respects_index_for_stacked_exports(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(json.dumps({"quantization_config": {"weight_block_size": [2, 2]}}))
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.bfloat16),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.bfloat16),
+        "lm_head.weight": torch.tensor([[0.5, -0.5]], dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
+    state_dict = materialize_model_weights(output_dir)
+
+    assert "model.layers.0.mlp.experts.0.gate_proj.weight" not in state_dict
+    assert "model.layers.0.mlp.experts.1.gate_proj.weight" not in state_dict
+    assert "model.layers.0.mlp.experts_stacked.gate_proj.weight" in state_dict
+    assert torch.equal(
+        state_dict["model.layers.0.mlp.experts_stacked.gate_proj.weight"],
+        torch.stack(
+            [
+                expert_tensors["model.layers.0.mlp.experts.0.gate_proj.weight"],
+                expert_tensors["model.layers.0.mlp.experts.1.gate_proj.weight"],
+            ]
+        ),
+    )
+
+
+def test_dequantize_state_dict_compat_shim_handles_quantized_inputs():
+    quantized_weight = torch.tensor([[1.0, -2.0], [3.0, -4.0]], dtype=torch.float32).to(torch.float8_e4m3fn)
+    inverse_scale = torch.tensor([[0.5]], dtype=torch.float32)
+    plain_weight = torch.tensor([1.25, -0.75], dtype=torch.float32)
+    hf_config = SimpleNamespace(quantization_config={"weight_block_size": [2, 2]})
+
+    dequantized = dequantize_state_dict(
+        {
+            "layer.weight": quantized_weight,
+            "layer.weight_scale_inv": inverse_scale,
+            "plain.weight": plain_weight,
+        },
+        hf_config,
+    )
+
+    assert set(dequantized) == {"layer.weight", "plain.weight"}
+    assert dequantized["layer.weight"].dtype == torch.bfloat16
+    assert torch.equal(
+        dequantized["layer.weight"],
+        _dequantize_reference_tensor(quantized_weight, inverse_scale, (2, 2)).to(torch.bfloat16),
+    )
+    assert dequantized["plain.weight"].dtype == torch.bfloat16
+    assert torch.equal(dequantized["plain.weight"], plain_weight.to(torch.bfloat16))
+
+
+def test_prepare_model_state_dict_returns_lazy_state_dict_for_hf_weights(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-dequantized"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    lm_head = torch.tensor([[1.0, -1.0], [2.0, -2.0]], dtype=torch.bfloat16)
+    safetensors.torch.save_file(
+        {
+            "model.embed_tokens.weight": torch.tensor([[0.5, 0.25], [-0.5, -0.25]], dtype=torch.bfloat16),
+            "model.norm.weight": torch.tensor([1.0, 2.0], dtype=torch.bfloat16),
+            "lm_head.weight": lm_head,
+        },
+        str(shard),
+    )
+    _write_index(
+        model_dir,
+        {
+            "model.embed_tokens.weight": shard.name,
+            "model.norm.weight": shard.name,
+            "lm_head.weight": shard.name,
+        },
+    )
+
+    state_dict = prepare_model_state_dict(SimpleNamespace(), random_weights=False, model_path=str(model_dir))
+
+    assert isinstance(state_dict, LazyStateDict)
+    assert "lm_head.weight" in state_dict
+    assert torch.equal(state_dict["lm_head.weight"], lm_head)
+
+
+def test_prepare_model_state_dict_rejects_quantized_hf_weights(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-quantized"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    safetensors.torch.save_file(
+        {
+            "model.embed_tokens.weight": torch.tensor([[1.0]], dtype=torch.bfloat16),
+            "model.layers.0.self_attn.q_proj.weight_scale_inv": torch.tensor([[0.5]], dtype=torch.float32),
+            "lm_head.weight": torch.tensor([[2.0]], dtype=torch.bfloat16),
+        },
+        str(shard),
+    )
+    _write_index(
+        model_dir,
+        {
+            "model.embed_tokens.weight": shard.name,
+            "model.layers.0.self_attn.q_proj.weight_scale_inv": shard.name,
+            "lm_head.weight": shard.name,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Detected quantized HF tensors"):
+        prepare_model_state_dict(SimpleNamespace(), random_weights=False, model_path=str(model_dir))
+
+
+def test_materialize_model_weights_keeps_explicit_eager_path(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-materialized"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    lm_head = torch.tensor([[3.0, -3.0]], dtype=torch.bfloat16)
+    safetensors.torch.save_file({"lm_head.weight": lm_head}, str(shard))
+
+    state_dict = materialize_model_weights(model_dir)
+
+    assert isinstance(state_dict, dict)
+    assert torch.equal(state_dict["lm_head.weight"], lm_head)
+
+
+def test_unload_weight_from_lazy_state_dict_evicts_cache(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-lazy-unload"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    weight = torch.tensor([[4.0, -4.0]], dtype=torch.bfloat16)
+    safetensors.torch.save_file({"lm_head.weight": weight}, str(shard))
+    _write_index(model_dir, {"lm_head.weight": shard.name})
+
+    state_dict = index_model_weights(model_dir)
+    assert isinstance(state_dict, LazyStateDict)
+
+    load_weight = load_weight_from_weights_dict(state_dict)
+    unload_weight = unload_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty_like(weight)
+
+    load_weight("lm_head.weight", target_tensor)
+    assert "lm_head.weight" in state_dict._cache
+
+    unload_weight("lm_head.weight", target_tensor)
+    assert target_tensor.numel() == 0
+    assert "lm_head.weight" not in state_dict._cache
+
+
+def test_unload_weight_from_lazy_state_dict_evicts_stacked_alias_cache(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-lazy-stacked-unload"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_weight = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_weight}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state_dict = index_model_weights(model_dir)
+    assert isinstance(state_dict, LazyStateDict)
+
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    load_weight = load_weight_from_weights_dict(state_dict)
+    unload_weight = unload_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty_like(stacked_weight[1])
+
+    load_weight(expert_key, target_tensor)
+    assert torch.equal(target_tensor, stacked_weight[1])
+    assert expert_key in state_dict._cache
+    assert stacked_key not in state_dict._cache
+
+    unload_weight(expert_key, target_tensor)
+    assert target_tensor.numel() == 0
+    assert expert_key not in state_dict._cache
+    assert stacked_key not in state_dict._cache
+
+
+def test_materialized_stacked_checkpoint_load_hooks_resolve_expert_aliases(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-eager-stacked-hooks"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_weight = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_weight}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state_dict = materialize_model_weights(model_dir)
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    load_weight = load_weight_from_weights_dict(state_dict)
+    unload_weight = unload_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty_like(stacked_weight[1])
+
+    load_weight(expert_key, target_tensor)
+    assert torch.equal(target_tensor, stacked_weight[1])
+
+    unload_weight(expert_key, target_tensor)
+    assert target_tensor.numel() == 0
+
+
+def test_load_weight_from_weights_dict_rejects_mixed_expert_checkpoint():
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    weights_dict = {
+        expert_key: torch.ones((2, 4), dtype=torch.bfloat16),
+        stacked_key: torch.ones((3, 2, 4), dtype=torch.bfloat16),
+    }
+
+    load_weight = load_weight_from_weights_dict(weights_dict)
+    unload_weight = unload_weight_from_weights_dict(weights_dict)
+
+    with pytest.raises(RuntimeError, match="mixes legacy expert tensor"):
+        load_weight(expert_key, torch.empty((2, 4), dtype=torch.bfloat16))
+    with pytest.raises(RuntimeError, match="mixes legacy expert tensor"):
+        unload_weight(expert_key, torch.empty((2, 4), dtype=torch.bfloat16))

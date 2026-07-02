@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ def run_mha_inference(
 ):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
     tt_mha_model = TtMultiHeadAttentionModel(
         hugging_face_reference_model.config,
         0,

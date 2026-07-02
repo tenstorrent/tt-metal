@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -93,6 +93,13 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     return mesh_shapes;
 }
 
+#if defined(TT_METAL_USE_EMULE)
+// emule has no fabric router, so the device-L1 connection table is never populated. Record the
+// fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
+// See tt-emule docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
+#endif
+
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
@@ -113,7 +120,7 @@ void append_fabric_connection_rt_args(
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
-    // but the routing is simple and doesnt need any special inter-mesh handling
+    // but the routing is simple and doesn't need any special inter-mesh handling
     if (!is_2d_fabric && !is_TG_gateway_connection(src_fabric_node_id, dst_fabric_node_id)) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
@@ -205,6 +212,16 @@ void append_fabric_connection_rt_args(
     if (core_type == CoreType::WORKER) {
         append_worker_to_fabric_edm_sender_rt_args(
             fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
+#if defined(TT_METAL_USE_EMULE)
+        // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
+        // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
+        __emule_fabric_record_conn(
+            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id)),
+            static_cast<uint32_t>(worker_core.x),
+            static_cast<uint32_t>(worker_core.y),
+            static_cast<uint32_t>(forwarding_direction.value()),
+            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id)));
+#endif
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
         //       ethernet core need to have same memory mapping as worker

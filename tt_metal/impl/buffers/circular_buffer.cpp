@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +46,7 @@ CircularBufferImpl::CircularBufferImpl(
     this->validate_set_config_attributes();
     TT_FATAL(
         !config.globally_allocated_address().has_value(),
-        "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
+        "Cannot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
     TT_FATAL(
         !this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices should be specified when using a GlobalCircularBuffer");
@@ -62,7 +62,7 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
     if (descriptor.global_circular_buffer) {
         TT_FATAL(
             !config_.globally_allocated_address().has_value(),
-            "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
+            "Cannot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
         TT_FATAL(
             !this->config_.remote_buffer_indices().empty(),
             "Remote buffer indices should be specified when using a GlobalCircularBuffer");
@@ -152,6 +152,16 @@ const std::optional<Tile>& CircularBufferImpl::tile(uint32_t buffer_index) const
             buffer_index);
     }
     return this->config_.tiles().at(buffer_index);
+}
+
+const std::optional<FaceGeometry>& CircularBufferImpl::unpack_face_geometry(uint32_t buffer_index) const {
+    if (!this->uses_buffer_index(buffer_index)) {
+        TT_THROW(
+            "Cannot access unpack face geometry for buffer index {} because circular buffer is not configured on that "
+            "index",
+            buffer_index);
+    }
+    return this->config_.unpack_face_geometry().at(buffer_index);
 }
 
 uint32_t CircularBufferImpl::address() const {

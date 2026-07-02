@@ -1,10 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "autograd/tensor.hpp"
+
+// Forward declaration to avoid heavy include in files that only need the pointer type
+namespace ttnn::distributed {
+class TensorToMesh;
+}  // namespace ttnn::distributed
 
 namespace ttml::ops {
 
@@ -33,7 +38,13 @@ autograd::TensorPtr rope(
     const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params, const uint32_t token_position);
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
-    uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& rope_scaling_params);
+    uint32_t head_dim,
+    uint32_t sequence_length,
+    float theta,
+    const RopeScalingParams& rope_scaling_params,
+    const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr);
+
+ttnn::Tensor gen_trans_mat();
 
 RotaryEmbeddingParams build_rope_params(
     uint32_t sequence_length,

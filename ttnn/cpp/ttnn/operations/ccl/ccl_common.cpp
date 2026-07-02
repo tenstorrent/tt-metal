@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topolo
 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis) {
     auto mesh_shape = tensor.device()->shape();
-    auto device_coords = tensor.device_storage().coords;
+    auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Mesh) {
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
@@ -48,9 +48,9 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
         if (mesh_shape[cluster_axis.value()] == 2) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
-        bool first_index_is_0 = device_coords.at(0)[cluster_axis.value()] == 0;
+        bool first_index_is_0 = device_coords[0][cluster_axis.value()] == 0;
         bool last_index_is_mesh_shape_minus_1 =
-            device_coords.at(device_coords.size() - 1)[cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
+            device_coords[device_coords.size() - 1][cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
         if (first_index_is_0 && last_index_is_mesh_shape_minus_1) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
         }
@@ -93,16 +93,16 @@ tt::tt_fabric::Topology get_usable_topology(
 }
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {
-    const auto& device_coords = tensor.device_storage().coords;
+    const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
         TT_FATAL(!device_coords.empty(), "device_coords is empty");
         TT_FATAL(
-            device_coords.at(0).dims() > cluster_axis.value(),
+            device_coords[0].dims() > cluster_axis.value(),
             "cluster axis {} is out of range for device coords rank {} ",
             cluster_axis.value(),
-            device_coords.at(0).dims());
+            device_coords[0].dims());
         uint32_t ring_size = 0;
         for (const auto& device_coord : device_coords) {
             ring_size = std::max(ring_size, device_coord[cluster_axis.value()] + 1);
@@ -117,7 +117,7 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor, const MeshCoordinate& physical_coord, const std::optional<uint32_t>& cluster_axis) {
-    const auto& device_coords = tensor.device_storage().coords;
+    const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
@@ -160,16 +160,16 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
     int offset,
     ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis) {
-    const auto& device_coords = tensor.device_storage().coords;
+    const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     auto boundary_mode = get_boundary_mode(tensor, topology, cluster_axis);
     if (cluster_axis.has_value()) {
         TT_FATAL(
-            device_coords.at(0)[cluster_axis.value()] == 0,
+            device_coords[0][cluster_axis.value()] == 0,
             "Currently, we only support CCLs with physical coordinates starting from 0 along the cluster axis {}, we "
             "got {}",
             cluster_axis.value(),
-            device_coords.at(0)[cluster_axis.value()]);
+            device_coords[0][cluster_axis.value()]);
         TT_FATAL(
             physical_coord.dims() > cluster_axis.value(),
             "cluster axis {} is out of range for physical coord rank {} ",
@@ -207,7 +207,7 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
         return std::nullopt;
     }
     log_debug(tt::LogOp, "Potential neighbor idx {} is found in device_coords", potential_neighbor_idx);
-    return device_coords.at(potential_neighbor_idx);
+    return device_coords[potential_neighbor_idx];
 }
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
@@ -310,8 +310,8 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
     auto* mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
-    devices.reserve(tensor.device_storage().coords.size());
-    for (const auto& coord : tensor.device_storage().coords) {
+    devices.reserve(tensor.device_storage().get_coords().size());
+    for (const auto& coord : tensor.device_storage().get_coords()) {
         devices.push_back(mesh_device->get_device(coord));
     }
     return devices;
@@ -961,6 +961,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
             }
         }
 
+        TT_ASSERT(min_num_workers_per_row > 0);
         const uint32_t min_workers_row_min_cols_per_worker = tensor_slice_shape_in_tiles.x / min_num_workers_per_row;
         const uint32_t min_workers_row_max_col_worker_count = tensor_slice_shape_in_tiles.x % min_num_workers_per_row;
         const uint32_t min_workers_row_max_cols_per_worker = min_workers_row_max_col_worker_count != 0
@@ -1893,6 +1894,119 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address 14
     worker_rt_args.push_back(termination_master_virtual_core.x);                   // termination_master_noc_x 15
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
+}
+
+// ProgramDescriptor (Contract-2) variant — mirrors the legacy Program& helper above.
+// Allocates the same five mux-side semaphores by pushing SemaphoreDescriptors into
+// desc.semaphores and recording their IDs into worker_rt_args. The arg-vector
+// layout (positions 0..16) is identical to the legacy helper so worker kernels
+// are byte-compatible across the two variants.
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    // Allocate a worker-core-scoped semaphore by querying the next available ID
+    // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
+    auto alloc_sem = [&]() -> uint32_t {
+        auto id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
+        TT_FATAL(
+            id_opt.has_value(),
+            "No available semaphore ID for fabric mux connection on worker core (x={}, y={}, core_type=WORKER); "
+            "{} SemaphoreDescriptors already allocated on this ProgramDescriptor.",
+            worker_logical_core.x,
+            worker_logical_core.y,
+            desc.semaphores.size());
+        const uint32_t id = id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = CoreRangeSet(CoreRange(worker_logical_core, worker_logical_core)),
+            .initial_value = 0});
+        return id;
+    };
+
+    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y 3
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address 4
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(
+        channel_type, worker_id));  // fabric_mux_connection_info_address 5
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address 6
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address 7
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
+    worker_rt_args.push_back(termination_master_semaphore_id.value_or(alloc_sem()));  // termination_sync_address 10
+    worker_rt_args.push_back(alloc_sem());                        // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(alloc_sem());                        // local_flow_control_address 12
+    worker_rt_args.push_back(alloc_sem());                        // local_teardown_address 13
+    worker_rt_args.push_back(alloc_sem());                        // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_master_virtual_core.x);  // termination_master_noc_x 15
+    worker_rt_args.push_back(termination_master_virtual_core.y);  // termination_master_noc_y 16
+}
+
+namespace {  // anonymous namespace for internal helpers
+
+// Fabric bandwidth is based on raw hardware capability
+double lookup_fabric_link_bw(tt::ARCH arch) {
+    switch (arch) {
+        // WH: 100 Gbps per link = 12.5 GB/s
+        case tt::ARCH::WORMHOLE_B0: return 12.5;
+        // BH: 400 Gbps per link = 50 GB/s
+        case tt::ARCH::BLACKHOLE: return 50.0;
+        default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
+    }
+}
+
+// One-way per-hop fabric latency (ns): marginal cost to forward the first packet across one more hop.
+// Measured on hardware via a single-clock round trip (src -> chip N hops away -> src) that cancels
+// cross-chip clock skew; per_hop = slope(RTT vs hops)/2, 256B payload (latency-bound), p50.
+// Fabric_1D uses 16B LowLatency header and Fabric_2D uses 96B Hybrid header.
+//   arch        2D fabric                          1D fabric
+//   Wormhole    874ns (for T3K, 907ns for Galaxy)  711ns (for T3K; 734ns on Galaxy for small hops)
+//   Blackhole   619ns (for p150_x4)                515ns (for p150_x4)
+// Note: Fabric_1D latency seems to increase with distance (~695*h + 4.7*h^2), not modelled here ...
+double lookup_fabric_hop_latency_ns(tt::ARCH arch, tt::tt_fabric::FabricConfig fabric_config) {
+    const bool is_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return is_2d ? 874.0 : 711.0;
+        case tt::ARCH::BLACKHOLE: return is_2d ? 619.0 : 515.0;
+        default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
+    }
+}
+
+}  // namespace
+
+std::pair<int, int> estimate_fabric_transfer_cycles(
+    tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops) {
+    const double total_bw = lookup_fabric_link_bw(arch) * num_links;
+    const double bandwidth_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
+
+    const double latency_ns = lookup_fabric_hop_latency_ns(arch, fabric_config) * num_hops;
+
+    // Convert ns -> device clock cycles
+    const double cycles_per_ns = static_cast<double>(clock_rate_mhz) / 1000.0;
+    return {
+        static_cast<int>(std::ceil(bandwidth_ns * cycles_per_ns)),
+        static_cast<int>(std::ceil(latency_ns * cycles_per_ns))};
 }
 
 }  // namespace ttnn::ccl

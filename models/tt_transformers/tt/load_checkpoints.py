@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -134,6 +134,10 @@ def standardize_hf_keys_multimodal(state_dict):
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
         elif "model.vision_tower.vision_model." in k:
             new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
+        elif "model.vision_tower." in k:
+            new_state_dict[k.replace("model.", "")] = state_dict[k]
+        elif "model.multi_modal_projector." in k:
+            new_state_dict[k.replace("model.", "")] = state_dict[k]
         elif "model.vision_model." in k:
             new_state_dict[k.replace("model.vision_model.", "vision_model.")] = state_dict[k]
         elif "model.language_model." in k:
@@ -153,9 +157,55 @@ def standardize_hf_keys_multimodal(state_dict):
     return output
 
 
+def expand_fused_moe_experts(state_dict):
+    """Split transformers 5.x fused Mixtral MoE expert params back to per-expert keys.
+
+    transformers 5.x replaced the per-expert ``...block_sparse_moe.experts.{i}.w{1,2,3}.weight``
+    tensors with 3D batched params under ``...mlp.experts.`` :
+      - ``gate_up_proj`` : ``[num_experts, 2*intermediate, hidden]`` (rows ``:I`` = w1/gate, ``I:`` = w3/up)
+      - ``down_proj``    : ``[num_experts, hidden, intermediate]`` (= w2)
+    and renamed the router ``block_sparse_moe.gate`` -> ``mlp.gate``. The tt Mixtral model loads the
+    per-expert / ``block_sparse_moe`` keys, so split them back here. Version- and model-tolerant:
+    a no-op unless the fused ``mlp.experts.gate_up_proj`` keys are present (i.e. Mixtral on >=5.x).
+    """
+    fused_keys = [k for k in state_dict if k.endswith("mlp.experts.gate_up_proj")]
+    if not fused_keys:
+        return state_dict
+    out = dict(state_dict)
+    for gup_key in fused_keys:
+        prefix = gup_key[: -len("mlp.experts.gate_up_proj")]  # e.g. "model.layers.0."
+        gate_up = out.pop(gup_key)  # [E, 2I, H]
+        down = out.pop(prefix + "mlp.experts.down_proj")  # [E, H, I]
+        num_experts = gate_up.shape[0]
+        inter = gate_up.shape[1] // 2
+        for i in range(num_experts):
+            base = f"{prefix}block_sparse_moe.experts.{i}."
+            out[base + "w1.weight"] = gate_up[i, :inter, :].contiguous()  # gate -> w1, [I, H]
+            out[base + "w3.weight"] = gate_up[i, inter:, :].contiguous()  # up   -> w3, [I, H]
+            out[base + "w2.weight"] = down[i].contiguous()  # down -> w2, [H, I]
+        # router gate: 5.x `...mlp.gate.weight` -> tt expects `...block_sparse_moe.gate.weight`
+        gate_key = prefix + "mlp.gate.weight"
+        if gate_key in out:
+            out[prefix + "block_sparse_moe.gate.weight"] = out.pop(gate_key)
+    return out
+
+
 def convert_hf_to_meta(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+    state_dict = expand_fused_moe_experts(state_dict)
     state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    state_dict = map_hf_to_meta_keys(state_dict)
+    return state_dict
+
+
+def convert_hf_to_meta_no_qkv_permute(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+    """Convert HF to Meta format but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
+    # SKIP convert_hf_qkv_to_meta_format - keep weights in HF format
     state_dict = map_hf_to_meta_keys(state_dict)
     return state_dict
 
@@ -183,6 +233,19 @@ def convert_hf_to_meta_mllama(state_dict, head_dim, config):
     return state_dict
 
 
+def convert_hf_to_meta_mllama_no_qkv_permute(state_dict, head_dim, config):
+    """Convert HF to Meta format for multimodal Llama but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict)
+    state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
+    state_dict = convert_pos_embeddings(state_dict)
+    state_dict = flatten_conv_linear(state_dict)
+    return state_dict
+
+
 def map_hf_to_meta_keys_vision_only(state_dict):
     """
     Map Hugging Face checkpoint keys to Meta checkpoint keys.
@@ -200,12 +263,16 @@ def map_hf_to_meta_keys_vision_only(state_dict):
         ("k_norm", "k_norm"),
         ("fc1", "c_fc"),
         ("fc2", "c_proj"),
+        ("gate_proj", "w1"),
+        ("down_proj", "w2"),
+        ("up_proj", "w3"),
         ("layer_norm1", "ln_1"),
         ("layer_norm2", "ln_2"),
         ("post_layernorm", "ln_post"),
         ("embeddings.patch_embedding._linear", "embeddings.patch_embedding"),
         ("embeddings.patch_embedding", "embeddings.patch_embedding._linear"),
         ("embeddings.position_embedding.weight", "embeddings.position_embedding.positional_embedding"),
+        ("patch_conv", "patch_conv._linear"),
     ]
 
     return replace_keys(state_dict, replacements)
@@ -217,7 +284,7 @@ def map_vision_hf_to_meta_keys_split_to_submodels(state_dict):
     other_state_dict = dict()
 
     for k, v in state_dict.items():
-        if k.startswith("visual") or k.startswith("vision_model"):
+        if k.startswith("visual") or k.startswith("vision_model") or k.startswith("vision_tower"):
             selected_dict = vision_state_dict
         elif k.startswith("model") or k.startswith("lm_head") or k.startswith("language_model"):
             selected_dict = text_state_dict
@@ -238,6 +305,32 @@ def map_vision_hf_to_meta_keys(state_dict, head_dim):
     vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
 
     return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def map_vision_hf_to_meta_keys_no_qkv_permute(state_dict, head_dim):
+    """Map vision HF to Meta keys but skip QKV format conversion for text portion.
+
+    This keeps text weights in HF format for use with HF-style RoPE.
+    """
+    vision_state_dict, text_state_dict, other_state_dict = map_vision_hf_to_meta_keys_split_to_submodels(state_dict)
+
+    # SKIP convert_hf_qkv_to_meta_format - keep text weights in HF format
+    text_state_dict = map_hf_to_meta_keys(text_state_dict)
+
+    vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
+
+    return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def convert_vision_hf_to_meta_no_qkv_permute(state_dict, head_dim):
+    """Convert vision HF to Meta format but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict)
+    state_dict = map_vision_hf_to_meta_keys_no_qkv_permute(state_dict, head_dim)
+    return state_dict
 
 
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
@@ -518,6 +611,18 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, con
     return state_dict
 
 
+def convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv=False, fuse_mlp=False, config=None):
+    state_dict = reindex_layers(state_dict, config)
+    if fuse_qkv:
+        state_dict = fuse_qkv_meta(state_dict)
+    if fuse_mlp:
+        state_dict = fuse_mlp_meta(state_dict)
+
+    state_dict = map_meta_to_hf_keys(state_dict)
+    state_dict = rename_layers_to_cross_attn(state_dict, config)
+    return state_dict
+
+
 def replace_keys(state_dict, replacements):
     """
     Replacements are in the form (pattern, replacement).
@@ -590,6 +695,7 @@ def map_hf_to_meta_keys_mllama(loaded_weights, config):
         (r"^vision_model.post_tile_positional_embedding.gate", r"vision_model.post_tile_pos_embed.gate"),
         (r"^vision_model.", r"vision_model.vision_encoder."),
         (r"^model.multi_modal_projector.", r"vision_model.vision_projection."),
+        (r"^multi_modal_projector.", r"vision_model.vision_projection."),
     ]
 
     self_attn_replacements = {

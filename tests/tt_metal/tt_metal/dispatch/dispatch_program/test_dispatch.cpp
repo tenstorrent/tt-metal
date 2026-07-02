@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,13 +17,12 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -33,9 +32,11 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-// Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size, Eth, EthernetConfig
+// Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size, Eth, EthernetConfig,
+// CreateSemaphore with CoreType
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/buffers/semaphore.hpp"
 
 namespace tt::tt_metal {
 
@@ -174,7 +175,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
             CoreCoord eth_core = *eth_cores.begin();
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 eth_core,
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
@@ -327,21 +328,22 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
-                EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
+                EthernetConfig{
+                    .eth_mode = Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
 
             workload.add_program(device_range, std::move(program));
             this->RunProgram(mesh_device, workload);
@@ -384,11 +386,13 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 class EarlyReturnFixture : public MeshDispatchFixture {
     void SetUp() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
+        get_shared_devices().needs_recovery = true;
         MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
         MeshDispatchFixture::TearDown();
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
+        get_shared_devices().needs_recovery = true;
     }
 };
 
@@ -402,7 +406,7 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
         // Kernel will block if it doesn't early return.
         CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             worker,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

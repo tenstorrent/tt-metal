@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -110,6 +110,8 @@ def run_all_gather_impl(
     all_gather_function=ttnn.experimental.all_gather_async,
     use_semaphore_free_all_gather_impl=False,
     sub_core_grids=None,
+    use_broadcast=False,
+    use_explicit_subdevice_id=True,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -222,37 +224,40 @@ def run_all_gather_impl(
     def run_op(i):  # absolutely disgusting if-else condition because changing every call site is a humongous PITA
         if use_semaphore_free_all_gather_impl and all_gather_function == ttnn.experimental.all_gather_async:
             logger.info(f"Using new all-gather")
-            tt_all_gather_out_tensor = ttnn.all_gather(
-                input_tensor_mesh_list[i],
-                dim=dim,
-                cluster_axis=cluster_axis,
-                num_links=num_links,
-                memory_config=mem_config_ag,
-                topology=all_gather_topology,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-                subdevice_id=worker_sub_device_id,
-                sub_core_grids=sub_core_grids,
-            )
+            all_gather_kwargs = {
+                "dim": dim,
+                "cluster_axis": cluster_axis,
+                "num_links": num_links,
+                "memory_config": mem_config_ag,
+                "topology": all_gather_topology,
+                "chunks_per_sync": chunks_per_sync,
+                "num_workers_per_link": num_workers_per_link,
+                "num_buffers_per_channel": num_buffers_per_channel,
+                "sub_core_grids": sub_core_grids,
+            }
+            if use_explicit_subdevice_id:
+                all_gather_kwargs["subdevice_id"] = worker_sub_device_id
+            tt_all_gather_out_tensor = ttnn.all_gather(input_tensor_mesh_list[i], **all_gather_kwargs)
         else:
             logger.info(f"Using experimental all-gather")
-            tt_all_gather_out_tensor = all_gather_function(
-                input_tensor_mesh_list[i],
-                persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
-                dim=dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                memory_config=mem_config_ag,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-                cluster_axis=cluster_axis,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-                sub_core_grids=sub_core_grids,
-            )
+            all_gather_async_kwargs = {
+                "persistent_output_buffer": persistent_output_buffers[i] if use_persistent_buffers else None,
+                "dim": dim,
+                "multi_device_global_semaphore": ccl_semaphore_handles[i],
+                "num_links": num_links,
+                "memory_config": mem_config_ag,
+                "topology": all_gather_topology,
+                "barrier_semaphore": barrier_semaphore_handles[i] if use_barrier else None,
+                "cluster_axis": cluster_axis,
+                "chunks_per_sync": chunks_per_sync,
+                "num_workers_per_link": num_workers_per_link,
+                "num_buffers_per_channel": num_buffers_per_channel,
+                "sub_core_grids": sub_core_grids,
+                "use_broadcast": use_broadcast,
+            }
+            if use_explicit_subdevice_id:
+                all_gather_async_kwargs["subdevice_id"] = worker_sub_device_id
+            tt_all_gather_out_tensor = all_gather_function(input_tensor_mesh_list[i], **all_gather_async_kwargs)
 
         return tt_all_gather_out_tensor
 
@@ -331,6 +336,172 @@ def run_all_gather_impl(
     mesh_device.reset_sub_device_stall_group()
     if use_sub_devices:
         mesh_device.clear_loaded_sub_device_manager()
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["mesh_1,8"])
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold, mem_config_input, mem_config_ag",
+    [
+        (
+            [1, 1, 32, 128 * 128],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            30,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 2048),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),
+        (
+            [1, 8, 32, 2112],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            35,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                        }
+                    ),
+                    (32 * 8, 64),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),
+        (
+            [1, 1, 32, 128 * 128],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            30,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
+        (
+            [1, 8, 32, 2112],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            35,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
+    ],
+    ids=["RM_sharded", "TILED_sharded", "RM_interleaved", "TILED_interleaved"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
+)
+def test_all_gather_async_broadcast(
+    mesh_device,
+    num_links,
+    ag_output_shape,
+    dim,
+    layout,
+    ag_input_dtype,
+    enable_trace,
+    num_iters,
+    use_barrier,
+    use_persistent_buffers,
+    mem_config_input,
+    mem_config_ag,
+    all_gather_topology,
+    pcc_threshold,
+):
+    run_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
+        use_semaphore_free_all_gather_impl=False,
+        allowed_pcc=pcc_threshold,
+        use_broadcast=True,
+    )
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -1236,16 +1407,11 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
     input_topology = tt_input.tensor_topology()
 
     # Create expected topology based on which all-gather path was used
-    if is_tile_padded:
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), list(input_topology.placements()), input_topology.mesh_coords()
-        )
-    else:
-        expected_placements = list(input_topology.placements())
-        expected_placements[cluster_axis] = ttnn.PlacementReplicate()
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
-        )
+    expected_placements = list(input_topology.placements())
+    expected_placements[cluster_axis] = ttnn.PlacementReplicate()
+    expected_topology = ttnn.TensorTopology(
+        input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
+    )
 
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.all_gather(

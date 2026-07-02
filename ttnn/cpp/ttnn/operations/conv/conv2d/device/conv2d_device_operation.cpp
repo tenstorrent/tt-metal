@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,8 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         auto shard_grid = args.memory_config.shard_spec().value().grid;
         auto shard_spec =
             tt::tt_metal::ShardSpec{shard_grid, shard_shape, args.memory_config.shard_spec().value().orientation};
-        auto mem_config = args.memory_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.memory_config.memory_layout(), args.memory_config.buffer_type(), shard_spec);
         return TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
@@ -128,15 +129,20 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             } else {
                 out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
             }
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
+        } else {
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
         }
-        TT_FATAL(
-            args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
-                args.block_config.out_subblock_h_ntiles == 1,
-            "Error");
     }
 }
 
-tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     hashable_operation_attributes_t hashable_args = {
         .sliding_window_config = args.sliding_window_config,
@@ -156,7 +162,7 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
         .config_tensors_in_dram = args.config_tensors_in_dram,
         .force_split_reader = args.force_split_reader,
     };
-    return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(

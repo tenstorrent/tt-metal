@@ -1,9 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <memory>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
+#include "allocator_state.hpp"
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
@@ -16,6 +18,7 @@
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
 #include "impl/allocator/allocator_types.hpp"
+#include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -34,7 +37,19 @@ void AllocatorImpl::validate_bank_assignments() const {
 
 void AllocatorImpl::init_one_bank_per_channel() {
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - config_->trace_region_size;
+    // trace_region_size is the TOTAL trace budget across all DRAM banks (not per-bank). Trace buffers are
+    // interleaved evenly across banks, so each bank reserves ceil(trace_region_size / num_banks). This is
+    // rounded up to a whole multiple of the max trace buffer page size (rather than just dram_alignment) so
+    // that the per-bank reservation always holds a whole number of trace pages: a trace whose total size fits
+    // the budget but whose pages skew onto a subset of banks (interleaving biases the leading pages toward the
+    // low banks) still fits per-bank. The aggregate reserved capacity (per_bank_trace_size * num_banks) is
+    // therefore >= trace_region_size.
+    DeviceAddr per_bank_trace_size = 0;
+    if (config_->trace_region_size > 0) {
+        per_bank_trace_size = round_up(
+            div_up(config_->trace_region_size, static_cast<size_t>(config_->num_dram_channels)), kMaxTraceBufPageSize);
+    }
+    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - per_bank_trace_size;
     std::vector<int64_t> bank_offsets(config_->num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < config_->num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(config_->dram_bank_offsets.at(channel_id));
@@ -43,6 +58,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
         BufferType::DRAM,
         bank_offsets,
         dram_bank_size,
+        config_->dram_alignment,
         config_->dram_alignment,
         config_->dram_unreserved_base,
         config_->disable_interleaved);
@@ -57,7 +73,8 @@ void AllocatorImpl::init_one_bank_per_channel() {
     trace_buffer_manager_ = std::make_unique<BankManager>(
         BufferType::TRACE,
         bank_offsets,
-        config_->trace_region_size,
+        per_bank_trace_size,
+        config_->dram_alignment,
         config_->dram_alignment,
         dram_bank_size + config_->dram_unreserved_base,
         config_->disable_interleaved);
@@ -80,6 +97,7 @@ void AllocatorImpl::init_one_bank_per_l1() {
         bank_offsets,
         l1_bank_size,
         config_->l1_alignment,
+        config_->dram_alignment,
         config_->l1_unreserved_base,
         config_->disable_interleaved);
 
@@ -119,13 +137,59 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
+
+    // Per-core allocation path: each core gets an independent address
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(
+            config_->allocator_mode == AllocatorMode::HYBRID,
+            "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
+        const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+        bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+        auto cores = corerange_to_cores(grid, std::nullopt, row_major);
+        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
+        DeviceAddr alloc_size = buffer->aligned_size_per_bank();
+
+        std::unordered_map<CoreCoord, DeviceAddr> addrs;
+        for (const auto& core : cores) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            addrs[core] = l1_manager_->allocate_buffer(
+                alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
+        }
+        buffer->set_per_core_addresses(std::move(addrs));
+        allocated_buffers_.insert(buffer);
+        return buffer->per_core_addresses_.at(cores[0]);
+    }
+
     switch (buffer_type) {
         case BufferType::DRAM:
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
-        case BufferType::L1:
-            address = l1_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+        case BufferType::L1: {
+            // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            if (!hybrid_device_allocators_.empty()) {
+                using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+                uint32_t num_banks = l1_manager_->num_banks();
+                for (auto* dev_alloc : hybrid_device_allocators_) {
+                    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+                        auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
+                        additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
+                    }
+                }
+            }
+            address = l1_manager_->allocate_buffer(
+                size,
+                page_size,
+                bottom_up,
+                config_->compute_grid,
+                num_cores,
+                BankManager::AllocatorDependencies::AllocatorID{0},
+                additional_ranges);
             break;
+        }
         case BufferType::L1_SMALL: {
             TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
             address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
@@ -140,6 +204,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
+
     return address;
 }
 
@@ -147,6 +212,19 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
+
+    // Per-core deallocation path
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        for (const auto& [core, addr] : buffer->per_core_addresses_) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
+        }
+        allocated_buffers_.erase(buffer);
+        return;
+    }
+
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
@@ -165,6 +243,35 @@ void AllocatorImpl::deallocate_buffers() {
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
+}
+
+void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_device_allocators_ = device_allocators;
+}
+
+void AllocatorImpl::clear_hybrid_device_allocators() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_device_allocators_.clear();
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto state = l1_manager_->extract_state(allocator_id);
+    return state.allocated_regions;
+}
+
+void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_allocated(AllocatorID{0}, address, size);
+}
+
+void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_deallocated(AllocatorID{0}, address);
 }
 
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
@@ -318,7 +425,17 @@ void AllocatorImpl::dump_memory_blocks(const BufferType& buffer_type, std::ostre
 std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t bank_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
-    return l1_manager_->lowest_occupied_address(bank_id);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    auto lowest = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{0});
+    // In HYBRID mode, also check this bank's per-core allocator (AllocatorID{bank_id + 1}), since it may
+    // have occupied a lower address range in this bank.
+    if (config_->allocator_mode == AllocatorMode::HYBRID) {
+        auto per_core = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{bank_id + 1});
+        if (per_core.has_value()) {
+            lowest = lowest.has_value() ? std::make_optional(std::min(*lowest, *per_core)) : per_core;
+        }
+    }
+    return lowest;
 }
 
 void AllocatorImpl::shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up) {
@@ -415,6 +532,9 @@ AllocatorImpl::~AllocatorImpl() {
 
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
+    }
 
     std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
 
@@ -445,6 +565,9 @@ AllocatorState AllocatorImpl::extract_state() const {
 
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
+    }
 
     // Clear all buffer types
     dram_manager_->deallocate_all();
@@ -527,3 +650,15 @@ void Allocator::override_state(const AllocatorState& state) { impl->override_sta
 size_t Allocator::get_worker_l1_size() const { return impl->get_worker_l1_size(); }
 
 }  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
+
+void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*>& sources) {
+    AllocatorState merged_state;
+    for (auto* source : sources) {
+        merged_state.merge(source->extract_state());
+    }
+    target->override_state(merged_state);
+}
+
+}  // namespace tt::tt_metal::experimental

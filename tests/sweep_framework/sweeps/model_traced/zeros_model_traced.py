@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+import ttnn
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_model_traced_mesh_shape,
+    create_mesh_device,
+    mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
+)
+
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype, parse_layout
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+
+TIMEOUT = 300
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("zeros")
+
+parameters = {
+    "model_traced_sample": {
+        "input_a_shape": [(1, 1, 32, 32)],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],
+    },
+}
+
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
+
+
+def mesh_device_fixture():
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
+
+
+def run(
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
+    output_memory_config=None,
+    memory_config=None,
+    storage_type="StorageType::DEVICE",
+    *,
+    device,
+    shape=None,
+    dtype=None,
+    layout=None,
+    **kwargs,
+) -> list:
+    torch.manual_seed(0)
+
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # V2 / model_traced_sample vectors use input_a_*; vectors_export JSON uses shape/dtype/layout/memory_config.
+    shape_val = input_a_shape if input_a_shape is not None else shape
+    dtype_val = input_a_dtype if input_a_dtype is not None else dtype
+    layout_val = input_a_layout if input_a_layout is not None else layout
+
+    if shape_val is None:
+        raise ValueError("Missing tensor shape (expected input_a_shape or shape).")
+
+    if isinstance(dtype_val, str):
+        dtype_val = parse_dtype(dtype_val)
+    if dtype_val is None:
+        dtype_val = ttnn.bfloat16
+
+    if isinstance(layout_val, str):
+        layout_val = parse_layout(layout_val)
+    if layout_val is None:
+        layout_val = ttnn.TILE_LAYOUT
+
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+    if output_memory_config is None and input_a_memory_config is not None:
+        output_memory_config = input_a_memory_config
+
+    shape = tuple(shape_val) if isinstance(shape_val, (list, tuple)) else shape_val
+
+    # PyTorch reference: zeros with the given shape
+    torch_output_tensor = torch.zeros(shape, dtype=torch.float32)
+
+    start_time = start_measuring_time()
+    # Pass shape as kwarg so the trace recorder names it `shape` (not `arg0`).
+    output_tensor = ttnn.zeros(
+        shape=shape,
+        dtype=dtype_val,
+        layout=layout_val,
+        device=device,
+        memory_config=output_memory_config,
+        **op_kwargs,
+    )
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement")
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+    e2e_perf = stop_measuring_time(start_time)
+
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+    return [pcc, e2e_perf]

@@ -1,0 +1,9 @@
+# Source files for ttnn_op_experimental_deepseek_prefill_per_token_cast_back.
+
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PER_TOKEN_CAST_BACK_API_HEADERS per_token_cast_back.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PER_TOKEN_CAST_BACK_SRCS
+    device/per_token_cast_back_device_operation.cpp
+    device/per_token_cast_back_program_factory.cpp
+    per_token_cast_back.cpp
+)

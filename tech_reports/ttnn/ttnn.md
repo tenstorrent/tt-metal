@@ -27,7 +27,7 @@ Table of Contents
 ![TT-NN OP Library](https://github.com/user-attachments/assets/acc5645b-d90a-4793-ae54-9ad825504fed)
 
 ## OP Infra
-OP Infra is the foundation for the OP Libary that provides common primitives required by all operations
+OP Infra is the foundation for the OP Library that provides common primitives required by all operations
   - [Tensor](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tensor.html)
   - [Operation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html)
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -44,16 +43,11 @@ struct MeshPartitionDeviceOperation {
             const std::vector<tt::tt_metal::Tensor>&)>;
 
         // -- shared variables --------------------------------------------
-        using SliceSharedVariables = std::variant<
-            prim::SliceRmProgramFactory::shared_variables_t,
-            prim::SliceRmShardedProgramFactory::shared_variables_t,
-            prim::SliceRmStrideProgramFactory::shared_variables_t,
-            prim::SliceTileProgramFactory::shared_variables_t,
-            prim::SliceTileTensorArgsProgramFactory::shared_variables_t>;
-
+        // Slice factories are ProgramDescriptor-based; on cache hit we re-run
+        // the matching factory's create_descriptor with the per-coord slice
+        // attrs and let apply_descriptor_runtime_args patch the cached Program.
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
-            SliceSharedVariables slice_shared_variables;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

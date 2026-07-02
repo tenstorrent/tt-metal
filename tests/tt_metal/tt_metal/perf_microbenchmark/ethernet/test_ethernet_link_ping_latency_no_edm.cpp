@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,6 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "df/float32.hpp"
 #include <tt-logger/tt-logger.hpp>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -10,7 +10,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "reduce_to_root_op.hpp"
 
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -619,7 +619,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         uint32_t loop_size = is_root_device ? 2 : 1;
 
         auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
-            input_tensor_l.device()->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
+            input_tensor_l.device()->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input_tensor_l.device()->arch(), compute_kernel_configuration);

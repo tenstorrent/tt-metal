@@ -1,0 +1,332 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <type_traits>
+
+#include "ckernel_ops.h"
+#include "llk_defs.h"
+#include "tensix.h"
+#include "tensix_types.h"
+
+namespace ckernel
+{
+
+/**
+ * @brief Whether the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) must be
+ *        disabled (written 1) for the given SrcA/SrcB destination formats.
+ *
+ * While the flag is clear (its reset state), MOVA2D / MOVB2D flush any SrcA/SrcB datum whose low
+ * 8 bits are zero to 0 (FlushDenormals; see MOVA2D.md `if (FlushDenormals && !(SrcAVal & 0xff))`).
+ * For the floating-point Src layout the low 8 bits are the exponent, and a zero exponent denotes a
+ * subnormal, which the HW does not support and therefore rounds to zero.
+ *
+ * UInt16 is the HW "Integer 16" format and the only 16-bit integer unpacker destination format. It
+ * shares the Src bit layout, so its low byte is the integer's low magnitude bits, NOT an exponent.
+ * A legitimate value such as 256 (0x0100) has a zero low byte and would be silently flushed to 0,
+ * destroying the high magnitude bits. Disabling the flag suppresses the flush so 16-bit integer
+ * data survives the move into Dst.
+ *
+ * @param srca_dst_format Destination data format of SrcA.
+ * @param srcb_dst_format Destination data format of SrcB.
+ * @return true when either operand is UInt16, in which case the flag must be disabled.
+ *
+ * @note ISA (paths are in the tt-isa-documentation repo): Blackhole/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
+ *       SrcASrcB.md (the "Integer 16" note).
+ */
+inline bool requires_disabled_src_zero_flag(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    return (srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+}
+
+enum Srcs
+{
+    SrcA = 0,
+    SrcB = 1,
+    SrcC = 2
+};
+
+enum Unpackers
+{
+    Unp0   = 0,
+    Unp1   = 1,
+    UnpAll = 2
+};
+
+enum DstStart
+{
+    StartZero = 0,
+    StartHalf = 1
+};
+
+enum DstClear
+{
+    ClearRow    = 0,
+    Clear16Rows = 1,
+    ClearHalf   = 2,
+    ClearFull   = 3
+};
+
+enum ThreadId
+{
+    BriscThreadId  = 0,
+    UnpackThreadId = 1,
+    MathThreadId   = 2,
+    PackThreadId   = 3
+};
+
+enum class DataLayout
+{
+    TILE      = 0,
+    ROW_MAJOR = 1
+};
+
+enum DstTileShape
+{
+    Tile32x32 = 0,
+    Tile32x16 = 1,
+    Tile16x16 = 2
+};
+
+enum UnpackDestination
+{
+    SrcRegs = 0,
+    DestReg = 1
+};
+
+enum register_space_e
+{
+    TDMA_REGS     = 0x0,
+    LOCAL_REGS    = 0x1,
+    ADDR_COUNTERS = 0x2
+};
+
+enum SortDir : bool
+{
+    ArgMax = false,
+    ArgMin = true,
+};
+
+constexpr std::uint32_t FACE_HEIGHT = 16;
+constexpr std::uint32_t FACE_WIDTH  = 16;
+constexpr std::uint32_t TILE_HEIGHT = 32;
+constexpr std::uint32_t TILE_WIDTH  = 32;
+
+constexpr std::uint32_t FACE_R_DIM = FACE_HEIGHT;
+constexpr std::uint32_t FACE_C_DIM = FACE_WIDTH;
+
+constexpr std::uint32_t TILE_R_DIM = TILE_HEIGHT;
+constexpr std::uint32_t TILE_C_DIM = TILE_WIDTH;
+
+constexpr std::uint32_t TILE_NUM_FACES = ((TILE_R_DIM * TILE_C_DIM) / (FACE_R_DIM * FACE_C_DIM));
+
+constexpr std::uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DEST_FACE_WIDTH) / (TILE_HEIGHT * TILE_HEIGHT);
+constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
+static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
+
+// Number of bits used to represent data format in unpacker/packer config.
+// The reason we keep only the bottom 4 bits is because the HW only has 4 bits to represent the dataformat.
+// Essentially, only using the bottom 4 bits when programming the HW dataformats is not a bug, because
+// the higher bits should be used to program other registers.
+// Also, uint32 does not require special handling because both int32 and uint32 are stored the same way in DEST
+// (just the highest bit is interpreted as a sign bit vs. a magnitude bit by the user). So when the packer
+// needs to read DEST in order to pack the data out it reads the same data either way and just moves 32bits in both cases.
+// Uint8 requires special handling because when int8 is put into DEST, the sign bit actually gets put
+// to the MSB of the 32bit container, rather than to bit 8. So for int8 the packer will read the 7 LSBs + 1 MSB,
+// but for uint8 the packer will read the 8 LSBs.
+constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 4;
+// Mask to extract data format bits
+constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
+
+// For instructions that address lower/upper 16 bits of a register
+#define LO_16(REG) (2 * (REG))
+#define HI_16(REG) (2 * (REG) + 1)
+
+// Helper function to convert to underlying type
+// e.g. to_underlying(MathFidelity::HiFi4) -> 4 (underlying type of MathFidelity is std::uint8_t)
+template <typename T>
+constexpr auto to_underlying(T t) noexcept
+{
+    return static_cast<std::underlying_type_t<T>>(t);
+}
+
+template <ThreadId thread_id>
+constexpr bool IS_TRISC_THREAD = thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId;
+
+inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
+{
+    return data_format & DATA_FORMAT_CONFIG_MASK;
+}
+
+constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
+{
+    switch (masked_data_format(format))
+    {
+        case (to_underlying(DataFormat::Int32)):
+        case (to_underlying(DataFormat::Float32)):
+            return (4096 >> 4);
+        case (to_underlying(DataFormat::Float16)):
+        case (to_underlying(DataFormat::Float16_b)):
+            return (2048 >> 4);
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp8_b)):
+            return ((1024 >> 4) + (64 >> 4));
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp4_b)):
+            return ((512 >> 4) + (64 >> 4));
+        case (to_underlying(DataFormat::Bfp2)):
+        case (to_underlying(DataFormat::Bfp2_b)):
+            return ((256 >> 4) + (64 >> 4));
+        case (to_underlying(DataFormat::Int8)):
+        case (to_underlying(DataFormat::Lf8)):
+        case (to_underlying(DataFormat::Fp8_e4m3)):
+            return (1024 >> 4);
+        default:
+            return ((1024 >> 4) + (64 >> 4));
+    };
+}
+
+constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
+{
+    switch (masked_data_format(format))
+    {
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp8_b)):
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp4_b)):
+        case (to_underlying(DataFormat::Bfp2)):
+        case (to_underlying(DataFormat::Bfp2_b)):
+            return true;
+        default:
+            return false;
+    };
+}
+
+constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
+{
+    switch (masked_data_format(format))
+    {
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp2)):
+            return true;
+        default:
+            return false;
+    };
+}
+
+constexpr static bool IS_A_FORMAT(std::uint32_t format)
+{
+    switch (masked_data_format(format))
+    {
+        case (to_underlying(DataFormat::Lf8)):
+        case (to_underlying(DataFormat::Float16)):
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp2)):
+            return true;
+        default:
+            return false;
+    };
+}
+
+constexpr static bool IS_8BIT_FORMAT(std::uint32_t format)
+{
+    // We can't use masked_data_format here since we require a whole byte for format recognition in this case
+    // in order to get exactly Fp8_e4m3.
+    switch (static_cast<DataFormat>(format))
+    {
+        case (DataFormat::Int8):
+        case (DataFormat::UInt8):
+        case (DataFormat::Fp8_e4m3):
+        case (DataFormat::Lf8):
+            return true;
+        default:
+            return false;
+    };
+}
+
+constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
+{
+    switch (static_cast<DataFormat>(masked_data_format(format)))
+    {
+        case DataFormat::Int32:
+        case DataFormat::Float32:
+            return datum_count << 2;
+
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+        case DataFormat::UInt16:
+            return datum_count << 1;
+
+        default:
+            return datum_count;
+    };
+}
+
+// Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
+// Distinct from SCALE_DATUM_SIZE above: that switches on the full masked format and has no Tf32 case
+// (returns 1 for Tf32), whereas this keys on (fmt & 0x3) and returns 4 for Tf32 -- the behavior
+// register strides need. The two agree on every other format, so they are NOT interchangeable.
+constexpr static std::uint32_t datum_size_in_bytes(const std::uint32_t format)
+{
+    return (format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
+}
+
+// True if the format is Int8 or Int32 -- the formats that enable INT8 math (ALU_ACC_CTRL_INT8_math_enabled).
+constexpr static bool is_int8_or_int32_format(const std::uint32_t format)
+{
+    return (masked_data_format(format) == to_underlying(DataFormat::Int8)) || (format == to_underlying(DataFormat::Int32));
+}
+
+#define LOWER_HALFWORD(x) ((x) & 0xFFFF)
+#define UPPER_HALFWORD(x) ((x) >> 16)
+
+enum class ActivationType
+{
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
+};
+
+enum class RoundingMode : std::uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2,
+};
+
+enum class BinaryOp : std::uint8_t
+{
+    ADD           = 0,
+    SUB           = 1,
+    MUL           = 2,
+    DIV           = 3,
+    RSUB          = 4,
+    POW           = 5,
+    XLOGY         = 6,
+    RSHFT         = 7,
+    LSHFT         = 8,
+    LOGICAL_RSHFT = 9,
+    ADD_TOP_ROW   = 10,
+    LT            = 11,
+    GT            = 12,
+    LE            = 13,
+    GE            = 14,
+    EQ            = 15,
+    NE            = 16,
+};
+
+enum class PackMode : std::uint8_t
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
+};
+
+} // namespace ckernel

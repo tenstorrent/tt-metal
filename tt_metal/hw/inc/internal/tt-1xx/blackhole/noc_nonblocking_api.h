@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,6 +27,9 @@ constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_DRISC)
+constexpr std::underlying_type_t<DramProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<DramProcessorTypes>>(DramProcessorTypes::DM0);
 #elif defined(COMPILE_FOR_TRISC)
 // TRISC is not a data movement processor. This is just so it compiles
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
@@ -65,6 +68,7 @@ constexpr uint32_t BRISC_WR_CMD_BUF = 0;      // for large writes
 constexpr uint32_t BRISC_RD_CMD_BUF = 1;      // for all reads
 constexpr uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 constexpr uint32_t BRISC_AT_CMD_BUF = 3;      // for atomics
+constexpr uint32_t NUM_NOC_CMD_BUFS = 4;
 
 // BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used
 // (36 bits of address followed by coordinates) This means that lo and mid registers need to have the address portion
@@ -116,10 +120,8 @@ inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t 
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
 #if defined(COMPILE_FOR_AERISC)
     constexpr uint32_t base = MEM_AERISC_NOC_COUNTER_BASE;
-    constexpr uint32_t size = MEM_AERISC_NOC_COUNTER_SIZE;
 #else
     constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
-    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
 #endif
 
     // Calculate most of the offset at compile time. Only the noc is variable at runtime.
@@ -183,6 +185,11 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
     return *ptr;
 }
 
+inline __attribute__((always_inline)) void NOC_CFG_WRITE_REG(uint32_t noc, uint32_t reg_id, uint32_t val) {
+    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
+    *(volatile uint32_t*)offset = val;
+}
+
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
@@ -229,6 +236,26 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
 // Clears NOC_PACKET_TAG register for the specified cmd_buf.
 inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t noc, uint32_t cmd_buf) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
+}
+
+inline __attribute__((always_inline)) void noc_clear_packet_tags(uint32_t noc) {
+    for (uint32_t cmd_buf = 0; cmd_buf < NUM_NOC_CMD_BUFS; cmd_buf++) {
+        noc_clear_packet_tag(noc, cmd_buf);
+    }
+}
+
+inline __attribute__((always_inline)) void noc_clear_all_packet_tags() {
+    for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+        noc_clear_packet_tags(noc);
+    }
+}
+
+// Kernels that do not explicitly set transaction IDs should naturally use transaction ID 0 for multicast writes after
+// kernel handoff. Only write/atomic-capable command buffers matter for this assert.
+inline __attribute__((always_inline)) bool ncrisc_noc_packet_tags_cleared(uint32_t noc) {
+    return NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_CMD_BUF, NOC_PACKET_TAG) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_PACKET_TAG) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_AT_CMD_BUF, NOC_PACKET_TAG) == 0;
 }
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.
@@ -425,7 +452,7 @@ inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t
 
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
 
@@ -945,7 +972,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
     ASSERT((dest_addr & 0x3) == 0);
@@ -995,7 +1022,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
         dest_addr,
         4,
         static_vc,
-        false,  // mcast
+        mcast,  // mcast
         false,  // linked
         1,      // num_dests
         true,   // multicast_path_reserve
@@ -1012,14 +1039,15 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t num_dests = 1) {
     ASSERT(be == 0xF);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
         }
     }
     bool static_vc_alloc = true;
@@ -1047,8 +1075,38 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
             noc_posted_writes_num_issued[noc] += 1;
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
         }
+    }
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_impl(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val,
+    uint64_t dest_addr,
+    uint32_t be,
+    uint32_t static_vc,
+    bool mcast,
+    bool posted,
+    uint32_t customized_src_addr,
+    uint32_t num_dests) {
+    if constexpr (dst_type == InlineWriteDst::DEFAULT) {
+        if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
+            noc_fast_default_write_dw_inline<noc_mode>(
+                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, num_dests);
+        } else {
+            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
+        }
+    } else if constexpr (dst_type == InlineWriteDst::L1) {
+        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
+    } else {
+        ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
+        noc_fast_default_write_dw_inline<noc_mode>(
+            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, num_dests);
     }
 }
 
@@ -1063,20 +1121,24 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool mcast,
     bool posted = false,
     uint32_t customized_src_addr = 0) {
-    if constexpr (dst_type == InlineWriteDst::DEFAULT) {
-        if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
-            noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
-        } else {
-            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
-                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
-        }
-    } else if constexpr (dst_type == InlineWriteDst::L1) {
-        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
-            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
-    } else {
-        ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
-        noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
-    }
+    noc_fast_write_dw_inline_impl<noc_mode, dst_type, flush>(
+        noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr, 1);
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val,
+    uint64_t dest_addr,
+    uint32_t be,
+    uint32_t static_vc,
+    bool mcast,
+    bool posted = false,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dests = 1) {
+    noc_fast_write_dw_inline_impl<noc_mode, dst_type, flush>(
+        noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr, num_dests);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
@@ -1091,7 +1153,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate force atomics to
     // be non-posted.
     posted = false;
@@ -1146,7 +1208,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. Also, due to HW bug, using posted with
     // multicast can introduce hangs. To workaround this, we emulate force atomics to be non-posted.
     posted = false;
@@ -1629,7 +1691,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 /**
  * The stateful NOC commands provide granular control over NOC register programming by writing
  * only a subset of registers for each transaction. This approach leverages the fact that many
- * transactions re-use certain values (e.g. length, coordinates) while varying others.
+ * transactions reuse certain values (e.g. length, coordinates) while varying others.
  *
  * This design provides significant advantages over previous stateful APIs:
  * - Fine-grained control: Users can specify exactly which registers to update per transaction
@@ -1639,7 +1701,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  *
  * The flags parameter uses a bitmask approach to specify which registers to program.
  * Making template functions with a long list of booleans makes understanding what registers
- * are being set tedious. This is an attempt to pack that data in a way thats ~easy to visually parse.
+ * are being set tedious. This is an attempt to pack that data in a way that's ~easy to visually parse.
  *
  * S/s: write, do not write to src address register (NOC_TARG_ADDR_LO)
  * N/n: write, do not write to noc coordinates register (NOC_RET_ADDR_COORDINATE)

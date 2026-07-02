@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/format.h>
 
 #include <CLI/CLI.hpp>
-#include <core/ttnn_all_includes.hpp>
 #include <string>
 
 #include "autograd/auto_context.hpp"
@@ -19,6 +18,7 @@
 #include "modules/distributed/linear.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 using ttml::autograd::TensorPtr;

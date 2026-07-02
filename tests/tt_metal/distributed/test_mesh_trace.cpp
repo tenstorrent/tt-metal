@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,13 +27,12 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -515,7 +514,14 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
         1, mesh_device_->compute_with_storage_grid_size(), seed);
     workload->add_program(all_devices, std::move(*programs[0]));
     auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true), std::runtime_error);
+    try {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true);
+        FAIL() << "Expected EnqueueMeshWorkload to fail while tracing uncached program binaries";
+    } catch (const std::runtime_error& e) {
+        const std::string error_message = e.what();
+        EXPECT_NE(error_message.find("Cannot load new binaries during trace capture."), std::string::npos);
+        EXPECT_NE(error_message.find("Warm up before capturing a trace."), std::string::npos);
+    }
     EXPECT_THROW(Finish(mesh_device_->mesh_command_queue()), std::runtime_error);
     mesh_device_->end_mesh_trace(0, trace_id);
 }

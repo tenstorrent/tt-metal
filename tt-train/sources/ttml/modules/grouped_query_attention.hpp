@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <optional>
 
 #include "autograd/tensor.hpp"
 #include "models/common/transformer_common.hpp"
@@ -40,7 +42,7 @@ public:
     explicit GroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+        const autograd::TensorPtr& x, const std::optional<autograd::TensorPtr>& mask) override;
 
     // Forward with KV cache for inference
     [[nodiscard]] autograd::TensorPtr operator()(

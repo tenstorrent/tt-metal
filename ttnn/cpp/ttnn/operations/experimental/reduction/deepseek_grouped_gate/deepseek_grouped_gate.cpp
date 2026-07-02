@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deepseek_grouped_gate.hpp"
 #include "device/deepseek_grouped_gate_device_operation.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental {
 
-std::array<Tensor, 2> DeepseekGroupedGateOperation::invoke(
+std::array<Tensor, 2> deepseek_grouped_gate(
     const Tensor& scores,
     const Tensor& bias,
     uint32_t n_groups,
@@ -29,4 +29,4 @@ std::array<Tensor, 2> DeepseekGroupedGateOperation::invoke(
         output_mem_config);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental

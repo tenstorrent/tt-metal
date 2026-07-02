@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -89,7 +89,7 @@ def test_multimodal_demo_text(
         [{"type": "image", "image": img}, {"type": "text", "text": "If I had to write a haiku for this one"}],
         [
             {"type": "image", "image": img2},
-            {"type": "text", "text": "Couting the number of individual spaghetti strands in this image"},
+            {"type": "text", "text": "Counting the number of individual spaghetti strands in this image"},
         ],
         [{"type": "image", "image": ocr_image}, {"type": "text", "text": "The full text in this image is as follows"}],
         [

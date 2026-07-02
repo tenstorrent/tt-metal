@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prefetch.hpp"
 
-#include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <array>
 #include <map>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -32,6 +33,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -63,8 +65,13 @@ PrefetchKernel::PrefetchKernel(
         get_reads_dispatch_cores) {
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
-    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
+    // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
+    // respect code space
+    force_watcher_no_inline_ =
+        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline());
 
+    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
+    static_config_.dispatch_telemetry_disabled = descriptor.rtoptions().get_dispatch_telemetry_disabled();
     DispatchWorkerType type = PREFETCH;
     if (h_variant && d_variant) {
         this->logical_core_ = dispatch_core_manager.prefetcher_core(device_id, channel, cq_id);
@@ -78,6 +85,7 @@ PrefetchKernel::PrefetchKernel(
         type = PREFETCH_D;
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
+    this->send_to_brisc_ = true;
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
@@ -94,12 +102,18 @@ void PrefetchKernel::GenerateStaticConfigs() {
     static_config_.fabric_header_rb_entries = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
+    static_config_.dispatch_telemetry_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
-        bool is_mock = descriptor_.cluster().get_target_device_type() == tt::TargetDevice::Mock;
+        bool is_mock = descriptor_.cluster().is_mock_or_emulated();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr =
+            device_->sysmem_manager().is_dram_backed()
+                ? get_absolute_cq_offset(
+                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
+                : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = is_mock ? 0x10000 : device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -136,7 +150,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -155,7 +170,11 @@ void PrefetchKernel::GenerateStaticConfigs() {
         channel = descriptor_.cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr =
+            device_->sysmem_manager().is_dram_backed()
+                ? get_absolute_cq_offset(
+                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
+                : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -227,7 +246,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -467,6 +487,7 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_CB_PAGES", std::to_string(dependent_config_.downstream_cb_pages.value())},
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(static_config_.my_downstream_cb_sem_id.value())},
         {"DOWNSTREAM_CB_SEM_ID", std::to_string(dependent_config_.downstream_cb_sem_id.value())},
+        {"IS_CQ_DRAM_BACKED", std::to_string(device_->sysmem_manager().is_dram_backed())},
         {"PCIE_BASE", std::to_string(static_config_.pcie_base.value())},
         {"PCIE_SIZE", std::to_string(static_config_.pcie_size.value())},
         {"PREFETCH_Q_BASE", std::to_string(static_config_.prefetch_q_base.value())},
@@ -493,6 +514,8 @@ void PrefetchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
+        {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
 
         {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
         {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},
@@ -529,11 +552,18 @@ void PrefetchKernel::CreateKernel() {
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
 
+    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
+
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {
             defines["FABRIC_2D"] = "1";
         }
+    }
+
+    if (device_->sysmem_manager().is_dram_backed()) {
+        defines["DRAM_BACKED_CQ_BANK_ID"] = std::to_string(device_->sysmem_manager().get_dram_region_bank_id());
     }
 
     // Runtime args offsets
@@ -543,19 +573,24 @@ void PrefetchKernel::CreateKernel() {
 
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
-    configure_kernel_variant(
-        dispatch_kernel_file_names[PREFETCH],
-        {},
-        defines,
-        false,
-        true,
-        // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
-        // respect code space
-        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline()),
-        optimization_level);
+    configure_kernel_variant(dispatch_kernel_file_names[PREFETCH], {}, defines, optimization_level);
 }
 
 void PrefetchKernel::ConfigureCore() {
+    TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
+    TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
+    PrefetchCoreTelemetry zero_prefetch_telemetry{};
+    if (static_config_.dispatch_telemetry_disabled.value()) {
+        zero_prefetch_telemetry.signature = INVALID_TELEMETRY_SIGNATURE;
+    }
+    detail::WriteToDeviceL1(
+        device_,
+        logical_core_,
+        static_config_.dispatch_telemetry_addr.value(),
+        std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(&zero_prefetch_telemetry), sizeof(zero_prefetch_telemetry)),
+        GetCoreType());
+
     // Only H-type prefetchers need L1 configuration
     if (static_config_.is_h_variant.value()) {
         // Initialize the FetchQ
@@ -563,7 +598,9 @@ void PrefetchKernel::ConfigureCore() {
         const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
+        const uint32_t prefetch_q_bytes = my_dispatch_constants.prefetch_q_size();
+        TT_ASSERT(prefetch_q_bytes % sizeof(uint32_t) == 0);
+        std::vector<uint32_t> prefetch_q(prefetch_q_bytes / sizeof(uint32_t), 0);
         uint32_t prefetch_q_base =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
         std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
@@ -572,8 +609,12 @@ void PrefetchKernel::ConfigureCore() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
         uint32_t prefetch_q_pcie_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-        std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {
-            get_absolute_cq_offset(channel, cq_id_, cq_size) + cq_start};
+        const uint32_t command_queue_start_addr =
+            device_->sysmem_manager().is_dram_backed()
+                ? get_absolute_cq_offset(
+                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
+                : get_absolute_cq_offset(channel, cq_id_, cq_size);
+        std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {command_queue_start_addr + cq_start};
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, GetCoreType());
         detail::WriteToDeviceL1(
             device_, logical_core_, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, GetCoreType());

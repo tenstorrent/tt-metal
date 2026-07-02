@@ -1,12 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <cmath>
 
 using namespace tt::tt_metal;
 
@@ -19,8 +23,6 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     switch (val) {
         case ADD:
         case SUB:
-        case EQ:
-        case NE:
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
@@ -34,10 +36,12 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case LDEXP:
         case BIAS_GELU:
         case HYPOT: return (a == FLOAT32 && b == FLOAT32);
+        case EQ:
+        case NE:
         case GT:
         case LT:
         case GE:
-        case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
+        case LE: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT16 || a == UINT32);
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
@@ -49,7 +53,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case DIV_FLOOR:
         case DIV_TRUNC:
-        case REMAINDER: return (a == INT32 && b == INT32);
+        case REMAINDER:
         case FMOD:
         case QUANT:
         case REQUANT:
@@ -57,16 +61,14 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MAXIMUM:
         case MINIMUM:
         case XLOGY:
+        case ATAN2:
         case POWER:
         case WHERE_TST:
-        case WHERE_TTS: return true;
+        case WHERE_TTS:
+        case ISCLOSE: return true;
         default: return false;
     }
     return false;
-}
-
-bool is_quant_op(const BinaryOpType val) {
-    return (val == BinaryOpType::QUANT) || (val == BinaryOpType::DEQUANT) || (val == BinaryOpType::REQUANT);
 }
 
 ShardSpec generate_shard_spec_all_cores(
@@ -223,10 +225,9 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     TT_THROW("Invalid subtile broadcast type");
 }
 
-tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
+ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
     // TODO: a more generalized way to skip the hashing of an EltwiseUnaryWithParam?
-    // Don't hash the quantization scale, otherwise we build the kernel for each different scale
-    return tt::stl::hash::hash_objects_with_default_seed(
+    auto base_hash = ttsl::hash::hash_objects_with_default_seed(
         binary_op_type,
         lhs_activations,
         rhs_activations,
@@ -238,7 +239,14 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash()
         subtile_broadcast_type,
         is_sfpu,
         is_quant_op,
-        is_where_op);
+        is_where_op,
+        input_layout_a,
+        input_layout_b,
+        output_layout);
+    if (binary_op_type == BinaryOpType::ISCLOSE) {
+        base_hash = ttsl::hash::hash_objects(base_hash, equal_nan);
+    }
+    return base_hash;
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -272,6 +280,37 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
     }
 
+    TT_FATAL(
+        ttnn::operations::binary::dtype_policy::is_supported(attributes.binary_op_type, input_tensor_a.dtype()),
+        "Input tensor A dtype {} is not supported for binary operation {}",
+        input_tensor_a.dtype(),
+        attributes.binary_op_type);
+
+    if (input_tensor_b.has_value()) {
+        const auto dtype_b = input_tensor_b->dtype();
+        if (ttnn::operations::binary::utils::is_quant_op(attributes.binary_op_type)) {
+            TT_FATAL(
+                dtype_b == DataType::FLOAT32,
+                "Scale tensor B must be float32 for binary operation {}, got {}",
+                attributes.binary_op_type,
+                dtype_b);
+        } else {
+            TT_FATAL(
+                ttnn::operations::binary::dtype_policy::is_supported(attributes.binary_op_type, dtype_b),
+                "Input tensor B dtype {} is not supported for binary operation {}",
+                dtype_b,
+                attributes.binary_op_type);
+        }
+
+        TT_FATAL(
+            ttnn::operations::binary::utils::is_dtype_combination_supported(
+                attributes.binary_op_type, input_tensor_a.dtype(), dtype_b),
+            "Mixed dtype is not supported for binary operation {}, dtype A: {}, dtype B: {}",
+            attributes.binary_op_type,
+            input_tensor_a.dtype(),
+            dtype_b);
+    }
+
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
@@ -280,7 +319,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "First operand to eltwise binary must be tilized");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "First operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",
+        input_tensor_a.layout());
 
     bool tensor_a_sharded = input_tensor_a.memory_config().is_sharded();
     if (not tensor_a_sharded) {
@@ -303,7 +345,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.device() == input_tensor_b->device(),
             "Operands to eltwise binary need to be on the same device!");
-        TT_FATAL(input_tensor_b->layout() == Layout::TILE, "Second operand to eltwise binary must be tilized");
+        TT_FATAL(
+            input_tensor_b->layout() == Layout::TILE || input_tensor_b->layout() == Layout::ROW_MAJOR,
+            "Second operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",
+            input_tensor_b->layout());
 
         if (not tensor_b_sharded) {
             TT_FATAL(
@@ -345,16 +390,26 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             a_dim,
             b_dim);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}",
                 i,
                 larger_rank,
                 a_dim,
                 b_dim);
         }
+    }
+    if (attributes.binary_op_type == BinaryOpType::ISCLOSE) {
+        TT_FATAL(
+            std::isfinite(attributes.rtol) && attributes.rtol >= 0.0f,
+            "isclose: rtol must be a finite, non-negative value, got {}",
+            attributes.rtol);
+        TT_FATAL(
+            std::isfinite(attributes.atol) && attributes.atol >= 0.0f,
+            "isclose: atol must be a finite, non-negative value, got {}",
+            attributes.atol);
     }
 }
 
@@ -436,11 +491,14 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return TensorSpec(
             output_shape,
             TensorLayout(
-                output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+                output_dtype,
+                PageConfig(attributes.output_layout),
+                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
-    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), attributes.memory_config));
+    return TensorSpec(
+        output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
@@ -454,7 +512,7 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -499,12 +557,17 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
     const std::optional<bool>& fast_and_approximate_mode,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    float rtol,
+    float atol,
+    bool equal_nan) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
+
     // Validate storage type for input tensors
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,
@@ -516,6 +579,15 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         "Input tensor B must be on device, got storage type: {}",
         input_tensor_b.storage_type());
 
+    // Resolve sub_device_id to sub_core_grids if provided (after device validation)
+    auto resolved_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        auto* device = input_tensor_a.device();
+        resolved_sub_core_grids =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+
     auto subtile_broadcast_type = ttnn::operations::binary_ng::get_subtile_broadcast_type(
         input_tensor_a.logical_shape()[-2],
         input_tensor_a.logical_shape()[-1],
@@ -526,10 +598,16 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     DataType dtype_b = input_tensor_b.dtype();
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
-    bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
+    bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
+
+    auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
+    if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR &&
+        input_tensor_b.layout() == Layout::ROW_MAJOR) {
+        output_layout = Layout::ROW_MAJOR;
+    }
 
     MemoryConfig mem_config_actual = input_tensor_a.memory_config();
     if (input_tensor_a.is_sharded()) {
@@ -547,7 +625,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                         tt::LogOp,
                         "BinaryNgDeviceOperation: Using memory config from input tensor B since it is sharded");
                 }
-            } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+            } else if (input_tensor_b.shard_spec()->num_cores() > input_tensor_a.shard_spec()->num_cores()) {
                 mem_config_actual =
                     operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(
@@ -599,13 +677,20 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                                           // dtype depending on which LLK is meant to be used.
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, &input_tensor_b, output_tensor, memory_config, sub_core_grids, mem_config_actual),
+            input_tensor_a, &input_tensor_b, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
         std::nullopt,
-        sub_core_grids,
+        resolved_sub_core_grids,
+        sub_device_id,
         subtile_broadcast_type,
         is_sfpu_op,
         is_quant_op,
-        is_where_op};
+        is_where_op,
+        rtol,
+        atol,
+        equal_nan,
+        input_tensor_a.layout(),
+        input_tensor_b.layout(),
+        output_layout};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -613,24 +698,46 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a,
-    float scalar,
+    ttnn::operations::unary::ScalarVariant scalar,
     ttnn::operations::binary_ng::BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
     const std::optional<bool>& fast_and_approximate_mode,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     std::optional<ttnn::operations::unary::ScalarVariant> /*scalar_value*/,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
+
+    // Validate storage type
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE,
+        "Input tensor A must be on device, got storage type: {}",
+        input_tensor_a.storage_type());
+
+    // Resolve sub_device_id to sub_core_grids if provided (after device validation)
+    auto resolved_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        auto* device = input_tensor_a.device();
+        resolved_sub_core_grids =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
-    bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
+    bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
     MemoryConfig mem_config_actual = memory_config.value_or(
         output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
+
+    auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
+    if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        output_layout = Layout::ROW_MAJOR;
+    }
 
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,
@@ -642,13 +749,21 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         input_tensor_a.dtype(),
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, nullptr, output_tensor, memory_config, sub_core_grids, mem_config_actual),
+            input_tensor_a, nullptr, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
         std::nullopt,
-        sub_core_grids,
+        resolved_sub_core_grids,
+        sub_device_id,
         ttnn::operations::binary_ng::SubtileBroadcastType::NONE,
         is_sfpu_op,
         is_quant_op,
-        false};
+        false,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*equal_nan=*/false,
+        input_tensor_a.layout(),
+        Layout::INVALID,
+        output_layout};
+
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

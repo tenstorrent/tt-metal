@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,7 +90,8 @@ ConvTranspose2dResult conv_transpose2d_L1(
         .padding = padding,
         .output_pad_hw = {output_padding[0], output_padding[1]},
         .dilation_hw = {dilation[0], dilation[1]},
-        .is_transpose = true};
+        .is_transpose = true,
+        .padding_mode = conv_config.padding_mode};
 
     // ConvTranspose2d is implemented via the Conv2d u_op with flipped weights.
     // The input tensor is first passed to the halo op that pads the input.
@@ -114,6 +115,8 @@ ConvTranspose2dResult conv_transpose2d_L1(
         dims.input_pad_right);
 
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+    // Grouped conv_transpose2d embeds grouping by expanding the weights before the conv2d micro-op.
+    const uint32_t conv_groups = groups > 1 ? 1 : groups;
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -146,7 +149,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             ConvTranspose2dDimensions::CONV2D_STRIDE,
             dilation,
             ConvTranspose2dDimensions::CONV2D_PADDING,
-            groups,
+            conv_groups,
             bias_tensor.has_value(),
             compute_config);
         auto_shard = true;
@@ -192,6 +195,15 @@ ConvTranspose2dResult conv_transpose2d_L1(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
+    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
+        conv_groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
+    const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
+        conv_is_1d_depthwise,
+        parallel_config.shard_scheme,
+        in_channels_padded,
+        kernel_size[1],
+        dilation[1],
+        input_tensor_post_tm.dtype());
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -203,7 +215,10 @@ ConvTranspose2dResult conv_transpose2d_L1(
         kernel_size[1],
         dims.output_width,
         get_fp32_dest_acc_en(compute_config),
-        conv_config.full_inner_dim);
+        conv_config.full_inner_dim,
+        false,
+        conv_is_1d_depthwise,
+        coalesce_1d_depthwise_kw_reads);
 
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
@@ -238,12 +253,15 @@ ConvTranspose2dResult conv_transpose2d_L1(
             mm_conv && auto_shard,
             out_channels,  // explicit out_channels for grouped convolutions
             bias_tensor.has_value(),
-            false,                                      // enable_kernel_stride_folding
-            false,                                      // full_inner_dim
-            false,                                      // enable_activation_reuse
+            false,  // enable_kernel_stride_folding
+            false,  // full_inner_dim
+            false,  // enable_activation_reuse
+            coalesce_1d_depthwise_kw_reads,
             ConvTranspose2dDimensions::CONV2D_STRIDE);  // stride (always {1,1} for transposed conv2d)
-        tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-            transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel), bias_tensor, params, device);
+        ttnn::Tensor transformed_weight_tensor =
+            transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
+        tie(weight_tensor_on_device, bias_tensor_on_device) =
+            prepare_conv_weights_biases_and_move_to_device(transformed_weight_tensor, bias_tensor, params, device);
     }
     Tensor output;
     if (mm_conv) {
@@ -290,6 +308,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         Tensor halo_output = ttnn::halo(
             input_tensor_post_tm,
             sliding_window_config,
+            compute_config,
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
@@ -319,7 +338,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             bias_tensor_on_device,
             sliding_window_config,
             out_channels,
-            groups,
+            conv_groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation,
             opt_conv_op_parallel_config,
@@ -359,8 +378,11 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     Layout input_layout;
     DataType input_dtype;
     DataType output_dtype;
-    Tensor& weight_tensor;
+    Tensor* weight_tensor;
     OptionalRefTensor bias_tensor;
+    bool has_bias;
+    DataType weight_dtype_;
+    uint32_t weight_logical_shape_3;
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
@@ -370,6 +392,7 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     IOShape strided_input_shape;
 
 public:
+    // Constructor with tensor references (for real execution path)
     ConvT2DSliceAttr(
         uint32_t batch_size,
         IOShape input_shape,
@@ -403,8 +426,56 @@ public:
         input_layout(input_layout),
         input_dtype(input_dtype),
         output_dtype(output_dtype),
-        weight_tensor(weight_tensor),
+        weight_tensor(&weight_tensor),
         bias_tensor(bias_tensor),
+        has_bias(bias_tensor.has_value()),
+        weight_dtype_(weight_tensor.dtype()),
+        weight_logical_shape_3(weight_tensor.logical_shape()[3]),
+        conv_config(conv_config),
+        compute_config(compute_config),
+        device(device),
+        mirror_kernel(mirror_kernel) {}
+
+    // Constructor with weight metadata only (for slice config determination without device tensors)
+    ConvT2DSliceAttr(
+        uint32_t batch_size,
+        IOShape input_shape,
+        uint32_t input_channels,
+        uint32_t output_channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 4> padding_n4,
+        std::array<uint32_t, 2> output_padding,
+        std::array<uint32_t, 2> dilation,
+        uint32_t groups,
+        Layout input_layout,
+        DataType input_dtype,
+        DataType output_dtype,
+        DataType weight_dtype,
+        uint32_t weight_logical_shape_3,
+        bool has_bias,
+        const Conv2dConfig& conv_config,
+        const DeviceComputeKernelConfig& compute_config,
+        MeshDevice* device,
+        bool mirror_kernel) :
+        batch_size(batch_size),
+        input_shape(input_shape),
+        input_channels(input_channels),
+        output_channels(output_channels),
+        kernel_size(kernel_size),
+        stride(stride),
+        padding_n4(padding_n4),
+        output_padding(output_padding),
+        dilation(dilation),
+        groups(groups),
+        input_layout(input_layout),
+        input_dtype(input_dtype),
+        output_dtype(output_dtype),
+        weight_tensor(nullptr),
+        bias_tensor(std::nullopt),
+        has_bias(has_bias),
+        weight_dtype_(weight_dtype),
+        weight_logical_shape_3(weight_logical_shape_3),
         conv_config(conv_config),
         compute_config(compute_config),
         device(device),
@@ -581,9 +652,11 @@ public:
         slice_halo_config.padding = this_slice_padding;
         slice_halo_config.output_pad_hw = {this_output_padding.at(0), this_output_padding.at(1)};
         slice_halo_config.dilation_hw = {dilation[0], dilation[1]};
-        slice_halo_config.num_cores_nhw = get_num_cores_channels_from_parallel_config(parallel_config);
+        slice_halo_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
         slice_halo_config.snap_to_tile = true;
+        slice_halo_config.is_transpose = true;
+        slice_halo_config.padding_mode = conv_config.padding_mode;
         const uint32_t input_channels_alignment = get_input_channels_alignment(
             conv_config.shard_layout.value(),
             conv_config.output_layout,
@@ -633,7 +706,7 @@ public:
             input_dtype,
             output_dtype,
             output_slice_width,
-            bias_tensor.has_value(),
+            has_bias,
             false,
             in_channels_padded);
         log_debug(
@@ -675,8 +748,9 @@ public:
 
         if (!conv_config.shard_layout.has_value()) {
             if (!conv_config.weights_dtype.has_value()) {
-                conv_config.weights_dtype = weight_tensor.dtype();
+                conv_config.weights_dtype = weight_dtype_;
             }
+            const uint32_t conv_groups = groups > 1 ? 1 : groups;
             auto conv2d_dims = compute_conv_transpose2d_dimensions(
                 input_slice_height,
                 input_slice_width,
@@ -705,7 +779,7 @@ public:
                 output_channels,
                 output_slice_height,
                 output_slice_width,
-                weight_tensor.logical_shape()[3],
+                weight_logical_shape_3,
                 conv2d_dims.full_input_height,
                 conv2d_dims.full_input_width,
                 device->compute_with_storage_grid_size(),
@@ -714,11 +788,11 @@ public:
                 output_dtype,
                 std::nullopt,
                 kernel_size,
-                stride,
+                ConvTranspose2dDimensions::CONV2D_STRIDE,
                 dilation,
-                padding_n4,
-                groups,
-                bias_tensor.has_value(),
+                ConvTranspose2dDimensions::CONV2D_PADDING,
+                conv_groups,
+                has_bias,
                 compute_config);
         }
         TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
@@ -774,9 +848,10 @@ public:
         // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
         conv_config_l1.output_layout = Layout::TILE;
 
+        TT_ASSERT(weight_tensor != nullptr, "weight_tensor must not be null in run_L1_op");
         auto conv2d_result = conv_transpose2d_L1(
             sliced_input_tensor,
-            weight_tensor,
+            *weight_tensor,
             device,
             input_channels,
             output_channels,
@@ -795,7 +870,7 @@ public:
             compute_config,
             std::nullopt,
             mirror_kernel);
-        weight_tensor = std::get<3>(conv2d_result);
+        *weight_tensor = std::get<3>(conv2d_result);
         if (bias_tensor.has_value()) {
             bias_tensor->get() = std::get<4>(conv2d_result).value();
         }
@@ -847,6 +922,72 @@ Result conv_transpose2d_DRAM(
     auto dims = compute_conv_transpose2d_dimensions(
         input_height, input_width, kernel_size, stride, padding, output_padding, dilation);
     auto padding_n4 = sliding_window::get_pair_n4_padding(padding);
+
+    // Early auto-determination: If auto-slicing is requested (num_slices=0), determine the configuration
+    // before deciding L1 vs DRAM path. This prevents double-preparation of weights when auto-slicing
+    // determines that L1 path should be used.
+    std::optional<Conv2dSliceConfig> effective_slice_config = dram_slice_config_;
+    if (dram_slice_config_.has_value() && dram_slice_config_->num_slices == 0) {
+        log_debug(tt::LogOp, "Early auto-determination for DRAM conv_transpose2d");
+        auto input_shape = ttnn::Shape({batch_size, input_height, input_width, in_channels});
+        auto output_shape = ttnn::Shape({batch_size, dims.output_height, dims.output_width, out_channels});
+
+        auto temp_slice_attr = get_conv_transpose2d_slice_attr(
+            batch_size,
+            input_height,
+            input_width,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding_n4,
+            output_padding,
+            dilation,
+            groups,
+            input_tensor.layout(),
+            input_tensor.dtype(),
+            output_dtype,
+            weight_tensor.dtype(),
+            weight_tensor.logical_shape()[3],
+            bias_tensor.has_value(),
+            conv_config,
+            compute_config,
+            device,
+            mirror_kernel);
+
+        effective_slice_config = ttnn::operations::op_slicing::determine_slice_config(
+            temp_slice_attr.get(), input_shape, output_shape, dram_slice_config_, conv_config.output_layout, device);
+
+        log_debug(tt::LogOp, "Early auto-determined slice config: {}", effective_slice_config.value());
+
+        // If auto-determination results in num_slices==1, convert to L1_FULL
+        // This signals that the operation fits entirely in L1 and should use the L1 path
+        if (effective_slice_config->num_slices == 1) {
+            log_debug(tt::LogOp, "Early auto-determined num_slices=1, using L1 path for conv_transpose2d");
+            // Call L1 version directly to avoid double-preparation of weights
+            return conv_transpose2d_L1(
+                input_tensor,
+                weight_tensor,
+                device,
+                in_channels,
+                out_channels,
+                batch_size,
+                input_height,
+                input_width,
+                kernel_size,
+                stride,
+                padding,
+                output_padding,
+                dilation,
+                groups,
+                dtype,
+                bias_tensor,
+                conv_config_,
+                compute_config_,
+                memory_config_,
+                mirror_kernel);
+        }
+    }
 
     log_debug(tt::LogOp, "Input : {}x{}", input_height, input_width);
     log_debug(tt::LogOp, "Output : {}x{}", dims.output_height, dims.output_width);
@@ -944,7 +1085,7 @@ Result conv_transpose2d_DRAM(
         input_tensor.layout(),
         input_tensor.dtype(),
         output_dtype,
-        std::ref(weight_tensor_on_device),
+        weight_tensor_on_device,
         bias_tensor_on_device.has_value() ? std::make_optional(std::ref(bias_tensor_on_device.value())) : std::nullopt,
         conv_config,
         compute_config,
@@ -979,6 +1120,13 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     const std::optional<const op_slicing::Op2DSliceConfig>& slice_config) {
     // If slice config explicitly specifies L1_FULL, use L1 path
     if (slice_config.has_value() && slice_config->slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+        return ConvT2dExecutionPath::L1;
+    }
+
+    // If slice config has num_slices == 1 (trivial slicing), use L1 path
+    // to avoid the overhead of DRAM slicing infrastructure for a single slice
+    if (slice_config.has_value() && slice_config->num_slices == 1) {
+        log_debug(tt::LogOp, "Using L1 path for trivial DRAM slice config with num_slices=1");
         return ConvT2dExecutionPath::L1;
     }
 
@@ -1026,13 +1174,59 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
         input_layout,
         input_dtype,
         conv_output_dtype,
-        std::ref(weight_tensor),
+        weight_tensor,
         bias_tensor.has_value() ? std::make_optional(std::ref(bias_tensor.value())) : std::nullopt,
         conv_config_,
         compute_config,
         device,
         mirror_kernel));
 }
+
+std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    Layout input_layout,
+    DataType input_dtype,
+    DataType conv_output_dtype,
+    DataType weight_dtype,
+    uint32_t weight_logical_shape_3,
+    bool has_bias,
+    const Conv2dConfig& conv_config_,
+    const DeviceComputeKernelConfig& compute_config,
+    MeshDevice* device,
+    bool mirror_kernel) {
+    return std::unique_ptr<op_slicing::OpSliceAttr>(new ConvT2DSliceAttr(
+        batch_size,
+        {input_height, input_width},
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding_n4,
+        output_padding,
+        dilation,
+        groups,
+        input_layout,
+        input_dtype,
+        conv_output_dtype,
+        weight_dtype,
+        weight_logical_shape_3,
+        has_bias,
+        conv_config_,
+        compute_config,
+        device,
+        mirror_kernel));
+}
+
 }  // namespace ttnn::operations::conv::conv_transpose2d
 
 namespace ttnn {

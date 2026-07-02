@@ -1,23 +1,26 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 
 
 class RMSNorm(nn.Module):
     def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None):
         super().__init__()
-        torch_weight = state_dict["weight"]
+        if state_dict:
+            torch_weight = state_dict["weight"].reshape((1, 1, -1, ttnn.TILE_SIZE))
+        else:
+            torch_weight = None
 
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         self.is_distributed = False  # self.mesh_config.tp > 1
         self.tt_weight = ttnn.as_tensor(
-            torch_weight.reshape((1, 1, -1, ttnn.TILE_SIZE)),
+            torch_weight,
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -57,7 +60,7 @@ class RMSNorm(nn.Module):
             tt_gathered_stats = ttnn.all_gather(
                 tt_stats,
                 dim=3,
-                num_links=1,
+                num_links=get_default_num_links(self.mesh_device),
                 cluster_axis=1,
                 mesh_device=self.mesh_device,
                 memory_config=tt_gathered_stats_memory_config,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,15 +22,6 @@ struct TilizeParams {
 struct TilizeInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_input_tensor;
-};
-
-struct MultiCoreSharedVariables {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-        std::vector<CoreCoord> cores;
-        uint32_t ncores{};
-    };
 };
 
 }  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -156,7 +156,7 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
                               .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
     experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         bool blocking = true;
         mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, blocking);
     }
@@ -269,7 +269,7 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
                               .host_data(host_buffer.data())
                               .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/true);
     }
 
@@ -322,7 +322,7 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
     experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
 
     bool used_pinned_memory = false;
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/false);
         used_pinned_memory = pinned_mem->lock_may_block();
         mesh_device->mesh_command_queue().finish();
@@ -351,7 +351,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
         ReplicatedBufferConfig{transfer_size},
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
-    std::vector<ElementType> host_buffer;
+    std::vector<ElementType> host_buffer(transfer_size / ElementSize);
 
     for ([[maybe_unused]] auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
@@ -401,7 +401,7 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
                              .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_mem);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
     }
 
@@ -468,8 +468,11 @@ int main(int argc, char** argv) {
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
                 ->ComputeStatistics("max", compute_max);
+            auto pinned_write_page_sizes = PAGE_SIZE_ARGS;
+            pinned_write_page_sizes.push_back(4096);
+            auto pinned_write_args = {pinned_write_page_sizes, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
             benchmark::RegisterBenchmark("WritePinnedMemory", BM_write_pinned_memory, device)
-                ->ArgsProduct(benchmark_args)
+                ->ArgsProduct(pinned_write_args)
                 ->ArgNames(benchmark_arg_names)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)

@@ -1,9 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 // Simple kernel that copies [start_page, end_page) pages from src to dst.
 void kernel_main() {
@@ -19,15 +23,18 @@ void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t end_page = get_arg_val<uint32_t>(1);
 
-    auto accessor_src = TensorAccessor(args_src, bank_base_address_src, page_size);
+    auto accessor_src = TensorAccessor(args_src, bank_base_address_src);
+
+    Noc noc;
+    CircularBuffer cb(cb_id);
 
     constexpr uint32_t one_tile = 1;
-    uint32_t cb_addr = get_write_ptr(cb_id);
     auto pages = accessor_src.pages(start_page, end_page);
     for (const auto& page : pages) {
-        cb_reserve_back(cb_id, one_tile);
-        noc_async_read(page.noc_addr(), cb_addr, page_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id, one_tile);
+        cb.reserve_back(one_tile);
+        noc.async_read(
+            accessor_src, cb, page_size, {.page_id = page.page_id(), .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb.push_back(one_tile);
     }
 }

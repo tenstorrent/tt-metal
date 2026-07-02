@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,11 +12,15 @@
 #include <tt-metalium/base_types.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
+namespace tt::tt_metal::experimental {
+struct ComputeHardwareConfig;
+}
+
 namespace ttnn {
 
 // Unified compute kernel configuration for all supported architectures.
 struct ComputeKernelConfig {
-    MathFidelity math_fidelity = MathFidelity::LoFi;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
     bool math_approx_mode = true;
     bool fp32_dest_acc_en = false;
     bool packer_l1_acc = false;
@@ -40,7 +44,7 @@ using BlackholeComputeKernelConfig = ComputeKernelConfig;
 DeviceComputeKernelConfig init_device_compute_kernel_config(
     tt::ARCH arch,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
-    MathFidelity default_fidelity = MathFidelity::LoFi,
+    tt::tt_metal::MathFidelity default_fidelity = tt::tt_metal::MathFidelity::LoFi,
     bool default_approx_mode = true,
     bool default_fp32_acc = false,
     bool default_l1_acc = false,
@@ -48,14 +52,24 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level =
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
+void verify_numerical_configuration(
+    tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config);
+
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+tt::tt_metal::MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
-std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
+std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, DeviceComputeKernelConfig compute_kernel_config);
+
+// Maps the four hardware knobs (math_fidelity, math_approx_mode, fp32_dest_acc_en,
+// dst_full_sync_en) to a Metal 2.0 ComputeHardwareConfig.
+// packer_l1_acc and throttle_level are op-side concerns, not translated.
+// The result's per-DFB unpack_to_dest_mode is left default for the program factory to set.
+// (As is bfp8_pack_precise, but that is rarely to never set non-default.)
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config);
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,

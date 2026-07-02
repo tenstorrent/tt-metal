@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #define DATA_FORMATS_DEFINED
 #endif
 
-#include <algorithm>
 #include <stdint.h>
 #include <tuple>
 #include <utility>
@@ -188,6 +187,15 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * writes of sub-tiles 2) modify tiles (or sub-tiles) by random access of the
  * valid section of the CB
  *
+ * Important note: the total number of tiles pushed within one complete cycle
+ * of the CB must sum to exactly the CB size (fifo_num_pages) so that the
+ * internal write pointer wraps correctly. Individual push amounts do not need
+ * to evenly divide the CB size. Example: on a CB of size 12,
+ * cb_push_back(5) followed by cb_push_back(7) is correct (total 12 = CB
+ * size). However, cb_push_back(7) followed by cb_push_back(7) on the same
+ * CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is
+ * detected at runtime when watcher or lightweight kernel asserts are enabled.
+ *
  * Return value: None
  *
  * | Argument  | Description                           | Type     | Valid Range                                                                                       | Required |
@@ -229,6 +237,15 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
  * CB via multiple reads of sub-tiles 2) access the tiles (or their sub-tiles)
  * that are visible to the consumer by random access of the valid section of
  * the CB
+ *
+ * Important note: the total number of tiles popped within one complete cycle
+ * of the CB must sum to exactly the CB size (fifo_num_pages) so that the
+ * internal read pointer wraps correctly. Individual pop amounts do not need
+ * to evenly divide the CB size. Example: on a CB of size 12,
+ * cb_pop_front(5) followed by cb_pop_front(7) is correct (total 12 = CB
+ * size). However, cb_pop_front(7) followed by cb_pop_front(7) on the same
+ * CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is
+ * detected at runtime when watcher or lightweight kernel asserts are enabled.
  *
  * Return value: None
  *
@@ -344,8 +361,7 @@ inline void wait_for_sync_register_value(uintptr_t addr, int32_t val) {
 /**
  * A non-blocking call that checks if the specified number of pages are available for reservation at the back of the
  * circular buffer. This call is used by the producer to see if the consumer has freed up the desired space (in pages).
- *
- * CB total size must be an even multiple of the argument passed to this call.
+ * This is a polling operation that does not advance any CB pointer.
  *
  * Return value: true if the specified number of pages are available
  *
@@ -373,9 +389,8 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format off
 /**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call
- * is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles.
- *
- * CB total size must be an even multiple of the argument passed to this call.
+ * is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles. This is a
+ * polling operation that does not advance any CB pointer.
  *
  * Return value: None
  *
@@ -410,20 +425,11 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 // clang-format off
 /**
  * A non-blocking call that tells the caller if the specified number of pages are available in the specified circular
- * buffer (CB). This call is used by the consumer of the CB to see if the prodcuers has fill the CB with at least the
- * specified number of tiles. Important note: in case multiple calls of cb_wait_front(n) are issued without a paired
- * cb_pop_front() call, n is expected to be incremented by the user to be equal to a cumulative total of tiles. Example:
- * 4 calls of cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of
- * cb_wait_front() waiting on 8, 16, 24, 32 tiles should be issued.
+ * buffer (CB). This call is used by the consumer of the CB to see if the producer has filled the CB with at least the
+ * specified number of tiles. This is a polling operation that does not advance any CB pointer. See cb_wait_front for
+ * the blocking variant and cumulative wait semantics.
  *
- * Important note: number of tiles used in all cb_* calls must evenly divide the cb size and must be the same number in
- * all cb_wait_front calls in the same kernel. Example 1: cb_wait_front(32), cb_wait_front(40), cb_pop_front(32+8) tiles
- * on a CB of size 64 would produce incorrect behavior. Example 2: cb_wait_front(3) on a cb of size 32 would also
- * produce incorrect behavior. These limitations are due to performance optimizations in the CB implementation.
- *
- * Important note: CB total size must be an even multiple of the argument passed to this call.
- *
- * Return value: None
+ * Return value: true if the specified number of pages are available
  *
  * | Argument  | Description                           | Type     | Valid Range                                                                                       | Required |
  * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
@@ -449,12 +455,12 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
  * 4 calls of cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of
  * cb_wait_front() waiting on 8, 16, 24, 32 tiles should be issued.
  *
- * Important note: number of tiles used in all cb_* calls must evenly divide the cb size and must be the same number in
- * all cb_wait_front calls in the same kernel. Example 1: cb_wait_front(32), cb_wait_front(40), cb_pop_front(32+8) tiles
- * on a CB of size 64 would produce incorrect behavior. Example 2: cb_wait_front(3) on a cb of size 32 would also
- * produce incorrect behavior. These limitations are due to performance optimizations in the CB implementation.
- *
- * Important note: CB total size must be an even multiple of the argument passed to this call.
+ * Important note: the total number of tiles passed to cb_pop_front/cb_push_back calls within one complete cycle of
+ * the CB must sum to exactly the CB size (fifo_num_pages) so that the internal pointer wraps correctly. Individual
+ * pop or push amounts do not need to evenly divide the CB size. Example: on a CB of size 12, cb_pop_front(5)
+ * followed by cb_pop_front(7) is correct (total 12 = CB size). However, cb_pop_front(7) followed by
+ * cb_pop_front(7) on the same CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is detected
+ * at runtime when watcher or lightweight kernel asserts are enabled.
  *
  * Return value: None
  *
@@ -916,7 +922,7 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
  * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
  * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
- * | num_dests                         | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                    | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores -1)                    | True     |
  * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes                            | uint32_t | Any uint32_t number                        | False    |
@@ -929,15 +935,10 @@ inline void noc_async_write_multicast(
     uint32_t size,
     uint32_t num_dests,
     bool linked = false,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_MULTICAST,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        false,
-        noc);
+        NocEventType::WRITE_MULTICAST, src_local_l1_addr, dst_noc_addr_multicast, size, vc, false, noc);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_multicast_one_packet<false>(
@@ -952,7 +953,7 @@ inline void noc_async_write_multicast(
             src_local_l1_addr,
             dst_noc_addr_multicast,
             size,
-            NOC_MULTICAST_WRITE_VC,
+            vc,
             true /* mcast */,
             linked,
             num_dests,
@@ -1057,10 +1058,12 @@ FORCE_INLINE void noc_async_read_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1112,7 +1115,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ID(
-        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false, noc);
+        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.get_aligned_page_size(), -1, false, noc);
     noc_async_read_page<TensorAccessor<DSpec>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1230,10 +1233,12 @@ FORCE_INLINE void noc_async_write_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1354,12 +1359,12 @@ FORCE_INLINE void noc_async_write_tile(
         id,
         addrgen,
         0 /* offset */,
-        addrgen.page_size,
+        addrgen.get_aligned_page_size(),
         NOC_UNICAST_WRITE_VC,
         false,
         noc);
     noc_async_write_page<TensorAccessor<DSpec>, false>(
-        id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+        id, addrgen, src_local_l1_addr, addrgen.get_aligned_page_size(), 0 /* offset */, noc);
 }
 
 // clang-format off
@@ -1425,12 +1430,12 @@ FORCE_INLINE void noc_async_read_shard(
         NocEventType::READ,
         dst_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
+        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
@@ -1459,19 +1464,19 @@ FORCE_INLINE void noc_async_write_shard(
         NocEventType::WRITE_,
         src_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
+        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
 /**
  * Returns the local address of the semaphore with the given id.
  *
- * Return value: Local address of the semaphore (uint32_t)
+ * Return value: Local address of the semaphore (uintptr_t)
  *
  * | Argument                  | Description                | Type                     | Valid Range              | Required |
  * |---------------------------|----------------------------|--------------------------|--------------------------|----------|
@@ -1480,8 +1485,8 @@ FORCE_INLINE void noc_async_write_shard(
  */
 // clang-format on
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
-FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
-    return (uint32_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
+FORCE_INLINE uintptr_t get_semaphore(uint32_t semaphore_id) {
+    return (uintptr_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
 }
 
 // clang-format off
@@ -1556,7 +1561,7 @@ inline void noc_semaphore_set_remote(
  * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | num_dests              | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores - 1)                   | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
@@ -1566,19 +1571,20 @@ inline void noc_semaphore_set_multicast(
     uint64_t dst_noc_addr_multicast,
     uint32_t num_dests,
     bool linked = false,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     WAYPOINT("NSNW");
 
     constexpr uint32_t size_bytes = 4;
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
 
-    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(vc, linked);
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::SEMAPHORE_SET_MULTICAST,
         src_local_l1_addr,
         dst_noc_addr_multicast,
         size_bytes,
-        NOC_MULTICAST_WRITE_VC,
+        vc,
         /*posted=*/false,
         noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
@@ -1587,7 +1593,7 @@ inline void noc_semaphore_set_multicast(
         src_local_l1_addr,
         dst_noc_addr_multicast,
         size_bytes,
-        NOC_MULTICAST_WRITE_VC,
+        vc,
         true,
         linked,
         num_dests,
@@ -1620,7 +1626,7 @@ inline void noc_semaphore_set_multicast(
  * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting (including self) | uint32_t | 0..(number of cores)                       | True     |
+ * | num_dests              | Number of destinations that the multicast source is targeting (including self)  | uint32_t | 0..(number of cores)                       | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
@@ -2048,6 +2054,77 @@ FORCE_INLINE void noc_inline_dw_write(
         customized_src_addr);
     WAYPOINT("NWID");
 }
+// clang-format off
+
+/**
+ * Initiates an asynchronous multicast write of a 32-bit value to a rectangular grid of NOC destinations.
+ * This is the multicast variant of \a noc_inline_dw_write. The destinations are specified using a uint64_t
+ * encoding referencing an on-chip grid of nodes located at NOC coordinate range (x_start,y_start,x_end,y_end)
+ * and a local address created using \a get_noc_multicast_addr function.
+ *
+ * The destination nodes can only be Tensix cores + L1 memory address. The destination L1 memory address must be
+ * the same on all destination nodes. This API does not support DRAM addresses.
+ *
+ * Return value: None
+ *
+ * | Argument                                 | Description                                                | Type     | Valid Range                                | Required |
+ * |------------------------------------------|------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | addr                                     | Encoding of the destination rectangle (x,y,x,y)+address    | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | val                                      | The value to be written                                    | uint32_t | Any uint32_t value                         | True     |
+ * | be                                       | Byte-enable                                                | uint8_t  | 0x1-0xF                                    | False    |
+ * | noc                                      | NOC to use for the transaction                             | uint8_t  | 0 or 1                                     | False    |
+ * | vc                                       | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Multicast VCs)                        | False    |
+ * | customized_src_addr                      | Custom source address for storing the value to be written  | uint32_t | Any uint32_t value                         | False    |
+ * |                                          | (required when `flush` is false)                           |          |                                            |          |
+ * | num_dest                                 | Number of destinations in the multicast rectangle          | uint32_t | 1..(number of cores - 1)                   | False    |
+ * | dst_type            (template parameter) | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst | DEFAULT, L1, REG                 | False    |
+ * | posted              (template parameter) | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                              | False    |
+ * | flush               (template parameter) | Whether to flush the NOC transaction before issuing the    | bool     | true or false                              | False    |
+ * |                                          | write (`false` callers must prevent races on the caller    |          |                                            |          |
+ * |                                          | side)                                                      |          |                                            |          |
+ *
+ * When `flush` is disabled the caller is responsible for providing a valid `customized_src_addr` scratch location and
+ * ensuring no outstanding inline write uses that address before issuing another write.
+ */
+// clang-format on
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
+FORCE_INLINE void noc_inline_mcast_dw_write(
+    uint64_t addr,
+    uint32_t val,
+    uint8_t be = 0xF,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dest = 1) {
+    WAYPOINT("NWIW");
+    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
+#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
+    if constexpr (dst_type == InlineWriteDst::L1) {
+        if constexpr (!flush) {
+            ASSERT(customized_src_addr != 0);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
+        } else {
+            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+        }
+    }
+#endif
+
+    noc_fast_write_dw_inline_multicast<noc_mode, dst_type, flush>(
+        noc,
+        write_at_cmd_buf,
+        val,
+        addr,
+        be,  // byte-enable
+        vc,
+        true,    // mcast
+        posted,  // posted
+        customized_src_addr,
+        num_dest);
+
+    WAYPOINT("NWID");
+}
 
 // clang-format off
 /**
@@ -2206,16 +2283,15 @@ FORCE_INLINE void noc_semaphore_inc(
  * |----------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | addr                       | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
  * | incr                       | The value to increment by                                                | uint32_t | Any uint32_t value                         | True     |
- * | num_dests                  | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | num_dests                  | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores - 1)                   | True     |
  * | noc_id                     | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked)         | bool     | true or false                              | False    |
  */
 // clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
-    uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, NOC_MULTICAST_WRITE_VC, posted, noc_id);
+    uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
 
     WAYPOINT("NIMW");
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);
@@ -2224,7 +2300,7 @@ FORCE_INLINE void noc_semaphore_inc_multicast(
         noc_id,
         write_at_cmd_buf,
         addr,
-        NOC_MULTICAST_WRITE_VC,
+        vc,
         incr,
         31 /*wrap*/,
         false /*linked*/,
@@ -2239,7 +2315,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
     // Posting heartbeat at this address is only needed for Wormhole
 #if !defined(ARCH_BLACKHOLE)
     invalidate_l1_cache();
-    volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
+    volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)(0x1C);
     heartbeat++;
     ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
 #endif

@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "data_types.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -394,8 +393,11 @@ protected:
     }
 
     distributed::MeshTraceId trace_programs() {
+        log_info(tt::LogTest, "Starting trace capture");
         const distributed::MeshTraceId trace_id = this->capture_trace();
+        log_info(tt::LogTest, "Trace capture complete, starting trace replay (50 iterations)");
         this->run_trace(trace_id);
+        log_info(tt::LogTest, "Trace replay complete");
         return trace_id;
     }
 
@@ -413,15 +415,21 @@ private:
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
+        log_info(tt::LogTest, "All workloads enqueued in trace, calling end_mesh_trace");
         this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
+        log_info(tt::LogTest, "end_mesh_trace complete");
         return trace_id;
     }
 
     void run_trace(const distributed::MeshTraceId trace_id) {
         auto& mesh_command_queue = this->device_->mesh_command_queue();
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
+            if (i % 10 == 0) {
+                log_info(tt::LogTest, "Replaying trace iteration {}", i);
+            }
             this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
+        log_info(tt::LogTest, "All trace iterations enqueued, calling Finish");
     }
 };
 

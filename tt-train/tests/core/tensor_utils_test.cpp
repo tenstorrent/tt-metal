@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -12,6 +11,8 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
+#include "tt-metalium/bfloat16.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/types.hpp"
 
 class TensorUtilsTest : public ::testing::Test {

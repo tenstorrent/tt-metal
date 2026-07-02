@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,12 +14,12 @@
 #include <nanobind/stl/variant.h>
 
 #include "sdpa_decode.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::transformer {
 
 void bind_sdpa_decode(nb::module_& mod) {
-    const auto* doc =
+    const auto* const doc =
         R"doc(
         A version of scaled dot product attention specifically for decode.
         The implementation is Flash-Decode and it currently only supports MQA on decoding single token.
@@ -44,6 +44,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             sliding_window_size (int, optional): The size of sliding window for sliding window attention. Defaults to `None`.
+            share_cache (bool, optional): KV cache sharing across batch for decode. `True` enables, `False` disables. Defaults to `None` (distinct program-cache key from explicit `False`).
 
 
         Returns:
@@ -54,210 +55,99 @@ void bind_sdpa_decode(nb::module_& mod) {
         "If a position is given as (-1), compute for the corresponding index in the batch is skipped."
         )doc";
 
-    using OperationType = decltype(ttnn::transformer::scaled_dot_product_attention_decode);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"scaled_dot_product_attention_decode", "ttnn.transformer.">(
         mod,
-        ttnn::transformer::scaled_dot_product_attention_decode,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const ttnn::Tensor& input_tensor_v,
-               const bool is_causal,
-               const std::optional<const Tensor>& attn_mask,
-               const std::vector<uint32_t>& cur_pos,
-               const std::optional<const Tensor>& cur_pos_tensor,
-               const std::optional<const Tensor>& attention_sink,
-               std::optional<float> scale,
-               std::optional<uint32_t> sliding_window_size,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<SDPAProgramConfig>& program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v,
-                    is_causal,
-                    attn_mask,
-                    cur_pos,
-                    cur_pos_tensor,
-                    attention_sink,
-                    scale,
-                    sliding_window_size,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::kw_only(),
-            nb::arg("is_causal").noconvert() = true,
-            nb::arg("attn_mask") = nb::none(),
-            nb::arg("cur_pos") = nb::cast(std::vector<uint32_t>()),
-            nb::arg("cur_pos_tensor") = nb::none(),
-            nb::arg("attention_sink") = nb::none(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("sliding_window_size") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::transformer::scaled_dot_product_attention_decode,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("is_causal").noconvert() = true,
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("cur_pos") = nb::cast(std::vector<uint32_t>()),
+        nb::arg("cur_pos_tensor") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("share_cache") = nb::none());
 
-    using PagedOperationType = decltype(ttnn::transformer::paged_scaled_dot_product_attention_decode);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"paged_scaled_dot_product_attention_decode", "ttnn.transformer.">(
         mod,
-        ttnn::transformer::paged_scaled_dot_product_attention_decode,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const PagedOperationType& self,
-               const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const ttnn::Tensor& input_tensor_v,
-               const ttnn::Tensor& page_table_tensor,
-               const bool is_causal,
-               const std::optional<const Tensor>& attn_mask,
-               const std::optional<const Tensor>& cur_pos_tensor,
-               const std::optional<const Tensor>& attention_sink,
-               std::optional<float> scale,
-               std::optional<uint32_t> sliding_window_size,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<SDPAProgramConfig>& program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v,
-                    page_table_tensor,
-                    is_causal,
-                    attn_mask,
-                    cur_pos_tensor,
-                    attention_sink,
-                    scale,
-                    sliding_window_size,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::arg("page_table_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("is_causal") = true,
-            nb::arg("attn_mask") = nb::none(),
-            nb::arg("cur_pos_tensor") = nb::none(),
-            nb::arg("attention_sink") = nb::none(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("sliding_window_size") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::transformer::paged_scaled_dot_product_attention_decode,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("page_table_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("is_causal") = true,
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("cur_pos_tensor") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        // block_size reads the K/V cache through a different (block_size, head_dim)
+        // view than its declared shape; needed for vLLM's shared kv-cache groups. See
+        // ttnn.experimental.paged_update_cache's kwarg of the same name.
+        nb::arg("block_size") = nb::none(),
+        // num_kv_heads reads the cache through a different per-block kv-head count
+        // than its declared shape. Companion to block_size for HMA cross-group sharing
+        // when sliding/full layers have asymmetric num_kv_heads. See
+        // ttnn.experimental.paged_update_cache's kwarg of the same name.
+        nb::arg("num_kv_heads") = nb::none(),
+        // cache_position_modulo (in tokens) treats the cache as a circular buffer:
+        // every page_table lookup uses cur_pos % cache_position_modulo. Required when
+        // the cache is sized for sliding-window-only allocation (vLLM
+        // SlidingWindowSpec); without it, positions past the bounded capacity collapse
+        // onto physical block 0 and silently corrupt the cache. Must be a multiple of
+        // (effective) block_size and >= sliding_window_size. Paged-mode only.
+        nb::arg("cache_position_modulo") = nb::none());
 
-    using MLAOperationType = decltype(ttnn::transformer::flash_multi_latent_attention_decode);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,
-        ttnn::transformer::flash_multi_latent_attention_decode,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const MLAOperationType& self,
-               const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const std::optional<const Tensor>& input_tensor_v,
-               const uint32_t head_dim_v,
-               const bool is_causal,
-               const std::optional<const Tensor>& attn_mask,
-               const std::vector<uint32_t>& cur_pos,
-               const std::optional<const Tensor>& cur_pos_tensor,
-               const std::optional<const Tensor>& attention_sink,
-               std::optional<float> scale,
-               std::optional<uint32_t> sliding_window_size,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<SDPAProgramConfig>& program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v,
-                    head_dim_v,
-                    is_causal,
-                    attn_mask,
-                    cur_pos,
-                    cur_pos_tensor,
-                    attention_sink,
-                    scale,
-                    sliding_window_size,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v") = nb::none(),
-            nb::arg("head_dim_v").noconvert(),
-            nb::kw_only(),
-            nb::arg("is_causal").noconvert() = true,
-            nb::arg("attn_mask") = nb::none(),
-            nb::arg("cur_pos") = nb::cast(std::vector<uint32_t>()),
-            nb::arg("cur_pos_tensor") = nb::none(),
-            nb::arg("attention_sink") = nb::none(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("sliding_window_size") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::transformer::flash_multi_latent_attention_decode,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v") = nb::none(),
+        nb::arg("head_dim_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("is_causal").noconvert() = true,
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("cur_pos") = nb::cast(std::vector<uint32_t>()),
+        nb::arg("cur_pos_tensor") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
-    using PagedMLAOperationType = decltype(ttnn::transformer::paged_flash_multi_latent_attention_decode);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"paged_flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,
-        ttnn::transformer::paged_flash_multi_latent_attention_decode,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const PagedMLAOperationType& self,
-               const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const std::optional<const Tensor>& input_tensor_v,
-               const uint32_t head_dim_v,
-               const ttnn::Tensor& page_table_tensor,
-               const bool is_causal,
-               const std::optional<const Tensor>& attn_mask,
-               const std::optional<const Tensor>& cur_pos_tensor,
-               const std::optional<const Tensor>& attention_sink,
-               std::optional<float> scale,
-               std::optional<uint32_t> sliding_window_size,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<SDPAProgramConfig>& program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v,
-                    head_dim_v,
-                    page_table_tensor,
-                    is_causal,
-                    attn_mask,
-                    cur_pos_tensor,
-                    attention_sink,
-                    scale,
-                    sliding_window_size,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v") = nb::none(),
-            nb::arg("head_dim_v").noconvert(),
-            nb::arg("page_table_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("is_causal").noconvert() = true,
-            nb::arg("attn_mask") = nb::none(),
-            nb::arg("cur_pos_tensor") = nb::none(),
-            nb::arg("attention_sink") = nb::none(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("sliding_window_size") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::transformer::paged_flash_multi_latent_attention_decode,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v") = nb::none(),
+        nb::arg("head_dim_v").noconvert(),
+        nb::arg("page_table_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("is_causal").noconvert() = true,
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("cur_pos_tensor") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::transformer

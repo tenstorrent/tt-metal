@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -59,6 +59,8 @@ class Attention(LightweightModule):
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
+        self.use_qk_fused = configuration.use_qk_fused
+        self.use_hf_rope = configuration.use_hf_rope
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -147,6 +149,22 @@ class Attention(LightweightModule):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+
+        # Select rotary embedding implementation for decode
+        if self.use_hf_rope and self.use_qk_fused:
+            raise NotImplementedError("Fused QK is not implemented for HF-style rope")
+        if self.use_hf_rope:
+            self.rotary_embedding_decode = self._hf_rope_decode
+        elif self.use_qk_fused:
+            self.rotary_embedding_decode = self._mllama_rope_fused_qk_decode
+        else:
+            self.rotary_embedding_decode = self._mllama_rope_decode
+
+        # Select rotary embedding implementation for prefill
+        if self.use_hf_rope:
+            self.rotary_embedding_prefill = self._hf_rope_prefill
+        else:
+            self.rotary_embedding_prefill = self._mllama_rope_prefill
 
         wq_str = f"{layer_name}.wq"
         wk_str = f"{layer_name}.wk"
@@ -306,7 +324,14 @@ class Attention(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
-        self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
+        def get_wo_mesh_mapper():
+            if self.use_fused_all_gather_matmul or self.TG:
+                return ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(2, 3),
+                    mesh_shape=configuration.cluster_shape,
+                )
+            return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
 
         if self.prefetcher is not None:
             self.wo_sharded_ring = ttnn.as_tensor(
@@ -315,11 +340,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.args.get_sharded_wo_ring_mem_config(),
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=self.shard_wo_dims,
-                    mesh_shape=configuration.cluster_shape,
-                ),
+                mesh_mapper=get_wo_mesh_mapper(),
                 cache_file_name=(cache_name("wo_sharded_ring")),
             )
 
@@ -335,11 +356,7 @@ class Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=get_wo_memory_config(),
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=self.shard_wo_dims,
-                mesh_shape=configuration.cluster_shape,
-            ),
+            mesh_mapper=get_wo_mesh_mapper(),
             cache_file_name=(
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
@@ -479,6 +496,90 @@ class Attention(LightweightModule):
         k_tensor = ttnn.to_memory_config(k_tensor, k_mem_config)
         return q_tensor, k_tensor
 
+    def _mllama_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        # Q Rotary Embeddings
+        q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+        )
+
+        # K Rotary Embeddings
+        k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+        )
+        return q_heads_1BQD, k_heads_1BKD
+
+    def _mllama_rope_fused_qk_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
+            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
+        )
+
+        q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
+        )
+        return q_heads_1BQD, k_heads_1BKD
+
+    def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        if q_heads_pre_rot_1BQD.dtype != ttnn.bfloat16:
+            q_heads_pre_rot_1BQD = ttnn.typecast(q_heads_pre_rot_1BQD, dtype=ttnn.bfloat16)
+        if k_heads_pre_rot_1BKD.dtype != ttnn.bfloat16:
+            k_heads_pre_rot_1BKD = ttnn.typecast(k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16)
+
+        q_heads_1BQD = ttnn.experimental.rotary_embedding_hf(
+            q_heads_pre_rot_1BQD,
+            rot_mats[0],
+            rot_mats[1],
+            is_decode_mode=True,
+        )
+        k_heads_1BKD = ttnn.experimental.rotary_embedding_hf(
+            k_heads_pre_rot_1BKD,
+            rot_mats[0],
+            rot_mats[1],
+            is_decode_mode=True,
+        )
+        return q_heads_1BQD, k_heads_1BKD
+
+    def _mllama_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+
+        return q_heads_1QSD, k_heads_1KSD
+
+    def _hf_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
+            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+
+        q_heads_1QSD = ttnn.experimental.rotary_embedding_hf(
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            is_decode_mode=False,
+        )
+
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_hf(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            is_decode_mode=False,
+        )
+
+        return q_heads_1QSD, k_heads_1KSD
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -563,23 +664,10 @@ class Attention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
 
         # Q, K Rotary Embeddings
-        if self.args.use_qk_fused:
-            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
-                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
-            )
-            q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
-                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
-            )
-        else:
-            # Q Rotary Embeddings
-            q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
-                q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
-            )
+        q_heads_1BQD, k_heads_1BKD = self.rotary_embedding_decode(
+            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos
+        )
 
-            # K Rotary Embeddings
-            k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
-                k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
-            )
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
         ###
@@ -596,7 +684,7 @@ class Attention(LightweightModule):
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
 
-        if self.args.use_qk_fused:
+        if self.use_qk_fused:
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
             )
@@ -614,7 +702,7 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
-        if page_table:
+        if page_table is not None:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
@@ -789,26 +877,49 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
+        # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
+        # concat before QKV matmul, then reshape back to batch after
+        batch_size = x_11SH.shape[0]
+        if batch_size > 1:
+            # Concatenate batch dimension into sequence for matmul compatibility
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
+        original_seq_len = seq_len  # Track original for later unpadding
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
 
         # reshaping long sequence to matmul fit on device
+        # Pad seq_len to nearest multiple of MAX_QKV_MM_SEQ_LEN if needed
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN and seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
+            padded_seq_len = (
+                (seq_len + self.MAX_QKV_MM_SEQ_LEN - 1) // self.MAX_QKV_MM_SEQ_LEN
+            ) * self.MAX_QKV_MM_SEQ_LEN
+            pad_len = padded_seq_len - seq_len
+            x_11SH = ttnn.pad(x_11SH, padding=[(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
+            seq_len = padded_seq_len
+
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
-            if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
-                raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        xqkv_fused = ttnn.linear(
-            x_11SH,
-            self.wqkv,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
-            compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-            program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
-        )
+        if self.args.use_minimal_qkv_prefill_matmul(seq_len):
+            xqkv_fused = ttnn.experimental.minimal_matmul(
+                x_11SH,
+                self.wqkv,
+                compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+                config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+            )
+        else:
+            xqkv_fused = ttnn.linear(
+                x_11SH,
+                self.wqkv,
+                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
+                compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+                program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+            )
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:
@@ -825,6 +936,14 @@ class Attention(LightweightModule):
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        # Slice back to original seq_len if we padded earlier
+        if original_seq_len != seq_len:
+            xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
+            seq_len = original_seq_len
+
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         ttnn.deallocate(x_11SH)
 
@@ -851,27 +970,9 @@ class Attention(LightweightModule):
         # Rotary embeddings
         ###
 
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
+        # Apply rotary embeddings using the selected implementation
+        q_heads_1QSD, k_heads_1KSD = self.rotary_embedding_prefill(q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats)
         ttnn.deallocate(q_heads_1QSD_pre_rot)
-
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
-
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache
@@ -884,7 +985,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
 
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and page_table is None:
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
         else:
             k_fill = k_heads_1KSD_8b
@@ -894,7 +995,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD)
 
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and page_table is None:
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
         else:
             v_fill = v_heads_1VSD_8b
@@ -902,19 +1003,50 @@ class Attention(LightweightModule):
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
-        if page_table:
+        if page_table is not None:
             # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
             # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
             block_size = keys_BKSD.shape[2]
             # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
+        if batch_size > 1:
+            # For batched prefill, loop over VALID users only and fill each user's cache separately
+            # k_fill/v_fill have shape [padded_batch, n_kv_heads, seq_len_per_user, head_dim]
+            # The paged_fill_cache kernel reads batch_idx_ptr[0] for all positions,
+            # so we must call it once per user with their specific K/V slice
+            #
+            # IMPORTANT: user_id is a list of valid slot indices for batched prefill.
+            # Empty slots have page_table entries of -1, so we must skip them to avoid
+            # writing to invalid memory blocks.
+            seq_len_per_user = k_fill.shape[2]
+            page_len = fill_page_table.shape[1] * block_size
+
+            # user_id is a list of valid slot indices (e.g., [0, 1, 2, ..., N-1] for N users)
+            # Each slot index tells us which row in k_fill and page_table to use
+            valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
+
+            for slot_idx in valid_slots:
+                # Extract this slot's K/V slice: [1, n_kv_heads, seq_len_per_user, head_dim]
+                k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
+                v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
+
+                # Slice to page length if needed (same as single-user path)
+                k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
+                v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+
+                # Fill cache for this specific slot with scalar batch_idx
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, fill_page_table, batch_idx=slot_idx)
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, fill_page_table, batch_idx=slot_idx)
+        elif page_table is not None:
+            # Single user path with page_table
             page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
             ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
         else:
+            # Single user path without page_table
             ttnn.fill_cache(
                 keys_BKSD,
                 k_fill,
@@ -925,7 +1057,7 @@ class Attention(LightweightModule):
                 v_fill,
                 user_id % self.batch_size_per_device_group,
             )
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and page_table is None:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -936,16 +1068,31 @@ class Attention(LightweightModule):
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
                 raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                input_tensor_q=q_heads_1QSD_8b,
-                input_tensor_k=keys_BKSD,
-                input_tensor_v=values_BKSD,
-                page_table_tensor=page_table,
-                chunk_start_idx=chunk_start_idx,
-                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
-            )
+            if isinstance(chunk_start_idx, ttnn.Tensor):
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=None,
+                    chunk_start_idx_tensor=chunk_start_idx,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None),
+                )
+            else:
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
+                )
         else:
+            # For batched prefill, the actual per-user seq_len is seq_len // batch_size
+            # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]
+            sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -954,7 +1101,7 @@ class Attention(LightweightModule):
                 sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None),
             )
 
         # deallocate keys and values
@@ -962,7 +1109,14 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        # For single-user prefill, reshape to expected format for nlp_concat_heads
+        # For batched prefill (batch_size > 1), skip this reshape - nlp_concat_heads handles [B, H, S, D]
+        # IMPORTANT: Reshaping [B, H, S, D] to [1, H, B*S, D] BEFORE concat_heads would scramble data
+        # because batch and sequence dimensions are separated by heads. Must reshape AFTER concat_heads.
+        if batch_size == 1:
+            attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        else:
+            attn_output_1QSD = attn_output_84SD
 
         ###
         # Output matmul
@@ -972,6 +1126,13 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
+
+        # For batched prefill, reshape to concatenate batch dimension into sequence
+        # This MUST happen AFTER nlp_concat_heads to preserve correct data layout
+        # nlp_concat_heads outputs [B, 1, S_per_user, H*D], reshape to [1, 1, B*S, H*D]
+        if batch_size > 1:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
+
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])

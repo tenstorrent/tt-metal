@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -29,6 +29,7 @@ class DecoderLayer:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        tokens_per_device=32,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -53,6 +54,7 @@ class DecoderLayer:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
             mesh_config=mesh_config,
             use_throughput_experts=use_throughput_experts,
+            tokens_per_device=tokens_per_device,
         )
 
         self.attention_type = hf_config.layer_types[layer_idx]
@@ -98,6 +100,11 @@ class DecoderLayer:
         user_id=0,
         batch_size=1,
     ):
+        seqlen = hidden_states.shape[-2]
+        if seqlen > 32 * 1024:
+            # Reallocate hidden states to prevent memory fragmentation.
+            hidden_states = ttnn.move(hidden_states)
+
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
         residual = hidden_states

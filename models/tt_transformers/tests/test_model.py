@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -98,6 +98,9 @@ def test_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
 
+    use_hf_rope = request.config.getoption("--use_hf_rope")
+    if use_hf_rope:
+        logger.info("Using HF style rope")
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
@@ -123,6 +126,7 @@ def test_model_inference(
         max_batch_size=batch_size,
         cache_hf=True,
         prefetcher=prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     # Define minimum PCC for each iteration
@@ -149,7 +153,8 @@ def test_model_inference(
             "Llama-3.2-11B": 0.952 if mode_accuracy else 0.940,
             "Llama-3.2-90B": 0.971,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
-        }[model_name]
+            "Qwen3-32B": 0.88 if mode_accuracy else 0.86,
+        }.get(model_name, 0.88 if mode_accuracy else 0.86)
 
         final_k_cache_pcc = {
             "Llama-3.1-8B": 0.9997,
@@ -159,7 +164,8 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9995,
             "Llama-3.2-90B": 0.9995,
             "Mistral-7B": 0.68,
-        }[model_name]
+            "Qwen3-32B": 0.9995,
+        }.get(model_name, 0.9995)
         final_v_cache_pcc = {
             "Llama-3.1-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
@@ -168,7 +174,8 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9996,
             "Llama-3.2-90B": 0.9996,
             "Mistral-7B": 0.68,
-        }[model_name]
+            "Qwen3-32B": 0.9995,
+        }.get(model_name, 0.9995)
 
         quick_iterations = {
             "Llama-3.1-8B": 6,
@@ -178,7 +185,8 @@ def test_model_inference(
             "Llama-3.2-11B": 6,
             "Llama-3.2-90B": 6,
             "Mistral-7B": 2,
-        }[model_name]
+            "Qwen3-32B": 6,
+        }.get(model_name, 6)
 
         iterations = quick_iterations
     else:
@@ -188,19 +196,26 @@ def test_model_inference(
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = {
-        k[len(state_dict_prefix) :]: v
-        for k, v in state_dict.items()
-        if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "learnable_embedding.weight", "norm.weight", "output.weight"]
-                ]
+    reference_state_dict = None
+    if dummy_weights:
+        reference_state_dict = {
+            k[len(state_dict_prefix) :]: v
+            for k, v in state_dict.items()
+            if (
+                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+                or any(
+                    [
+                        f"{state_dict_prefix}{name}" in k
+                        for name in [
+                            "tok_embeddings.weight",
+                            "learnable_embedding.weight",
+                            "norm.weight",
+                            "output.weight",
+                        ]
+                    ]
+                )
             )
-        )
-    }
+        }
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
@@ -219,8 +234,9 @@ def test_model_inference(
 
     reference_model = None
     if run_ref_pt:
-        reference_model = model_args.reference_transformer()
-        reference_model.load_state_dict(reference_state_dict)
+        reference_model = model_args.reference_transformer(load_checkpoint=not dummy_weights)
+        if dummy_weights:
+            reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host
     embd = model_args.reference_embedding(reference_model)

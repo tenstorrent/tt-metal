@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +8,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/constants.hpp>
-
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -31,8 +29,22 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma = tensor_args.weight;
     const auto& beta = tensor_args.bias;
     const auto& stats = tensor_args.stats;
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
+    TT_FATAL(
+        a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
+        "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
+        a.layout());
+    TT_FATAL(
+        !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");
+    if (a.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            a.logical_shape()[-1] % tile_width == 0,
+            "ROW_MAJOR input requires W ({}) to be a multiple of tile width ({})",
+            a.logical_shape()[-1],
+            tile_width);
+    }
     TT_FATAL(
         a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
@@ -44,9 +56,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
         TT_FATAL(
-            a.padded_shape() == b.value().padded_shape(),
-            "Input and residual shapes must match, got input: {} vs residual: {}",
+            a.logical_shape() == b.value().logical_shape() && a.padded_shape() == b.value().padded_shape(),
+            "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
+            "logical={} padded={}",
+            a.logical_shape(),
             a.padded_shape(),
+            b.value().logical_shape(),
             b.value().padded_shape());
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "Input and residual tensors must be on same device");
@@ -55,16 +70,22 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
-                "{} != {}",
+                a.padded_shape()[-1] == gamma.value().padded_shape()[-1] &&
+                    gamma.value().logical_shape()[-1] >= a.logical_shape()[-1],
+                "Input and gamma padded widths must match and gamma logical width must be >= input logical width "
+                "(otherwise valid input columns would be multiplied by gamma padding). Got input: logical[-1]={} "
+                "padded[-1]={} vs gamma: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                gamma.value().logical_shape()[-1],
                 gamma.value().padded_shape()[-1]);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
-                gamma.value().padded_shape()[-2] == TILE_HEIGHT,
-                "Gamma tensor height must be TILE_HEIGHT (32), got: {}",
+                gamma.value().padded_shape()[-2] == tile_height,
+                "Gamma tensor height must equal tile height ({}), got: {}",
+                tile_height,
                 gamma.value().padded_shape()[-2]);
         } else {
             TT_FATAL(
@@ -72,14 +93,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor must have ROW_MAJOR layout, got: {}",
                 gamma.value().layout());
             TT_FATAL(
-                (gamma.value().padded_shape()[-1] == TILE_WIDTH &&
-                 gamma.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                (gamma.value().padded_shape()[-1] == tile_width &&
+                 gamma.value().physical_volume() / tile_width == a.padded_shape()[-1] / tile_width),
                 "Gamma's last padded dim needs to equal tile width and gamma's volume needs to align with last padded "
-                "dim of input. Error with gamma.value().padded_shape(): {}, TILE_WIDTH: {}, "
+                "dim of input. Error with gamma.value().padded_shape(): {}, tile_width: {}, "
                 "gamma.value().physical_volume(): {}, "
                 "a.padded_shape(): {}",
                 gamma.value().padded_shape(),
-                TILE_WIDTH,
+                tile_width,
                 gamma.value().physical_volume(),
                 a.padded_shape());
             TT_FATAL(
@@ -98,16 +119,22 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (beta.has_value()) {
         if (beta.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == beta.value().padded_shape()[-1],
-                "Input and beta inner dimensions must match, got input: {} vs beta: {}",
+                a.padded_shape()[-1] == beta.value().padded_shape()[-1] &&
+                    beta.value().logical_shape()[-1] >= a.logical_shape()[-1],
+                "Input and beta padded widths must match and beta logical width must be >= input logical width "
+                "(otherwise valid input columns would be offset by beta padding). Got input: logical[-1]={} "
+                "padded[-1]={} vs beta: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                beta.value().logical_shape()[-1],
                 beta.value().padded_shape()[-1]);
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
             TT_FATAL(
-                beta.value().padded_shape()[-2] == TILE_HEIGHT,
-                "Beta tensor height must be TILE_HEIGHT (32), got: {}",
+                beta.value().padded_shape()[-2] == tile_height,
+                "Beta tensor height must equal tile height ({}), got: {}",
+                tile_height,
                 beta.value().padded_shape()[-2]);
         } else {
             TT_FATAL(
@@ -115,14 +142,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 "Beta tensor must have ROW_MAJOR layout, got: {}",
                 beta.value().layout());
             TT_FATAL(
-                (beta.value().padded_shape()[-1] == TILE_WIDTH &&
-                 beta.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                (beta.value().padded_shape()[-1] == tile_width &&
+                 beta.value().physical_volume() / tile_width == a.padded_shape()[-1] / tile_width),
                 "Beta tensor dimensions must align with input tensor. Got beta padded shape: {}, physical volume: {}, "
-                "input padded shape: {}, TILE_WIDTH: {}",
+                "input padded shape: {}, tile_width: {}",
                 beta.value().padded_shape()[-1],
                 beta.value().physical_volume(),
                 a.padded_shape()[-1],
-                TILE_WIDTH);
+                tile_width);
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
@@ -158,14 +185,19 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             bbox_num_cores,
             bbox.end_coord.x - bbox.start_coord.x + 1,
             bbox.end_coord.y - bbox.start_coord.y + 1);
+
+        const auto& sharded_pc = std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+        ttnn::operations::normalization::detail::validate_sharded_input(a, sharded_pc.compute_with_storage_grid_size);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
-        TT_FATAL(a.padded_shape()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
+        TT_FATAL(
+            a.padded_shape()[-2] == tile_height, "Only activations with batch size = {} are supported", tile_height);
         if (b.has_value()) {
             TT_FATAL(
-                b.value().padded_shape()[-2] == TILE_HEIGHT,
-                "Only residual tensors with batch size = 32 are supported");
+                b.value().padded_shape()[-2] == tile_height,
+                "Only residual tensors with batch size = {} are supported",
+                tile_height);
         }
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -177,13 +209,21 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if (operation_attributes.norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(
-                stats.value().padded_shape()[-1] % (2 * TILE_WIDTH) == 0,
+                stats.value().padded_shape()[-1] % (2 * tile_width) == 0,
                 "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
         } else {
             TT_FATAL(
-                stats.value().padded_shape()[-1] % TILE_WIDTH == 0,
+                stats.value().padded_shape()[-1] % tile_width == 0,
                 "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
+    }
+    if (operation_attributes.fused_activation.has_value()) {
+        TT_FATAL(
+            operation_attributes.norm_type == LayerNormType::RMSNORM,
+            "Fused activation only supported for fused rms norm + unary");
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "Fused activation is not supported for distributed layernorm");
     }
     std::visit(
         [&](const auto& program_config) {
@@ -226,17 +266,17 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 const auto& shape = a.padded_shape();
                 uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
-                uint32_t Mt = M / TILE_WIDTH;
-                uint32_t Kt = K / TILE_WIDTH;
+                uint32_t Mt = M / tile_width;
+                uint32_t Kt = K / tile_width;
                 // block
-                uint32_t block_h = program_config.block_h * TILE_HEIGHT;
+                uint32_t block_h = program_config.block_h * tile_height;
                 const auto shard_spec = a.shard_spec().value();
                 // check dims
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
                     "block_w must be divisible by subblock_w.");
-                TT_FATAL(M % TILE_HEIGHT == 0, "M ({}) must be divisible by tile height ({})", M, TILE_HEIGHT);
-                TT_FATAL(K % TILE_WIDTH == 0, "K ({}) must be divisible by tile width ({})", K, TILE_WIDTH);
+                TT_FATAL(M % tile_height == 0, "M ({}) must be divisible by tile height ({})", M, tile_height);
+                TT_FATAL(K % tile_width == 0, "K ({}) must be divisible by tile width ({})", K, tile_width);
                 const auto bbox = shard_spec.grid.bounding_box();
                 TT_FATAL(
                     bbox.end_coord.x - bbox.start_coord.x < program_config.compute_with_storage_grid_size.x &&
@@ -277,10 +317,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w,
                             tt::div_up(Kt, num_cores_c));
                         TT_FATAL(
-                            Mt / num_cores_r == program_config.block_h,
-                            "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
+                            tt::div_up(Mt, num_cores_r) == program_config.block_h,
+                            "block_h ({}) must equal ceil(Mt / num_cores_r) ({}); Mt={}, num_cores_r={}",
                             program_config.block_h,
-                            Mt / num_cores_r);
+                            tt::div_up(Mt, num_cores_r),
+                            Mt,
+                            num_cores_r);
                     } else {
                         TT_FATAL(
                             tt::div_up(Kt, num_cores_r) == program_config.block_w,
@@ -288,10 +330,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w,
                             tt::div_up(Kt, num_cores_r));
                         TT_FATAL(
-                            Mt / num_cores_c == program_config.block_h,
-                            "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
+                            tt::div_up(Mt, num_cores_c) == program_config.block_h,
+                            "block_h ({}) must equal ceil(Mt / num_cores_c) ({}); Mt={}, num_cores_c={}",
                             program_config.block_h,
-                            Mt / num_cores_c);
+                            tt::div_up(Mt, num_cores_c),
+                            Mt,
+                            num_cores_c);
                     }
                 }
                 if (b.has_value()) {
@@ -303,14 +347,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                         shard_spec);
                 }
                 TT_FATAL(
-                    program_config.block_h * TILE_HEIGHT == shard_spec.shape[0],
-                    "Block height * TILE_HEIGHT must match shard shape[0], got {} vs {}",
-                    program_config.block_h * TILE_HEIGHT,
+                    program_config.block_h * tile_height == shard_spec.shape[0],
+                    "Block height * tile_height must match shard shape[0], got {} vs {}",
+                    program_config.block_h * tile_height,
                     shard_spec.shape[0]);
                 TT_FATAL(
-                    program_config.block_w * TILE_WIDTH == shard_spec.shape[1],
-                    "Block width * TILE_WIDTH must match shard shape[1], got {} vs {}",
-                    program_config.block_w * TILE_WIDTH,
+                    program_config.block_w * tile_width == shard_spec.shape[1],
+                    "Block width * tile_width must match shard shape[1], got {} vs {}",
+                    program_config.block_w * tile_width,
                     shard_spec.shape[1]);
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
@@ -345,8 +389,9 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
     auto output_padded_shape = input_tensor.padded_shape();
 
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
+        const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
         uint32_t num_tiles_w = operation_attributes.norm_type == LayerNormType::LAYERNORM ? 2 : 1;
-        output_shape[3] = num_tiles_w * TILE_WIDTH;
+        output_shape[3] = num_tiles_w * tile_width;
     }
 
     return std::visit(
@@ -359,7 +404,10 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                     CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
                     CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
                     shard_spec.grid = output_grid;
-                    auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        operation_attributes.output_mem_config.memory_layout(),
+                        operation_attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
                 }
@@ -377,7 +425,8 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 auto mem_config = operation_attributes.output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
+                    mem_config = tt::tt_metal::MemoryConfig(
+                        mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
                 return ttnn::TensorSpec(
@@ -389,10 +438,11 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         output_shape,
                         output_padded_shape));
             } else {
+                const auto output_layout = input_tensor.layout();
                 return TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config));
+                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);
@@ -428,7 +478,8 @@ Tensor layer_norm(
     LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
-    const std::optional<const Tensor>& recip_tensor) {
+    const std::optional<const Tensor>& recip_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -437,7 +488,7 @@ Tensor layer_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
-    };
+        .fused_activation = fused_activation};
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,

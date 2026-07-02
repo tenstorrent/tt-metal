@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-  "setuptools==70.1.0",
+  "setuptools==80.10.2",
   "setuptools-scm==8.1.0",
   "wheel",
 ]
@@ -21,6 +21,7 @@ dependencies = [
   "click>=8.1.7",
   "pandas>=2.0.3",
   "seaborn>=0.13.2",
+  "ml_dtypes",
 ]
 requires-python = ">=3.10"
 keywords = ["metalium", "ttnn", "tt-metal", "machine learning", "tenstorrent", "libnuma", "libhwloc"]

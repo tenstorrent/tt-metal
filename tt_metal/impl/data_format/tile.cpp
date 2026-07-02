@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,14 +77,38 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Bfp4_b: return (tile_hw / 2) + aligned_exp_size;
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b: return tile_hw + aligned_exp_size;
+        case DataFormat::MxFp4:
+        case DataFormat::MxFp6P:
+        case DataFormat::MxFp6R:
+        case DataFormat::MxFp8R:
+        case DataFormat::MxFp8P:
+        case DataFormat::MxInt8:
+        case DataFormat::MxInt4:
+        case DataFormat::MxInt2: {
+            // All MX formats share a [block scales | packed elements] tile layout:
+            // one E8M0 scale byte per 32-element block (padded to L1 alignment),
+            // followed by the elements packed at the format's storage width.
+            constexpr uint32_t kMxBlockSize = 32;
+            TT_ASSERT(tile_hw % kMxBlockSize == 0, "MX tile size must be a multiple of 32 elements");
+            const uint32_t exp_bytes = tt::round_up(tile_hw / kMxBlockSize, l1_alignment);
+            uint32_t elem_bytes = tile_hw;  // 8-bit storage: MxFp6 / MxFp8 / MxInt8
+            if (format == DataFormat::MxFp4 || format == DataFormat::MxInt4) {
+                elem_bytes = tile_hw / 2;  // 4-bit elements, 2 per byte
+            } else if (format == DataFormat::MxInt2) {
+                elem_bytes = tile_hw / 4;  // 2-bit elements, 4 per byte
+            }
+            return exp_bytes + elem_bytes;
+        }
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (tile_hw * 2);
         case DataFormat::Float32: return (tile_hw * 4);
+        case DataFormat::Fp8_e4m3:
         case DataFormat::Int8:
         case DataFormat::Lf8:
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return tile_hw;
         case DataFormat::UInt16:
+        case DataFormat::Int16:
         case DataFormat::RawUInt16: return (tile_hw * 2);
         case DataFormat::UInt32:
         case DataFormat::Int32:

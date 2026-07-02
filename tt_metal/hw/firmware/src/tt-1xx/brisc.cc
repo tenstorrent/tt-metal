@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/perf_counters.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -30,7 +31,9 @@
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
+#include "api/debug/checkpoint.h"
 
 // clang-format on
 
@@ -80,8 +83,8 @@ uint32_t crta_count __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 uint8_t prev_noc_mode = DM_DEDICATED_NOC;
@@ -176,8 +179,6 @@ void enable_power_management() {
 }
 
 void set_deassert_addresses() {
-    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-
 #ifdef ARCH_BLACKHOLE
     WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, MEM_NCRISC_FIRMWARE_BASE);
     WRITE_REG(RISCV_DEBUG_REG_TRISC0_RESET_PC, MEM_TRISC0_FIRMWARE_BASE);
@@ -186,6 +187,8 @@ void set_deassert_addresses() {
     WRITE_REG(RISCV_DEBUG_REG_TRISC_RESET_PC_OVERRIDE, 0b111);
     WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC_OVERRIDE, 0x1);
 #else
+    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_FIRMWARE_BASE;
     cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = MEM_TRISC0_FIRMWARE_BASE;
     cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = MEM_TRISC1_FIRMWARE_BASE;
@@ -364,6 +367,7 @@ int main() {
 
     risc_init();
     device_setup();
+    DEVICE_PRINT_INITIALIZE_LOCK();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
@@ -378,6 +382,7 @@ int main() {
     // ex. Immediately after starting, we send a RUN_MSG_RESET_READ_PTR signal
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
+    noc_clear_all_packet_tags();
     trigger_sync_register_init();
 
     DeviceProfilerInit();
@@ -445,6 +450,9 @@ int main() {
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
                 RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
+#ifdef DEBUG_CHECKPOINT_ENABLED
+            debug_checkpoint_init(enables);
+#endif
             run_triscs(enables);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -533,6 +541,9 @@ int main() {
 
             wait_ncrisc_trisc();
 
+            // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
+            ReadPerfCounters();
+
             trigger_sync_register_init();
 
             if constexpr (ASSERT_ENABLED) {
@@ -547,6 +558,7 @@ int main() {
                         ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
                         ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
                         ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
+                        ASSERT(ncrisc_noc_packet_tags_cleared(noc), DebugAssertNCriscNOCPacketTagClearedTripped);
                     }
                     WAYPOINT("NKFD");
                 }
@@ -561,6 +573,7 @@ int main() {
 
             uint32_t go_message_index = mailboxes->go_message_index;
             mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

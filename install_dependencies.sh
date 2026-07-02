@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 
 set -e
 
@@ -24,7 +24,7 @@ detect_os() {
         . /etc/os-release
         OS_ID="$ID"
         OS_VERSION="$VERSION_ID"
-        OS_CODENAME="${UBUNTU_CODENAME:VERSION_CODENAME}"
+        OS_CODENAME="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
         OS_ID_LIKE="$ID_LIKE"
     else
         echo "Error: /etc/os-release not found. Unsupported system."
@@ -169,27 +169,24 @@ init_packages() {
         debian)
             # Determine g++ version based on Ubuntu version
             local gpp_package="g++"
-            if [[ "$OS_ID" == "ubuntu" ]]; then
-                case "$OS_VERSION" in
-                    "22.04")
-                        gpp_package="g++-12"
-                        echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
-                        ;;
-                    "24.04")
-                        gpp_package="g++-14"
-                        echo "[INFO] Using g++-14 for Ubuntu 24.04 (gcc-14 will be installed as dependency)"
-                        ;;
-                    *)
-                        echo "[INFO] Using default g++ for Ubuntu $OS_VERSION"
-                        ;;
-                esac
-            fi
+            case "$UBUNTU_CODENAME" in
+                "jammy") # 22.04
+                    gpp_package="g++-12"
+                    echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
+                    ;;
+                "noble") # 24.04
+                    gpp_package="g++-14"
+                    echo "[INFO] Using g++-14 for Ubuntu 24.04 (gcc-14 will be installed as dependency)"
+                    ;;
+                *)
+                    echo "[INFO] Using default g++ for $OS_ID $OS_VERSION"
+                    ;;
+            esac
 
             # All packages needed for TT-Metal development
             PACKAGES=(
                 "git"
                 "build-essential"
-                "cmake"
                 "ninja-build"
                 "pkg-config"
                 "$gpp_package"
@@ -213,6 +210,10 @@ init_packages() {
                 "curl"
                 "xxd"
             )
+            # Add cmake to packages only if not in Docker (Docker provides via tool image)
+            if [ "$docker" -ne 1 ]; then
+                PACKAGES+=("cmake")
+            fi
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
             fi
@@ -238,7 +239,7 @@ init_packages() {
                 "numactl-devel"
                 "libatomic"
                 "libstdc++"
-                "tbb-devel"
+                "intel-oneapi-tbb-devel"
                 "capstone-devel"
                 "wget"
                 "curl"
@@ -279,36 +280,92 @@ prep_ubuntu_system() {
     # Also v20
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
-    # Add Kitware repository for latest CMake
-    # If the kitware-archive-keyring package has not been installed previously, manually obtain a copy of our signing key
-    test -f /usr/share/doc/kitware-archive-keyring/copyright || wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-
-    # Add the repository to sources list and update
-    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
-    apt-get update
-
-    # If the kitware-archive-keyring package was not installed previously, remove the manually obtained key to make room for the package
-    test -f /usr/share/doc/kitware-archive-keyring/copyright || rm /usr/share/keyrings/kitware-archive-keyring.gpg
-
-    # Install the kitware-archive-keyring package to ensure that your keyring stays up to date as keys are rotated
-    apt-get install -y --no-install-recommends kitware-archive-keyring
+    # Install CMake from GitHub releases (skip in Docker, cmake provided via tool image)
+    if [ "$docker" -ne 1 ]; then
+        local cmake_version="4.0.2"
+        local cmake_installer="/tmp/cmake-${cmake_version}-installer.sh"
+        wget -q "https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-linux-x86_64.sh" -O "$cmake_installer"
+        bash "$cmake_installer" --skip-license --prefix=/usr/local
+        rm -f "$cmake_installer"
+    else
+        echo "[INFO] Skipping CMake install in Docker (cmake provided via tool image)"
+    fi
 
     # Add GCC toolchain repository for specific g++ versions if needed
-    if [[ "$OS_ID" == "ubuntu" ]]; then
-        case "$OS_VERSION" in
-            "24.04")
-                echo "[INFO] Adding toolchain repository for g++-14 on Ubuntu 24.04"
-                add-apt-repository -y ppa:ubuntu-toolchain-r/test
-                ;;
-        esac
-    fi
+    case "$UBUNTU_CODENAME" in
+        "noble")
+            echo "[INFO] Adding toolchain repository for g++-14 on Ubuntu 24.04"
+            add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            ;;
+    esac
 
     apt-get update
 }
 
 prep_redhat_system() {
     echo "[INFO] Preparing Red Hat family system..."
-    # TODO: Implement Red Hat family system preparation
+
+    # Add Intel oneAPI repository for TBB 2021+
+    # Legacy tbb-devel (2020.3) has an enum-out-of-range bug (oneapi-src/oneTBB#843)
+    # that is rejected by clang when gcc-toolset-15's <execution> header pulls tbb/task.h
+    cat > /etc/yum.repos.d/oneAPI.repo << 'REPO_EOF'
+[oneAPI]
+name=Intel oneAPI repository
+baseurl=https://yum.repos.intel.com/oneapi
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+REPO_EOF
+}
+
+# Configure update-alternatives so gcc/g++ and clang/clang++ point to
+# version-specific compilers. Only applies to Ubuntu (debian-based).
+configure_compiler_alternatives() {
+    if ! is_debian_based; then
+        return
+    fi
+
+    if [[ "$OS_ID" != "ubuntu" ]]; then
+        return
+    fi
+
+    case "$OS_VERSION" in
+        22.04*)
+            if [ -x /usr/bin/gcc-12 ]; then
+                echo "[INFO] Setting gcc-12/g++-12 as defaults via update-alternatives"
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120 || true
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 120 || true
+                update-alternatives --set gcc /usr/bin/gcc-12 2>/dev/null || true
+                update-alternatives --set g++ /usr/bin/g++-12 2>/dev/null || true
+            fi
+            ;;
+        24.04*)
+            if [ -x /usr/bin/gcc-14 ]; then
+                echo "[INFO] Setting gcc-14/g++-14 as defaults via update-alternatives"
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140 || true
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 140 || true
+                update-alternatives --set gcc /usr/bin/gcc-14 2>/dev/null || true
+                update-alternatives --set g++ /usr/bin/g++-14 2>/dev/null || true
+            fi
+            ;;
+        *)
+            echo "[INFO] No GCC/G++ version override for Ubuntu $OS_VERSION"
+            ;;
+    esac
+
+    # Set llvm-20 toolchain as default when installed
+    if [ -x /usr/bin/clang-20 ]; then
+        echo "[INFO] Setting llvm-20 toolchain as defaults via update-alternatives"
+        for tool in clang clang++; do
+            update-alternatives --install /usr/bin/$tool $tool /usr/bin/${tool}-20 100 || true
+            update-alternatives --set $tool /usr/bin/${tool}-20 2>/dev/null || true
+        done
+        if [ -x /usr/bin/clang-tidy-20 ]; then
+            update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-20 100 || true
+            update-alternatives --set clang-tidy /usr/bin/clang-tidy-20 2>/dev/null || true
+        fi
+    fi
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI
@@ -339,6 +396,7 @@ install_llvm() {
 }
 
 install_sfpi() {
+
     local version_file=$(dirname $0)/tt_metal/sfpi-info.sh
     if ! [[ -r $version_file ]] ; then
 	version_file=$(dirname $0)/sfpi-info.sh
@@ -402,10 +460,10 @@ install_mpi_ulfm() {
     fi
 
     # Only install MPI ULFM for Ubuntu 24.04 or older
-    local VERSION_NUM=$(echo "$VERSION" | sed 's/\.//')
+    local VERSION_NUM=$(echo "$OS_VERSION" | sed 's/\.//')
 
-    if [ "$VERSION_NUM" -gt "2404" ]; then
-        echo "[INFO] Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 24.04 or older)"
+    if [[ "$OS_ID" == "ubuntu" ]] && [ "$VERSION_NUM" -gt "2404" ]; then
+        echo "[INFO] Skipping MPI ULFM installation for Ubuntu $OS_VERSION (only needed for 24.04 or older)"
         return
     fi
 
@@ -462,10 +520,17 @@ install() {
     # Install core packages
     install_packages
 
-    # Install specialized components
-    install_sfpi
+    # Install specialized components (SFPI and MPI/ULFM come from container layers when --docker)
+    if [ "$docker" -ne 1 ]; then
+        install_sfpi
+        install_mpi_ulfm
+    fi
     install_llvm
-    install_mpi_ulfm
+
+    # Set gcc/g++ and clang/clang++ defaults via update-alternatives (docker builds only)
+    if [ "$docker" -eq 1 ]; then
+        configure_compiler_alternatives
+    fi
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then

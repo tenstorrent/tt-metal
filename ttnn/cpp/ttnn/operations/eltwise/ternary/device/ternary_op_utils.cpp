@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -99,7 +99,7 @@ bool is_native_L1_sharding(
             return false;
         }
         // Check if output grid differs from input grids - if so, cannot use native sharding
-        if (output_memory_config.is_sharded() && output_memory_config.shard_spec().has_value()) {
+        if (output_memory_config.shard_spec().has_value()) {
             const auto& out_grid = output_memory_config.shard_spec()->grid;
             if (predicate_spec.memory_config().is_sharded() &&
                 predicate_spec.memory_config().shard_spec().has_value() &&
@@ -125,7 +125,7 @@ bool is_native_L1_sharding(
         if (false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (output_memory_config.is_sharded() && output_memory_config.buffer_type() == BufferType::L1) {
+        if (output_memory_config.buffer_type() == BufferType::L1) {
             return true;
         }
     }
@@ -173,6 +173,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTS configurations for WHERE
     {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -187,6 +190,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    // TTS ROW_COL_BCAST for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
 
     // TST configurations for WHERE
     {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::COL_BCAST},
@@ -201,6 +207,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    // TST ROW_COL_BCAST for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
 
     // TTT configurations for LERP - same kernels, different compute operation
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
@@ -213,6 +222,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for LERP
+    {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTT configurations for ADDCMUL (shared addc_ops kernels)
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::NONE},
@@ -225,6 +237,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for ADDCMUL
+    {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
 
     // TTT configurations for ADDCDIV (shared addc_ops kernels)
     {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::NONE},
@@ -237,6 +252,17 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for ADDCDIV
+    {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
+
+    // TTT configurations for SNAKE_BETA (reader handles H/outer bcast; compute is always NoBcast).
+    {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -251,6 +277,10 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    // TTS ROW_COL_BCAST for LERP
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+
 };
 
 TernaryKernelConfig::TernaryKernelConfig(
@@ -294,6 +324,10 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
         case KernelName::ReaderRowBcastTST:
         case KernelName::ReaderRowBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_row_bcast.cpp");
+        case KernelName::ReaderRowColBcastTTT:
+            return fmt::format(dataflow, root, "ternary_reader_row_col_bcast_ttt.cpp");
+        case KernelName::ReaderRowColBcastTTS:
+        case KernelName::ReaderRowColBcastTST: return fmt::format(dataflow, root, "tts_tst_reader_row_col_bcast.cpp");
         case KernelName::WriterNoBcastTernary:
         case KernelName::WriterNoBcast:
         case KernelName::WriterColBcastTTT: return fmt::format(dataflow, root, "ternary_writer_nobcast.cpp");
@@ -323,9 +357,31 @@ std::string override_addcmul_compute_kernel(KernelName kernel_name) {
     }
 }
 
+std::map<std::string, std::string> get_addcmul_int_kernel_defines(DataType dtype) {
+    TT_FATAL(
+        dtype == DataType::INT32 || dtype == DataType::UINT32,
+        "get_addcmul_int_kernel_defines: expected INT32 or UINT32, got {}",
+        dtype);
+    std::string fmt = (dtype == DataType::UINT32) ? "DataFormat::UInt32" : "DataFormat::Int32";
+    return {{"ADDCMUL_DATA_FORMAT", fmt}};
+}
+
 inline uint32_t pack_scalar_runtime_arg_float(const float scalar, const DataType dtype) {
     if (dtype == DataType::INT32) {
+        // float → int32 (truncate towards zero) → reinterpret bits as uint32.
+        // bit_cast preserves the two's complement bit-pattern without any value conversion.
+        //   6.0f  → static_cast<int32_t> →  6         → bit_cast → 0x00000006
+        //  -6.0f  → static_cast<int32_t> → -6         → bit_cast → 0xFFFFFFFA
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    if (dtype == DataType::UINT32) {
+        // float → int64 → uint32 (mod 2^32).
+        // A direct float → uint32 cast is UB in C++ for negative values, so we route
+        // through int64 (which can represent all float values in the int32 range) and
+        // then narrow to uint32 (C++ guarantees this is mod 2^32, always well-defined).
+        //   6.0f  → static_cast<int64_t> →  6LL → static_cast<uint32_t> → 0x00000006
+        //  -6.0f  → static_cast<int64_t> → -6LL → static_cast<uint32_t> → 0xFFFFFFFA
+        return static_cast<uint32_t>(static_cast<int64_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);
 }
@@ -338,7 +394,10 @@ uint32_t pack_scalar_runtime_arg(const ScalarVariant scalar, const DataType dtyp
                 return pack_scalar_runtime_arg_float(v, dtype);
             } else {
                 static_assert(std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>);
-                return std::bit_cast<uint32_t>(v);
+                if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+                    return std::bit_cast<uint32_t>(v);
+                }
+                return std::bit_cast<uint32_t>(static_cast<float>(v));
             }
         },
         scalar);
@@ -449,6 +508,11 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcdiv_tile<DataFormat::Float32>"
                                                                            : "addcdiv_tile<DataFormat::Float16_b>";
             break;
+        case TernaryOpType::SNAKE_BETA:
+            defines["TERNARY_SFPU_OP_INIT"] = "snake_beta_tile_init";
+            defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "snake_beta_tile<DataFormat::Float32>"
+                                                                           : "snake_beta_tile<DataFormat::Float16_b>";
+            break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }
 
@@ -503,6 +567,20 @@ TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, cons
 
         if (pred_row_bcast && pred_col_bcast) {
             return TernaryBroadcastType::SCALAR_A_BCAST;
+        }
+
+        bool is_pred_row = (pred_row_bcast && !pred_col_bcast);
+        bool is_pred_col = (!pred_row_bcast && pred_col_bcast);
+        bool is_b_row = (b_row_bcast && !b_col_bcast);
+        bool is_b_col = (!b_row_bcast && b_col_bcast);
+        bool is_pred_full = (pred_h == max_h && pred_w == max_w);
+        bool is_b_full = (b_h == max_h && b_w == max_w);
+
+        bool pred_ok = is_pred_row || is_pred_col || is_pred_full;
+        bool b_ok = is_b_row || is_b_col || is_b_full;
+
+        if (pred_ok && b_ok) {
+            return TernaryBroadcastType::ROW_COL_BCAST;
         }
 
         return TernaryBroadcastType::INVALID_BCAST;
@@ -610,6 +688,22 @@ TernaryBroadcastType get_broadcast_type(
             return TernaryBroadcastType::SCALAR_BCAST;
         }
 
+        // Mixed row+col broadcast: each tensor is one of scalar(1,1), row(1,W), col(H,1), or full(H,W)
+        bool is_pred_row = (pred_row_bcast && !pred_col_bcast);
+        bool is_pred_col = (!pred_row_bcast && pred_col_bcast);
+        bool is_true_row = (true_row_bcast && !true_col_bcast);
+        bool is_true_col = (!true_row_bcast && true_col_bcast);
+        bool is_false_row = (false_row_bcast && !false_col_bcast);
+        bool is_false_col = (!false_row_bcast && false_col_bcast);
+
+        bool pred_valid = is_pred_scalar || is_pred_non_bcast || is_pred_row || is_pred_col;
+        bool true_valid = is_true_scalar || is_true_non_bcast || is_true_row || is_true_col;
+        bool false_valid = is_false_scalar || is_false_non_bcast || is_false_row || is_false_col;
+
+        if (pred_valid && true_valid && false_valid) {
+            return TernaryBroadcastType::ROW_COL_BCAST;
+        }
+
         return TernaryBroadcastType::INVALID_BCAST;
     }
 
@@ -660,7 +754,7 @@ ttnn::Shape compute_broadcasted_output_ternary(
     const int rank_c = c_shape.rank();
     const int largest_rank = std::max({rank_a, rank_b, rank_c});
 
-    tt::stl::SmallVector<uint32_t> output_shape(largest_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(largest_rank, 1);
 
     for (int i = -1; i >= -largest_rank; --i) {
         auto dim_a = (i >= -rank_a) ? a_shape[i] : 1;
@@ -698,11 +792,11 @@ ttnn::Shape compute_broadcasted_output_ternary(
             dim_b,
             dim_c);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 dim_a == dim_b && dim_b == dim_c,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}, dim c: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}, dim c: {}",
                 i,
                 largest_rank,
                 dim_a,

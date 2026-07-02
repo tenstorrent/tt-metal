@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,13 +17,15 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/div_int32_floor.h"
 #include "api/compute/div_int32_sfpu.h"
-#include "api/compute/remainder_int32.h"
+#include "api/compute/binary_remainder.h"
 #include "api/compute/binary_fmod.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/xlogy.h"
+#include "api/compute/atan2.h"
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/binary_comp.h"
+#include "api/dataflow/circular_buffer.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -31,91 +33,88 @@ void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-
+    CircularBuffer cb_in0(tt::CBIndex::c_0);
+    CircularBuffer cb_in1(tt::CBIndex::c_1);
+    CircularBuffer cb_out0(tt::CBIndex::c_2);
 #ifdef SFPU_OP_INIT_PRE_IN0_0
-    constexpr auto cb_inp0 = tt::CBIndex::c_3;
+    CircularBuffer cb_inp0(tt::CBIndex::c_3);
 #else
-    constexpr auto cb_inp0 = cb_in0;
+    CircularBuffer cb_inp0 = cb_in0;
 #endif
-
 #ifdef SFPU_OP_INIT_PRE_IN1_0
-    constexpr auto cb_inp1 = tt::CBIndex::c_4;
+    CircularBuffer cb_inp1(tt::CBIndex::c_4);
 #else
-    constexpr auto cb_inp1 = cb_in1;
+    CircularBuffer cb_inp1 = cb_in1;
 #endif
 
-    constexpr auto cb_out0 = tt::CBIndex::c_2;
-
-    unary_op_init_common(cb_in0, cb_out0);
+    unary_op_init_common(cb_in0.get_cb_id(), cb_out0.get_cb_id());
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
 #if PRE_SCALE
-        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0.get_cb_id());  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
-        cb_wait_front(cb_in0, per_core_block_size);
-        cb_reserve_back(cb_inp0, per_core_block_size);
+        cb_in0.wait_front(per_core_block_size);
+        cb_inp0.reserve_back(per_core_block_size);
 
         tile_regs_acquire();
         SFPU_OP_INIT_PRE_IN0_0
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_in0, i, i);  // copy from c_in[0] to DST[0]
+            copy_tile(cb_in0.get_cb_id(), i, i);  // copy from c_in[0] to DST[0]
             SFPU_OP_FUNC_PRE_IN0_0
         }
         tile_regs_commit();
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, cb_inp0);  // DST[0]->cb
+            pack_tile(i, cb_inp0.get_cb_id());  // DST[0]->cb
         }
         tile_regs_release();
 
-        cb_pop_front(cb_in0, per_core_block_size);
-        cb_push_back(cb_inp0, per_core_block_size);
+        cb_in0.pop_front(per_core_block_size);
+        cb_inp0.push_back(per_core_block_size);
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN1_0
-        cb_wait_front(cb_in1, per_core_block_size);
-        cb_reserve_back(cb_inp1, per_core_block_size);
+        cb_in1.wait_front(per_core_block_size);
+        cb_inp1.reserve_back(per_core_block_size);
 
         tile_regs_acquire();
         SFPU_OP_INIT_PRE_IN1_0
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_in1, i, i);  // copy from c_in[0] to DST[0]
+            copy_tile(cb_in1.get_cb_id(), i, i);  // copy from c_in[0] to DST[0]
             SFPU_OP_FUNC_PRE_IN1_0
         }
         tile_regs_commit();
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, cb_inp1);  // DST[0]->cb
+            pack_tile(i, cb_inp1.get_cb_id());  // DST[0]->cb
         }
         tile_regs_release();
 
-        cb_pop_front(cb_in1, per_core_block_size);
-        cb_push_back(cb_inp1, per_core_block_size);
+        cb_in1.pop_front(per_core_block_size);
+        cb_inp1.push_back(per_core_block_size);
 #endif
-        cb_wait_front(cb_inp0, per_core_block_size);
-        cb_wait_front(cb_inp1, per_core_block_size);
-        cb_reserve_back(cb_out0, per_core_block_size);
+        cb_inp0.wait_front(per_core_block_size);
+        cb_inp1.wait_front(per_core_block_size);
+        cb_out0.reserve_back(per_core_block_size);
 
         tile_regs_acquire();
         tile_regs_wait();
-        copy_tile_to_dst_init_short_with_dt(cb_inp1, cb_inp0);
+        copy_tile_to_dst_init_short_with_dt(cb_inp1.get_cb_id(), cb_inp0.get_cb_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_inp0, i, i * 2);
+            copy_tile(cb_inp0.get_cb_id(), i, i * 2);
         }
-        copy_tile_to_dst_init_short_with_dt(cb_inp0, cb_inp1);
+        copy_tile_to_dst_init_short_with_dt(cb_inp0.get_cb_id(), cb_inp1.get_cb_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_inp1, i, i * 2 + 1);
+            copy_tile(cb_inp1.get_cb_id(), i, i * 2 + 1);
 
 #ifdef BINOP_INIT
             BINOP_INIT
@@ -132,14 +131,38 @@ void kernel_main() {
 #ifdef LT_INT32_INIT
             LT_INT32_INIT
 #endif
+#ifdef LT_UINT32_INIT
+            LT_UINT32_INIT
+#endif
+#ifdef LT_UINT16_INIT
+            LT_UINT16_INIT
+#endif
 #ifdef GT_INT32_INIT
             GT_INT32_INIT
+#endif
+#ifdef GT_UINT32_INIT
+            GT_UINT32_INIT
+#endif
+#ifdef GT_UINT16_INIT
+            GT_UINT16_INIT
 #endif
 #ifdef GE_INT32_INIT
             GE_INT32_INIT
 #endif
+#ifdef GE_UINT32_INIT
+            GE_UINT32_INIT
+#endif
+#ifdef GE_UINT16_INIT
+            GE_UINT16_INIT
+#endif
 #ifdef LE_INT32_INIT
             LE_INT32_INIT
+#endif
+#ifdef LE_UINT32_INIT
+            LE_UINT32_INIT
+#endif
+#ifdef LE_UINT16_INIT
+            LE_UINT16_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT
@@ -162,13 +185,13 @@ void kernel_main() {
 #ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
 #endif
-            pack_tile(i * 2, cb_out0);
+            pack_tile(i * 2, cb_out0.get_cb_id());
         }
         tile_regs_commit();
         tile_regs_release();
 
-        cb_pop_front(cb_inp0, per_core_block_size);
-        cb_pop_front(cb_inp1, per_core_block_size);
-        cb_push_back(cb_out0, per_core_block_size);
+        cb_inp0.pop_front(per_core_block_size);
+        cb_inp1.pop_front(per_core_block_size);
+        cb_out0.push_back(per_core_block_size);
     }
 }

@@ -1,10 +1,12 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import math
+
 import pytest
+
+import ttnn
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
 
 

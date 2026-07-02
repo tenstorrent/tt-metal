@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,10 @@ public:
 
 // Factory function to create node descriptors by name
 tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descriptor(NodeType node_type);
+
+// Helper function to get BH Galaxy Rev from system, currently only intended
+//    for use here
+NodeType get_bh_glx_rev_from_system();
 
 // Helper function to get topology for a NodeType (uses virtual function from node instances)
 Topology get_node_type_topology(NodeType node_type);

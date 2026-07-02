@@ -28,8 +28,8 @@ chmod +x install.sh
 > TT-Installer automatically installs all latest versions. Wormhole Galaxy (6U) and Blackhole systems require the following versions:
 > | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 > |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
-> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
+> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.8.0 or above    | fw_pack-19.8.1.fwbundle (v19.8.1)          | v5.0.0 or above      | N/A                            |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.8.0 or above    | fw_pack-19.8.1.fwbundle (v19.8.1)          | v5.0.0 or above      | N/A                            |
 
 - If required, add the following flags for specifying dependencies versions:
 
@@ -38,9 +38,9 @@ chmod +x install.sh
 
 ```
 ./install.sh \
-  --smi-version=v3.0.38 \
-  --fw-version=19.2.0 \
-  --kmd-version=2.5.0 \
+  --smi-version=v5.0.0 \
+  --fw-version=19.8.1 \
+  --kmd-version=2.8.0 \
   --install-container-runtime=no
 ```
 
@@ -85,7 +85,7 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 
 #### Step 2. (For models users only) Set Up Environment for Models:
 
-To try our pre-built models in `models/`, you must:
+To try our pre-built models in [`tt-metal/models/`](https://github.com/tenstorrent/tt-metal/tree/main/models), you must:
 
   - Install their required dependencies
   - Set appropriate environment variables
@@ -151,7 +151,7 @@ ninja install # Installs to build directory by default, required for Python envi
 
 #### Step 3. Virtual Environment Setup
 
-- (Optional) Specify existing python envirionment:
+- (Optional) Specify existing python environment:
 ```
 export PYTHON_ENV_DIR=<path_to_your_env_directory>
 ```

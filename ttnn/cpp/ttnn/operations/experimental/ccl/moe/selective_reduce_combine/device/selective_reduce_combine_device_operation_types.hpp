@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include <optional>
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -19,10 +20,9 @@ struct SelectiveReduceCombineParams {
     uint32_t batch_size;
     uint32_t seq_size;
     uint32_t select_experts_k;
-    uint32_t experts;
     uint32_t num_links;
 
-    std::optional<uint32_t> axis;
+    uint32_t axis;
     tt::tt_fabric::Topology topology;
 
     uint32_t num_token_parallel_cores;
@@ -33,13 +33,12 @@ struct SelectiveReduceCombineParams {
     std::optional<GlobalSemaphore> optional_cross_device_semaphore;
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("hidden_size", hidden_size);
         attrs.emplace_back("batch_size", batch_size);
         attrs.emplace_back("seq_size", seq_size);
         attrs.emplace_back("select_experts_k", select_experts_k);
-        attrs.emplace_back("experts", experts);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("axis", axis);
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
@@ -55,7 +54,7 @@ struct SelectiveReduceCombineParams {
 
 struct SelectiveReduceCombineTensors {
     ttnn::Tensor dense_input_tensor;
-    ttnn::Tensor dense_metadata_tensor;
+    ttnn::Tensor dense_activations_tensor;
     ttnn::Tensor dense_token_maps_tensor;
     ttnn::Tensor dense_token_counts_tensor;
     std::optional<ttnn::Tensor> optional_output_tensor;

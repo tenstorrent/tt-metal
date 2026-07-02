@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <optional>
 
 #include "autograd/tensor.hpp"
 #include "modules/module_base.hpp"
@@ -35,7 +37,7 @@ public:
     explicit DistributedGroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+        const autograd::TensorPtr& x, const std::optional<autograd::TensorPtr>& mask) override;
 };
 
 }  // namespace ttml::modules::distributed

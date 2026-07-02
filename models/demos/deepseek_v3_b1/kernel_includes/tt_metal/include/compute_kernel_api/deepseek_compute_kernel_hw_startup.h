@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,9 @@ ALWI void deepseek_compute_kernel_init() {
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
     compute_kernel_hw_startup(0, 0, 0);
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reconfig_remap(true)));
+#endif
 }
 
 /**
@@ -31,7 +34,7 @@ ALWI void deepseek_compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint3
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(icb0, icb1)));
 
-    PACK((llk_pack_init<false, false, false>(ocb)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_dest_init<fp32_dest_acc_en, false>(ocb)));
+    PACK((llk_pack_init<ckernel::PackMode::Default, false /* zero_output */>(ocb)));
+    PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(ocb)));
 }

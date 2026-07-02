@@ -147,7 +147,7 @@ Maps test directories to CI/CD pipelines based on workflow configurations:
    - `.github/workflows/ttnn-post-commit.yaml` - main post-commit tests
    - `.github/workflows/tt-metal-l2-nightly-impl.yaml` - nightly tests
    - `.github/workflows/blackhole-multi-card-unit-tests-impl.yaml` - Blackhole multi-card tests
-   - `.github/workflows/all-post-commit-workflows.yaml` - orchestrates post-commit tests
+   - `.github/workflows/sanity-tests.yaml` - orchestrates sanity tests
 
 ### Step 5: Extract Pipeline Details
 

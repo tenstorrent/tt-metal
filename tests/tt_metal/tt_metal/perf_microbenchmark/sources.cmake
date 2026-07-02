@@ -2,13 +2,14 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(PERF_MICROBENCH_TESTS_SRCS
+    disaggregation/bench_kv_chunk_address_table.cpp
+    disaggregation/bench_kv_chunk_address_table_serialization.cpp
     dispatch/test_pgm_dispatch.cpp
     dispatch/benchmark_rw_buffer.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
-    routing/test_tt_fabric.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     tensix/test_gathering.cpp
     old/matmul/matmul_global_l1.cpp
@@ -36,19 +37,4 @@ set(X86_64_ONLY_TESTS
     dispatch/test_bw_and_latency.cpp
     dispatch/test_dispatcher.cpp
     3_pcie_transfer/test_pull_from_pcie.cpp
-)
-
-set(TEST_TT_FABRIC_ADDITIONAL_SOURCES
-    routing/tt_fabric_test_common_types.cpp
-    routing/tt_fabric_test_config.cpp
-    routing/tt_fabric_test_results.cpp
-    routing/tt_fabric_test_latency_results.cpp
-    routing/tt_fabric_test_bandwidth_results.cpp
-    routing/tt_fabric_test_context.cpp
-    routing/tt_fabric_test_bandwidth_profiler.cpp
-    routing/tt_fabric_test_device_setup.cpp
-    routing/tt_fabric_test_progress_monitor.cpp
-    routing/tt_fabric_test_eth_readback.cpp
-    routing/tt_fabric_test_code_profiler.cpp
-    routing/tt_fabric_telemetry_manager.cpp
 )

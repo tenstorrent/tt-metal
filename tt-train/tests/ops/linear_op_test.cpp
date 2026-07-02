@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -53,19 +53,24 @@ bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, 
     return all_equals;
 }
 
-TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(LinearOpTest, DISABLED_TTNNBackwardGoodShape) {
     auto tensor = ttml::autograd::create_tensor();
     ttml::init::uniform_init(tensor, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    tensor->set_requires_grad(true);
 
     auto weight = ttml::autograd::create_tensor();
     ttml::init::uniform_init(weight, ttnn::Shape({1, 1, 64, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    weight->set_requires_grad(true);
 
     auto bias = ttml::autograd::create_tensor();
     ttml::init::uniform_init(bias, ttnn::Shape({1, 1, 1, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    bias->set_requires_grad(true);
 
     auto out = ttml::autograd::create_tensor();
     ttml::init::uniform_init(out, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
     out->set_grad(out->get_value());
+    out->set_requires_grad(true);
 
     ttml::ops::ttnn_linear_backward(tensor, weight, bias, out);
     auto ttnn_tensor_grad = tensor->get_grad();

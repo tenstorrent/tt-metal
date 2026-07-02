@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -100,7 +100,7 @@ void kernel_main() {
                     cb_reserve_back(
                         cb_id,
                         max_block_num_tiles *
-                            2);  // Reserve two blocks of spcae to issue multiple block reads in parallel
+                            2);  // Reserve two blocks of space to issue multiple block reads in parallel
                 }
             }
 

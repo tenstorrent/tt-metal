@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,13 +41,6 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
         operation_attributes.device);
 }
 
-tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
-}
-
 }  // namespace ttnn::operations::rand
 
 namespace ttnn::prim {
@@ -59,11 +52,20 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     MeshDevice& device,
     float from,
     float to,
-    uint32_t seed) {
+    uint32_t seed,
+    ttsl::SmallVector<bool> mesh_dim_is_sharded) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
+            shape,
+            dtype,
+            layout,
+            memory_config,
+            std::addressof(device),
+            from,
+            to,
+            seed,
+            std::move(mesh_dim_is_sharded)},
         OperationType::tensor_args_t{});
 }
 }  // namespace ttnn::prim

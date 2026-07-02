@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_lin
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 class DotDict(dict):

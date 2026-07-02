@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"

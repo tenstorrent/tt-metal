@@ -42,11 +42,13 @@ Core
    ttnn.as_tensor
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
+   ttnn.copy_host_to_device_tensor_partial
    ttnn.deallocate
    ttnn.dump_tensor
    ttnn.from_device
    ttnn.from_torch
    ttnn.get_device_tensors
+   ttnn.get_optimal_worker_cores_for_sharded_tensor
    ttnn.load_tensor
    ttnn.reallocate
    ttnn.split_work_to_cores
@@ -77,6 +79,7 @@ Tensor Creation
    ttnn.ones
    ttnn.ones_like
    ttnn.rand
+   ttnn.randn
    ttnn.uniform
    ttnn.zeros
    ttnn.zeros_like
@@ -232,6 +235,7 @@ Pointwise Unary
    ttnn.trunc
    ttnn.unary_chain
    ttnn.var_hw
+   ttnn.xielu
 
 Pointwise Binary
 ================
@@ -315,6 +319,7 @@ Pointwise Ternary
    ttnn.addcmul
    ttnn.lerp
    ttnn.mac
+   ttnn.snake_beta
    ttnn.where
 
 Quantization
@@ -361,6 +366,7 @@ Reduction
    ttnn.sampling
    ttnn.std
    ttnn.sum
+   ttnn.experimental.topk_large_indices
    ttnn.topk
    ttnn.var
 
@@ -389,6 +395,7 @@ Data Movement
    ttnn.moe_expert_token_remap
    ttnn.moe_routing_remap
    ttnn.move
+   ttnn.narrow
    ttnn.nonzero
    ttnn.pad
    ttnn.permute
@@ -466,15 +473,20 @@ Transformer
    ttnn.transformer.concatenate_heads
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.gated_delta_attn_seq
    ttnn.transformer.joint_scaled_dot_product_attention
    ttnn.transformer.paged_flash_multi_latent_attention_decode
    ttnn.transformer.paged_scaled_dot_product_attention_decode
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
+   ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_sdpa
+   ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads
-   ttnn.transformer.windowed_scaled_dot_product_attention
+   ttnn.experimental.indexer_score_dsa
+   ttnn.experimental.indexer_score_msa
 
 CCL
 ===

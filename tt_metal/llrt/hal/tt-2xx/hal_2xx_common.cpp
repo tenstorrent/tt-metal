@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include <tt_stl/reflection.hpp>
 
 #include "hal_2xx_common.hpp"
 #include "rtoptions.hpp"
@@ -33,28 +31,24 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                         case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_0:
                         case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_0:
                             defines.push_back("UCK_CHLKC_UNPACK");
-                            defines.push_back("NAMESPACE=chlkc_unpack");
                             break;
                         case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_1:
                         case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_1:
                         case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_1:
                         case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_1:
                             defines.push_back("UCK_CHLKC_MATH");
-                            defines.push_back("NAMESPACE=chlkc_math");
                             break;
                         case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_2:
                         case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_2:
                         case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_2:
                         case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_2:
                             defines.push_back("UCK_CHLKC_PACK");
-                            defines.push_back("NAMESPACE=chlkc_pack");
                             break;
                         case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_3:
                         case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_3:
                         case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_3:
                         case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_3:
-                            defines.push_back("UCK_CHLKC_UNPACK");
-                            defines.push_back("NAMESPACE=chlkc_unpack");
+                            defines.push_back("UCK_CHLKC_ISOLATE_SFPU");
                             break;
                         default: TT_THROW("Invalid processor id {}", params.processor_id);
                     }
@@ -145,17 +139,9 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
             switch (params.processor_class) {
                 case HalProcessorClassType::DM: return fmt::format("dm{}", params.processor_id); break;
                 case HalProcessorClassType::COMPUTE:
-                    return (
-                        params.is_fw ? fmt::format(
-                                           "trisc{}",
-                                           params.processor_id %
-                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE)
-                                     : fmt::format(
-                                           "neo{}_trisc{}",
-                                           params.processor_id /
-                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE,
-                                           params.processor_id %
-                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE));
+                    return fmt::format(
+                        "trisc{}",
+                        params.processor_id % experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
             }
         case HalProgrammableCoreType::ACTIVE_ETH: return "erisc";
         case HalProgrammableCoreType::IDLE_ETH:

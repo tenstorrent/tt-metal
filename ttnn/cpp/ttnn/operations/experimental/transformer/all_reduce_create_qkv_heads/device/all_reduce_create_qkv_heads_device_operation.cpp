@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_create_qkv_heads_device_operation.hpp"
@@ -180,7 +180,7 @@ void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
     // 1 User Per Core Max and 32 users for now
     TT_FATAL(
         num_cores >= 2 * num_users,
-        "Input coregrid size is {}. Need cores atleast double of num_users={} for decode when q and k heads are not "
+        "Input coregrid size is {}. Need cores at least double of num_users={} for decode when q and k heads are not "
         "overlapping coregrid",
         num_cores,
         num_users);
@@ -239,9 +239,18 @@ AllReduceCreateQkvHeadsDeviceOperation::compute_output_specs(
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, operation_attributes.head_dim}};
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, operation_attributes.head_dim}};
     tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {num_kv_heads_padded, operation_attributes.head_dim}};
-    MemoryConfig q_mem_config = operation_attributes.final_mem_config.with_shard_spec(q_shard_spec);
-    MemoryConfig k_mem_config = operation_attributes.final_mem_config.with_shard_spec(k_shard_spec);
-    MemoryConfig v_mem_config = operation_attributes.final_mem_config.with_shard_spec(v_shard_spec);
+    MemoryConfig q_mem_config = MemoryConfig(
+        operation_attributes.final_mem_config.memory_layout(),
+        operation_attributes.final_mem_config.buffer_type(),
+        q_shard_spec);
+    MemoryConfig k_mem_config = MemoryConfig(
+        operation_attributes.final_mem_config.memory_layout(),
+        operation_attributes.final_mem_config.buffer_type(),
+        k_shard_spec);
+    MemoryConfig v_mem_config = MemoryConfig(
+        operation_attributes.final_mem_config.memory_layout(),
+        operation_attributes.final_mem_config.buffer_type(),
+        v_shard_spec);
 
     return {
         .all_reduce = all_reduce_tensor_spec,
@@ -270,26 +279,6 @@ AllReduceCreateQkvHeadsDeviceOperation::create_output_tensors(
         .q = create_device_tensor(output_specs.q, device),
         .k = create_device_tensor(output_specs.k, device),
         .v = create_device_tensor(output_specs.v, device)};
-}
-
-tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
-    // Hash individual fields to avoid hashing non-hashable types like GlobalSemaphore
-    return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeadsDeviceOperation>(
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.all_reduce_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
 }
 
 }  // namespace ttnn::experimental::prim

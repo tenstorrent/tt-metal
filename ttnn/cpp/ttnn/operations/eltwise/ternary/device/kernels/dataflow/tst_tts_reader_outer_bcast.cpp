@@ -1,10 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Standard first 5 arguments
@@ -41,23 +44,21 @@ void kernel_main() {
     constexpr auto src1_args =
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
-    // #if SRC_SHARDED_A
-    //     cb_reserve_back(predicate_cb, srcA_num_tiles);
-    //     cb_push_back(predicate_cb, srcA_num_tiles);
-    // #else
-    const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(predicate_cb));
-    // #endif
-    // #if SRC_SHARDED_B
-    //     cb_reserve_back(src_b_cb, srcB_num_tiles);
-    //     cb_push_back(src_b_cb, srcB_num_tiles);
-    // #else
-    const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(src_b_cb));
-    // #endif
+    Noc noc;
+    CircularBuffer cb_pred(predicate_cb);
+    CircularBuffer cb_b(src_b_cb);
 
-    // #if !SRC_SHARDED_A || !SRC_SHARDED_B
+#if !SRC_SHARDED_A
+    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+#endif
+#if !SRC_SHARDED_B
+    const uint32_t src1_tile_bytes = cb_b.get_tile_size();
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
+#endif
+
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = 0;  // TODO: remove this when sharding support is added
-    // constexpr bool has_sharding = get_compile_time_arg_val(src2_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(src1_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
@@ -99,28 +100,25 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-                            // #if !SRC_SHARDED_A
-                            // read a tile from src_a
-                            cb_reserve_back(predicate_cb, onetile);
-                            uint32_t l1_write_addr_a = get_write_ptr(predicate_cb);
-                            noc_async_read_page(tile_offset + tw, s0, l1_write_addr_a);
-                            // #endif
-                            // #if !SRC_SHARDED_B
-                            // read a tile from src_b
-                            cb_reserve_back(src_b_cb, onetile);
-                            uint32_t l1_write_addr_b = get_write_ptr(src_b_cb);
-                            noc_async_read_page(tile_offset_b + tw, s1, l1_write_addr_b);
-                            // #endif
-
-                            // #if !SRC_SHARDED_A || !SRC_SHARDED_B
-                            noc_async_read_barrier();
-                            // #endif
-                            // #if !SRC_SHARDED_A
-                            cb_push_back(predicate_cb, onetile);
-                            // #endif
-                            // #if !SRC_SHARDED_B
-                            cb_push_back(src_b_cb, onetile);
-                            // #endif
+#if !SRC_SHARDED_A
+                            cb_pred.reserve_back(onetile);
+                            noc.async_read(
+                                s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+#endif
+#if !SRC_SHARDED_B
+                            cb_b.reserve_back(onetile);
+                            noc.async_read(
+                                s1, cb_b, src1_tile_bytes, {.page_id = tile_offset_b + tw}, {.offset_bytes = 0});
+#endif
+#if !SRC_SHARDED_A || !SRC_SHARDED_B
+                            noc.async_read_barrier();
+#endif
+#if !SRC_SHARDED_A
+                            cb_pred.push_back(onetile);
+#endif
+#if !SRC_SHARDED_B
+                            cb_b.push_back(onetile);
+#endif
                         }
                         if constexpr (!has_sharding) {
                             // next row of tiles should start at the first column
@@ -141,5 +139,4 @@ void kernel_main() {
         tile_offset += next_nd_shift;
         tile_offset_b += next_nd_shift_b;
     }
-    // #endif
 }

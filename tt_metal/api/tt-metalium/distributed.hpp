@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,6 +72,12 @@ void EnqueueWriteMeshBuffer(
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     const std::vector<DType>& src,
     bool blocking = false) {
+    TT_FATAL(src.size() * sizeof(DType) >= mesh_buffer->size(),
+        "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
+        mesh_buffer->size(),
+        src.size(),
+        sizeof(DType));
+
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
 }
 
@@ -101,9 +107,9 @@ bool EventQuery(const MeshEvent& event);
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 void Synchronize(
-    MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
-void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 // Returns true if the distributed environment is initialized and world_size > 1.
 bool UsingDistributedEnvironment();

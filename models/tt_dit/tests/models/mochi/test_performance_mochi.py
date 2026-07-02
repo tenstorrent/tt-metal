@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
+from ....pipelines.events import profiler_event_callback
 from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 
 
@@ -23,9 +24,8 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, topology, num_links",
     [
-        # VAE mesh shape = (1, 8) is more memory efficient.
         [(2, 2), 0, 1, (1, 4), 0, 1, ttnn.Topology.Linear, 2],
-        [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 2],
+        [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 2],  # VAE mesh shape = (1, 8) is more memory efficient.
         [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 1],
         [(4, 8), 1, 0, (4, 8), 0, 1, ttnn.Topology.Linear, 4],  # note sp <-> tp switch for VAE for memory efficiency.
         [(4, 8), 1, 0, (4, 8), 0, 1, ttnn.Topology.Linear, 2],  # note sp <-> tp switch for VAE for memory efficiency.
@@ -47,6 +47,7 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 def test_mochi_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
+    model_location_generator,
     model_name: str,
     image_w: int,
     image_h: int,
@@ -94,9 +95,15 @@ def test_mochi_pipeline_performance(
         f"Creating TT Mochi pipeline with DiT mesh device shape {mesh_device.shape}, VAE mesh device shape {vae_mesh_shape}"
     )
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
-    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
+    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {vae_tp_axis}")
 
-    tt_pipe = TTMochiPipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=model_name)
+    tt_pipe = TTMochiPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=model_location_generator(model_name),
+        height=image_h,
+        width=image_w,
+        num_frames=num_frames,
+    )
 
     # Test prompts
     prompts = [
@@ -112,14 +119,10 @@ def test_mochi_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         frames = tt_pipe(
-            prompts[0],
+            prompts=[prompts[0]],
             num_inference_steps=2,  # Small number of steps to reduce test time.
             guidance_scale=guidance_scale,
-            num_frames=num_frames,
-            height=image_h,
-            width=image_w,
-            seed=0,  # Make deterministic
-        ).frames[0]
+        )[0]
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
@@ -165,16 +168,11 @@ def test_mochi_pipeline_performance(
             prompt_idx = (i + 1) % len(prompts)
             with benchmark_profiler("run", iteration=i):
                 frames = tt_pipe(
-                    prompts[prompt_idx],
+                    prompts=[prompts[prompt_idx]],
                     num_inference_steps=num_inference_steps,
                     guidance_scale=guidance_scale,
-                    num_frames=num_frames,
-                    height=image_h,
-                    width=image_w,
-                    seed=0,  # Make deterministic
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
-                ).frames[0]
+                    on_event=profiler_event_callback(benchmark_profiler, i),
+                )[0]
 
             logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
@@ -238,6 +236,15 @@ def test_mochi_pipeline_performance(
             "denoising": 1320,
             "vae": 55,
             "total": 1385,
+        }
+    elif tuple(mesh_device.shape) == (2, 2) and vae_mesh_shape == (1, 4):
+        assert is_blackhole(), "2x2 is only supported for blackhole"
+        # Tighten these once we have a stable BH QuietBox baseline in CI.
+        expected_metrics = {
+            "encoder": 12.5,
+            "denoising": 2600,
+            "vae": 90,
+            "total": 2700,
         }
     elif tuple(mesh_device.shape) == (4, 8) and vae_mesh_shape == (4, 8):
         expected_metrics = {

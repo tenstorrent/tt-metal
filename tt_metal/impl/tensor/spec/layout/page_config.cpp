@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 
 #include <tt-metalium/shape2d.hpp>
@@ -19,6 +20,7 @@ size_t rm_element_size_bytes(DataType dtype) {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
@@ -145,7 +147,14 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
+RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {
+    if (tile != Tile{}) {
+        log_warning(
+            LogMetal,
+            "Configuring a ROW MAJOR page config with a tile configuration, this will be rejected in the future. See "
+            "#18536");
+    }
+}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
@@ -164,7 +173,7 @@ void RowMajorPageConfig::validate_alignment(
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
 
-    // TODO: Do we need to validate sharded width here if wee are guaranteed that physical_shard_width is set as
+    // TODO: Do we need to validate sharded width here if we are guaranteed that physical_shard_width is set as
     // width_alignment
     if (memory_config.shard_spec().has_value() && memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& physical_shard_shape = memory_config.shard_spec().value().shape;
@@ -209,7 +218,16 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
     return size;
 }
 
-const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+const Tile& RowMajorPageConfig::get_tile() const {
+    if (tile_ != Tile{}) {
+        log_warning(
+            LogMetal,
+            "Attempting to extract tile information out of a ROW MAJOR layout, this will be rejected in the future. "
+            "See "
+            "#18536.");
+    }
+    return tile_;
+}
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ void kernel_main() {
     uint32_t stick_id = 0;
 
     constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(src_args, src_addr, stick_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // We reserve back an entire tile row and issue a bunch of reads

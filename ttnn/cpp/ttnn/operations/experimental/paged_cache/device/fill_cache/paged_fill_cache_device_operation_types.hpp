@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,16 @@ struct PagedFillCacheParams {
     const uint32_t batch_idx_fallback;
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
     const bool noop = false;  // When true, kernels early exit
+    // Optional per-call block_size override; see PagedUpdateCacheParams::block_size_override.
+    const std::optional<uint32_t> block_size_override = std::nullopt;
+    // Optional circular-buffer capacity (in tokens) for the cache view. When set, the
+    // kernel computes ``seq_tile_id %= (cache_position_modulo / TILE_HEIGHT)`` before
+    // resolving the page_table entry, so a bounded sliding-window cache can be filled
+    // from a prefill longer than the capacity — only the last cache_position_modulo
+    // tokens survive in the cache after the writes, exactly what attention needs.
+    // Must be a multiple of the effective block_size. See
+    // PagedUpdateCacheParams::cache_position_modulo for the companion decode-side kwarg.
+    const std::optional<uint32_t> cache_position_modulo = std::nullopt;
 };
 
 struct PagedFillCacheInputs {

@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
+
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -27,8 +29,9 @@ flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED: return flatbuffer::TensorMemoryLayout::HeightSharded;
         case TensorMemoryLayout::WIDTH_SHARDED: return flatbuffer::TensorMemoryLayout::WidthSharded;
         case TensorMemoryLayout::BLOCK_SHARDED: return flatbuffer::TensorMemoryLayout::BlockSharded;
+        case TensorMemoryLayout::ND_SHARDED: return flatbuffer::TensorMemoryLayout::NdSharded;
+        default: TT_THROW("Unsupported TensorMemoryLayout to flatbuffer.");
     }
-    TT_THROW("Unsupported TensorMemoryLayout to flatbuffer.");
 }
 
 // For page sizes, keep lambda usage consistent across types.
@@ -43,9 +46,22 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
     auto create_fb_vec_of_structs = [&](const auto& array, auto fb_type_tag) {
         using FlatBufferType = decltype(fb_type_tag);
         std::vector<FlatBufferType> vec;
+        vec.reserve(array.size());
         for (size_t i = 0; i < array.size(); i++) {
             if (array[i]) {
                 vec.push_back(FlatBufferType{static_cast<uint32_t>(i), to_flatbuffer(*array[i])});
+            }
+        }
+        return builder.CreateVectorOfStructs(vec);
+    };
+
+    auto create_fb_vec_of_unpack_face_geometry = [&](const auto& array) {
+        std::vector<flatbuffer::CBConfigUnpackFaceGeometry> vec;
+        vec.reserve(array.size());
+        for (size_t i = 0; i < array.size(); i++) {
+            if (array[i]) {
+                vec.push_back(flatbuffer::CBConfigUnpackFaceGeometry{
+                    static_cast<uint32_t>(i), array[i]->face_r_dim, array[i]->num_faces});
             }
         }
         return builder.CreateVectorOfStructs(vec);
@@ -82,7 +98,8 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         create_fb_vec_of_uint8(config.remote_buffer_indices()),
         config.dynamic_cb(),
         config.max_size(),
-        config.buffer_size());
+        config.buffer_size(),
+        create_fb_vec_of_unpack_face_geometry(config.unpack_face_geometry()));
 }
 
 // TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp

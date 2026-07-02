@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,10 +25,9 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
@@ -281,7 +280,7 @@ bool matmul_large_block(
     std::vector<uint32_t> writer_rt_args;
     std::string writer_kernel;
     if (output_rm) {
-        writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
+        writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp";
         writer_rt_args = {dst_dram_buffer->address(), 0, uint(M * N)};
     } else {
         writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp";

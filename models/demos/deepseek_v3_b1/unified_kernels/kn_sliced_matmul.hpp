@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -14,6 +15,7 @@
 #include "api/compute/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/pack_block.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -66,12 +68,13 @@ struct KNSlicedMatmul {
 
     // Compute args (TRISC)
     struct ComputeArgs {
-        uint32_t act_cb;           // activation CB (full shared buffer)
-        uint32_t weights_cb;       // weights CB (per-core K-slice)
-        uint32_t out_cb;           // output CB (out_w tiles)
-        uint32_t k_offset;         // tile offset into act_cb
-        uint32_t k_per_core;       // K tiles this core processes
-        uint32_t act_total_tiles;  // total tiles in act_cb (for wait/pop)
+        uint32_t act_cb;                        // activation CB (full shared buffer)
+        uint32_t weights_cb;                    // weights CB (per-core K-slice)
+        uint32_t out_cb;                        // output CB (out_w tiles)
+        uint32_t k_offset;                      // tile offset into act_cb
+        uint32_t k_per_core;                    // K tiles this core processes
+        uint32_t act_total_tiles;               // total tiles in act_cb (for wait/pop)
+        uint32_t weights_address_override = 0;  // byte address; overrides weights read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -110,10 +113,15 @@ struct KNSlicedMatmul {
 
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                 args.act_cb, args.weights_cb, args.out_cb, out_w);
+            pack_block_contiguous_init(args.out_cb);
 
             // Wait for all activation tiles and weight tiles
+            if (args.weights_address_override > 0) {
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(args.weights_cb, args.weights_address_override); }));
+            } else {
+                cb_wait_front(args.weights_cb, args.k_per_core);
+            }
             cb_wait_front(args.act_cb, args.act_total_tiles);
-            cb_wait_front(args.weights_cb, args.k_per_core);
 
             // Reserve output tile
             cb_reserve_back(args.out_cb, out_w);
@@ -123,9 +131,8 @@ struct KNSlicedMatmul {
             tile_regs_commit();
 
             tile_regs_wait();
-            for (uint32_t j = 0; j < out_w; j++) {
-                pack_tile(j, args.out_cb, j);
-            }
+            pack_block_contiguous(0, args.out_cb, out_w);
+            cb_push_back(args.out_cb, out_w);
             tile_regs_release();
 
             custom_mm_block_uninit<dense_packing>();
@@ -137,8 +144,6 @@ struct KNSlicedMatmul {
             if constexpr (pop_weights) {
                 cb_pop_front(args.weights_cb, args.k_per_core);
             }
-
-            cb_push_back(args.out_cb, out_w);
 #endif
         }
     };  // class Op

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 
 #include <ostream>
 #include <cstdint>
+
+namespace tt::tt_metal {
 
 enum class MathFidelity : uint8_t {
     LoFi = 0,
@@ -27,16 +29,24 @@ inline std::ostream& operator<<(std::ostream& os, const MathFidelity& fidelity) 
     return os;
 }
 
-template <>
-struct std::hash<MathFidelity> {
-    std::size_t operator()(MathFidelity const& obj) const noexcept { return static_cast<std::size_t>(obj); }
-};
-
 /**
- * Specifies mode of operation for unpacking directly to Dest regsiter.
+ * Specifies mode of operation for unpacking directly to Dest register.
  * Default mode enables all dataformats (except Float32) to be unpacked into Dest. Buffers
  * with Default mode can be used to unpack to SRCA/B or Dest.
  * UnpackToDestFp32 enables unpacking Float32 data to Dest with full precision, but makes
  * the buffer incompatible with unpacking to SRCA/B.
  */
 enum class UnpackToDestMode : uint8_t { UnpackToDestFp32, Default };
+
+}  // namespace tt::tt_metal
+
+template <>
+struct std::hash<tt::tt_metal::MathFidelity> {
+    std::size_t operator()(const tt::tt_metal::MathFidelity& obj) const noexcept {
+        return static_cast<std::size_t>(obj);
+    }
+};
+
+// Adding to tt::tt_metal namespace as we transition to moving this out of global namespace eventually.
+using MathFidelity [[deprecated("Use tt::tt_metal::MathFidelity")]] = tt::tt_metal::MathFidelity;
+using UnpackToDestMode [[deprecated("Use tt::tt_metal::UnpackToDestMode")]] = tt::tt_metal::UnpackToDestMode;

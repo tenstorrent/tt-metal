@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -19,6 +20,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/shape.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace tt::tt_metal {
 
@@ -33,7 +35,10 @@ enum class DataType {
     UINT8 = 5,
     UINT16 = 6,
     INT32 = 7,
-    INVALID = 8,
+    // WARNING: narrowly supported — Blackhole only, ROW-MAJOR only for now, used exclusively
+    // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
+    FP8_E4M3 = 8,
+    INVALID = 9,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
@@ -64,6 +69,13 @@ bool is_block_float(DataType dtype);
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 
+/**
+ * Returns tile size of given data type in bytes.
+ *
+ * Equivalent to tt::tile_size(datatype_to_dataformat_converter(dtype)).
+ */
+uint32_t tile_size(DataType dtype);
+
 struct NdShardSpec {
     Shape shard_shape;
     CoreRangeSet grid;
@@ -82,3 +94,8 @@ using PadValue = std::variant<uint32_t, float>;
 std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt::tt_metal
+
+template <>
+struct fmt::formatter<tt::tt_metal::DataType> : fmt::formatter<string_view> {
+    auto format(tt::tt_metal::DataType dt, format_context& ctx) const -> format_context::iterator;
+};

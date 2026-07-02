@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include "allocator/allocator.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
 
@@ -300,12 +301,24 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
         std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
-            cq_zeros.data(),
-            (cq_size - cq_start),
-            get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
-            mmio_device_id,
-            channel);
+        if (local_device->sysmem_manager().is_dram_backed()) {
+            const uint32_t dram_channel = local_device->allocator_impl()->get_dram_channel_from_bank_id(
+                local_device->sysmem_manager().get_dram_region_bank_id());
+            tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
+                cq_zeros.data(),
+                (cq_size - cq_start),
+                local_device->id(),
+                dram_channel,
+                local_device->sysmem_manager().get_dram_region_base_addr() +
+                    get_absolute_cq_offset(channel, 0, cq_size) + cq_start);
+        } else {
+            tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
+                cq_zeros.data(),
+                (cq_size - cq_start),
+                get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
+                mmio_device_id,
+                channel);
+        }
     }
 
     // Create src vector
@@ -520,3 +533,42 @@ INSTANTIATE_TEST_SUITE_P(
         )       // Combine
 );
 // clang-format on
+
+// Device-free check of the shard->core placement formula for both 1D strategies.
+// 8 single-page shards over 2 cores (R = 4 shards per core). Round-robin spreads
+// consecutive shards across cores; CONTIGUOUS_1D (shard-contiguous) packs a contiguous run per core.
+TEST(BufferDistributionSpecContiguous, ShardContiguousVsRoundRobinPlacement) {
+    const tt::tt_metal::Shape tensor_in_pages{8, 1};
+    const tt::tt_metal::Shape shard_in_pages{1, 1};
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
+
+    BufferDistributionSpec round_robin(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::ROUND_ROBIN_1D);
+    BufferDistributionSpec shard_contiguous(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::CONTIGUOUS_1D);
+
+    ASSERT_EQ(round_robin.num_cores(), 2u);
+    ASSERT_EQ(shard_contiguous.num_cores(), 2u);
+
+    const auto round_robin_map = round_robin.compute_page_mapping().core_host_page_indices;
+    const auto shard_contiguous_map = shard_contiguous.compute_page_mapping().core_host_page_indices;
+
+    // Round-robin: core c holds shards c, c + num_cores, ...
+    EXPECT_EQ(round_robin_map[0], (std::vector<uint32_t>{0, 2, 4, 6}));
+    EXPECT_EQ(round_robin_map[1], (std::vector<uint32_t>{1, 3, 5, 7}));
+
+    // Shard-contiguous: core c holds the contiguous run c*R .. c*R + R - 1.
+    EXPECT_EQ(shard_contiguous_map[0], (std::vector<uint32_t>{0, 1, 2, 3}));
+    EXPECT_EQ(shard_contiguous_map[1], (std::vector<uint32_t>{4, 5, 6, 7}));
+}
+
+// CONTIGUOUS_1D requires a uniform shards-per-core; an indivisible count must fatal.
+TEST(BufferDistributionSpecContiguous, ShardContiguousRequiresUniformShardsPerCore) {
+    const tt::tt_metal::Shape tensor_in_pages{7, 1};  // 7 shards over 2 cores -> not uniform
+    const tt::tt_metal::Shape shard_in_pages{1, 1};
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
+
+    BufferDistributionSpec shard_contiguous(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::CONTIGUOUS_1D);
+    EXPECT_ANY_THROW((void)shard_contiguous.compute_page_mapping());
+}

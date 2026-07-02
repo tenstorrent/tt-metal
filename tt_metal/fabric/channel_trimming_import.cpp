@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "channel_trimming_import.hpp"
 
+#include <algorithm>
 #include <limits>
-#include <stdexcept>
 #include <string>
 
 #include <tt-logger/tt-logger.hpp>
@@ -47,6 +47,34 @@ int parse_noc_send_type(const std::string& name) {
         return NocSendType::NOC_UNICAST_READ;
     }
     return -1;
+}
+
+std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info_impl(
+    const ChannelTrimmingOverrides& entry,
+    std::size_t actual_sender_channels_vc0,
+    const ChannelTrimmingGlobalOverrides& global_overrides) {
+    if (global_overrides.per_vc[0].has_override()) {
+        return std::nullopt;
+    }
+
+    Vc0TrimFastPathInfo info{};
+
+    const std::size_t vc0_width = std::min<std::size_t>(actual_sender_channels_vc0, 8u * sizeof(uint16_t));
+    const uint16_t vc0_mask = vc0_width == 0 ? 0 : static_cast<uint16_t>((1u << vc0_width) - 1u);
+    const uint16_t vc0_sender_mask = entry.sender_channel_used_bitfield_by_vc & vc0_mask;
+    const bool vc0_sender_idle = vc0_sender_mask == 0;
+    const bool vc0_worker_only = vc0_sender_mask == 0x1u;
+    const bool vc0_receiver_observed_traffic = entry.is_receiver_channel_data_forwarded(0);
+    const bool vc0_has_downstream_router_forwarding = entry.sender_channel_forwarded_to_bitfield_by_vc[0] != 0;
+    const bool vc0_has_no_downstream_forwarding =
+        !vc0_receiver_observed_traffic || !vc0_has_downstream_router_forwarding;
+
+    info.worker_only_nonforwarding = vc0_worker_only && vc0_has_no_downstream_forwarding;
+    info.terminal_only_nonforwarding =
+        vc0_sender_idle && vc0_receiver_observed_traffic && !vc0_has_downstream_router_forwarding;
+    info.terminal_or_source_only = (vc0_sender_idle || vc0_worker_only) && vc0_has_no_downstream_forwarding;
+
+    return info;
 }
 
 // Import sender_channels sequence into the entry's per-channel arrays and forwarded-to bitfields.
@@ -116,6 +144,13 @@ void import_noc_send_types(const YAML::Node& chan_data, ChannelTrimmingOverrides
 
 }  // namespace
 
+std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info(
+    const ChannelTrimmingOverrides& entry,
+    std::size_t actual_sender_channels_vc0,
+    const ChannelTrimmingGlobalOverrides& global_overrides) {
+    return try_derive_vc0_trim_fast_path_info_impl(entry, actual_sender_channels_vc0, global_overrides);
+}
+
 ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& yaml_path) {
     log_info(tt::LogFabric, "Loading channel trimming profile from: {}", yaml_path);
 
@@ -170,6 +205,71 @@ ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& ya
     }
 
     log_info(tt::LogFabric, "Loaded {} channel trimming overrides from profile", overrides.size());
+    return overrides;
+}
+
+ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std::string& yaml_path) {
+    log_info(tt::LogFabric, "Loading channel trimming global overrides from: {}", yaml_path);
+
+    YAML::Node root = YAML::LoadFile(yaml_path);
+    TT_FATAL(
+        root["channel_trimming_overrides"],
+        "Override YAML missing 'channel_trimming_overrides' root key: {}",
+        yaml_path);
+
+    ChannelTrimmingGlobalOverrides overrides;
+    const auto& overrides_node = root["channel_trimming_overrides"];
+
+    auto vc_keys = collect_map_keys(overrides_node);
+    for (const auto& vc_key : vc_keys) {
+        // Parse "vcN" → N
+        TT_FATAL(
+            vc_key.size() >= 3 && vc_key.substr(0, 2) == "vc",
+            "Invalid VC key '{}' in override YAML (expected 'vc0', 'vc1', ...)",
+            vc_key);
+        size_t vc = std::stoul(vc_key.substr(2));
+        TT_FATAL(
+            vc < builder_config::MAX_NUM_VCS,
+            "VC index {} exceeds MAX_NUM_VCS ({}) in override YAML",
+            vc,
+            builder_config::MAX_NUM_VCS);
+
+        const auto& vc_node = overrides_node[vc_key];
+        auto& vc_override = overrides.per_vc[vc];
+
+        if (vc_node["force_enable_all_sender_channels"]) {
+            vc_override.force_enable_all_sender_channels = vc_node["force_enable_all_sender_channels"].as<bool>();
+        }
+        if (vc_node["force_enable_all_receiver_channels"]) {
+            vc_override.force_enable_all_receiver_channels = vc_node["force_enable_all_receiver_channels"].as<bool>();
+        }
+        if (vc_node["force_enable_sender_channels"]) {
+            std::vector<size_t> indices;
+            for (const auto& idx_node : vc_node["force_enable_sender_channels"]) {
+                indices.push_back(idx_node.as<size_t>());
+            }
+            vc_override.force_enable_sender_channels = std::move(indices);
+        }
+        if (vc_node["force_enable_receiver_channels"]) {
+            std::vector<size_t> indices;
+            for (const auto& idx_node : vc_node["force_enable_receiver_channels"]) {
+                indices.push_back(idx_node.as<size_t>());
+            }
+            vc_override.force_enable_receiver_channels = std::move(indices);
+        }
+
+        log_debug(
+            tt::LogFabric,
+            "  VC{}: force_all_sender={} force_all_receiver={} sender_indices={} receiver_indices={}",
+            vc,
+            vc_override.force_enable_all_sender_channels.value_or(false),
+            vc_override.force_enable_all_receiver_channels.value_or(false),
+            vc_override.force_enable_sender_channels.has_value() ? vc_override.force_enable_sender_channels->size() : 0,
+            vc_override.force_enable_receiver_channels.has_value() ? vc_override.force_enable_receiver_channels->size()
+                                                                   : 0);
+    }
+
+    log_info(tt::LogFabric, "Loaded channel trimming global overrides from: {}", yaml_path);
     return overrides;
 }
 

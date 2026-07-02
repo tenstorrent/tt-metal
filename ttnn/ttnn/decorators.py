@@ -1,20 +1,15 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import glob
 import os
 
 import pathlib
-import shutil
 import sys
-import time
-import traceback
 import types
 
 from contextlib import contextmanager
-from datetime import datetime
 from functools import wraps
 from importlib.machinery import ModuleSpec
 from importlib.util import module_from_spec
@@ -23,7 +18,6 @@ from typing import Callable
 from loguru import logger
 
 import ttnn
-import ttnn.database
 import ttnn.operation_tracer
 
 
@@ -53,17 +47,17 @@ def compare_tensors_using_pcc(
     comparison_records = []
     for index, (golden_output, output) in enumerate(zip(golden_outputs, outputs)):
         if not isinstance(output, torch.Tensor):
-            torch_output = ttnn.to_torch(output)
+            torch_output = to_torch_for_comparison(output, golden_output)
         else:
             torch_output = output
         matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
-        comparison_record = ttnn.database.TensorComparisonRecord(
-            tensor_id=output.tensor_id,
-            golden_tensor_id=golden_output.tensor_id,
-            matches=matches,
-            desired_pcc=desired_pcc,
-            actual_pcc=actual_pcc,
-        )
+        comparison_record = {
+            "tensor_id": int(output.tensor_id),
+            "golden_tensor_id": int(golden_output.tensor_id),
+            "matches": bool(matches),
+            "desired_pcc": float(desired_pcc),
+            "actual_pcc": float(actual_pcc),
+        }
         comparison_records.append(comparison_record)
 
         if not matches:
@@ -215,19 +209,194 @@ def set_tensor_id(tensor, force=False):
         raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
 
 
+def get_output_tensor_ids(output):
+    """Return the list of tensor_id ints from all tensors in *output*.
+
+    Tensor IDs must already be assigned (via ``set_tensor_id``).
+    """
+    ids = []
+    for t in get_all_tensors(output):
+        tid = getattr(t, "tensor_id", None)
+        if tid is not None:
+            ids.append(int(tid))
+    return ids
+
+
+def to_torch_for_comparison(tensor, golden_tensor=None):
+    import math
+    import torch
+
+    if isinstance(tensor, torch.Tensor):
+        return tensor
+
+    if not isinstance(tensor, ttnn.Tensor):
+        raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
+
+    try:
+        topology = tensor.tensor_topology()
+        placements = list(topology.placements())
+        distribution_shape = [int(dim) for dim in list(topology.distribution_shape())]
+    except Exception:
+        placements = []
+        distribution_shape = []
+
+    def get_shape(value):
+        try:
+            return tuple(int(dim) for dim in value.shape)
+        except Exception:
+            return None
+
+    def compose_device_tensors():
+        try:
+            device_tensors = ttnn.get_device_tensors(tensor)
+        except Exception:
+            return None
+
+        if not device_tensors:
+            return None
+
+        torch_shards = [ttnn.to_torch(device_tensor) for device_tensor in device_tensors]
+        if len(torch_shards) == 1:
+            return torch_shards[0]
+
+        target_shape = get_shape(golden_tensor) or get_shape(tensor)
+        first_shape = tuple(torch_shards[0].shape)
+
+        if target_shape is not None and first_shape == target_shape:
+            return torch_shards[0]
+
+        candidate_dims = []
+        for dim in range(len(first_shape)):
+            if any(len(shard.shape) != len(first_shape) for shard in torch_shards):
+                break
+            if any(
+                tuple(shard.shape[:dim]) != first_shape[:dim] or tuple(shard.shape[dim + 1 :]) != first_shape[dim + 1 :]
+                for shard in torch_shards
+            ):
+                continue
+
+            composed_shape = list(first_shape)
+            composed_shape[dim] = sum(shard.shape[dim] for shard in torch_shards)
+            if target_shape is None or tuple(composed_shape) == target_shape:
+                candidate_dims.append(dim)
+
+        if candidate_dims:
+            return torch.cat(torch_shards, dim=candidate_dims[0])
+
+        return None
+
+    if placements and math.prod(distribution_shape) > 1:
+        has_shard = any(isinstance(placement, ttnn.PlacementShard) for placement in placements)
+        try:
+            device_tensors = ttnn.get_device_tensors(tensor)
+        except Exception:
+            device_tensors = []
+
+        if has_shard and device_tensors:
+            try:
+                per_device_rank = len(device_tensors[0].shape)
+            except Exception:
+                per_device_rank = None
+            if per_device_rank is not None and any(
+                isinstance(placement, ttnn.PlacementShard) and placement.dim >= per_device_rank
+                for placement in placements
+            ):
+                return ttnn.to_torch(device_tensors[0])
+
+        if not has_shard:
+            composed = compose_device_tensors()
+            if composed is not None:
+                return composed
+
+        mesh_device = tensor.device()
+        if mesh_device is None:
+            mesh_device = ttnn.GetDefaultDevice()
+
+        if mesh_device is not None:
+            composer_dims = []
+            composer_shape = []
+            for placement, dim_size in zip(placements, distribution_shape):
+                if isinstance(placement, ttnn.PlacementShard):
+                    composer_dims.append(placement.dim)
+                    composer_shape.append(dim_size)
+                else:
+                    composer_dims.append(0)
+                    composer_shape.append(1)
+
+            mesh_composer = ttnn.create_mesh_composer(
+                mesh_device,
+                ttnn.MeshComposerConfig(
+                    dims=composer_dims,
+                    mesh_shape_override=ttnn.MeshShape(composer_shape),
+                ),
+            )
+            return ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+
+    composed = compose_device_tensors()
+    if composed is not None:
+        return composed
+
+    return ttnn.to_torch(tensor)
+
+
+def get_tensor_report_record(tensor):
+    import torch
+
+    if isinstance(tensor, ttnn.Tensor):
+        device_id = None
+        address = None
+        memory_config = None
+        buffer_type = None
+        if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE) and tensor.is_allocated():
+            memory_config = ttnn.get_memory_config(tensor)
+            device_id = tensor.device().id()
+            address = tensor.buffer_address()
+            buffer_type = memory_config.buffer_type.value
+
+        return {
+            "tensor_id": int(tensor.tensor_id),
+            "shape": str(tensor.shape),
+            "dtype": str(tensor.dtype),
+            "layout": str(tensor.layout),
+            "memory_config": str(memory_config) if memory_config is not None else None,
+            "device_id": device_id,
+            "address": address,
+            "buffer_type": buffer_type,
+        }
+
+    if isinstance(tensor, torch.Tensor):
+        return {
+            "tensor_id": int(tensor.tensor_id),
+            "shape": str(tensor.shape),
+            "dtype": str(tensor.dtype),
+            "layout": str(tensor.layout),
+            "memory_config": None,
+            "device_id": None,
+            "address": None,
+            "buffer_type": None,
+        }
+
+    raise RuntimeError(f"Unsupported tensor report record type: {type(tensor)}")
+
+
+def set_output_tensor_id_decorator(function):
+    @wraps(function)
+    def call_wrapper(*function_args, **function_kwargs):
+        output = function(*function_args, **function_kwargs)
+        output_tensors = get_all_tensors(output)
+        set_tensor_id(output_tensors, force=True)
+        return output
+
+    return call_wrapper
+
+
 OPERATION_CALL_STACK = []
-
-
-@dataclasses.dataclass
-class OutputWithDuration:
-    output: any
-    duration: float
 
 
 def default_preprocess_golden_function_inputs(function_args, function_kwargs):
     def recursive_preprocess_golden_function_inputs(object_value):
         if isinstance(object_value, ttnn.Tensor):
-            return ttnn.to_torch(object_value)
+            return to_torch_for_comparison(object_value)
         elif isinstance(object_value, (list, tuple)):
             new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
             return type(object_value)(new_object_value)
@@ -274,9 +443,12 @@ def default_postprocess_golden_function_outputs(output, function_args, function_
 
 
 TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
+TENSOR_IDS_PRODUCED_BY_OPERATION = set()
 
 
 def preprocess_global_golden_function_inputs(function_args, function_kwargs):
+    if ttnn.CONFIG.report_path is None:
+        return None
     input_index = 0
 
     def recursive_preprocess_golden_function_inputs(object_value):
@@ -285,10 +457,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             if object_value.tensor_id is None:
                 raise RuntimeError(f"Input tensor does not have a tensor_id")
             if object_value.tensor_id not in TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR:
-                if (
-                    ttnn.database.query_output_tensor_by_tensor_id(ttnn.CONFIG.report_path, object_value.tensor_id)
-                    is not None
-                ):
+                if object_value.tensor_id in TENSOR_IDS_PRODUCED_BY_OPERATION:
                     logger.warning(
                         f"Intermediate tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the global golden tensors. Global golden will be skipped"
                     )
@@ -297,7 +466,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
                     logger.warning(
                         f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index})  is not found in the global golden tensors. Creating it from ttnn tensor."
                     )
-                    golden_tensor = ttnn.to_torch(object_value)
+                    golden_tensor = to_torch_for_comparison(object_value)
             else:
                 golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
             input_index += 1
@@ -359,10 +528,30 @@ class FastOperation:
     postprocess_golden_function_outputs: Callable
     is_cpp_operation: bool
     is_experimental: bool
+    _slow_operation: "Operation | None" = dataclasses.field(default=None, init=False, repr=False)
 
     @property
     def __name__(self):
         return self.python_fully_qualified_name
+
+    def _requires_slow_runtime(self) -> bool:
+        return (
+            not ttnn.CONFIG.enable_fast_runtime_mode or ttnn.CONFIG.enable_comparison_mode or ttnn.CONFIG.enable_logging
+        )
+
+    def _slow_operation_instance(self) -> "Operation":
+        if self._slow_operation is None:
+            self._slow_operation = Operation(
+                python_fully_qualified_name=self.python_fully_qualified_name,
+                function=self.function,
+                golden_function=self.golden_function,
+                preprocess_golden_function_inputs=self.preprocess_golden_function_inputs,
+                postprocess_golden_function_outputs=self.postprocess_golden_function_outputs,
+                is_cpp_operation=self.is_cpp_operation,
+                is_experimental=self.is_experimental,
+            )
+            self._slow_operation.__post_init__()
+        return self._slow_operation
 
     def __gt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
@@ -440,11 +629,21 @@ class FastOperation:
         )
 
     def __call__(self, *function_args, **function_kwargs):
+        if self._requires_slow_runtime():
+            return self._slow_operation_instance()(*function_args, **function_kwargs)
+
         cq_id = None
         if "queue_id" in function_kwargs:
             cq_id = function_kwargs.pop("queue_id")
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
 
         try:
             if cq_id is None:
@@ -457,6 +656,13 @@ class FastOperation:
             if enhanced_msg:
                 raise TypeError(enhanced_msg) from e
             raise
+        finally:
+            if recording:
+                ttnn.graph.track_function_end()
+
+        if recording:
+            set_tensor_id(get_all_tensors(result), force=True)
+            ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(result))
 
         return result
 
@@ -510,37 +716,25 @@ class Operation:
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
 
-        def set_output_tensor_id_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                output = function(*function_args, **function_kwargs)
-                output_tensors = get_all_tensors(output)
-                # Set new tensor id to store the outputs of in-place operations correctly
-                set_tensor_id(output_tensors, force=True)
-                return output
-
-            return call_wrapper
-
-        def duration_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                start = time.time()
-                output = function(*function_args, **function_kwargs)
-                end = time.time()
-                duration = end - start
-                return OutputWithDuration(output, duration)
-
-            return call_wrapper
-
         def comparison_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
                 import torch
 
+                local_golden_function_args_and_kwargs = None
+                global_golden_function_args_and_kwargs = None
                 if self.golden_function is not None:
-                    local_golden_function_args, local_golden_function_kwargs = self.preprocess_golden_function_inputs(
-                        function_args, function_kwargs
-                    )
+                    try:
+                        local_golden_function_args_and_kwargs = self.preprocess_golden_function_inputs(
+                            function_args, function_kwargs
+                        )
+                    except Exception as e:
+                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
+                            raise
+                        logger.warning(
+                            f"{self.python_fully_qualified_name}: Failed to preprocess local golden inputs: {e}. "
+                            "Local comparison will be skipped"
+                        )
                     global_golden_function_args_and_kwargs = preprocess_global_golden_function_inputs(
                         function_args, function_kwargs
                     )
@@ -554,6 +748,7 @@ class Operation:
                     logger.debug(
                         f"{self.python_fully_qualified_name}: Skipping comparison against CPU because golden_function is not provided"
                     )
+                    TENSOR_IDS_PRODUCED_BY_OPERATION.update(get_output_tensor_ids(function_return_value))
                     return function_return_value, (
                         local_tensor_comparison_records,
                         [],
@@ -561,50 +756,86 @@ class Operation:
                         [],
                     )
 
-                if isinstance(function_return_value, OutputWithDuration):
-                    output = function_return_value.output
-                else:
-                    output = function_return_value
+                output = function_return_value
 
                 logger.debug(f"{self.python_fully_qualified_name}: Comparing against CPU")
-                local_golden_function_output = self.golden_function(
-                    *local_golden_function_args, **local_golden_function_kwargs
-                )
+                local_golden_function_output = None
+                if local_golden_function_args_and_kwargs is not None:
+                    local_golden_function_args, local_golden_function_kwargs = local_golden_function_args_and_kwargs
+                    try:
+                        local_golden_function_output = self.golden_function(
+                            *local_golden_function_args, **local_golden_function_kwargs
+                        )
+                    except Exception as e:
+                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
+                            raise
+                        logger.warning(
+                            f"{self.python_fully_qualified_name}: Failed to compute local golden output: {e}. "
+                            "Local comparison will be skipped"
+                        )
 
                 global_golden_function_output = None
                 if global_golden_function_args_and_kwargs is not None:
                     global_golden_function_args, global_golden_function_kwargs = global_golden_function_args_and_kwargs
-                    global_golden_function_output = self.golden_function(
-                        *global_golden_function_args, **global_golden_function_kwargs
-                    )
+                    try:
+                        global_golden_function_output = self.golden_function(
+                            *global_golden_function_args, **global_golden_function_kwargs
+                        )
+                    except Exception as e:
+                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
+                            raise
+                        logger.warning(
+                            f"{self.python_fully_qualified_name}: Failed to compute global golden output: {e}. "
+                            "Global comparison will be skipped"
+                        )
 
                 if local_golden_function_output is not None:
-                    set_tensor_id(local_golden_function_output)
-                    local_tensor_comparison_records = compare_tensors_using_pcc(
-                        self.python_fully_qualified_name,
-                        local_golden_function_output,
-                        output,
-                        desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
-                        level="locally",
-                        fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
-                    )
+                    try:
+                        set_tensor_id(local_golden_function_output)
+                        local_tensor_comparison_records = compare_tensors_using_pcc(
+                            self.python_fully_qualified_name,
+                            local_golden_function_output,
+                            output,
+                            desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
+                            level="locally",
+                            fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
+                        )
+                    except Exception as e:
+                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
+                            raise
+                        local_golden_function_output = None
+                        logger.warning(
+                            f"{self.python_fully_qualified_name}: Failed local tensor comparison: {e}. "
+                            "Local comparison will be skipped"
+                        )
 
                 if global_golden_function_output is not None:
-                    set_tensor_id(global_golden_function_output)
-                    postprocess_global_golden_function_outputs(output, global_golden_function_output)
-                    global_tensor_comparison_records = compare_tensors_using_pcc(
-                        self.python_fully_qualified_name,
-                        global_golden_function_output,
-                        output,
-                        desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
-                        level="globally",
-                        fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
-                    )
+                    try:
+                        set_tensor_id(global_golden_function_output)
+                        postprocess_global_golden_function_outputs(output, global_golden_function_output)
+                        global_tensor_comparison_records = compare_tensors_using_pcc(
+                            self.python_fully_qualified_name,
+                            global_golden_function_output,
+                            output,
+                            desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
+                            level="globally",
+                            fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
+                        )
+                    except Exception as e:
+                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
+                            raise
+                        global_golden_function_output = None
+                        logger.warning(
+                            f"{self.python_fully_qualified_name}: Failed global tensor comparison: {e}. "
+                            "Global comparison will be skipped"
+                        )
 
                 if isinstance(local_golden_function_output, torch.Tensor):
                     local_golden_function_output = [local_golden_function_output]
                 if isinstance(global_golden_function_output, torch.Tensor):
                     global_golden_function_output = [global_golden_function_output]
+
+                TENSOR_IDS_PRODUCED_BY_OPERATION.update(get_output_tensor_ids(output))
 
                 return function_return_value, (
                     local_tensor_comparison_records,
@@ -618,18 +849,6 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
-                if ttnn.CONFIG.report_path is not None:
-                    # If the database already exists, get the operation_id from the latest operation
-                    latest_operation = ttnn.database.query_latest_operation(ttnn.CONFIG.report_path)
-                    if latest_operation is not None:
-                        operation_id = latest_operation.operation_id + 1
-                        ttnn._ttnn.set_python_operation_id(operation_id)
-
-                    latest_tensor = ttnn.database.query_latest_tensor(ttnn.CONFIG.report_path)
-                    if latest_tensor is not None:
-                        tensor_id = latest_tensor.tensor_id + 1
-                        ttnn._ttnn.set_tensor_id(tensor_id)
-
                 operation_id = ttnn._ttnn.get_python_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
@@ -660,6 +879,9 @@ class Operation:
                         self.python_fully_qualified_name, decorated_function
                     )
 
+                if ttnn.graph.is_python_io_recording_enabled():
+                    ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
                     set_tensor_id(input_tensors)
@@ -672,35 +894,14 @@ class Operation:
 
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
-                    if ttnn.CONFIG.report_path is not None:
-                        cluster_descriptor_path = pathlib.Path(ttnn.CONFIG.report_path) / "cluster_descriptor.yaml"
-                        if not cluster_descriptor_path.exists():
-                            save_cluster_descriptor(str(cluster_descriptor_path))
-                        if not glob.glob(str(ttnn.CONFIG.report_path) + "/physical_chip_mesh_coordinate_mapping*.yaml"):
-                            save_mesh_descriptor(ttnn.CONFIG.report_path)
-                        ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
-                        ttnn.database.insert_stack_trace(
-                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
-                        )
-                        ttnn.database.insert_operation_arguments(
-                            ttnn.CONFIG.report_path, operation_id, function_args, function_kwargs
-                        )
-                        ttnn.database.insert_input_tensors(ttnn.CONFIG.report_path, operation_id, input_tensors)
-
-                    decorated_function = duration_decorator(decorated_function)
-
                 if ttnn.CONFIG.enable_comparison_mode:
                     decorated_function = comparison_decorator(decorated_function)
 
-                # Initialize variables that may be needed in finally block
-                output = None
-                duration = None
-                captured_graph = None
+                # Initialize variables for comparison mode
                 local_tensor_comparison_records = []
                 local_golden_function_output = []
                 global_tensor_comparison_records = []
                 global_golden_function_output = []
-                output_tensors = []
 
                 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
@@ -711,25 +912,7 @@ class Operation:
                         with command_queue(cq_id):
                             output = decorated_function(*function_args, **function_kwargs)
 
-                except Exception as e:
-                    # Record error to database if reporting is enabled
-                    if ttnn.CONFIG.report_path is not None:
-                        operation_id = ttnn._ttnn.get_python_operation_id()
-                        error_type = type(e).__name__
-                        error_message = str(e)
-                        stack_trace = traceback.format_exc()
-                        timestamp = datetime.now().isoformat()
-                        ttnn.database.insert_error(
-                            ttnn.CONFIG.report_path,
-                            operation_id,
-                            self.python_fully_qualified_name,
-                            error_type,
-                            error_message,
-                            stack_trace,
-                            timestamp,
-                        )
-                    raise
-                else:
+                    # Success path - only runs if no exception
                     if ttnn.CONFIG.enable_comparison_mode:
                         (
                             output,
@@ -744,50 +927,24 @@ class Operation:
                     if ttnn.CONFIG.enable_logging:
                         for device in devices:
                             ttnn.synchronize_device(device)
-
-                        output, duration = output.output, output.duration
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")
 
-                        output_tensors = get_all_tensors(output)
-
-                        if ttnn.CONFIG.report_path is not None:
-                            ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
-                            ttnn.database.insert_tensor_comparison_records(
-                                ttnn.CONFIG.report_path,
-                                "local_tensor_comparison_records",
-                                local_tensor_comparison_records,
-                            )
-                            if local_golden_function_output is not None:
-                                ttnn.database.store_tensors(ttnn.CONFIG.report_path, local_golden_function_output)
-                            ttnn.database.insert_tensor_comparison_records(
-                                ttnn.CONFIG.report_path,
-                                "global_tensor_comparison_records",
-                                global_tensor_comparison_records,
-                            )
-                            if global_golden_function_output is not None:
-                                ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
-
-                            if ttnn.CONFIG.enable_graph_report:
-                                ttnn.tracer.visualize(
-                                    ttnn.tracer.GRAPH_STACK[-1],
-                                    file_name=ttnn.CONFIG.report_path
-                                    / ttnn.database.GRAPHS_PATH
-                                    / f"{operation_id}.svg",
-                                )
-                                # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
+                    # Comparison mode: record Python-specific golden comparison data
+                    # for offline graph_report import.
+                    if ttnn.CONFIG.enable_comparison_mode:
+                        golden_tensors = get_all_tensors((local_golden_function_output, global_golden_function_output))
+                        ttnn.graph.record_tensor_comparison_data(
+                            local_tensor_comparison_records=local_tensor_comparison_records,
+                            global_tensor_comparison_records=global_tensor_comparison_records,
+                            tensors=[get_tensor_report_record(tensor) for tensor in golden_tensors],
+                        )
 
                 finally:
                     captured_graph = ttnn.graph.end_graph_capture()
 
-                    if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_path is not None:
-                        ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
-                        ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
-                        ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id, devices)
-                        if ttnn.CONFIG.enable_detailed_buffer_report:
-                            ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id, devices)
-
-                        if captured_graph is not None:
-                            ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
+                if ttnn.graph.is_graph_capture_active() and ttnn.graph.is_python_io_recording_enabled():
+                    ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(output))
+                    ttnn.graph.store_captured_graph(captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
@@ -804,6 +961,9 @@ class Operation:
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
         try:
             if not OPERATION_CALL_STACK:
                 ttnn._ttnn.fetch_and_increment_python_operation_id()
@@ -811,6 +971,8 @@ class Operation:
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
             OPERATION_CALL_STACK.pop()
+            if recording:
+                ttnn.graph.track_function_end()
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)
@@ -937,6 +1099,14 @@ def create_module_if_not_exists(module_name):
     else:
         parent_module = None
 
+    # Check if parent already has this as a package attribute
+    if parent_module and hasattr(parent_module, child_module_name):
+        existing_attr = getattr(parent_module, child_module_name)
+        if hasattr(existing_attr, "__path__"):
+            # It's a package, register it and return
+            sys.modules[module_name] = existing_attr
+            return existing_attr
+
     # Create the module
     new_module = module_from_spec(ModuleSpec(module_name, None))
 
@@ -1051,27 +1221,3 @@ def register_ttl_operation_as_ttnn_operation(python_fully_qualified_name, functi
         is_experimental=True,
     )(function)
     return function
-
-
-def save_cluster_descriptor(dest_path):
-    temp_path = ttnn._ttnn.cluster.serialize_cluster_descriptor()
-
-    if not temp_path:
-        return None
-
-    shutil.copy(temp_path, dest_path)
-
-
-def save_mesh_descriptor(dest_path):
-    if not "TT_METAL_HOME" in os.environ:
-        logger.warning("Not copying mesh descriptor - TT_METAL_HOME not set")
-        return
-
-    mesh_descriptor_paths = glob.glob(f"{os.environ['TT_METAL_HOME']}/generated/fabric/*.yaml")
-
-    if not mesh_descriptor_paths:
-        logger.warning("Mesh descriptor not found")
-        return
-
-    for path in mesh_descriptor_paths:
-        shutil.copy(path, dest_path)

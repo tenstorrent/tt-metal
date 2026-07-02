@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
@@ -37,6 +37,7 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "device.hpp"
+#include "impl/device/device_impl.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -46,6 +47,7 @@
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
@@ -59,6 +61,7 @@
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -180,16 +183,14 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[idx]);
             // Per-kernel check: Only set actual offset if this kernel has RTAs
             if (max_rtas[idx] > 0) {
+                TT_FATAL(
+                    rta_offset <= std::numeric_limits<uint16_t>::max(), "RTA offset {} overflows uint16_t", rta_offset);
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                    uint32_t processor_index = hal.get_processor_index(
-                        kernel->get_kernel_programmable_core_type(),
-                        kernel->get_kernel_processor_class(),
-                        kernel->get_kernel_processor_type(i));
-                    TT_FATAL(
-                        rta_offset <= std::numeric_limits<uint16_t>::max(),
-                        "RTA offset {} overflows uint16_t",
-                        rta_offset);
-                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                    std::vector<uint32_t> processor_indices =
+                        kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                    for (uint32_t processor_index : processor_indices) {
+                        kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                    }
                 }
             }
         }
@@ -241,17 +242,17 @@ uint32_t configure_crta_offsets_for_kernel_groups(
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             // Per-kernel check: Only set actual offset if this kernel has CRTAs
             if (kg->crta_sizes[idx] > 0) {
+                TT_FATAL(
+                    kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
+                    "CRTA offset {} overflows uint16_t",
+                    kg->crta_offsets[idx]);
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                    uint32_t processor_index = hal.get_processor_index(
-                        kernel->get_kernel_programmable_core_type(),
-                        kernel->get_kernel_processor_class(),
-                        kernel->get_kernel_processor_type(i));
-                    TT_FATAL(
-                        kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
-                        "CRTA offset {} overflows uint16_t",
-                        kg->crta_offsets[idx]);
-                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
-                        kg->crta_offsets[idx];
+                    std::vector<uint32_t> processor_indices =
+                        kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                    for (uint32_t processor_index : processor_indices) {
+                        kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
+                            kg->crta_offsets[idx];
+                    }
                 }
             }
         }
@@ -332,6 +333,26 @@ uint32_t finalize_cbs(
     return tt::align(base_offset + total_cb_size, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 }
 
+void finalize_dfb_masks(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers) {
+    for (auto& kg : kernel_groups) {
+        auto kernel_config = kg->launch_msg.view().kernel_config();
+        uint64_t kg_dfb_mask = 0;
+        for (const auto& dfb : dataflow_buffers) {
+            for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
+                if (dfb->core_ranges.intersects(kg_range)) {
+                    kg_dfb_mask |= (uint64_t(1) << dfb->id);
+                    break;
+                }
+            }
+        }
+        if (kg_dfb_mask != 0) {
+            kernel_config.local_cb_mask() = kg_dfb_mask;
+        }
+    }
+}
+
 uint32_t finalize_kernel_bins(
     IDevice* device,
     uint32_t programmable_core_type_index,
@@ -340,8 +361,8 @@ uint32_t finalize_kernel_bins(
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
-    // Mock devices don't have real binaries, skip finalization
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    // Mock/emulated devices don't have real binaries, skip finalization
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;
@@ -361,8 +382,9 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
+                                                        .get_device_build_env(device->build_id())
+                                                        .build_key());
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {
@@ -374,16 +396,18 @@ uint32_t finalize_kernel_bins(
                 } else {
                     kernel_text_offset = binaries[i]->get_text_addr();
                 }
-                uint32_t processor_index = hal.get_processor_index(
-                    programmable_core_type, kernel->get_kernel_processor_class(), kernel->get_kernel_processor_type(i));
-                kg->kernel_text_offsets[processor_index] = kernel_text_offset;
-                kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                hal.set_iram_text_size(
-                    kg->launch_msg.view(),
-                    programmable_core_type,
-                    kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(i),
-                    binaries[i]->get_text_size());
+                std::vector<uint32_t> processor_indices = kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                for (uint32_t processor_index : processor_indices) {
+                    kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                    kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                    kernel_config.kernel_text_size()[processor_index] = binaries[i]->get_packed_size();
+                    hal.set_iram_text_size(
+                        kg->launch_msg.view(),
+                        programmable_core_type,
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(i),
+                        binaries[i]->get_text_size());
+                }
             }
         }
         max_offset = std::max(offset, max_offset);
@@ -408,8 +432,7 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(write_offsets);
 }
 
-void insert_stall_cmds(
-    ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* /*device*/) {
+void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id) {
     // Initialize stall command sequences for this program.
     tt::tt_metal::DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait_with_prefetch_stall();
@@ -583,6 +606,8 @@ struct Transfer {
     // Keep track of what CBs contributed to this transfer, so we can update the data in
     // update_program_dispatch_commands.
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs;
+    // Keep track of what DFBs contributed to this transfer for the same purpose.
+    std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dfbs;
     // RTAs must be updated from data every time update_program_dispatch_commmands is called.
     RuntimeArgsData* rta_data = nullptr;
     size_t end() const { return start + data.size(); }
@@ -1103,6 +1128,90 @@ private:
     std::vector<std::vector<uint32_t>> cb_config_payloads;
 };
 
+class DataflowBufferCommandGenerator {
+public:
+    void construct_commands(
+        IDevice* device, const CommandConstants& constants, ProgramImpl& program, BatchedTransfers& batched_transfers) {
+        const auto& dataflow_buffers = program.dataflow_buffers();
+        if (dataflow_buffers.empty()) {
+            return;
+        }
+
+        const auto& hal = MetalContext::instance().hal();
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+
+        const auto unique_coreranges = program.dataflow_buffers_unique_coreranges();
+        const uint32_t num_sub_cmds = unique_coreranges.size();
+
+        dfb_config_payloads = std::vector<std::vector<uint8_t>>(
+            num_sub_cmds, std::vector<uint8_t>(program.get_program_config(index).dfb_size, 0));
+
+        if (num_sub_cmds == 0) {
+            return;
+        }
+
+        uint32_t i = 0;
+        for (const CoreRange& core_range : unique_coreranges) {
+            const CoreCoord& virtual_start =
+                device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+            const CoreCoord& virtual_end =
+                device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+
+            auto& payload = dfb_config_payloads[i];
+            const auto& dfbs_on_corerange = program.dataflow_buffers_on_corerange(core_range);
+
+            // core_lookup_ is keyed by logical coordinates, so pass a logical representative.
+            // All cores in a DFB's range have the same alloc_addr, so any core works.
+            const CoreCoord logical_representative = core_range.start_coord;
+
+            size_t max_byte_end = 0;
+            size_t sequential_byte_offset = 0;
+            for (const auto& dfb : dfbs_on_corerange) {
+                size_t dfb_byte_offset = 0;
+                if (!hal.has_tile_counter_registers()) {
+                    // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
+                    dfb_byte_offset =
+                        static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+                } else {
+                    // Quasar: DFBs are laid out sequentially in the dfb config region.
+                    dfb_byte_offset = sequential_byte_offset;
+                    sequential_byte_offset += dfb->serialized_size();
+                }
+
+                auto serialized = dfb->serialize_for_core(logical_representative);
+                TT_ASSERT(serialized.size() == dfb->serialized_size());
+                TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
+                std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
+                max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
+            }
+
+            CoreRange virtual_range(virtual_start, virtual_end);
+            auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+            uint32_t start_addr = program.get_program_config(index).dfb_offset;
+
+            LOG_TRACE_LAZY(
+                tt::LogDispatch,
+                "Dataflow Buffers (MCAST): logical_range={}, virtual_range={}, "
+                "noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, config_size={} bytes",
+                core_range,
+                virtual_range,
+                noc_xy_addr,
+                core_range.size(),
+                start_addr,
+                max_byte_end);
+
+            batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
+                {.start = start_addr,
+                 .data = tt::stl::Span<const uint8_t>(payload.data(), max_byte_end),
+                 .dfbs = dfbs_on_corerange}};
+            i++;
+        }
+    }
+
+private:
+    std::vector<std::vector<uint8_t>> dfb_config_payloads;
+};
+
 class ProgramBinaryCommandGenerator {
 public:
     // Generate kernel_bins_cmds (for multicast) and kernel_bins_unicast_cmds (for unicast) for the binaries in the
@@ -1541,6 +1650,10 @@ public:
                     program_command_sequence.cb_configs_payloads.push_back(
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
                 }
+                if (!transfer.dfbs.empty()) {
+                    program_command_sequence.dataflow_buffers_on_core_ranges.push_back(std::move(transfer.dfbs));
+                    program_command_sequence.dfb_configs_payloads.push_back(data_collection_location[j]);
+                }
                 if (transfer.rta_data) {
                     // When watcher enabled, transfer.data contains [count | args...]
                     // rt_args_data points to args location (data + offset)
@@ -1578,7 +1691,7 @@ public:
     LaunchMessageGenerator() {
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         for (uint32_t programmable_core_type_index = 0;
-             programmable_core_type_index < tt::tt_metal::NumHalProgrammableCoreTypes;
+             programmable_core_type_index < hal.get_programmable_core_type_count();
              ++programmable_core_type_index) {
             auto factory = hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index));
             if (launch_msg_sizeB == 0) {
@@ -1601,7 +1714,7 @@ public:
         SubDeviceId sub_device_id) {
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         for (uint32_t programmable_core_type_index = 0;
-             programmable_core_type_index < tt::tt_metal::NumHalProgrammableCoreTypes;
+             programmable_core_type_index < hal.get_programmable_core_type_count();
              ++programmable_core_type_index) {
             for (auto& kernel_group : program.get_kernel_groups(programmable_core_type_index)) {
                 auto kernel_config = kernel_group->launch_msg.view().kernel_config();
@@ -1802,7 +1915,6 @@ public:
     // Determine the size of the go signal commands.
     void size_commands(
         DeviceCommandCalculator& calculator,
-        IDevice* /*device*/,
         SubDeviceId /*sub_device_id*/,
         const ProgramTransferInfo& program_transfer_info) {
         // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write
@@ -1825,13 +1937,15 @@ public:
         ProgramCommandSequence& program_command_sequence,
         HostMemDeviceCommand& device_command_sequence,
         const CommandConstants& constants,
-        IDevice* device,
+        distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx = device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
-        const auto& num_noc_unicast_txns = has_unicast_launch_cmds ? device->num_noc_unicast_txns(sub_device_id) : 0;
+        const auto& noc_data_start_idx =
+            mesh_device->impl().noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
+        const auto& num_noc_unicast_txns =
+            has_unicast_launch_cmds ? mesh_device->impl().num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
         if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -1890,7 +2004,7 @@ public:
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     ProgramImpl& program,
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
     LOG_TRACE_LAZY(tt::LogDispatch, "");
@@ -1899,7 +2013,7 @@ void assemble_device_commands(
     LOG_TRACE_LAZY(
         tt::LogDispatch,
         "Device: {}, SubDevice: {}, Prefetcher Cache: {}",
-        device->id(),
+        mesh_device->id(),
         *sub_device_id,
         use_prefetcher_cache ? "enabled" : "disabled");
 
@@ -1909,19 +2023,22 @@ void assemble_device_commands(
     constants.noc_index = k_dispatch_downstream_noc;
     constants.max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
-    constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+    constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
     BatchedTransfers batched_transfers =
-        assemble_runtime_args_commands(program_command_sequence, program, device, constants);
+        assemble_runtime_args_commands(program_command_sequence, program, mesh_device, constants);
 
     // Assemble config buffer
     DeviceCommandCalculator program_config_buffer_calculator;
 
     SemphoreCommandGenerator semaphore_command_generator;
     semaphore_command_generator.size_commands(
-        program, device, program_config_buffer_calculator, constants, batched_transfers);
+        program, mesh_device, program_config_buffer_calculator, constants, batched_transfers);
 
     CircularBufferCommandGenerator circular_buffer_command_generator;
-    circular_buffer_command_generator.construct_commands(device, constants, program, batched_transfers);
+    circular_buffer_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
+
+    DataflowBufferCommandGenerator dfb_command_generator;
+    dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
@@ -1941,15 +2058,16 @@ void assemble_device_commands(
     const auto& program_transfer_info = program.get_program_transfer_info();
     if (!program_transfer_info.kernel_bins.empty()) {
         TT_FATAL(
-            program.get_kernels_buffer(device).get(), "Expected Kernel Binary Buffer to be allocated for program.");
+            program.get_kernels_buffer(mesh_device).get(),
+            "Expected Kernel Binary Buffer to be allocated for program.");
     }
     ProgramBinaryCommandGenerator program_binary_command_generator;
     DeviceCommandCalculator program_binary_calculator;
     program_binary_command_generator.size_commands(
-        device,
+        mesh_device,
         program,
         program_transfer_info,
-        program.get_kernels_buffer(device),
+        program.get_kernels_buffer(mesh_device),
         constants,
         program_binary_calculator,
         use_prefetcher_cache);
@@ -1961,13 +2079,26 @@ void assemble_device_commands(
         program_command_sequence.program_binary_command_sequence.size_bytes() ==
         program_command_sequence.program_binary_command_sequence.write_offset_bytes());
     if (use_prefetcher_cache) {
-        program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(device)->address();
+        program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(mesh_device)->address();
+    }
+
+    // Assemble wait barrier command sequence
+    {
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_wait();
+        program_command_sequence.wait_barrier_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
+        program_command_sequence.wait_barrier_command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        TT_ASSERT(
+            program_command_sequence.wait_barrier_command_sequence.size_bytes() ==
+            program_command_sequence.wait_barrier_command_sequence.write_offset_bytes());
     }
 
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
     DeviceCommandCalculator launch_message_calculator;
-    launch_message_generator.construct_commands(device, program, launch_message_calculator, constants, sub_device_id);
+    launch_message_generator.construct_commands(
+        mesh_device, program, launch_message_calculator, constants, sub_device_id);
     program_command_sequence.launch_msg_command_sequence =
         HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
     launch_message_generator.assemble_commands(
@@ -1979,13 +2110,13 @@ void assemble_device_commands(
     // Assemble go signal
     GoSignalGenerator go_signal_generator;
     DeviceCommandCalculator go_signal_calculator;
-    go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
+    go_signal_generator.size_commands(go_signal_calculator, sub_device_id, program_transfer_info);
     program_command_sequence.go_msg_command_sequence = HostMemDeviceCommand(go_signal_calculator.write_offset_bytes());
     go_signal_generator.assemble_commands(
         program_command_sequence,
         program_command_sequence.go_msg_command_sequence,
         constants,
-        device,
+        mesh_device,
         sub_device_id,
         program_transfer_info,
         launch_message_generator.has_multicast_launch_cmds(),
@@ -2036,8 +2167,8 @@ void assemble_device_commands(
     }
 }
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
-    const auto& hal = MetalContext::instance().hal();
+void initialize_worker_config_buf_mgr(
+    const Hal& hal, WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t ringbuffer_size;
         if (hal.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
@@ -2173,9 +2304,13 @@ void update_program_dispatch_commands(
     static_assert(
         std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
         "program_host_id type should be uint16_t");
-    uint16_t runtime_id = program.get_runtime_id();
+    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
+
+    tt::TieRuntimeIdToProgramId(program);
+    tt::RecordKernelSourceMap(program);
+
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset,
@@ -2211,6 +2346,26 @@ void update_program_dispatch_commands(
         }
         i++;
     }
+
+    {
+        uint32_t dfb_i = 0;
+        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
+            if (!hal.has_tile_counter_registers()) {
+                // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
+                for (const auto& dfb : dfbs_on_core_range) {
+                    uint32_t base_index = dfb->id * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                    uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload) + base_index;
+                    words[0] = dfb->uniform_alloc_addr();
+                    words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                    words[2] = dfb->config.num_entries;
+                    words[3] = dfb->config.entry_size;
+                }
+            }
+            dfb_i++;
+        }
+    }
+
     // Update RTAs.
     for (auto& rta_update : cached_program_command_sequence.rta_updates) {
         memcpy(rta_update.dst, rta_update.src, rta_update.size);
@@ -2287,7 +2442,7 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogenous across devices.
+    // where the number of active eth cores is heterogeneous across devices.
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
     if (unicast_go_signal_update.first) {
@@ -2379,6 +2534,22 @@ void update_traced_program_dispatch_commands(
             trace_node.cb_configs_payloads[i].size() * sizeof(uint32_t));
         i++;
     }
+    // Update DFB Configs
+    TT_ASSERT(
+        trace_node.dfb_configs_payloads.size() ==
+        cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
+    {
+        uint32_t dfb_i = 0;
+        for ([[maybe_unused]] const auto& dfbs_on_core_range :
+             cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
+            std::memcpy(
+                dfb_config_payload,
+                trace_node.dfb_configs_payloads[dfb_i].data(),
+                trace_node.dfb_configs_payloads[dfb_i].size());
+            dfb_i++;
+        }
+    }
     // Update RTAs.
     TT_ASSERT(cached_program_command_sequence.rta_updates.size() == trace_node.rta_data.size());
     for (size_t i = 0; i < cached_program_command_sequence.rta_updates.size(); i++) {
@@ -2467,7 +2638,7 @@ void update_traced_program_dispatch_commands(
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogenous across devices.
+    // where the number of active eth cores is heterogeneous across devices.
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
     if (unicast_go_signal_update.first) {
@@ -2567,6 +2738,11 @@ void write_program_command_sequence(
         write_data_to_cq(
             program_command_sequence.program_binary_command_sequence.data(),
             program_command_sequence.program_binary_command_sequence.size_bytes());
+    } else {
+        // Write the wait barrier before writing launch messages.
+        write_data_to_cq(
+            program_command_sequence.wait_barrier_command_sequence.data(),
+            program_command_sequence.wait_barrier_command_sequence.size_bytes());
     }
 
     // Write the launch message
@@ -2589,10 +2765,11 @@ void write_program_command_sequence(
     LOG_TRACE_LAZY(tt::LogDispatch, "");
 }
 
-TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {
-    std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
-    program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+TraceNode create_trace_node(
+    ProgramImpl& program, distributed::MeshDevice* mesh_device, uint32_t num_workers, bool use_prefetcher_cache) {
+    std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(mesh_device)};
+    program.generate_trace_dispatch_commands(mesh_device, use_prefetcher_cache);
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a
     // regular cached program command sequence), so rta_updates includes all the RTAs.
@@ -2639,12 +2816,39 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
         cb_config_payload.resize(first_unused_index);
     }
 
+    std::vector<std::vector<uint8_t>> all_dfb_configs_payloads;
+    if (!hal.has_tile_counter_registers()) {
+        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            std::vector<uint8_t> dfb_config_payload(
+                max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
+            size_t first_unused_byte = 0;
+            for (const auto& dfb : dfbs_on_core_range) {
+                size_t base_index = static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                size_t byte_offset = base_index * sizeof(uint32_t);
+                uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
+                words[0] = dfb->uniform_alloc_addr();
+                words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                words[2] = dfb->config.num_entries;
+                words[3] = dfb->config.entry_size;
+                first_unused_byte = std::max(
+                    first_unused_byte, byte_offset + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t));
+            }
+            dfb_config_payload.resize(first_unused_byte);
+            all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
+        }
+    }
+
+    tt::TieRuntimeIdToProgramId(program);
+    tt::RecordKernelSourceMap(program);
+
     return TraceNode{
         program.shared_from_this(),
         static_cast<uint32_t>(program.get_runtime_id()),
         sub_device_ids[0],
+        num_workers,
         std::move(rta_data),
-        std::move(all_cb_configs_payloads)};
+        std::move(all_cb_configs_payloads),
+        std::move(all_dfb_configs_payloads)};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
@@ -2683,25 +2887,26 @@ uint32_t program_base_addr_on_core(
 }
 
 void reset_config_buf_mgrs_and_expected_workers(
+    const Hal& hal,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
     uint32_t worker_l1_unreserved_start) {
     for (uint32_t i = 0; i < num_entries_to_reset; ++i) {
         config_buffer_mgrs[i] = WorkerConfigBufferMgr();
-        initialize_worker_config_buf_mgr(config_buffer_mgrs[i], worker_l1_unreserved_start);
+        initialize_worker_config_buf_mgr(hal, config_buffer_mgrs[i], worker_l1_unreserved_start);
     }
     std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_entries_to_reset, 0);
 }
 
 void reset_worker_dispatch_state_on_device(
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
-    auto num_sub_devices = device->num_sub_devices();
+    auto num_sub_devices = mesh_device->num_sub_devices();
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (reset_launch_msg_state) {
@@ -2744,9 +2949,9 @@ void reset_worker_dispatch_state_on_device(
                     dispatch_core.y,
                     MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
-                device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-                device->num_noc_unicast_txns(sub_device_id),
-                device->noc_data_start_index(sub_device_id),
+                mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                mesh_device->impl().num_noc_unicast_txns(sub_device_id),
+                mesh_device->impl().noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
         }
     }
@@ -2757,8 +2962,8 @@ void reset_worker_dispatch_state_on_device(
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
         uint32_t expected_num_workers = expected_num_workers_completed[i];
         if (reset_launch_msg_state) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
-                                    device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
+                                    mesh_device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
@@ -2780,27 +2985,35 @@ void reset_worker_dispatch_state_on_device(
 }
 
 void set_num_worker_sems_on_dispatch(
-    IDevice* /*device*/, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
-    // Not needed for regular dispatch kernel
-    if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
-        return;
-    }
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint32_t num_worker_sems,
+    tt::stl::Span<const uint32_t> workers_per_sub_device) {
+    TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+    TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_num_worker_sems();
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        calculator.add_dispatch_set_num_worker_sems();
+    }
+    calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_SUBORDINATE);
+    } else {
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_MASTER);
+    }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* /*device*/,
-    const vector_aligned<uint32_t>& go_signal_noc_data,
-    SystemMemoryManager& manager,
-    uint8_t cq_id) {
+    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
     tt::tt_metal::DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
@@ -2818,10 +3031,7 @@ void set_go_signal_noc_data_on_dispatch(
 
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
-    tt::tt_metal::IDevice* device,
-    tt::tt_metal::SubDeviceId sub_device_id,
-    uint32_t num_expected_workers,
-    uint8_t cq_id) {
+    Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id) {
     tt::tt_metal::DeviceCommandCalculator calculator;
     bool distributed_dispatcher =
         tt::tt_metal::MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
@@ -2877,7 +3087,7 @@ static_assert(
     "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
 
 void set_core_go_message_mapping_on_device(
-    IDevice* device,
+    Device* device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     SystemMemoryManager& manager,
     uint8_t cq_id) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,7 +72,7 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
 
     auto unary_writer_kernel = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_1.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_1.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

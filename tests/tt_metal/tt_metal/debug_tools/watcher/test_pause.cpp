@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -14,17 +15,17 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher pause feature.
@@ -40,48 +41,31 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
+    const auto& hal = MetalContext::instance().hal();
+    const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
+    // TENSIX cores run the Metal 2.0 variant of the kernel; ETH cores stay on the legacy kernel/API.
+    const std::string path_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause_2_0.cpp";
+    const std::string path_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp";
 
-    // Test runs on a 5x5 grid
-    CoreCoord xy_start = {0, 0};
-    CoreCoord xy_end = {4, 4};
+    CoreCoord xy_start = {0, 0}, xy_end;
 
-    // Create all kernels
-    auto brisc_kid = CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
-        CoreRange(xy_start, xy_end),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    auto ncrisc_kid = CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
-        CoreRange(xy_start, xy_end),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    auto trisc_kid = CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
-        CoreRange(xy_start, xy_end),
-        ComputeConfig{});
+    if (is_quasar) {
+        // Quasar only supports single cluster currently
+        // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple CoreRangeSets
+        xy_end = {0, 0};
+    } else {
+        // Test runs on a 5x5 grid on BH/WH
+        xy_end = {4, 4};
+    }
 
     // Write runtime args
     uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
-    uint32_t delay_cycles = clk_mhz * 500000; // .5 secons
-    const std::vector<uint32_t> args = { delay_cycles };
-    for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
-        for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            SetRuntimeArgs(program_, brisc_kid, CoreCoord{x, y}, args);
-            SetRuntimeArgs(program_, ncrisc_kid, CoreCoord{x, y}, args);
-            SetRuntimeArgs(program_, trisc_kid, CoreCoord{x, y}, args);
-        }
-    }
-
+    uint32_t delay_cycles = clk_mhz * 500000;  // .5 seconds
+    const std::vector<uint32_t> args = {delay_cycles};
 
     // Also run on ethernet cores if they're present
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
-    //bool has_eth_cores = false;
     bool has_ieth_cores = !device->get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
@@ -89,45 +73,108 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         has_ieth_cores = false;
     }
 
-    if (has_eth_cores) {
-        KernelHandle erisc_kid;
-        std::set<CoreRange> eth_core_ranges;
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            log_info(
-                LogTest, "Running on eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
-            eth_core_ranges.insert(CoreRange(core, core));
-        }
-        erisc_kid = CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
-            eth_core_ranges,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+    // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
+    // On Quasar a single DM KernelSpec covers DM2..DM7 (DM0/DM1 are reserved); on WH/BH
+    // gen1 requires one KernelSpec per processor, so BRISC and NCRISC are split.
+    std::vector<experimental::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpecName> kernel_names;
+    experimental::ProgramRunArgs params;
+    auto add_dm_kernel =
+        [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
+            // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
+            // current arch. The unused config is ignored on the other arch.
+            auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
+            auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
+                                ? tt::tt_metal::NOC::RISCV_1_default
+                                : tt::tt_metal::NOC::RISCV_0_default;
+            experimental::DataMovementHardwareConfig dm_cfg{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_proc, .noc = gen1_noc},
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+            };
+            kernel_specs.push_back(experimental::KernelSpec{
+                .unique_id = experimental::KernelSpecName{name},
+                .source = path_metal2,
+                .num_threads = num_threads,
+                .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
+                .hw_config = dm_cfg,
+            });
+            kernel_names.emplace_back(name);
+            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = experimental::KernelSpecName{name},
+                .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
+            });
+        };
 
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            SetRuntimeArgs(program_, erisc_kid, core, args);
+    if (is_quasar) {
+        // On Quasar, launch kernel on all user DMs (DM2..DM7). DM0/DM1 are reserved for internal use.
+        // TODO: Watcher features for ERISCs and TRISCs are temporarily skipped on Quasar until basic runtime bring-up.
+        constexpr uint32_t kQuasarUserDmCores = 6;
+        add_dm_kernel("pause_dm", static_cast<uint8_t>(kQuasarUserDmCores), std::nullopt);
+    } else {
+        add_dm_kernel("pause_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
+        add_dm_kernel("pause_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
+
+        const experimental::KernelSpecName COMPUTE_KERNEL_NAME{"pause_compute"};
+        kernel_specs.push_back(experimental::KernelSpec{
+            .unique_id = COMPUTE_KERNEL_NAME,
+            .source = path_metal2,
+            .num_threads = 1,
+            .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
+            .hw_config = experimental::ComputeHardwareConfig{},
+        });
+        kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = COMPUTE_KERNEL_NAME,
+            .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
+        });
+    }
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = kernel_names,
+        .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
+    };
+    experimental::ProgramSpec spec{
+        .name = "watcher_pause",
+        .kernels = kernel_specs,
+        .work_units = {wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::SetProgramRunArgs(program, params);
+
+    // ETH cores: invoke the original (legacy) kernel via the legacy host API.
+    if (!is_quasar) {
+        auto create_eth_kernels = [&](bool is_active) {
+            std::set<CoreRange> eth_core_ranges;
+            auto eth_cores =
+                is_active ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+            for (const auto& core : eth_cores) {
+                log_info(
+                    LogTest,
+                    "Running on {} eth core {}({})",
+                    is_active ? "active" : "inactive",
+                    core.str(),
+                    device->ethernet_core_from_logical_core(core).str());
+                eth_core_ranges.insert(CoreRange(core, core));
+            }
+            tt_metal::EthernetConfig eth_config{.noc = tt_metal::NOC::NOC_0};
+            if (!is_active) {
+                eth_config.eth_mode = Eth::IDLE;
+            }
+            KernelHandle erisc_kid = CreateKernel(program, path_legacy, eth_core_ranges, eth_config);
+            SetCommonRuntimeArgs(program, erisc_kid, args);
+        };
+
+        if (has_eth_cores) {
+            create_eth_kernels(true);
+        }
+        if (has_ieth_cores) {
+            create_eth_kernels(false);
         }
     }
-    if (has_ieth_cores) {
-        KernelHandle ierisc_kid;
-        std::set<CoreRange> eth_core_ranges;
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            log_info(
-                LogTest,
-                "Running on inactive eth core {}({})",
-                core.str(),
-                device->ethernet_core_from_logical_core(core).str());
-            eth_core_ranges.insert(CoreRange(core, core));
-        }
-        ierisc_kid = CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
-            eth_core_ranges,
-            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
-
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            SetRuntimeArgs(program_, ierisc_kid, core, args);
-        }
-    }
+    workload.add_program(device_range, std::move(program));
 
     // Run the program
     fixture->RunProgram(mesh_device, workload);
@@ -137,26 +184,40 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord virtual_core = device->worker_core_from_logical_core({x, y});
-            for (const auto& risc_str : {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"}) {
+            uint32_t num_processors =
+                is_quasar ? hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0)  // DMs only
+                          : hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);      // all 5
+            // On Quasar, DM0/DM1 are reserved for internal use and don't run the pause kernel,
+            // so the pause message only appears for DM2..DM7.
+            uint32_t first_processor_idx = is_quasar ? 2u : 0u;
+            for (uint32_t processor_idx = first_processor_idx; processor_idx < num_processors; processor_idx++) {
+                const std::string& risc_str =
+                    hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false);
                 std::string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
                 expected_strings.push_back(expected);
             }
         }
     }
-    if (has_eth_cores) {
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
+
+    // Add expected messages for all ETH
+    auto create_eth_expected_messages = [&](bool is_active) {
+        auto eth_cores = is_active ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+        for (const auto& core : eth_cores) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            std::string expected = fmt::format("{}:erisc", virtual_core.str());
+            // TODO: replace string literals with hal.get_processor_class_name() after
+            // unifying all tests + watcher_device_reader::get_riscv_name() with same method
+            std::string expected = fmt::format("{}:{}", virtual_core.str(), is_active ? "erisc" : "ierisc");
             expected_strings.push_back(expected);
         }
+    };
+
+    if (has_eth_cores) {
+        create_eth_expected_messages(true);
     }
     if (has_ieth_cores) {
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            std::string expected = fmt::format("{}:ierisc", virtual_core.str());
-            expected_strings.push_back(expected);
-        }
+        create_eth_expected_messages(false);
     }
+
     EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
 }
 }

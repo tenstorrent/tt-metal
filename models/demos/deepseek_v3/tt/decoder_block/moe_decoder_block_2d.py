@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
@@ -12,7 +12,13 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.tt.moe_optimized import MoEOptimized
+from models.demos.deepseek_v3.utils.config_helpers import (
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -21,6 +27,17 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+
+def _moe_cls(
+    fabric_config: ttnn.FabricConfig | None = None,
+    mesh_device: ttnn.MeshDevice | None = None,
+):
+    """Use optimized MoE when quad mesh (16x8), ring fabric"""
+    fc = fabric_config if fabric_config is not None else get_fabric_config()
+    if is_quad_mesh(mesh_device) and is_ring_fabric(fc):
+        return MoEOptimized
+    return MoE
 
 
 class MoEDecoderBlock2D(DecoderBlock2DBase):
@@ -33,6 +50,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
     ) -> WeightConfig:
+        moe_cls = _moe_cls(mesh_device=mesh_device)
         return {
             "shared_expert": SharedExpert.convert_weights(
                 hf_config,
@@ -40,7 +58,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 output_path / "shared_experts",
                 mesh_device,
             ),
-            "moe": MoE.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
+            "moe": moe_cls.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
         }
 
     @classmethod
@@ -49,10 +67,18 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
+        moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
         return {
-            "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
-            "moe": MoE.prefill_model_config(hf_config, mesh_device),
+            "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device, fabric_config),
+            "moe": moe_cls.prefill_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
         }
 
     @classmethod
@@ -61,10 +87,23 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
+        moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
         return {
-            "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device),
-            "moe": MoE.decode_model_config(hf_config, mesh_device),
+            "shared_expert": SharedExpert.decode_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
+            "moe": moe_cls.decode_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
         }
 
     @classmethod
@@ -75,9 +114,10 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
     ) -> ModelState:
+        moe_cls = _moe_cls(mesh_device=mesh_device)
         return {
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
-            "moe": MoE.create_state(hf_config, mesh_device, ccl),
+            "moe": moe_cls.create_state(hf_config, mesh_device, ccl),
         }
 
     @classmethod
@@ -86,21 +126,18 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
+        moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
+        moe_shared = moe_cls.create_shared_state(hf_config, mesh_device)
         return {
             "shared_expert": {},
-            "moe": MoE.create_shared_state(hf_config, mesh_device),
+            "moe": moe_shared,
         }
 
     @classmethod
-    def _forward_mlp_common(
-        cls,
-        x: ttnn.Tensor,
-        cfg: RunPrefillConfig | RunDecodeConfig,
-        moe_forward_fn,
-        shared_expert_forward_fn,
-    ) -> ttnn.Tensor:
-        """Common implementation for forward_mlp_prefill and forward_mlp_decode."""
+    @abstractmethod
+    def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         # Handle all_gather if input is TP-sharded
         hidden_size = cfg["moe"]["hidden_size"]
         tp_size = cfg["moe"]["mesh_device"].shape[1]
@@ -117,12 +154,21 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             # Should always be TP-sharded at this point
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
-        # Run both MoE and SharedExpert with the same gathered input
-        mlp_out = moe_forward_fn(x_gathered, cfg["moe"])
-        # SharedExpert now always expects collective ops to be handled by caller
-        shared_expert_out = shared_expert_forward_fn(x_gathered, cfg["shared_expert"])
+        batch_size = x_gathered.shape[1]
+        seq_len = x_gathered.shape[2]
+        if batch_size > 1:
+            x_gathered = ttnn.reshape(x_gathered, (x_gathered.shape[0], 1, batch_size * seq_len, x_gathered.shape[3]))
 
-        # Add outputs first, then reduce_scatter the combined result
+        # Run both MoE and SharedExpert with the same gathered input
+        moe_cls = _moe_cls(
+            fabric_config=cfg["moe"]["fabric_config"],
+            mesh_device=cfg["moe"]["mesh_device"],
+        )
+        mlp_out = moe_cls.forward_prefill(x_gathered, cfg["moe"])
+        # SharedExpert now always expects collective ops to be handled by caller
+        shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
+
+        mlp_out = ttnn.sum(mlp_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"])
         combined_out = ttnn.add(mlp_out, shared_expert_out)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
@@ -136,6 +182,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
             )
             ttnn.deallocate(combined_out)
+            if batch_size > 1:
+                output = ttnn.reshape(output, (output.shape[0], batch_size, seq_len, output.shape[3]))
             # Cleanup gathered tensor
             if x_gathered is not x:
                 ttnn.deallocate(x_gathered)
@@ -147,10 +195,78 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     @abstractmethod
-    def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls._forward_mlp_common(x, cfg, MoE.forward_prefill, SharedExpert.forward_prefill)
-
-    @classmethod
-    @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls._forward_mlp_common(x, cfg, MoE.forward_decode, SharedExpert.forward_decode)
+        # Handle all_gather if input is TP-sharded
+        hidden_size = cfg["moe"]["hidden_size"]
+        tp_size = cfg["moe"]["mesh_device"].shape[1]
+        x_dim = x.shape[-1]
+        num_tokens_per_row = x.shape[-2]
+
+        if x_dim == hidden_size // tp_size:
+            # Input is TP-sharded, need to gather
+            # Use MoE's all_gather config which outputs the correct memory layout for MoEGate
+            ccl_moe = cfg["moe"]["ccl"]
+            x_gathered = ttnn.experimental.all_gather_async(
+                x, **ccl_moe.populate_all_gather_runtime_args(cfg["moe"]["revert_tp"])
+            )
+        else:
+            # Should always be TP-sharded at this point
+            assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
+
+        # Run both MoE and SharedExpert with the same gathered input
+        moe_cls = _moe_cls(
+            fabric_config=cfg["moe"]["fabric_config"],
+            mesh_device=cfg["moe"]["mesh_device"],
+        )
+        mlp_out = moe_cls.forward_decode(x_gathered, cfg["moe"])
+        # SharedExpert now always expects collective ops to be handled by caller
+        shared_expert_out = SharedExpert.forward_decode(x_gathered, cfg["shared_expert"])
+
+        # We sum the experts from MoE along with SharedExpert inside a single reduce by concatting first, instead
+        # of a reduce on the MoE experts followed by an add with the SharedExpert. This enables us to use
+        # the optimized reduce_scatter.
+        shared_expert_out = ttnn.to_memory_config(shared_expert_out, ttnn.L1_MEMORY_CONFIG)
+        combined_out = ttnn.concat([mlp_out, shared_expert_out], dim=0)
+        ttnn.deallocate(mlp_out)
+        ttnn.deallocate(shared_expert_out)
+
+        # Handle summing experts
+        # Handle reduce_scatter if input was TP-sharded
+        if x_dim == hidden_size // tp_size:
+            # Single reduce_scatter on combined output using MoE's config for consistency
+
+            if (
+                cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING
+                and tp_size == 8
+                and num_tokens_per_row == ttnn.TILE_SIZE
+            ):
+                summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                    combined_out,
+                    dim=0,
+                    split_size=combined_out.shape[-1] // tp_size,
+                    output_memory_config=cfg["moe"]["ring_sum_experts_output_memory_config"],
+                )
+                ttnn.deallocate(combined_out)
+                output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                    summed_experts, **cfg["moe"]["ring_final_output_reduce_scatter"]
+                )
+            else:
+                ccl_moe = cfg["moe"]["ccl"]
+
+                summed_experts = ttnn.sum(
+                    combined_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
+                )
+                ttnn.deallocate(combined_out)
+                output = ttnn.experimental.reduce_scatter_minimal_async(
+                    summed_experts,
+                    **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
+                )
+
+            # Cleanup gathered tensor
+            if x_gathered is not x:
+                ttnn.deallocate(x_gathered)
+        else:
+            # Should always be TP-sharded at this point
+            assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
+
+        return output

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "internal/mod_div_lib.h"
@@ -33,8 +34,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
@@ -192,8 +193,8 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
 #ifdef ENABLE_GLOBAL_CB
         uint32_t in1_cb_start_addr = 0;
@@ -218,7 +219,7 @@ void kernel_main() {
 #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
         if constexpr (batch > 1) {
-            PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+            PACK((llk_pack_relu_config(ReluConfig::none())));
         }
 #endif
 
@@ -247,7 +248,7 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
             if (last_out) {
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+                PACK((llk_pack_relu_config(ReluConfig::zero())));
             }
 #endif
 
@@ -294,11 +295,11 @@ void kernel_main() {
                     uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
                     uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                     uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                    // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+                    // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
                     for (uint32_t inner_dim_idx = 0; inner_dim_idx < unpadded_in0_block_w; ++inner_dim_idx) {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
-                        // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                        // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                         matmul_block(
                             input0_cb_id,
                             in1_cb_id,

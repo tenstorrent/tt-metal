@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 
 namespace tt::tt_metal {
 

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag-latest:
-        description: 'Tag the image as latest (WARNING: Affects production!)'
+        description: "Tag the image as latest (WARNING: Affects production!)"
         required: true
         type: boolean
         default: false
@@ -17,13 +17,18 @@ on:
           - "ubuntu-24.04"
         description: "Platform to build and test"
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
       contents: read
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-wheel: true
       platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
       enable-lto: false
@@ -45,6 +50,7 @@ jobs:
       packages: write
       contents: read
     needs:
+      - check-harbor
       - build-artifact
       - create-image-tag-name
     secrets: inherit
@@ -54,3 +60,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       platform: ${{ inputs.platform }}
       image: ${{ matrix.image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}

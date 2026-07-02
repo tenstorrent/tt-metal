@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,6 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -139,26 +138,16 @@ public:
         bool blocking);
 
     virtual MeshEvent enqueue_record_event(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual MeshEvent enqueue_record_event_to_host(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual void enqueue_wait_for_event(const MeshEvent& sync_event) = 0;
-    virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void reset_worker_state(
-        bool reset_launch_msg_state,
-        uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) = 0;
+    virtual void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
-
-    // Internal function.
-    virtual void wait_for_completion(bool) {}
-    // May only be called after wait_for_completion has been called on both command queues on the device.
-    virtual void finish_and_reset_in_use() {}
 };
 
 // Specifies host data to be written to or read from a MeshBuffer shard.

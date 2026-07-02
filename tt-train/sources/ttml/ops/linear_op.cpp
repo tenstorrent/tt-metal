@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "linear_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -113,8 +115,7 @@ autograd::TensorPtr linear_op(
         ttnn_linear_backward(tensor, weight, bias, out);
     };
 
-    auto links = autograd::get_links(weight, tensor, bias);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor, bias));
     return out;
 }
 

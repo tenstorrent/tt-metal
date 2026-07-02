@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
 #include <tt-metalium/experimental/udm/mesh_utils.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <unordered_map>

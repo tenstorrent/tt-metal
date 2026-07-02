@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "minimal_matmul.hpp"
@@ -9,13 +9,13 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::minimal_matmul {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteMinimalMatmul::invoke(
+ttnn::Tensor minimal_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    std::optional<unary::UnaryWithParam> fused_activation,
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
@@ -36,4 +36,4 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
     return outputs[0];
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::experimental

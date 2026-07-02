@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,14 +7,62 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "selective_reduce_combine_device_operation.hpp"
+#include "selective_reduce_combine_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.dense_input_tensor;
+    const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
+
+    TT_FATAL(
+        tensor_args.dense_token_maps_tensor.logical_shape().rank() == 2,
+        "dense_token_maps_tensor must be rank 2 ([experts, per-token-stride]); got rank {}",
+        tensor_args.dense_token_maps_tensor.logical_shape().rank());
+
+    const auto num_links = operation_attributes.num_links;
+    TT_FATAL(num_links > 0, "num_links must be > 0, got {}", num_links);
+
+    const auto worker_layout = detail::compute_worker_layout(
+        input_tensor,
+        operation_attributes.hidden_size,
+        operation_attributes.num_token_parallel_cores,
+        operation_attributes.num_data_parallel_cores);
+    const auto num_worker_cores = worker_layout.num_worker_cores;
+    TT_FATAL(
+        num_worker_cores % num_links == 0,
+        "num_worker_cores ({}) must be divisible by num_links ({})",
+        num_worker_cores,
+        num_links);
+
+    const auto batch_size = operation_attributes.batch_size;
+    const auto seq_size = operation_attributes.seq_size;
+    const auto total_tokens = batch_size * seq_size;
+
+    // physical experts per device, replicated shared experts are counted per device (matches program factory)
+    const uint32_t experts_per_device = tensor_args.dense_token_maps_tensor.logical_shape()[0];
+
+    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
+
+    const auto datum_size =
+        tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(token_activations_tensor.dtype()));
+
+    const auto alignment = (token_activations_tensor.memory_config().buffer_type() == BufferType::L1)
+                               ? tt::tt_metal::hal::get_l1_alignment()
+                               : tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t expected_activations_stride_elm =
+        tt::align((2 * experts_per_device + 1) * datum_size, alignment) / datum_size;
+
+    TT_FATAL(
+        activations_stride_elm == expected_activations_stride_elm,
+        "The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token");
+}
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -28,17 +76,13 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
 
     const uint32_t batch_size = operation_attributes.batch_size;
     const uint32_t seq_size = operation_attributes.seq_size;
+    const uint32_t select_experts_k = operation_attributes.select_experts_k;
 
-    const uint32_t experts = operation_attributes.experts;
-
-    const auto& axis = operation_attributes.axis;
-    const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const auto axis = operation_attributes.axis;
+    const auto num_devices_cluster = (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
-    const uint32_t experts_per_cluster = experts / num_clusters;
-
-    auto output_shape = ttnn::Shape({experts_per_cluster, total_tokens_per_device, hidden_size});
+    auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
 
     auto mem_config = operation_attributes.output_memory_config;
     return TensorSpec(
@@ -58,15 +102,14 @@ SelectiveReduceCombineDeviceOperation::create_output_tensors(
 namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
-    const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_activations_tensor,
     const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     uint32_t hidden_size,
     uint32_t batch_size,
     uint32_t seq_size,
     uint32_t select_experts_k,
-    uint32_t experts,
-    const std::optional<uint32_t>& axis,
+    uint32_t cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
     uint32_t num_token_parallel_cores,
@@ -84,9 +127,8 @@ ttnn::Tensor selective_reduce_combine(
             .batch_size = batch_size,
             .seq_size = seq_size,
             .select_experts_k = select_experts_k,
-            .experts = experts,
             .num_links = num_links,
-            .axis = axis,
+            .axis = cluster_axis,
             .topology = topology,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
@@ -96,7 +138,7 @@ ttnn::Tensor selective_reduce_combine(
             .optional_cross_device_semaphore = optional_cross_device_semaphore},
         OperationType::tensor_args_t{
             .dense_input_tensor = dense_input_tensor,
-            .dense_metadata_tensor = dense_metadata_tensor,
+            .dense_activations_tensor = dense_activations_tensor,
             .dense_token_maps_tensor = dense_token_maps_tensor,
             .dense_token_counts_tensor = dense_token_counts_tensor,
             .optional_output_tensor = optional_output_tensor});

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -244,7 +244,7 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
         std::vector<uint32_t> writer_rt_args;
         string writer_kernel;
         if (output_rm) {
-            writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
+            writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp";
             writer_rt_args = {dst_dram_buffer->address(), (uint32_t)0, uint(M * N)};
         } else {
             writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp";

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -82,12 +82,12 @@ inline void print_udm_control_fields(volatile tt_l1_ptr uint32_t* packet_start_a
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_start_addr);
 
-    DPRINT << "UDM Control Fields (Packet " << packet_index << "):\n";
-    DPRINT << "  src_chip_id: " << (uint32_t)header->udm_control.write.src_chip_id << "\n";
-    DPRINT << "  src_mesh_id: " << (uint32_t)header->udm_control.write.src_mesh_id << "\n";
-    DPRINT << "  src_noc_x: " << (uint32_t)header->udm_control.write.src_noc_x << "\n";
-    DPRINT << "  src_noc_y: " << (uint32_t)header->udm_control.write.src_noc_y << "\n";
-    DPRINT << "  risc_id: " << (uint32_t)header->udm_control.write.risc_id << "\n";
-    DPRINT << "  transaction_id: " << (uint32_t)header->udm_control.write.transaction_id << "\n";
-    DPRINT << "  posted: " << (uint32_t)header->udm_control.write.posted << "\n";
+    DPRINT("UDM Control Fields (Packet {}):\n", packet_index);
+    DPRINT("  src_chip_id: {}\n", (uint32_t)header->udm_control.write.src_chip_id);
+    DPRINT("  src_mesh_id: {}\n", (uint32_t)header->udm_control.write.src_mesh_id);
+    DPRINT("  src_noc_x: {}\n", (uint32_t)header->udm_control.write.src_noc_x);
+    DPRINT("  src_noc_y: {}\n", (uint32_t)header->udm_control.write.src_noc_y);
+    DPRINT("  risc_id: {}\n", (uint32_t)header->udm_control.write.risc_id);
+    DPRINT("  transaction_id: {}\n", (uint32_t)header->udm_control.write.transaction_id);
+    DPRINT("  posted: {}\n", (uint32_t)header->udm_control.write.posted);
 }

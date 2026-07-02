@@ -1,9 +1,8 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-
 import pytest
 
 import torch
@@ -11,7 +10,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 @pytest.mark.parametrize(
@@ -21,7 +19,6 @@ from models.common.utility_functions import is_watcher_enabled, skip_with_watche
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if not enable_cache:
         device.disable_program_cache()
@@ -49,7 +46,6 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if not enable_cache:
         device.disable_and_clear_program_cache()
@@ -114,8 +110,6 @@ def test_reshape_block_shard(
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_reshape_height_shard(device, layout):
-    if is_watcher_enabled() and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Skipping test with watcher enabled due to hang, see github issue #37096")
     input_shape = [1, 1, 256, 32]
     output_shape = [1, 1, 32, 256]
     input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -142,8 +136,6 @@ def test_reshape_height_shard(device, layout):
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_reshape_width_shard(device, layout):
-    if is_watcher_enabled() and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Skipping test with watcher enabled due to hang, see github issue #37096")
     input_shape = [1, 1, 256, 256]
     output_shape = [1, 1, 64, 1024]
     input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -261,8 +253,7 @@ def test_reshape_cw_div2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c * 2, h, w // 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -279,8 +270,7 @@ def test_reshape_cw_mul2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c // 2, h, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -297,8 +287,7 @@ def test_reshape_hw_div2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h * 2, w // 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -315,8 +304,7 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
@@ -326,11 +314,11 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -350,7 +338,7 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize("h", [32])
@@ -363,8 +351,7 @@ def test_reshape(h, w):
     output_tensor = ttnn.reshape(input_tensor, (w, h))
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -377,8 +364,7 @@ def test_reshape_negative_1(h, w):
     output_tensor = ttnn.reshape(input_tensor, (-1,))
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [32, 32])
@@ -393,15 +379,13 @@ def test_reshape_in_4D(n, c, h, w):
     output_tensor = ttnn.reshape(input_tensor, (h, w, n, c))
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [32, 64])
 @pytest.mark.parametrize("c", [32, 64])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_reshape_in_4D_on_device(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(h, w, n, c)
@@ -412,11 +396,9 @@ def test_reshape_in_4D_on_device(device, n, c, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_permute_reshape(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, 64, 128)
@@ -433,7 +415,7 @@ def test_permute_reshape(device):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 def test_reshape_with_negative_dim(device):
@@ -452,7 +434,7 @@ def test_reshape_with_negative_dim(device):
 
     assert list(expected_output_shape) == list(torch_output.shape)
     assert list(expected_output_shape) == list(tt_output.shape)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 def test_reshape_tile_layout_mamba(device):
@@ -465,7 +447,7 @@ def test_reshape_tile_layout_mamba(device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 def test_reshape_tile_layout_only_change_shape(device):
@@ -478,7 +460,7 @@ def test_reshape_tile_layout_only_change_shape(device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 @pytest.mark.parametrize(
@@ -530,7 +512,7 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
     )
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 @pytest.mark.parametrize(
@@ -578,11 +560,11 @@ def test_reshape_subgrid(device, input_shape, output_shape, layout, memory_confi
     )
     ttnn_output = ttnn.reshape(input_tensor, output_shape, sub_core_grids=sub_core_grids)
     output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
-@pytest.mark.parametrize("recreate_mapping_tensor", (ttnn.TileReshapeMapMode.CACHE, ttnn.TileReshapeMapMode.RECREATE))
-def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
+@pytest.mark.parametrize("reshape_tile_mode", (ttnn.TileReshapeMapMode.CACHE, ttnn.TileReshapeMapMode.RECREATE))
+def test_reshape_tile_program_cache(device, reshape_tile_mode):
     for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):
         for _ in range(3):
             torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -591,10 +573,10 @@ def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
             input_tensor = ttnn.from_torch(
                 torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
             )
-            ttnn_output = ttnn.reshape(input_tensor, output_shape, recreate_mapping_tensor=recreate_mapping_tensor)
+            ttnn_output = ttnn.reshape(input_tensor, output_shape, reshape_tile_mode=reshape_tile_mode)
 
             output = ttnn.to_torch(ttnn_output)
-            assert_with_pcc(torch_result, output, 0.9999)
+            assert_equal(torch_result, output)
 
 
 # issue 15048
@@ -615,7 +597,7 @@ def test_previously_failing_test(device):
     ttnn_output = ttnn.reshape(input_tensor, target_shape)
     output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 # Since Inner dim is 1 of bfloat16, can't do on device, testing fallback on host
@@ -636,7 +618,7 @@ def test_reshape_host(input_shape, output_shape, device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 # required for Embedding
@@ -662,7 +644,7 @@ def test_reshape_int(input_shape, output_shape, device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 @pytest.mark.parametrize(
@@ -693,7 +675,7 @@ def test_fp32_support(input_shape, output_shape, device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 @pytest.mark.parametrize(
@@ -785,7 +767,7 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
         assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
+@pytest.mark.timeout(320)
 def test_reshape_oob(device):
     """
     Test proves that this reshape op writes data out of bounds, corrupting
@@ -866,3 +848,62 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+
+
+@pytest.mark.parametrize(
+    # Conv3d-style dim names. N=batch, D=depth, H=height, W=width, C=channels.
+    "N,D,H,W,C",
+    [
+        # [1, 128, 240, 240, 1],
+        # [1, 32, 40, 40, 1],
+        # [1, 8, 12, 12, 1],
+        # [1, 1, 12, 12, 1],
+        [1, 1, 8, 8, 1],
+        # [1, 1, 24, 24, 1],
+        # [1, 8, 24, 24, 1],
+    ],
+)
+def test_reshape_conv2d(device, N, D, H, W, C):
+    torch.manual_seed(0)
+    x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
+    ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
+
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    t = ttnn.reshape(t, (N, C, D, H, W))
+    out = ttnn.to_torch(t, device=device).to(torch.float32)
+
+    assert_with_pcc(ref, out, 0.99)
+
+
+@pytest.mark.parametrize(
+    "H,W,C",
+    [
+        [8, 8, 1],
+    ],
+)
+def test_reshape_conv2d_rank3(device, H, W, C):
+    torch.manual_seed(0)
+    x = torch.randn(H, W, C, dtype=torch.bfloat16)
+    ref = x.float().permute(0, 2, 1).contiguous()  # HWC -> NCDHW
+    import logging
+
+    logging.info(f"{ref.shape}")
+
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    t = ttnn.reshape(t, (H, C, W))
+    out = ttnn.to_torch(t, device=device).to(torch.float32)
+
+    assert_with_pcc(ref, out, 0.99)
+
+
+def test_reshape_4d_5d_layout(device):
+    # https://github.com/tenstorrent/tt-metal/issues/41102
+    x = torch.arange(1 * 5 * 16 * 128, dtype=torch.float32).reshape(1, 5, 16, 128)
+    expected = x.reshape(1, 5, 8, 2, 128)
+
+    x_tt = ttnn.from_torch(x, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x_tt = ttnn.to_layout(x_tt, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.to_torch(ttnn.reshape(x_tt, (1, 5, 8, 2, 128)))
+
+    diff = (result.float() - expected.float()).abs().max().item()
+    assert diff == 0.0

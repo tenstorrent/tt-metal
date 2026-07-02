@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,7 @@ struct ReduceScatterProgramArtifacts {
     uint32_t num_workers_per_direction;
     uint32_t num_mux_cores_per_direction_per_link;
     uint32_t num_cores_per_link;
+    uint32_t normalized_dim;
 };
 
 struct ReduceScatterMinimalAsyncParams {
@@ -47,25 +48,38 @@ struct ReduceScatterMinimalAsyncParams {
     std::optional<uint32_t> num_buffers_per_channel;
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    // Add attributes method for reflection
-    auto attributes() const {
-        using tt::stl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("optional_intermediate_mem_config", optional_intermediate_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("chunks_per_sync", chunks_per_sync);
-        attrs.emplace_back("num_workers_per_link", num_workers_per_link);
-        attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
-        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
-        return attrs;
+    // Compile-time attributes drive the default program-cache reflection hash and the canonical key
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "optional_intermediate_mem_config",
+        "topology",
+        "has_barrier_semaphore",
+        "using_persistent_buffers",
+        "sub_device_id",
+        "cluster_axis",
+        "chunks_per_sync",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+        "compute_kernel_config");
+    auto attribute_values() const {
+        return std::make_tuple(
+            dim,
+            num_links,
+            ring_size,
+            output_mem_config,
+            optional_intermediate_mem_config,
+            topology,
+            barrier_semaphore.has_value(),
+            using_persistent_buffers,
+            sub_device_id,
+            cluster_axis,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            compute_kernel_config);
     }
 };
 
@@ -75,14 +89,23 @@ struct ReduceScatterMinimalAsyncInputs {
     std::optional<Tensor> optional_output_tensor;
 };
 
-// Common validation function
-void reduce_scatter_common_validates(
+}  // namespace ttnn::experimental::prim
+
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_validate_utils.hpp"
+
+namespace ttnn::experimental::prim {
+
+// Forwarder kept for callers outside the experimental/ccl tree.
+inline void reduce_scatter_common_validates(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
     const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor);
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    ttnn::experimental::ccl::reduce_scatter_common_validates(
+        input_tensor, topology, dim, num_links, ring_size, memory_config, optional_output_tensor);
+}
 
 }  // namespace ttnn::experimental::prim

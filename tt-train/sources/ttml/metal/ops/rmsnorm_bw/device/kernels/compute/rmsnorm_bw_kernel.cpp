@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,8 +35,6 @@ constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
 // CBs with intermediate computations
 constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
 constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
-
-constexpr uint32_t onetile = 1;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -216,8 +214,9 @@ inline void compute_scale(const uint32_t row) {
 
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
-    reconfig_data_format(cb_scale_idx, cb_mat_mul_reduce);
-    mm_init(cb_scale_idx, cb_mat_mul_reduce, cb_scale_idx, 0);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
     matmul_tiles(
         cb_scale_idx,
         cb_mat_mul_reduce,
@@ -294,8 +293,9 @@ inline void compute_scale(const uint32_t row) {
 
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
-    reconfig_data_format(cb_scale_idx, cb_mat_mul_reduce);
-    mm_init(cb_scale_idx, cb_mat_mul_reduce, cb_scale_idx, 0);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
     matmul_tiles(
         cb_scale_idx,
         cb_mat_mul_reduce,
@@ -320,6 +320,7 @@ void kernel_main() {
 
     init_sfpu(cb_input_idx, cb_dL_da_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
+    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_rms_a_idx, onetile);
         // This value is constant for the whole row, so we can compute it once per row.

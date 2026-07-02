@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -42,6 +42,37 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
+def get_root3_row(root_row: int, use_torus: bool = False) -> int:
+    """Pick the row of ROOT3 for a given root row.
+
+    Linear (default) mode covers all 4 rows of a 4x2 mesh by always placing
+    ROOT3 on an inner row (1 or 2). For inner roots this matches the historical
+    "other inner row" rule. For corner roots (0 or 3) we pick the inner row on
+    the OPPOSITE side of the root, which keeps the LEAF→{ROOT3,ROOT_ROW} hops
+    1 row apart and only forces the ROOT3→ROOT_ROW hop to be 2 rows
+    (resolved via fabric multi-hop routing, see `reduce_num_hops`).
+
+    Torus mode is retained for callers that explicitly know the fabric wraps
+    rows; it is no longer auto-enabled by lm_head_sampling.
+    """
+    if use_torus:
+        if root_row == 0:
+            return 3
+        if root_row == 3:
+            return 0
+        raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+
+    if root_row == 0:
+        return 2
+    if root_row == 1:
+        return 2
+    if root_row == 2:
+        return 1
+    if root_row == 3:
+        return 1
+    raise ValueError(f"Unsupported root_row {root_row} for 4-row mesh")
+
+
 def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
     """Determine the role of a device based on its coordinate and the root coordinate."""
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
@@ -50,29 +81,10 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate,
     root_row = root_coord[0]
     my_row = coord[0]
 
-    # ROOT2: same row as ROOT1, different column
     if my_row == root_row:
         return MESH_ROOT2
 
-    # ROOT3 coord
-    if use_torus:
-        # Torus: root must be at corner (row 0 or 3), ROOT3 is opposite corner
-        if root_row == 0:
-            root3_row = 3
-        elif root_row == 3:
-            root3_row = 0
-        else:
-            raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
-    else:
-        # Linear: root must be at inner row (1 or 2), ROOT3 is the other inner row
-        if root_row == 1:
-            root3_row = 2
-        elif root_row == 2:
-            root3_row = 1
-        else:
-            raise ValueError(f"Linear mode requires root at inner row (1 or 2), got row {root_row}")
-
-    if my_row == root3_row:
+    if my_row == get_root3_row(root_row, use_torus):
         return MESH_ROOT3
 
     return MESH_LEAF
@@ -100,236 +112,46 @@ class ReduceToOneB1:
         return torch.sum(torch.stack(input_tensors), dim=0)
 
     @staticmethod
-    def create_d2d0_infrastructure(
-        submesh_device: ttnn.MeshDevice,
-        root_coord: tuple,
-        shard_cores: list,
-        page_size_bytes: int,
-        d2d0_downstream_socket: object,  # Sender socket to send aggregated data downstream
-    ) -> dict:
-        """
-        Create D2D_0 socket infrastructure for reduce-to-one aggregation.
-
-        This method allocates a D2D_0 aggregator core that doesn't overlap with
-        worker or fabric cores used by reduce-to-one, creates D2D socket pairs
-        from workers to aggregator, and sets up the necessary semaphores.
-
-        Args:
-            submesh_device: The mesh device
-            root_coord: Tuple (row, col) of root device coordinate
-            shard_cores: List of worker cores used by reduce-to-one
-            page_size_bytes: Size of each page in bytes (per worker)
-            d2d0_downstream_socket: Sender socket for D2D_0 to send aggregated data downstream
-
-        Returns:
-            Dictionary containing:
-                - d2d0_downstream_socket: Sender socket to downstream (e.g., D2D_1)
-                - d2d_socket_pairs: List of 8 D2D socket pairs (worker → aggregator)
-                - d2d0_termination_semaphore: Semaphore for D2D_0 termination
-                - d2d0_core: The allocated D2D_0 aggregator core
-        """
-        device_coord = ttnn.MeshCoordinate(root_coord[0], root_coord[1])
-        compute_grid = submesh_device.compute_with_storage_grid_size()
-
-        # Build column structure from shard cores to determine fabric cores
-        column_to_cores_map = {}
-        for core in shard_cores:
-            x = core.x
-            if x not in column_to_cores_map:
-                column_to_cores_map[x] = []
-            column_to_cores_map[x].append(core)
-
-        # Sort columns and cores within each column
-        sorted_columns = sorted(column_to_cores_map.keys())
-        for x in sorted_columns:
-            column_to_cores_map[x].sort(key=lambda c: c.y)
-
-        # Calculate fabric cores (one per column)
-        # For horizontal layouts (all cores in same row), place below instead of to the right
-        fabric_cores = []
-
-        # Detect layout: if all workers in 1-2 rows, it's horizontal
-        all_y_coords = set(core.y for core in shard_cores)
-        is_horizontal_layout = len(all_y_coords) <= 2
-
-        for x in sorted_columns:
-            bottom_core = max(column_to_cores_map[x], key=lambda c: c.y)
-            if is_horizontal_layout:
-                # Horizontal layout: place fabric core below (y+1)
-                fabric_core = ttnn.CoreCoord(bottom_core.x, bottom_core.y + 1)
-            else:
-                # Vertical layout: place fabric core to the right (x+1)
-                fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
-            fabric_cores.append(fabric_core)
-
-        # Find a D2D_0 aggregator core that doesn't overlap with worker or fabric cores
-        all_reduce_cores = set((c.x, c.y) for c in shard_cores + fabric_cores)
-
-        # Search for a free core, starting from bottom-right
-        d2d0_core = None
-        for y in range(compute_grid.y - 1, -1, -1):
-            for x in range(compute_grid.x - 1, -1, -1):
-                candidate = ttnn.CoreCoord(x, y)
-                if (candidate.x, candidate.y) not in all_reduce_cores:
-                    d2d0_core = candidate
-                    break
-            if d2d0_core:
-                break
-
-        if not d2d0_core:
-            raise RuntimeError("Could not find non-overlapping core for D2D_0 aggregator")
-
-        d2d0_socket_core = ttnn.MeshCoreCoord(device_coord, d2d0_core)
-
-        # Create D2D socket pairs: worker → aggregator
-        d2d_socket_buffer_size = page_size_bytes * 2  # Buffer for 2 pages per socket
-        d2d_socket_pairs = []
-
-        for worker_core in shard_cores:
-            worker_core_coord = ttnn.MeshCoreCoord(device_coord, worker_core)
-
-            socket_connection = ttnn.SocketConnection(
-                worker_core_coord,  # sender
-                d2d0_socket_core,  # receiver
-            )
-            socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, d2d_socket_buffer_size)
-            socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
-            socket_pair = ttnn.create_socket_pair(submesh_device, submesh_device, socket_config)
-
-            d2d_socket_pairs.append(socket_pair)
-
-        # Create termination semaphore for worker cores + D2D_0 core
-        shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in shard_cores])
-        d2d0_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(d2d0_core, d2d0_core)])
-        worker_and_d2d0_cores = shard_grid.merge(d2d0_core_set)
-        d2d0_termination_semaphore = ttnn.create_global_semaphore(submesh_device, worker_and_d2d0_cores, 0)
-
-        return {
-            "d2d0_downstream_socket": d2d0_downstream_socket,
-            "d2d_socket_pairs": d2d_socket_pairs,
-            "d2d0_termination_semaphore": d2d0_termination_semaphore,
-            "d2d0_core": d2d0_core,
-        }
-
-    @staticmethod
-    def create_d2d0_aggregator_kernel(
-        d2d0_infrastructure: dict,
-        page_size_bytes: int,
-        num_shard_cores: int,
-        use_fabric_on_sender: bool = False,
-    ):
-        """
-        Create D2D_0 aggregator kernel descriptor (to be added to main program).
-
-        Args:
-            d2d0_infrastructure: D2D_0 infrastructure dict from create_d2d0_infrastructure()
-            page_size_bytes: Size of each page in bytes (per worker)
-            num_shard_cores: Number of worker cores sending data
-            use_fabric_on_sender: Whether to use fabric when sending to downstream
-
-        Returns:
-            KernelDescriptor for D2D_0 aggregator kernel
-        """
-        d2d0_core = d2d0_infrastructure["d2d0_core"]
-        d2d0_downstream_socket = d2d0_infrastructure["d2d0_downstream_socket"]
-        d2d_socket_pairs = d2d0_infrastructure["d2d_socket_pairs"]
-        termination_semaphore = d2d0_infrastructure["d2d0_termination_semaphore"]
-
-        # Compile-time args for D2D_0 aggregator kernel (d2d_exchange_multiple_senders.cpp)
-        total_page_size = num_shard_cores * page_size_bytes  # e.g., 8 cores * 1792 bytes = 14336 bytes
-
-        # Calculate fabric packet splitting (if using fabric on sender)
-        if use_fabric_on_sender:
-            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-            num_whole_fabric_packets = total_page_size // fabric_max_payload_size
-            partial_packet_size = total_page_size % fabric_max_payload_size
-
-            # Split across 2 forward links
-            num_fwd_links = 2
-            if num_whole_fabric_packets > 0:
-                num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // num_fwd_links) + int(
-                    partial_packet_size > 0
-                )
-                num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
-                num_whole_fabric_packets_link_1 = num_whole_fabric_packets - num_whole_fabric_packets_link_0
-            else:
-                num_whole_fabric_packets_link_0 = 0
-                num_whole_fabric_packets_link_1 = 0
-
-            whole_packet_size = fabric_max_payload_size
-            fabric_packet_header_cb_id = 0
-        else:
-            # Fabric parameters (set to 0 if not using fabric)
-            num_whole_fabric_packets_link_0 = 0
-            num_whole_fabric_packets_link_1 = 0
-            whole_packet_size = 0
-            partial_packet_size = 0
-            fabric_packet_header_cb_id = 0
-
-        ct_args = [
-            d2d0_downstream_socket.get_config_buffer_address(),  # sender_socket_config_addr (to D2D_1)
-            ttnn.get_global_semaphore_address(termination_semaphore),  # termination_semaphore_addr
-            total_page_size,  # page_size (downstream aggregated size)
-            page_size_bytes,  # upstream_page_size (from each worker)
-            num_whole_fabric_packets_link_0,
-            num_whole_fabric_packets_link_1,
-            whole_packet_size,
-            partial_packet_size,
-            fabric_packet_header_cb_id,
-            0,  # use_fabric_on_receiver (always 0, workers are on same device)
-            1 if use_fabric_on_sender else 0,  # use_fabric_on_sender
-            num_shard_cores,  # num_upstream_sockets
-        ]
-
-        # Add receiver socket config addresses for all upstream sockets (workers → aggregator)
-        for socket_pair in d2d_socket_pairs:
-            _, receiver_socket = socket_pair  # Get receiver socket from pair
-            ct_args.append(receiver_socket.get_config_buffer_address())
-
-        # Pad with zeros if fewer than 8 sockets
-        while len(ct_args) < 20:  # 12 base args + 8 socket addrs = 20
-            ct_args.append(0)
-
-        # Create kernel descriptor
-        d2d0_core_range = ttnn.CoreRangeSet([ttnn.CoreRange(d2d0_core, d2d0_core)])
-        d2d0_kernel = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_senders.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=d2d0_core_range,
-            compile_time_args=ct_args,
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-
-        return d2d0_kernel
-
-    @staticmethod
     def op(
         input_tensor_mesh: ttnn.Tensor,
-        intermediate_tensors: list,
+        intermediate_tensor: ttnn.Tensor,
         output_tensor: ttnn.Tensor,
         semaphores: list,
         root_coord: ttnn.MeshCoordinate,
         exit_coord: Optional[ttnn.MeshCoordinate] = None,
-        enable_d2d0_output: bool = False,  # Enable D2D_0 aggregation output
-        d2d0_infrastructure: Optional[dict] = None,
-        num_iterations: int = 1,  # Pre-created D2D_0 infrastructure
+        downstream_sockets=None,
+        agg_output_size_bytes: int = 0,
+        num_iterations: int = 1,
         is_torus: bool = False,
-    ) -> tuple:
+        forward_metadata_size_bytes: int = 0,
+        metadata_l1_addr: int = 0,
+        worker_fabric_ready_semaphore=None,
+    ) -> ttnn.Tensor:
         """
-        Execute reduce-to-one operation using generic_op with optional D2D_0 aggregation output.
+        Execute reduce-to-one operation using generic_op.
+
+        When downstream_sockets is provided, each ROOT1 worker core directly sends
+        its shard through its own dedicated sender socket to the downstream
+        d2d_exchange pipeline core.
 
         Args:
             input_tensor_mesh: Input tensor mesh (each device has its own data)
-            intermediate_tensors: List of 3 pre-allocated intermediate tensor meshes
+            intermediate_tensor: Pre-allocated intermediate tensor mesh (3x shard width,
+                                 backing a single 3-page CB for all reduction rounds)
             output_tensor: Pre-allocated output tensor mesh (single-core sharded)
             semaphores: List of 4 global semaphores for synchronization
             root_coord: MeshCoordinate of the root device (must be row 1 or 2)
             exit_coord: Optional MeshCoordinate for exit signaling (defaults to root_coord)
-            enable_d2d0_output: If True, creates D2D_0 aggregation infrastructure
-            d2d0_infrastructure: Optional pre-created D2D_0 infrastructure dict
+            downstream_sockets: Optional list of sender sockets for each ROOT1 worker core
+            agg_output_size_bytes: Total useful output bytes (unpadded) for socket aggregation
+            num_iterations: Number of iterations to run inside the kernel
+            is_torus: Whether to use torus topology
+            worker_fabric_ready_semaphore: Optional shared worker->fabric ready semaphore.
+                                         When provided, this avoids allocating the semaphore
+                                         inside the op, which is required for trace capture.
 
         Returns:
-            Tuple of (output_tensor, d2d0_infrastructure or None)
+            Output tensor
         """
         # Convert root_coord to MeshCoordinate if it's a tuple
         if isinstance(root_coord, tuple):
@@ -355,9 +177,7 @@ class ReduceToOneB1:
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        intermediate_r1_per_device = ttnn.get_device_tensors(intermediate_tensors[0])
-        intermediate_r2_per_device = ttnn.get_device_tensors(intermediate_tensors[1])
-        intermediate_r3_per_device = ttnn.get_device_tensors(intermediate_tensors[2])
+        intermediate_per_device = ttnn.get_device_tensors(intermediate_tensor)
 
         # Get semaphore addresses
         sem_round1_addr = ttnn.get_global_semaphore_address(semaphores[0])
@@ -391,18 +211,15 @@ class ReduceToOneB1:
             compute_tile_height * compute_tile_width
         )
 
-        packet_header_size_bytes = 96
+        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         slot_size_bytes = packet_header_size_bytes + payload_size_bytes
 
         # CB indices (matching C++ implementation)
         local_cb = 0  # Input tensor
-        received_cb_r1 = 1  # Round 1: LEAF → ROOT*
+        received_cb = 1  # 3-page CB for all reduction rounds (backed by intermediate tensor)
         output_cb = 2  # Final output
         packet_cb = 3  # Packet staging
-        packet_header_cb = 4  # Packet header (persistent)
-        received_cb_r2 = 5  # Round 2: ROOT3 → ROOT2/ROOT1
-        received_cb_r3 = 6  # Round 3: ROOT2 → ROOT1
-        scratch_cb = 7  # Scratch for compute
+        scratch_cb = 5  # Scratch for compute
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -415,36 +232,30 @@ class ReduceToOneB1:
         output_shard_spec = output_sample.memory_config().shard_spec
         output_core = output_shard_spec.grid.ranges()[0].start
 
-        # Get shard cores for D2D_0 infrastructure (if needed)
         shard_grid = input_sample.memory_config().shard_spec.grid
         shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
 
-        # Create global semaphores for worker→fabric signaling
-        # Compute num_workers_per_column from input shard grid (same for all devices)
-        sample_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
-        sample_columns = {}
-        for c in sample_cores:
-            sample_columns.setdefault(c.x, []).append(c)
-        num_worker_fabric_sems = len(sample_columns[sorted(sample_columns.keys())[0]])
+        # Create a single global ready semaphore for worker->fabric signaling.
+        # Each FC sees its own local semaphore instance at the same L1 address.
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         worker_fabric_sem_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
-        worker_fabric_global_sems = [
-            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_worker_fabric_sems)
-        ]
-        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
+        if isinstance(worker_fabric_ready_semaphore, (list, tuple)):
+            raise ValueError(
+                "Expected a single worker_fabric_ready_semaphore; "
+                "reduce_to_one standalone now uses one shared ready-mask semaphore"
+            )
+        if worker_fabric_ready_semaphore is None:
+            worker_fabric_ready_semaphore = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+        worker_fabric_ready_sem_addr = ttnn.get_global_semaphore_address(worker_fabric_ready_semaphore)
 
-        # Create or use provided D2D_0 infrastructure
-        d2d0_infra = None
-        if enable_d2d0_output:
-            if d2d0_infrastructure is None:
-                raise ValueError(
-                    "enable_d2d0_output=True but d2d0_infrastructure not provided. "
-                    "Test must create D2D_0 downstream socket and infrastructure."
-                )
-            else:
-                d2d0_infra = d2d0_infrastructure
+        # Persistent-signal sync setup for downstream sockets
+        agg_sem_addr = 0
+        total_num_workers_count = len(shard_cores) if downstream_sockets is not None else 0
+        if downstream_sockets is not None:
+            agg_sem = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+            agg_sem_addr = ttnn.get_global_semaphore_address(agg_sem)
 
         for row in range(mesh_rows):
             for col in range(mesh_cols):
@@ -460,9 +271,7 @@ class ReduceToOneB1:
                 # Get tensors for this device
                 input_tensor_device = input_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
-                intermediate_r1_device = intermediate_r1_per_device[device_idx]
-                intermediate_r2_device = intermediate_r2_per_device[device_idx]
-                intermediate_r3_device = intermediate_r3_per_device[device_idx]
+                intermediate_device = intermediate_per_device[device_idx]
 
                 device = input_tensor_device.device()
 
@@ -544,18 +353,20 @@ class ReduceToOneB1:
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
 
-                # Destination L1 address depends on role
+                # Destination L1 address: offset within the single intermediate tensor
+                # Page 0 = round 1 (LEAF data), page 1 = round 2 (ROOT3), page 2 = round 3 (ROOT2)
+                intermediate_base = intermediate_device.buffer_address()
                 if is_leaf:
-                    dst_l1_addr = intermediate_r1_device.buffer_address()
+                    dst_l1_addr = intermediate_base  # page 0
                     dst_sem_addr = sem_round1_addr
                 elif is_root3:
-                    dst_l1_addr = intermediate_r2_device.buffer_address()
+                    dst_l1_addr = intermediate_base + payload_size_bytes  # page 1
                     dst_sem_addr = sem_round2_addr
                 elif is_root2:
-                    dst_l1_addr = intermediate_r3_device.buffer_address()
+                    dst_l1_addr = intermediate_base + 2 * payload_size_bytes  # page 2
                     dst_sem_addr = sem_round3_addr
                 else:
-                    dst_l1_addr = intermediate_r1_device.buffer_address()
+                    dst_l1_addr = intermediate_base  # ROOT1 exit (not used for reduce)
                     dst_sem_addr = sem_exit_addr
 
                 # Get physical coords for output core
@@ -567,13 +378,18 @@ class ReduceToOneB1:
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
                     ("local_cb", local_cb),
-                    ("received_cb_r1", received_cb_r1),
-                    ("received_cb_r2", received_cb_r2),
-                    ("received_cb_r3", received_cb_r3),
+                    ("received_cb", received_cb),
                     ("num_loop_iters", num_iterations),
                 ]
 
                 # Writer (BRISC) compile-time args
+                device_total_num_workers = (
+                    total_num_workers_count if (is_root1 and downstream_sockets is not None) else 0
+                )
+                device_agg_output_size = agg_output_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                device_forward_metadata_size = (
+                    forward_metadata_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                )
                 writer_ct_args = [
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
@@ -581,14 +397,15 @@ class ReduceToOneB1:
                     ("local_cb", local_cb),
                     ("scratch_cb", scratch_cb),
                     ("packet_cb", packet_cb),
-                    ("packet_header_cb", packet_header_cb),
                     ("num_hops", 1),
                     ("dst_fabric_node_chip_id", dest_fabric_node_id.chip_id),
                     ("dst_fabric_node_mesh_id", int(dest_fabric_node_id.mesh_id)),
                     ("output_core_noc_x", output_core_phys.x),
                     ("output_core_noc_y", output_core_phys.y),
                     ("num_workers", num_workers_per_column),
-                    ("slot_size_bytes", slot_size_bytes),
+                    ("total_num_workers", device_total_num_workers),
+                    ("agg_output_size_bytes", device_agg_output_size),
+                    ("forward_metadata_size_bytes", device_forward_metadata_size),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -597,9 +414,7 @@ class ReduceToOneB1:
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
                     ("local_cb", local_cb),
-                    ("received_cb_r1", received_cb_r1),
-                    ("received_cb_r2", received_cb_r2),
-                    ("received_cb_r3", received_cb_r3),
+                    ("received_cb", received_cb),
                     ("output_cb", output_cb),
                     ("scratch_cb", scratch_cb),
                     ("num_loop_iters", num_iterations),
@@ -614,6 +429,18 @@ class ReduceToOneB1:
                 ]
 
                 # === Per-Core Runtime Args ===
+                # Persistent-signal core setup for ROOT1 with downstream sockets
+                # First worker core is the designated persistent-signal coordinator
+                persistent_core_noc_x = 0
+                persistent_core_noc_y = 0
+                if is_root1 and downstream_sockets is not None:
+                    persistent_core_phys = device.worker_core_from_logical_core(input_cores_list[0])
+                    persistent_core_noc_x = persistent_core_phys.x
+                    persistent_core_noc_y = persistent_core_phys.y
+
+                # Resolve metadata L1 address for ROOT1 last-worker forwarding
+                device_metadata_l1_addr = metadata_l1_addr if (is_root1 and forward_metadata_size_bytes > 0) else 0
+
                 # Build per-core BRISC args for worker cores
                 brisc_per_core_args = []
                 for core_idx, core in enumerate(input_cores_list):
@@ -622,29 +449,30 @@ class ReduceToOneB1:
                     slot_idx = core_to_slot_idx[(core.x, core.y)]
                     shard_idx = core_to_shard_idx[(core.x, core.y)]
 
-                    # Get socket config address for ROOT1 cores (if D2D_0 enabled)
                     socket_config_addr = 0
-                    if is_root1 and d2d0_infra is not None:
-                        # d2d0_infra contains socket pairs, one per worker core
-                        sender_socket = d2d0_infra["d2d_socket_pairs"][core_idx][0]  # Get sender from pair
-                        socket_config_addr = sender_socket.get_config_buffer_address()
+                    if is_root1 and downstream_sockets is not None:
+                        socket_config_addr = downstream_sockets[shard_idx].get_config_buffer_address()
 
                     worker_args = [
-                        fabric_core_phys.x,  # fabric_core_noc_x
-                        fabric_core_phys.y,  # fabric_core_noc_y
-                        slot_idx,  # my_slot_idx
-                        worker_fabric_sem_addrs[slot_idx],  # worker_sem_addr
-                        dst_l1_addr,  # dst_l1_addr
-                        dst_sem_addr,  # dst_sem_addr
-                        output_tensor_device.buffer_address(),  # output_base_addr
-                        shard_idx,  # shard_idx
-                        socket_config_addr,  # socket_config_addr (for ROOT1 socket sending)
+                        fabric_core_phys.x,
+                        fabric_core_phys.y,
+                        slot_idx,
+                        worker_fabric_ready_sem_addr,
+                        dst_l1_addr,
+                        dst_sem_addr,
+                        output_tensor_device.buffer_address(),
+                        shard_idx,
+                        socket_config_addr,
+                        device_metadata_l1_addr,
                     ]
+                    if is_root1 and downstream_sockets is not None:
+                        worker_args.extend([agg_sem_addr, persistent_core_noc_x, persistent_core_noc_y])
+
                     brisc_per_core_args.append((core, worker_args))
 
-                # Fabric cores BRISC args: worker semaphore addresses (fabric args appended later)
+                # Fabric cores BRISC args: shared ready semaphore address (fabric args appended later)
                 for fc in fabric_cores:
-                    brisc_per_core_args.append((fc, list(worker_fabric_sem_addrs)))
+                    brisc_per_core_args.append((fc, [worker_fabric_ready_sem_addr]))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -662,13 +490,13 @@ class ReduceToOneB1:
                     )
                 ]
 
-                # received_cb_r1: backed by intermediate tensor r1
-                cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r1, intermediate_r1_device)
+                # received_cb: 3-page CB backed by intermediate tensor (all reduction rounds)
+                cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb, intermediate_device)
                 cb1_desc.core_ranges = all_cores_set
-                cb1_desc.total_size = payload_size_bytes
+                cb1_desc.total_size = 3 * payload_size_bytes
                 cb1_desc.format_descriptors = [
                     ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r1,
+                        buffer_index=received_cb,
                         data_format=dtype,
                         page_size=payload_size_bytes,
                         tile=compute_tile_desc,
@@ -701,48 +529,9 @@ class ReduceToOneB1:
                     ],
                 )
 
-                # packet_header_cb: persistent packet header storage
-                cb4_desc = ttnn.CBDescriptor(
-                    total_size=packet_header_size_bytes,
-                    core_ranges=all_cores_set,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=packet_header_cb,
-                            data_format=dtype,
-                            page_size=packet_header_size_bytes,
-                        )
-                    ],
-                )
-
-                # received_cb_r2: backed by intermediate tensor r2
-                cb5_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r2, intermediate_r2_device)
-                cb5_desc.core_ranges = all_cores_set
-                cb5_desc.total_size = payload_size_bytes
-                cb5_desc.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r2,
-                        data_format=dtype,
-                        page_size=payload_size_bytes,
-                        tile=compute_tile_desc,
-                    )
-                ]
-
-                # received_cb_r3: backed by intermediate tensor r3
-                cb6_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r3, intermediate_r3_device)
-                cb6_desc.core_ranges = all_cores_set
-                cb6_desc.total_size = payload_size_bytes
-                cb6_desc.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r3,
-                        data_format=dtype,
-                        page_size=payload_size_bytes,
-                        tile=compute_tile_desc,
-                    )
-                ]
-
                 # scratch_cb: compute scratch (not tensor-backed)
                 cb_size_bytes = num_compute_tiles * compute_tile_size_bytes
-                cb7_desc = ttnn.CBDescriptor(
+                cb5_desc = ttnn.CBDescriptor(
                     total_size=cb_size_bytes,
                     core_ranges=all_cores_set,
                     format_descriptors=[
@@ -755,7 +544,7 @@ class ReduceToOneB1:
                     ],
                 )
 
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc, cb6_desc, cb7_desc]
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc]
 
                 # Build unified compile-time core descriptors
                 unified_ct_core_descriptors = [
@@ -783,6 +572,7 @@ class ReduceToOneB1:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=brisc_per_core_args,
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()
@@ -793,27 +583,6 @@ class ReduceToOneB1:
 
                 # === Program Descriptor ===
                 all_kernels = kernel_result.kernels
-
-                # Add D2D_0 aggregator kernel to ROOT1 device program if enabled
-                if is_root1 and d2d0_infra is not None:
-                    # Determine if D2D_0 needs fabric to send to downstream
-                    d2d0_downstream_socket = d2d0_infra["d2d0_downstream_socket"]
-                    d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
-                        0
-                    ].receiver_core.device_coord
-                    my_fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                    downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
-                        ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
-                    )
-                    use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
-                    # print("use fabric on sender: ", use_fabric_on_sender)
-                    d2d0_kernel = ReduceToOneB1.create_d2d0_aggregator_kernel(
-                        d2d0_infra,
-                        payload_size_bytes,  # Per-worker page size
-                        len(shard_cores),  # Number of workers
-                        use_fabric_on_sender=use_fabric_on_sender,
-                    )
-                    all_kernels = all_kernels + [d2d0_kernel]
 
                 program = ttnn.ProgramDescriptor(
                     kernels=all_kernels,
@@ -838,42 +607,14 @@ class ReduceToOneB1:
                         )
                         fabric_rt_args_ref.extend(fabric_conn_args)
 
-                # Add fabric connection args for D2D_0 aggregator kernel if it needs fabric
-                if is_root1 and d2d0_infra is not None and use_fabric_on_sender:
-                    # print("appending fabric rt for D2D_0\n")
-                    d2d0_kernel_idx = len(all_kernels) - 1  # D2D_0 kernel is the last one added
-                    d2d0_core = d2d0_infra["d2d0_core"]
-
-                    # print("set rt args to []")
-                    # Initialize runtime args to empty list before extending with fabric args
-                    program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y] = []
-                    d2d0_rt_args_ref = program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y]
-                    # print("getting rt args ref\n")
-                    # Set up fabric connections for D2D_0 kernel
-                    # Use same number of links as determined by socket config
-                    num_d2d0_links = len(d2d0_downstream_socket.get_connection_config())
-                    for link_idx in range(num_d2d0_links):
-                        d2d0_fabric_args = ttnn.setup_fabric_connection(
-                            my_fabric_node_id,
-                            downstream_fabric_node_id,
-                            link_idx,
-                            program,
-                            d2d0_core,
-                        )
-                        d2d0_rt_args_ref.extend(d2d0_fabric_args)
-
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
-        # Execute reduce-to-one operation (D2D_0 aggregator runs on ROOT1 device if enabled)
+        # Execute reduce-to-one operation
         input_list = [
             input_tensor_mesh,
             output_tensor,
-            intermediate_tensors[0],
-            intermediate_tensors[1],
-            intermediate_tensors[2],
+            intermediate_tensor,
         ]
         ttnn.generic_op(input_list, mesh_program_descriptor)
 
-        if enable_d2d0_output:
-            return (output_tensor, d2d0_infra)
         return output_tensor

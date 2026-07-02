@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "debug_tools.hpp"
 
+#include <fmt/ranges.h>
 #include <cstdint>
 #include <cstdlib>
 #include <algorithm>
@@ -15,7 +16,9 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "allocator/allocator.hpp"
 #include "command_queue_common.hpp"
+#include "device/device_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
@@ -41,6 +44,26 @@ T val(T v) {
     return v;
 }
 }  // namespace
+
+void read_cq_memory_for_dump(
+    void* dst,
+    uint32_t size_bytes,
+    uint64_t byte_addr,
+    ChipId mmio_device_id,
+    uint16_t channel,
+    const SystemMemoryManager& sysmem_manager) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    if (sysmem_manager.is_dram_backed()) {
+        const uint32_t dram_channel = MetalContext::instance()
+                                          .device_manager()
+                                          ->get_active_device(mmio_device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
+        cluster.read_dram_vec(dst, size_bytes, mmio_device_id, dram_channel, byte_addr);
+    } else {
+        cluster.read_sysmem(dst, size_bytes, byte_addr, mmio_device_id, channel);
+    }
+}
 
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
     std::ifstream host_dispatch_dump_file;
@@ -213,6 +236,19 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
                 cq_file << fmt::format(" (num_worker_sems={})", val(cmd->set_num_worker_sems.num_worker_sems));
                 break;
+            case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS: {
+                uint32_t num_sub_devices = val(cmd->set_sub_device_worker_counts.num_sub_devices);
+                uint32_t* workers_per_sub_device =
+                    reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(cmd) + sizeof(CQDispatchCmd));
+                cq_file << fmt::format(
+                    " (num_sub_devices={}, workers_per_sub_device=[{}])",
+                    num_sub_devices,
+                    fmt::join(workers_per_sub_device, workers_per_sub_device + num_sub_devices, ", "));
+                stride += num_sub_devices * sizeof(uint32_t);
+                const uint32_t alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+                stride = ((stride + alignment - 1) / alignment) * alignment;
+                break;
+            }
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
                 cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
                 break;
@@ -360,8 +396,7 @@ void dump_completion_queue_entries(
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
         uint32_t page_addr = base_addr + page_offset;
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
 
         // Check if this page starts with a valid command id
         CQDispatchCmd* cmd = (CQDispatchCmd*)read_data.data();
@@ -457,8 +492,8 @@ void dump_issue_queue_entries(
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
     uint32_t end_of_curr_page =
         first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel);
+    read_cq_memory_for_dump(
+        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel, sysmem_manager);
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
@@ -467,8 +502,8 @@ void dump_issue_queue_entries(
         // Check if we need to read a new page
         if (curr_addr > end_of_curr_page) {
             uint32_t page_base = curr_addr - (curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-            tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
+            read_cq_memory_for_dump(
+                read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
             end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
         }
 
@@ -524,8 +559,8 @@ void dump_issue_queue_entries(
                     if (dispatch_curr_addr > end_of_curr_page) {
                         uint32_t page_base =
                             dispatch_curr_addr - (dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-                        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                            read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
+                        read_cq_memory_for_dump(
+                            read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
                         end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
                     }
 
@@ -628,8 +663,7 @@ void dump_command_queue_raw_data(
         print_progress_bar(((float)page_offset / bytes_to_read) + 0.005);
 
         // Print in 16B per line
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
         TT_ASSERT(read_data.size() % 16 == 0);
         for (uint32_t line_offset = 0; line_offset < read_data.size(); line_offset += 16) {
             uint32_t line_addr = page_addr + line_offset;

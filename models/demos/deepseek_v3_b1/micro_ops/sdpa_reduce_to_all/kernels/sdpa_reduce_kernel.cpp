@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Unified SDPA Reduce-to-All Kernel
@@ -21,6 +21,7 @@
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/sdpa_reduce_worker.hpp"
 #include "../../../unified_kernels/sdpa_reduce_forwarder.hpp"
+#include "../../../metadata/metadata.hpp"
 
 void kernel_main() {
     constexpr bool is_worker = get_named_compile_time_arg_val("is_worker") == 1;
@@ -35,10 +36,8 @@ void kernel_main() {
         using ReaderCTArgs = Worker::ReaderCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_ms"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_ms"),
+            get_named_compile_time_arg_val("cb_neighbor_l"),
+            get_named_compile_time_arg_val("cb_neighbor_ms"),
             get_named_compile_time_arg_val("ms_tile_size_bytes"),
             get_named_compile_time_arg_val("l_chunk_size_bytes"),
             get_named_compile_time_arg_val("num_l_chunks"),
@@ -46,9 +45,8 @@ void kernel_main() {
             get_named_compile_time_arg_val("position_enabled"),
             get_named_compile_time_arg_val("per_device_chunk_size")>;
 
-        // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-        using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_l, ReaderCTArgs::out_tiles);
+        unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_ms, 1);
 
         uint32_t per_core_rta_arg_idx = 0;
         Worker::ReaderArgs reader_args{
@@ -57,8 +55,20 @@ void kernel_main() {
             .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op(reader_args);
+        if constexpr (ReaderCTArgs::position_enabled) {
+            uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+            volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+            reader_args.global_pos = metadata_ptr->position_id;
+            reader_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
+        Worker::Op<ReaderCTArgs> op;
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_READER");
+            op(reader_args);
+        }
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -73,9 +83,13 @@ void kernel_main() {
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
         };
         Fwd::Op<FwdCTArgs> op;
-        op(fwd_args);
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
+            op(fwd_args);
+        }
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -85,15 +99,11 @@ void kernel_main() {
     if constexpr (is_worker) {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
 
-        // Dummy ReaderCT and ComputeCT - not used by BRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
         using WriterCTArgs = Worker::WriterCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
             get_named_compile_time_arg_val("cb_r1_result_l"),
             get_named_compile_time_arg_val("cb_r1_result_ms"),
-            get_named_compile_time_arg_val("cb_packet_slot"),
             get_named_compile_time_arg_val("l1_alignment"),
             get_named_compile_time_arg_val("page_size_bytes"),
             get_named_compile_time_arg_val("slot_size"),
@@ -108,8 +118,6 @@ void kernel_main() {
             get_named_compile_time_arg_val("scatter_face_size"),
             get_named_compile_time_arg_val("scatter_row_face_size"),
             get_named_compile_time_arg_val("scatter_num_rows")>;
-
-        using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         uint32_t per_core_rta_arg_idx = 0;
         Worker::WriterArgs writer_args{
@@ -132,12 +140,16 @@ void kernel_main() {
             .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
+            .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx),
             // scatter_arrival_enabled=0, so this is not used
             .scatter_arrival_sem_addr = 0,
         };
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op(writer_args);
+        per_core_rta_arg_idx += WriterCTArgs::scatter_num_rows * 2;  // x, y value per dest
+        Worker::Op<WriterCTArgs> op;
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_WRITER");
+            op(writer_args);
+        }
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -152,9 +164,13 @@ void kernel_main() {
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
         };
         Fwd::Op<FwdCTArgs> op;
-        op(fwd_args);
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
+            op(fwd_args);
+        }
     }
 
 #elif defined(COMPILE_FOR_TRISC)
@@ -164,24 +180,18 @@ void kernel_main() {
     if constexpr (is_worker) {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
 
-        // Dummy ReaderCT and WriterCT - not used by TRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
         using ComputeCTArgs = Worker::ComputeCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_ms"),
+            get_named_compile_time_arg_val("cb_neighbor_l"),
+            get_named_compile_time_arg_val("cb_neighbor_ms"),
             get_named_compile_time_arg_val("cb_r1_result_l"),
             get_named_compile_time_arg_val("cb_r1_result_ms"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_ms"),
             get_named_compile_time_arg_val("cb_l_out"),
-            get_named_compile_time_arg_val("cb_ms_out"),
             get_named_compile_time_arg_val("scale_fp32"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("num_l_chunks"),
+            get_named_compile_time_arg_val("compute_block_size"),
             get_named_compile_time_arg_val("position_enabled"),
             get_named_compile_time_arg_val("per_device_chunk_size"),
             get_named_compile_time_arg_val("final_reduction")>;
@@ -189,9 +199,25 @@ void kernel_main() {
         // Initialize compute engine for unified kernel
         deepseek_compute_kernel_init();
 
-        Worker::ComputeArgs compute_args{};
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op(compute_args);
+        Worker::ComputeArgs compute_args;
+        if constexpr (ComputeCTArgs::position_enabled) {
+            uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+            volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+            compute_args.global_pos = metadata_ptr->position_id;
+            uint32_t per_core_rta_arg_idx = 0;
+            compute_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.swap_r1_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.swap_r2_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
+        Worker::Op<ComputeCTArgs> op;
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_COMPUTE");
+            op(compute_args);
+        }
     }
     // else: forwarder TRISC is no-op
 #endif

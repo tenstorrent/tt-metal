@@ -153,13 +153,13 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 14 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
 
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 16 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
@@ -235,12 +235,12 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 30 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
@@ -317,12 +317,12 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 48 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
@@ -398,12 +398,12 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 62 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
 }

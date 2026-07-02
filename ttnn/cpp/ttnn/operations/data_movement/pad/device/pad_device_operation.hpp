@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,17 +10,17 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_program_factory.hpp"
-#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_height_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 struct PadDeviceOperation {
@@ -30,7 +30,7 @@ struct PadDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         PadRmReaderWriterMultiCoreProgramFactory,
-        PadRmReaderWriterMultiCoreV2ProgramFactory,
+        PadRmReaderWriterMultiCoreDefaultProgramFactory,
         PadRmReaderWriterProgramFactory,
         PadRmShardedHeightOnlyProgramFactory,
         PadRmShardedWidthOnlyProgramFactory,

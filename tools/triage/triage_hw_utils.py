@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared helpers for hardware triage scripts. Not a triage script itself."""
@@ -8,6 +8,7 @@ import datetime
 from pathlib import Path
 
 from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +84,8 @@ def read_tag(device_id, tag: str) -> str:
         raw = read_arc_telemetry_entry(device_id, tag)
         decoder = TELEMETRY_DECODERS.get(tag)
         return decoder(raw) if decoder else str(raw)
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         return f"error: {e} {raw}"
 

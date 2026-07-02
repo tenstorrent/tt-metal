@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -498,6 +498,7 @@ class TT_CCL:
                     "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128), (1, 1, seqlen, 128 // 4)],
                 }
                 if not self.is_qwen
                 else {
@@ -506,6 +507,7 @@ class TT_CCL:
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128), (1, 1, seqlen, 128 // 4)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -567,6 +569,7 @@ class TT_CCL:
                     "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128), (1, 1, seqlen, 128 // 4)],
                     "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
                     # "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
                     "FF1_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
@@ -580,6 +583,7 @@ class TT_CCL:
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128), (1, 1, seqlen, 128 // 4)],
                     "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
                     # "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                     "FF1_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
@@ -632,6 +636,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3584)],
                     "FF2": [(1, 1, seqlen, 2048)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128)],  # For prefix caching column replication
                 }
                 if not self.is_qwen
                 else {
@@ -643,6 +648,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3200)],
                     "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128)],  # For prefix caching column replication
                 }
             )
             for key, shape in buffers_dict.items():
@@ -1182,6 +1188,7 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
         )
+
         if self.mode == "prefill" and buffer_key is not None and dim != 2:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
@@ -1190,6 +1197,71 @@ class TT_CCL:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
+
+    def line_all_gather_matmul(
+        self,
+        input_tensor_mesh,
+        weight_tensor,
+        dim,
+        cluster_axis,
+        memory_config,
+        matmul_config,
+        compute_kernel_config,
+        dtype=ttnn.bfloat8_b,
+    ):
+        """
+        Fused AllGather + MatMul for prefill using all_gather_minimal_matmul_async.
+
+        """
+        topology = self.model_config.get("CCL_TOPOLOGY", ttnn.Topology.Ring)
+        force_transpose = True
+
+        B = input_tensor_mesh.shape[1]
+        input_tensor_mesh = ttnn.reshape(
+            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+        )
+
+        grid_size = matmul_config.compute_with_storage_grid_size
+        if hasattr(grid_size, "x"):
+            core_grid = ttnn.CoreCoord(grid_size.x, grid_size.y)
+        else:
+            core_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+
+        div_axis = core_grid.x if force_transpose else core_grid.y
+        num_links = 1
+        for nl in [4, 3, 2, 1]:
+            if div_axis % nl == 0:
+                num_links = nl
+                break
+
+        max_workers_total = core_grid.x if force_transpose else core_grid.y
+        num_workers_per_link = max(1, min(8 // num_links, max_workers_total // num_links))
+
+        sem_current = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+        sem_next = self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs]
+        if isinstance(sem_current, list):
+            semaphores = sem_current + sem_next
+        else:
+            semaphores = [sem_current, sem_next]
+
+        output = ttnn.experimental.all_gather_minimal_matmul_async(
+            input_tensor=input_tensor_mesh,
+            weight_tensor=weight_tensor,
+            config=matmul_config,
+            compute_kernel_config=compute_kernel_config,
+            multi_device_global_semaphore=semaphores,
+            num_links=num_links,
+            topology=topology,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+            dtype=dtype,
+            force_transpose=force_transpose,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=8,
+        )
+
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return output[0]
 
     def all_gather_concat(
         self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8, use_noc1_only=False

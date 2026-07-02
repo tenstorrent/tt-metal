@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

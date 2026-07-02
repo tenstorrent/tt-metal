@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,11 @@ Tensor::Tensor(const tt::tt_metal::Tensor& value, bool requires_grad) : m_value(
 }
 
 void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
+    // Skip gradient addition if not required. Part of branch pruning autograd optimization.
+    if (!m_requires_grad) {
+        return;
+    }
+
     if (!is_grad_initialized()) {
         auto value_shape = m_value.get_tensor().logical_shape();
         if (grad.logical_shape() != value_shape) {
@@ -54,7 +59,7 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
     // It is important to not use inline addition here
     // m_grad might share memory with other tensors
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
-    m_grad = ttnn::add(m_grad, grad, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    m_grad = ttnn::add(m_grad, grad, std::nullopt, std::nullopt, std::nullopt, none, none, none);
 }
 
 void Tensor::backward(bool retain_graph) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,11 +41,11 @@ struct TraceDescriptor;
 class Program;
 class IDevice;
 class Trace;
-struct Event;
 class Buffer;
 class GlobalSemaphore;
 class CoreRange;
 class CoreRangeSet;
+class MeshTensor;
 
 // ==================================================
 //                  HOST API: Device management
@@ -274,6 +274,9 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
  */
 // clang-format on
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
 
 // clang-format off
 /**
@@ -292,15 +295,8 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
-[[deprecated(
-    "tt::tt_metal::CreateSemaphore(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t "
-    "initial_value, CoreType core_type) is deprecated. Use tt::tt_metal::CreateSemaphore(Program& program, const "
-    "std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) instead.")]]
-uint32_t CreateSemaphore(
-    Program& program,
-    const std::variant<CoreRange, CoreRangeSet>& core_spec,
-    uint32_t initial_value,
-    CoreType core_type);
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
 
 // clang-format off
 /**
@@ -311,7 +307,7 @@ uint32_t CreateSemaphore(
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
- * | core_spec     | Range of the Tensix co-ordinates using the semaphore | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
+ * | core_spec     | Range of the Tensix coordinates using the semaphore  | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
  */
 // clang-format on
@@ -328,7 +324,7 @@ uint32_t CreateSemaphore(
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix co-ordinates using the semaphore   | const CoreRangeSet &                                      |              | Yes      |
+ * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
@@ -346,7 +342,7 @@ GlobalSemaphore CreateGlobalSemaphore(
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix co-ordinates using the semaphore   | CoreRangeSet &&                                           |              | Yes      |
+ * | cores          | Range of the Tensix coordinates using the semaphore    | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
@@ -623,18 +619,6 @@ void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
     ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
-
-// clang-format off
-/**
- * Host will query an event for completion status on device.
- * Return value: bool.  True if event is completed, false otherwise.
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
- */
-// clang-format on
-[[deprecated("Use distributed::EventQuery with distributed::MeshEvent instead.")]]
-bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**

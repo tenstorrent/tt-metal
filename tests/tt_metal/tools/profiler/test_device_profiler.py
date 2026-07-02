@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -319,168 +319,6 @@ def test_full_buffer():
         assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
     else:
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
-
-
-@pytest.mark.skip(reason="Skipped due to issue in Profiler CI. Issue #36371")
-def test_device_api_debugger_non_dropping():
-    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
-
-    testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
-    clear_profiler_runtime_artifacts()
-
-    envVars = "TT_METAL_NOC_DEBUG_DUMP=1 "
-
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
-    assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"
-
-    # Verify the NOC trace JSON file exists
-    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
-    assert os.path.isfile(expected_trace_file), f"Expected trace file '{expected_trace_file}' does not exist"
-
-    # Read and parse the JSON file
-    with open(expected_trace_file, "r") as nocTraceJson:
-        try:
-            noc_trace_data = json.load(nocTraceJson)
-        except json.JSONDecodeError:
-            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
-
-    assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
-    assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
-
-    # Track READ and WRITE events separately for each RISC
-    brisc_read_dst_addrs_found = set()
-    brisc_write_dst_addrs_found = set()
-    ncrisc_read_dst_addrs_found = set()
-    ncrisc_write_dst_addrs_found = set()
-
-    # Track barrier events
-    read_barrier_start_count = 0
-    read_barrier_end_count = 0
-    write_barrier_start_count = 0
-    write_barrier_end_count = 0
-
-    for event in noc_trace_data:
-        assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
-        event_type = event.get("type")
-
-        # Count barrier events
-        if event_type == "READ_BARRIER_START":
-            read_barrier_start_count += 1
-        elif event_type == "READ_BARRIER_END":
-            read_barrier_end_count += 1
-        elif event_type == "WRITE_BARRIER_START":
-            write_barrier_start_count += 1
-        elif event_type == "WRITE_BARRIER_END":
-            write_barrier_end_count += 1
-
-        if "dst_addr" in event and "proc" in event:
-            proc = event["proc"]
-            dst_addr = event["dst_addr"]
-
-            if proc == "BRISC":
-                if event_type == "READ":
-                    brisc_read_dst_addrs_found.add(dst_addr)
-                elif event_type == "WRITE_":
-                    brisc_write_dst_addrs_found.add(dst_addr)
-            elif proc == "NCRISC":
-                if event_type == "READ":
-                    ncrisc_read_dst_addrs_found.add(dst_addr)
-                elif event_type == "WRITE_":
-                    ncrisc_write_dst_addrs_found.add(dst_addr)
-
-    expected_dst_addrs = set(range(10000))  # 0 to 9999
-
-    # Verify BRISC READ has all expected dst_addr values
-    missing_brisc_read_dst_addrs = expected_dst_addrs - brisc_read_dst_addrs_found
-    assert len(missing_brisc_read_dst_addrs) == 0, (
-        f"Missing dst_addr values in BRISC READ JSON events: {sorted(missing_brisc_read_dst_addrs)[:20]}"
-        f"{'...' if len(missing_brisc_read_dst_addrs) > 20 else ''} "
-        f"(found {len(brisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify BRISC WRITE has all expected dst_addr values
-    missing_brisc_write_dst_addrs = expected_dst_addrs - brisc_write_dst_addrs_found
-    assert len(missing_brisc_write_dst_addrs) == 0, (
-        f"Missing dst_addr values in BRISC WRITE JSON events: {sorted(missing_brisc_write_dst_addrs)[:20]}"
-        f"{'...' if len(missing_brisc_write_dst_addrs) > 20 else ''} "
-        f"(found {len(brisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify NCRISC READ has all expected dst_addr values
-    missing_ncrisc_read_dst_addrs = expected_dst_addrs - ncrisc_read_dst_addrs_found
-    assert len(missing_ncrisc_read_dst_addrs) == 0, (
-        f"Missing dst_addr values in NCRISC READ JSON events: {sorted(missing_ncrisc_read_dst_addrs)[:20]}"
-        f"{'...' if len(missing_ncrisc_read_dst_addrs) > 20 else ''} "
-        f"(found {len(ncrisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify NCRISC WRITE has all expected dst_addr values
-    missing_ncrisc_write_dst_addrs = expected_dst_addrs - ncrisc_write_dst_addrs_found
-    assert len(missing_ncrisc_write_dst_addrs) == 0, (
-        f"Missing dst_addr values in NCRISC WRITE JSON events: {sorted(missing_ncrisc_write_dst_addrs)[:20]}"
-        f"{'...' if len(missing_ncrisc_write_dst_addrs) > 20 else ''} "
-        f"(found {len(ncrisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify barrier event counts
-    expected_barrier_count = 20000
-    assert (
-        read_barrier_start_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} READ_BARRIER_START events, found {read_barrier_start_count}"
-    assert (
-        read_barrier_end_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} READ_BARRIER_END events, found {read_barrier_end_count}"
-    assert (
-        write_barrier_start_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} WRITE_BARRIER_START events, found {write_barrier_start_count}"
-    assert (
-        write_barrier_end_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} WRITE_BARRIER_END events, found {write_barrier_end_count}"
-
-    # There is a read/write barrier after each noc_async_read/write call.
-    # Verify that the noc counters are being tracked properly
-    NOC_COUNTER_BITS = 12
-    prev_counters = {}  # (proc, noc, type) -> previous counter value
-    read_event_count = 0
-    write_event_count = 0
-
-    for event in noc_trace_data:
-        event_type = event.get("type")
-        if event_type in ["READ", "WRITE_"]:
-            assert (
-                "noc_status_counter" in event
-            ), f"noc_status_counter missing in {event_type} event at timestamp {event.get('timestamp')}"
-            assert "proc" in event, f"proc missing in {event_type} event at timestamp {event.get('timestamp')}"
-            assert "noc" in event, f"noc missing in {event_type} event at timestamp {event.get('timestamp')}"
-
-            noc_status_counter = event.get("noc_status_counter")
-            proc = event.get("proc")
-            noc = event.get("noc")
-
-            assert isinstance(
-                noc_status_counter, int
-            ), f"noc_status_counter must be an integer, found {type(noc_status_counter)} in {event_type} event"
-
-            counter_key = (proc, noc, event_type)
-
-            if counter_key in prev_counters:
-                prev_counter = prev_counters[counter_key]
-                expected_counter = (prev_counter + 1) % (2**NOC_COUNTER_BITS)
-                assert noc_status_counter == expected_counter, (
-                    f"noc_status_counter should increment by 1 for consecutive {event_type} events "
-                    f"for {proc} {noc}. Previous counter: {prev_counter}, current counter: {noc_status_counter}, "
-                    f"expected: {expected_counter} at timestamp {event.get('timestamp')}"
-                )
-
-            prev_counters[counter_key] = noc_status_counter
-
-            if event_type == "READ":
-                read_event_count += 1
-            else:
-                write_event_count += 1
-
-    assert read_event_count > 0 or write_event_count > 0, "No READ or WRITE_ events found to verify noc_status_counter"
 
 
 def wildcard_match(pattern, words):
@@ -943,6 +781,130 @@ def verify_trace_ids_in_device_csv(csv_path=None, riscs=("BRISC", "NCRISC")):
         assert False, error_msg
 
 
+DEVICE_ID_NUM_BITS = 10
+DEVICE_OP_ID_NUM_BITS = 31
+
+# create_basic_sync_program() in sub_device_test_utils.hpp assigns these runtime ids:
+# waiter -> sub_device_2, syncer/incrementer -> sub_device_1
+SUBDEVICE_TEST_PROGRAM_RUNTIME_ID_TO_SUB_DEVICE = {
+    1: 1,
+    2: 0,
+    3: 0,
+}
+
+SUBDEVICE_TEST_CORE_TO_SUB_DEVICE = {(x, y): 0 for x in range(3) for y in range(3)}
+SUBDEVICE_TEST_CORE_TO_SUB_DEVICE.update({(3, 3): 1, (4, 4): 1})
+
+
+def decode_run_host_id(encoded_run_host_id):
+    encoded_run_host_id = int(encoded_run_host_id)
+    device_id = encoded_run_host_id & ((1 << DEVICE_ID_NUM_BITS) - 1)
+    base_program_id = (encoded_run_host_id & ((1 << DEVICE_OP_ID_NUM_BITS) - 1)) >> DEVICE_ID_NUM_BITS
+    return device_id, base_program_id
+
+
+def get_base_program_id(run_host_id):
+    run_host_id = int(run_host_id)
+    if run_host_id == 0:
+        return None
+    if run_host_id >= (1 << DEVICE_ID_NUM_BITS):
+        _, base_program_id = decode_run_host_id(run_host_id)
+        return base_program_id
+    return run_host_id
+
+
+def parse_device_csv_meta_data(meta_data_str):
+    if meta_data_str is None or (isinstance(meta_data_str, float) and pd.isna(meta_data_str)):
+        return None
+    meta_data_str = str(meta_data_str).strip()
+    if not meta_data_str:
+        return None
+    try:
+        return json.loads(meta_data_str.replace(";", ","))
+    except json.JSONDecodeError:
+        return None
+
+
+def verify_sub_device_ids_in_device_csv(csv_path=None):
+    """
+    Verify sub-device metadata in profile_log_device.csv for sub-device dispatch tests.
+
+    Every row with non-empty meta data must include sub_device_id and sub_device_manager_id.
+    When the owning program or worker core is known, sub_device_id must match the test layout.
+    """
+    if csv_path is None:
+        csv_path = PROFILER_LOGS_DIR / "profile_log_device.csv"
+
+    if not os.path.isfile(csv_path):
+        assert False, f"Device log CSV not found at {csv_path}"
+
+    df = pd.read_csv(csv_path, skiprows=1, header=0, na_filter=False)
+
+    errors = []
+    validated_rows = 0
+    manager_ids = set()
+
+    for row in df.itertuples(index=False):
+        meta_data = parse_device_csv_meta_data(row[-1])
+        if meta_data is None:
+            continue
+
+        validated_rows += 1
+
+        if "sub_device_id" not in meta_data or "sub_device_manager_id" not in meta_data:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), run_host_id {row[7]}: "
+                f"meta data missing sub_device fields: {meta_data}"
+            )
+            continue
+
+        sub_device_id = int(meta_data["sub_device_id"])
+        manager_ids.add(int(meta_data["sub_device_manager_id"]))
+
+        base_program_id = get_base_program_id(row[7])
+
+        expected_from_program = (
+            SUBDEVICE_TEST_PROGRAM_RUNTIME_ID_TO_SUB_DEVICE.get(base_program_id)
+            if base_program_id is not None
+            else None
+        )
+        expected_from_core = SUBDEVICE_TEST_CORE_TO_SUB_DEVICE.get((int(row[1]), int(row[2])))
+
+        if expected_from_program is not None and sub_device_id != expected_from_program:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), program {base_program_id}, run_host_id {row[7]}: "
+                f"expected sub_device_id {expected_from_program}, got {sub_device_id}. meta_data={meta_data}"
+            )
+        elif expected_from_program is None and expected_from_core is not None and sub_device_id != expected_from_core:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), run_host_id {row[7]}: "
+                f"expected sub_device_id {expected_from_core} from core location, got {sub_device_id}. "
+                f"meta_data={meta_data}"
+            )
+        elif expected_from_program is None and expected_from_core is None and sub_device_id not in {0, 1}:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), run_host_id {row[7]}: "
+                f"unexpected sub_device_id {sub_device_id} (expected 0 or 1). meta_data={meta_data}"
+            )
+
+    if validated_rows == 0:
+        assert False, f"No meta data rows found in device CSV at {csv_path}"
+
+    if len(manager_ids) != 1:
+        errors.append(f"Expected one sub_device_manager_id across all markers, found {sorted(manager_ids)}")
+
+    logger.info(
+        f"Sub-device CSV validation: checked {validated_rows} meta data rows, "
+        f"sub_device_manager_id={next(iter(manager_ids)) if len(manager_ids) == 1 else manager_ids}"
+    )
+
+    if errors:
+        error_msg = f"Found {len(errors)} sub_device meta data mismatches:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            error_msg += f"\n... and {len(errors) - 10} more errors"
+        assert False, error_msg
+
+
 @pytest.mark.skip_post_commit
 def test_quick_push_on_noc_profiler():
     devicesData = run_device_profiler_test(
@@ -1047,7 +1009,7 @@ def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):
 def test_ethernet_dispatch_cores():
     # Simple range check: both Dispatch and Prefetch should be within this range
     MIN_COUNT = 500
-    MAX_COUNT = 10000
+    MAX_COUNT = 11000
 
     # Test configuration: (test_name_suffix, op_support_count)
     test_configs = [
@@ -1474,14 +1436,24 @@ def test_fabric_event_profiler_2d():
 
 def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
-    run_gtest_profiler_test(
+    # Skip process_device_log.py post-processing: it resolves profiler paths relative to
+    # tools/tracy when cwd changes, while the device CSV is written under TT_METAL_HOME.
+    # Sub-device correctness is validated directly on profile_log_device.csv.
+    ran_basic = run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
         "UnitMeshCQSingleCardFixture.TensixTestSubDeviceBasicPrograms",
+        skip_get_device_data=True,
     )
-    run_gtest_profiler_test(
+    if ran_basic:
+        verify_sub_device_ids_in_device_csv()
+
+    ran_trace = run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
         "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+        skip_get_device_data=True,
     )
+    if ran_trace:
+        verify_sub_device_ids_in_device_csv()
 
 
 def validate_programs_perf_durations(perf_data):

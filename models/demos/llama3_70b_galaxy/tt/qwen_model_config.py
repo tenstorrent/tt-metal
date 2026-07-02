@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,10 +18,12 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     encode_prompt_instruct,
     encode_prompt_hf,
+    get_rope_theta,
+    get_rope_scaling,
     nearest_multiple,
 )
 from typing import Tuple
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32, is_blackhole
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     load_hf_state_dict,
@@ -412,12 +414,35 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            # Chunk values based on what works best empirically,
+            # while sticking to sdpa limitations
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=256 if seqlen >= 2048 else 64,
+                q_chunk_size=256
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
+                k_chunk_size=512
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+                if seqlen >= 2048
+                else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
+            )
+
+            # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
+            # match KV cache block_size so one trace works for any block-aligned chunk at replay.
+            # Required by llama_attention when use_chunked_sdpa is True (chunk_start_idx > 0).
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                exp_approx_mode=False,
+                q_chunk_size=min(page_size, 128),
+                k_chunk_size=min(page_size, 128),
             )
 
             def find_largest_divisor(n, max_divisor=8):
@@ -732,55 +757,51 @@ class TtQwenModelArgs(TtModelArgs):
             #  Only used when seq_len >= 4096
             def prefill_ff2_minimal_matmul_config(seq_len):
                 """
-                Returns the best minimal matmul config for prefill FF2 based on sequence length.
-                Configurations are optimized based on sweep results.
+                Qwen3-32B FF2 fused AG+MM config (Galaxy, 8x4 mesh, cluster_axis=1).
+
+                Tuned via tests/ttnn/unit_tests/operations/ccl/sweep_qwen3_ff2_agmm.py.
+
+                WH Galaxy (3-4 eth links/tray-pair):
+                  grid=(6,8), M=8, K=5, N=5, sub=(1,5)   -> +7.7% 4k, +8.6% 8k TTFT
+                  (num_links=3 auto-derived from grid_x=6, 2 workers/link)
+
+                BH Galaxy (2 eth links/tray-pair cap):
+                  grid=(8,8), M=8, K=5, N=5, sub=(8,1)
+                  - num_links=2 auto-derived (BH tray-pair cap), 4 workers/link
+                    (workers_per_link in {1,2,3} hits the same CCL core-range
+                    overlap bug that WH sees at grid_x in {2,4,8})
+                  - sub=(8,1) beats (1,5)/(4,2)/(2,4) by maximizing M-unroll in
+                    dest regs when M-per-core (16 tiles) >> N-per-core (5 tiles).
+                  - Sweeps over extra Tensix cores, smaller K_block, finer
+                    M_block, larger N_block, and num_buffers_per_channel all
+                    landed within noise or slower than this config.
+                  End-to-end 4k prefill TTFT (ISL=3864, batch=1):
+                    non-fused baseline:       542.5 ms / 7121 t/s
+                    WH-config on BH:          530.1 ms / 7289 t/s (+2.3%)
+                    BH-tuned (this config):   527.8 ms / 7322 t/s (+2.7% total)
+
+                Key constraints (shape-derived, divisibility):
+                  K_block | K_tiles_per_device (= 25)        => K_block in {1, 5, 25}
+                  N_block | N_tiles            (= 40)
+                  sub_h * sub_w <= 8, sub_h | M_block, sub_w | N_block
                 """
-                # Best configurations from sweep results for each M value
-                if seq_len <= 4096:
+                if is_blackhole():
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        K_block_size=5,
+                        N_block_size=5,
+                        subblock_h=8,
+                        subblock_w=1,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
                     )
-                elif seq_len <= 16384:  # Both 8K and 16K share the same config
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 32768:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 65536:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                else:  # For seq_len >= 131072
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
-                    )
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=5,
+                    N_block_size=5,
+                    subblock_h=1,
+                    subblock_w=5,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
@@ -1647,12 +1668,12 @@ class TtQwenModelArgs(TtModelArgs):
                     )
                     self.hidden_dim = padded_hidden_dim
 
-        # RoPE params
-        self.rope_theta = params.get("rope_theta")
+        # RoPE params (transformers 5.x nests these under `rope_parameters`)
+        self.rope_theta = get_rope_theta(params)
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        rope_scaling_params = params.get("rope_scaling", None)
+        rope_scaling_params = get_rope_scaling(params)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
             self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)

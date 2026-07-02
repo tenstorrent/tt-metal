@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nanobind/nb_autograd.hpp"
 
+#include <fmt/core.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
@@ -13,17 +14,20 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
+#include "autograd/callback.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/tensor.hpp"
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "ops/binary_ops.hpp"
+#include "tt-metalium/distributed_context.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::nanobind::autograd {
 using namespace ttml::autograd;
@@ -37,7 +41,9 @@ void py_module_types(nb::module_& m) {
     nb::class_<Graph>(m, "Graph");
     nb::class_<GraphNode>(m, "GraphNode");
     nb::class_<NodeId>(m, "NodeId");
-    nb::class_<Tensor>(m, "Tensor");
+    // dynamic_attr() lets Python code attach arbitrary markers (e.g.
+    // `_fsdp_managed`, `_fsdp_shard_dim`, `_fsdp_axis`) to a Tensor.
+    nb::class_<Tensor>(m, "Tensor", nb::dynamic_attr());
     nb::class_<ParallelismContext>(m, "ParallelismContext");
     nb::class_<DistributedConfig>(m, "DistributedConfig");
 }
@@ -141,13 +147,14 @@ void py_module(nb::module_& m) {
             "to_numpy",
             [](const Tensor& tensor,
                std::optional<tt::tt_metal::DataType> new_type,
-               ttnn::distributed::MeshToTensor* composer) {
-                return ttml::nanobind::util::make_numpy_tensor(
-                    tensor.get_value(PreferredPrecision::FULL), new_type, composer);
+               ttnn::distributed::MeshToTensor* composer,
+               PreferredPrecision precision) {
+                return ttml::nanobind::util::make_numpy_tensor(tensor.get_value(precision), new_type, composer);
             },
             nb::arg("new_type") = std::nullopt,
             nb::arg("composer") = nullptr,
-            "Construct a numpy tensor from a Tensor");
+            nb::arg("precision") = PreferredPrecision::FULL,
+            "Construct a numpy tensor from a Tensor. precision=NATIVE reads the value as stored (no upcast).");
         py_tensor.def(
             "to_string",
             [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).write_to_string(); },
@@ -215,6 +222,13 @@ void py_module(nb::module_& m) {
         py_auto_context.def("set_seed", &AutoContext::set_seed, nb::arg("seed"), "Set seed");
         py_auto_context.def("get_seed", &AutoContext::get_seed, "Get seed");
         py_auto_context.def(
+            "get_generator_state", &AutoContext::get_generator_state, "Serialize the RNG generator state");
+        py_auto_context.def(
+            "set_generator_state",
+            &AutoContext::set_generator_state,
+            nb::arg("state"),
+            "Restore the RNG generator state");
+        py_auto_context.def(
             "add_backward_node",
             [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
                 // Handle empty list case where nanobind can't infer element type
@@ -237,11 +251,11 @@ void py_module(nb::module_& m) {
 
                 if (!mesh_shape_obj.is_none()) {
                     if (nb::isinstance<nb::list>(mesh_shape_obj) || nb::isinstance<nb::tuple>(mesh_shape_obj)) {
-                        const auto dims = nb::cast<std::vector<int>>(mesh_shape_obj);
-                        if (dims.size() != 2) {
-                            throw std::runtime_error("mesh_shape must be a list/tuple of 2 integers: [rows, cols]");
+                        const auto dims = nb::cast<std::vector<uint32_t>>(mesh_shape_obj);
+                        if (dims.empty()) {
+                            throw std::runtime_error("mesh_shape must be a non-empty list/tuple of integers");
                         }
-                        mesh_shape = tt::tt_metal::distributed::MeshShape(dims[0], dims[1]);
+                        mesh_shape = tt::tt_metal::distributed::MeshShape(dims);
                     } else {
                         mesh_shape = nb::cast<tt::tt_metal::distributed::MeshShape>(mesh_shape_obj);
                     }
@@ -289,7 +303,7 @@ void py_module(nb::module_& m) {
             },
             nb::rv_policy::reference,
             "Get distributed context");
-        py_auto_context.def("get_profiler", &AutoContext::get_profiler, "Get profiler");
+        py_auto_context.def("get_profiler", &AutoContext::get_profiler, nb::rv_policy::reference, "Get profiler");
         py_auto_context.def("close_profiler", &AutoContext::close_profiler, "Close profiler");
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources, "Get CCL resources");
 
@@ -313,6 +327,10 @@ void py_module(nb::module_& m) {
             [](AutoContext& self) -> const ParallelismContext& { return self.get_parallelism_context(); },
             nb::rv_policy::reference,
             "Get parallelism context");
+        py_auto_context.def(
+            "is_parallelism_context_initialized",
+            &AutoContext::is_parallelism_context_initialized,
+            "Check if parallelism context has been initialized");
     }
 
     {
@@ -350,6 +368,33 @@ void py_module(nb::module_& m) {
         "Create an autograd Tensor from a tt::tt_metal::Tensor");
 
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
+
+    // Identity-forward autograd node that fires a Python callback during backward.
+    m.def(
+        "callback",
+        [](const TensorPtr& input, std::function<void()> fn) -> TensorPtr {
+            return autograd_callback(input, std::move(fn));
+        },
+        nb::arg("tensor"),
+        nb::arg("fn"),
+        "Identity autograd op that invokes `fn()` during backward before calling backward of the input's node. "
+        "This is used to implement module-level backward-pre / backward-post hooks (e.g. FSDP).");
+
+    // Close the AutoContext device at Python shutdown so MeshDevice (and its
+    // D2HSocket / NamedShm resources) are torn down before ShmResourceTracker's
+    // atexit handler runs. AutoContext is held in ttsl::Indestructible so its
+    // destructor never runs on its own.
+    nb::module_::import_("atexit").attr("register")(nb::cpp_function([]() {
+        // Best-effort: log and swallow so later atexit handlers still run.
+        try {
+            AutoContext::get_instance().close_device();
+        } catch (const std::exception& e) {
+            fmt::println(stderr, "[tt-train] AutoContext close_device() failed during Python atexit: {}", e.what());
+        } catch (...) {
+            fmt::println(
+                stderr, "[tt-train] AutoContext close_device() failed during Python atexit: unknown exception");
+        }
+    }));
 }
 
 }  // namespace ttml::nanobind::autograd

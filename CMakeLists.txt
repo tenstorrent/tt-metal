@@ -37,8 +37,29 @@ project(
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
+# Augment CMake's built-in per-config flags rather than replacing them wholesale.
+# Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
+# discarding toolchain-file settings and CMake defaults.  add_compile_options() with
+# config generators appends cleanly and composes correctly with toolchain files
+#
+# Flags already provided by CMake defaults and therefore omitted here:
+#   Debug:          -O0 -g
+#   RelWithDebInfo: -O2 -g -DNDEBUG  (we keep -O3 below to preserve existing behaviour)
+add_compile_options(
+    # Richer debug info: include macro definitions and use GNU pubnames for faster GDB lookup
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-g3>"
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-ggnu-pubnames>"
+    # Keep frame pointers for profiling and stack unwinding in non-Release builds
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-fno-omit-frame-pointer>"
+    # Non-standard DEBUG macro (CMake convention is absence of NDEBUG, but this preserves
+    # existing behaviour for code that gates on #ifdef DEBUG).
+    # Restricted to CXX: the original set(CMAKE_CXX_FLAGS_DEBUG …) never applied to C, and
+    # some C sources in third_party redefine DEBUG as a function-like macro which would
+    # conflict with -DDEBUG=1 and produce a -Wmacro-redefined error.
+    "$<$<AND:$<CONFIG:Debug,RelWithDebInfo>,$<COMPILE_LANGUAGE:CXX>>:-DDEBUG>"
+    # RelWithDebInfo: restore -O3 to match previous behaviour (CMake default is -O2)
+    "$<$<CONFIG:RelWithDebInfo>:-O3>"
+)
 
 # Defining build types is the purview of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
@@ -104,8 +125,8 @@ set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 # Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
-# Reduce verbose "-- Up-to-date:" messages during install steps (e.g. cmake --install / target install)
-set(CMAKE_INSTALL_MESSAGE LAZY)
+# Suppress all "-- Installing:" messages during install steps (e.g. cmake --install / target install)
+set(CMAKE_INSTALL_MESSAGE NEVER)
 
 ############################################################################################################################
 # Project Options
@@ -163,13 +184,17 @@ target_link_libraries(
         numa
 )
 
+# Enable all warnings and treat them as errors by default
+if(NOT DEFINED CMAKE_COMPILE_WARNING_AS_ERROR)
+    set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
+endif()
+
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
     -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
     -Wall
-    -Werror
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
@@ -223,12 +248,6 @@ string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAK
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
-include(tracy)
-
-if(ENABLE_TRACY AND TARGET TracyClient)
-    message(STATUS "Adding -Wno-unused-variable to TracyClient")
-    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
-endif()
 
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
@@ -259,23 +278,26 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(metal_common_pch)
+endif()
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
 
+include(helper_functions)
 add_subdirectory(tt_stl)
+
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
-
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()
 
 ############################################################################################################################
 # Install targets for build artifacts and nanobinds
-#   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #define DM_COMMON_HPP
 
 #include <cstdint>
+#include <unordered_map>
 // #include "device_fixture.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>

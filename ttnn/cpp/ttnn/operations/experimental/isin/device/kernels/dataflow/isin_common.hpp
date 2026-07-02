@@ -1,8 +1,13 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // choose the right C++ POD type at compile-time
 template <DataFormat df>
@@ -97,16 +102,19 @@ FORCE_INLINE void load_to_cb(
     const uint32_t& offset,
     const uint32_t& subchunk_size,
     const uint32_t& datum_size) {
-    cb_reserve_back(cb, ONE_PAGE);
+    Noc noc;
+    CircularBuffer cb_obj(cb);
+    cb_obj.reserve_back(ONE_PAGE);
 
-    const uint64_t source_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
-    const uint32_t l1_write_address = get_write_ptr(cb);
+    const uint64_t source_noc_address = addr_gtor.get_noc_addr(FIRST_STICK);
+    const uint32_t l1_write_address = cb_obj.get_write_ptr();
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     noc_async_read(source_noc_address + offset_bytes, l1_write_address, subchunk_size_bytes);
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
-    cb_push_back(cb, ONE_PAGE);
+    cb_obj.push_back(ONE_PAGE);
 }
 
 // write from L1 to DRAM
@@ -117,14 +125,17 @@ FORCE_INLINE void write_to_dram(
     const uint32_t& offset,
     const uint32_t& subchunk_size,
     const uint32_t& datum_size) {
-    cb_wait_front(cb, ONE_PAGE);
+    Noc noc;
+    CircularBuffer cb_obj(cb);
+    cb_obj.wait_front(ONE_PAGE);
 
-    const uint64_t destination_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
-    const uint32_t l1_read_address = get_read_ptr(cb);
+    const uint64_t destination_noc_address = addr_gtor.get_noc_addr(FIRST_STICK);
+    const uint32_t l1_read_address = cb_obj.get_read_ptr();
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     noc_async_write(l1_read_address, destination_noc_address + offset_bytes, subchunk_size_bytes);
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 
-    cb_pop_front(cb, ONE_PAGE);
+    cb_obj.pop_front(ONE_PAGE);
 }

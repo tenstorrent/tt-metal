@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,16 +87,6 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
 TensorSpec SliceWriteDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output.tensor_spec();
-}
-
-tt::stl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "SliceWriteDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<SliceWriteDeviceOperation>(
-        args, tensor_args, program_factory.index());
 }
 
 Tensor SliceWriteDeviceOperation::create_output_tensors(

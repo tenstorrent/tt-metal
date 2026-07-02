@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ enum class SfpuType {
     tanh,
     hardtanh,
     gelu,
+    gelu_tanh,
     exponential,
     exp_with_base,
     sigmoid,
@@ -91,6 +92,12 @@ enum class SfpuType {
     gt,
     ge,
     le,
+    lt_int,
+    gt_int,
+    le_int,
+    ge_int,
+    eq_int,
+    ne_int,
     eq,
     topk_local_sort,
     topk_merge,
@@ -117,6 +124,7 @@ enum class SfpuType {
     remainder,
     fmod,
     ceil,
+    isclose,
     unused,
     reshuffle_rows,
     cumsum,
@@ -127,6 +135,7 @@ enum class SfpuType {
     gcd,
     lcm,
     softshrink,
+    hardshrink,
     hardsigmoid,
     threshold,
     where,
@@ -152,4 +161,10 @@ enum class SfpuType {
     unary_min_uint32,
     addcdiv,
     lerp,
+    snake_beta,
+    xielu,
+    lgamma,
+    polygamma,
+    mish,
+    ne,
 };
