@@ -105,6 +105,30 @@ class Pi0_5GLX16DecodePipeline:
         self._socket_mode = os.environ.get("PI0_KV_SOCKET", "").lower() in ("1", "true", "yes", "on")
         self._kv_recv_tids = None  # per denoise chip: trace id for recv+copy->_prefix_kv
         self._socket_built = False
+        # Single-trace mode (WIP, opt-in via PI0_16_SINGLE_TRACE=1): capture the WHOLE
+        # e2e (prefill + KV concat/send + recv/copy + N denoise steps) in ONE trace on
+        # the (2,8) compute submesh root (mesh_handles.trace_root), mirroring the
+        # 28-chip pipeline. Default OFF -> the validated multi-trace path (1 prefill +
+        # 8 recv + 8 loop).
+        #
+        # KNOWN BLOCKER (root-caused): the capture records all stages but HANGS at
+        # end_trace_capture(trace_root). Bisect showed it hangs on the PREFILL portion
+        # (denoise ruled out). Cause: the prefill is TENSOR-PARALLEL — its TP=8
+        # all_reduce/all_gather CCL spans only row 0 (a SUBSET of the (2,8) root). A
+        # traced collective requires the trace root == the CCL mesh; when the root is
+        # bigger than the collective, end_trace_capture deadlocks. Evidence: the
+        # multi-trace prefill trace rooted on the (1,8) works (CCL == whole trace mesh);
+        # the 1x8 pipeline's single trace works (CCL == mesh); the 28-chip single trace
+        # works because its prefill is PIPELINE-parallel (no CCL). Minimal socket /
+        # cyclic-socket parent-rooted traces also finalize fine — it's specifically CCL
+        # on a subset. A true single trace here needs a non-CCL (pipeline-parallel)
+        # prefill; the (2,8) carve + driver split below are validated and kept for that.
+        self._single_trace = self._socket_mode and (
+            os.environ.get("PI0_16_SINGLE_TRACE", "0").lower() in ("1", "true", "yes", "on")
+        )
+        self._trace_root = getattr(mesh_handles, "trace_root", None)
+        self._e2e_trace_id = None  # single-trace: the one trace id on trace_root
+        self._trace_cat_bufs = None  # resident in-trace KV-concat buffers
 
         self._num_real_cams = int(os.environ.get("PI0_NUM_CAMERAS", _DEFAULT_NUM_REAL_CAMS))
         if not 1 <= self._num_real_cams <= _NUM_CHIPS_REQUIRED:
@@ -548,6 +572,12 @@ class Pi0_5GLX16DecodePipeline:
                 self._kv_cat_send.append((c, w, ss))
                 self._kv_cat_recv[c].append((w, rs, rv, n, lo))
         send_by = {(c, w): ss for c, w, ss in self._kv_cat_send}
+        # Single-trace path: build the denoise driver eagerly (no per-mesh capture),
+        # then capture the WHOLE e2e in ONE trace on trace_root. Early-return.
+        if self._single_trace:
+            self._capture_single_trace(bounds)
+            return
+        # ---- multi-trace path (PI0_16_SINGLE_TRACE=0) ----
         # 4. Capture the denoise loop (stream_euler): warms the inter-stage hop
         #    sockets + JITs send/recv + inits per-chip socket infra. Zero-KV replay
         #    discarded.
@@ -619,10 +649,182 @@ class Pi0_5GLX16DecodePipeline:
             self._kv_recv_tids.append((dst, tid))
         self._socket_built = True
 
+    # ──────────── Single-trace (2,8) path ──────────────────────────────
+    def _kv_socket_round(self, bounds, *, in_trace: bool) -> None:
+        """One KV handoff round: per-chip concat of _kv_persist layers -> socket send
+        prefill(0,c)->denoise(1,c) -> recv into DRAM scratch -> slice/copy DRAM->L1
+        into each stage's _prefix_kv. Used eagerly (in_trace=False: syncs + frees the
+        transient concat buffers) and inside the single e2e trace (in_trace=True: no
+        host sync — CQ ordering + the fabric socket handshake gate it — and the concat
+        buffers stay resident in the trace region through the send)."""
+        cats = {}
+        for c, (lo, hi) in enumerate(bounds):
+            cats[c] = (
+                ttnn.concat([self._kv_persist[g][0] for g in range(lo, hi)], dim=0),
+                ttnn.concat([self._kv_persist[g][1] for g in range(lo, hi)], dim=0),
+            )
+        for c, w, ss in self._kv_cat_send:
+            ttnn.experimental.send_direct_async(cats[c][w], ss)
+        for c in range(_NUM_CHIPS_REQUIRED):
+            for w, rs, rv, n, lo2 in self._kv_cat_recv[c]:
+                ttnn.experimental.recv_direct_async(rv, rs)
+        if not in_trace:
+            ttnn.synchronize_device(self.prefill_mesh)
+            for m in self.denoise_per_chip:
+                ttnn.synchronize_device(m)
+        for c, (lo, hi) in enumerate(bounds):
+            st = self._driver._stages[c]
+            for w, rs, rv, n, lo2 in self._kv_cat_recv[c]:
+                per = list(self._kv_persist[lo][w].shape)
+                for j in range(n):
+                    sl = ttnn.slice(rv, [j, 0, 0, 0], [j + 1, per[1], per[2], per[3]])
+                    ttnn.copy(sl, st._prefix_kv[j][w])
+                    ttnn.deallocate(sl)
+        if in_trace:
+            # Pin the concat buffers for the whole trace: the send DMA reads them and
+            # the N denoise steps that follow in the same trace must NOT reuse their
+            # trace-region addresses. Held on self so Python GC can't free them during
+            # capture; released in _socket_teardown.
+            for c in cats:
+                self._trace_cat_bufs.extend([cats[c][0], cats[c][1]])
+        else:
+            for c in cats:
+                ttnn.deallocate(cats[c][0])
+                ttnn.deallocate(cats[c][1])
+
+    def _capture_single_trace(self, bounds) -> None:
+        """Capture the whole e2e — prefill compute + KV concat/send + recv/copy + N
+        denoise steps — in ONE trace on trace_root (the (2,8) compute submesh that
+        contains both the prefill row and the denoise stage children). Mirrors the
+        28-chip's single begin_trace_capture(compute). Every chip in trace_root is
+        commanded (prefill row 0 + denoise row 1), so the trace's blocking finish
+        doesn't wait on idle chips."""
+        if self._trace_root is None:
+            raise RuntimeError("single-trace requires mesh_handles.trace_root (the (2,8) compute submesh)")
+        noise = self._build_noise_torch()
+        # 4. Eager denoise build: hop/wrap sockets + JIT the stage forwards (no capture).
+        self._driver.build_eager(noise)
+        # 5. Eager KV-socket warm-round (JITs concat/send/recv/copy) on the valid
+        #    _kv_persist from the step-1 warmup, so the in-trace socket ops don't JIT
+        #    during capture ("Writes not supported"). Do NOT run an eager denoise step
+        #    here — build_eager already JIT'd the stage-forward + hop-socket kernels
+        #    (identical shapes for zero vs real KV), and a SECOND eager use of the hop
+        #    sockets deadlocks. Inside capture, _emit_step ops are only RECORDED (not
+        #    executed → no block); at replay the trace manages the socket handshakes.
+        self._kv_socket_round(bounds, in_trace=False)  # syncs all 16 chips internally
+        # 6. ONE capture spanning prefill + KV handoff + N denoise steps.
+        #    KNOWN ISSUE (WIP): this records all stages but end_trace_capture below
+        #    hangs on trace_root — socket-op finalization under a parent-rooted trace.
+        self._trace_cat_bufs = []  # resident in-trace concat buffers (see _kv_socket_round)
+        self._e2e_trace_id = ttnn.begin_trace_capture(self._trace_root, cq_id=0)
+        self._prefill_compute_to_persist()
+        self._kv_socket_round(bounds, in_trace=True)
+        for i in range(self.num_denoising_steps):
+            self._driver.step(i)
+        ttnn.end_trace_capture(self._trace_root, self._e2e_trace_id, cq_id=0)
+        self._prefill_trace_key = self._artifact_mask_key
+        self._socket_built = True
+
+    def _single_trace_replay(self) -> "torch.Tensor":
+        """Per-chunk single-trace replay: reseed noise into _x_t (outside the trace),
+        execute the ONE e2e trace on trace_root, read the actions. Inputs
+        (pixel/lang) already refreshed by the caller."""
+        self._driver.reseed_noise(self._build_noise_torch())
+        ttnn.execute_trace(self._trace_root, self._e2e_trace_id, cq_id=0, blocking=True)
+        return self._driver.read_actions()
+
+    def _single_trace_host_chunks(self, images, lang_tokens, n):
+        """Pre-stage n host input tuples (pixel, lang, noise) for the timed loops."""
+        pixel_host = self._stack_and_fold_pixels(images)
+        ah, ah_pad, ad = self.action_horizon, self._action_horizon_padded, self.action_dim
+        chunks = []
+        for _ in range(n):
+            h_pix = ttnn.from_torch(
+                pixel_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.prefill_mesh, dim=0),
+            )
+            h_lang = ttnn.from_torch(lang_tokens.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            noise_pad = torch.zeros(1, ah_pad, ad, dtype=torch.float32)
+            noise_pad[:, :ah, :] = torch.randn(1, ah, ad)
+            h_noise = ttnn.from_torch(noise_pad, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            chunks.append((h_pix, h_lang, h_noise))
+        return chunks
+
+    def _single_trace_2cq_loop(self, images, lang_tokens, iters):
+        """Single-trace 2CQ replay: next chunk's (pixel, lang, noise) H2D on CQ1
+        overlapped with the current chunk's ONE e2e trace on CQ0. Events on
+        trace_root. Mirrors pipeline_1x8.sample_actions_traced_2cq_loop."""
+        import time as _time
+
+        root = self._trace_root
+        ah = self.action_horizon
+        host_chunks = self._single_trace_host_chunks(images, lang_tokens, iters + 1)
+        h0 = host_chunks[0]
+        ttnn.copy_host_to_device_tensor(h0[0], self.pixel_values_buf, cq_id=1)
+        ttnn.copy_host_to_device_tensor(h0[1], self.lang_tokens_buf, cq_id=1)
+        ttnn.copy_host_to_device_tensor(h0[2], self._driver.x_t, cq_id=1)
+        write_event = ttnn.record_event(root, 1)
+        times_ms, last_actions = [], None
+        for i in range(iters):
+            t0 = _time.perf_counter()
+            ttnn.wait_for_event(0, write_event)
+            ttnn.execute_trace(root, self._e2e_trace_id, cq_id=0, blocking=False)
+            op_event = ttnn.record_event(root, 0)
+            if i + 1 < iters:
+                hn = host_chunks[i + 1]
+                ttnn.wait_for_event(1, op_event)
+                ttnn.copy_host_to_device_tensor(hn[0], self.pixel_values_buf, cq_id=1)
+                ttnn.copy_host_to_device_tensor(hn[1], self.lang_tokens_buf, cq_id=1)
+                ttnn.copy_host_to_device_tensor(hn[2], self._driver.x_t, cq_id=1)
+                write_event = ttnn.record_event(root, 1)
+            last_actions = ttnn.to_torch(self._driver.x_t)[:, :ah, :]
+            times_ms.append((_time.perf_counter() - t0) * 1000.0)
+        if last_actions is None:
+            raise RuntimeError("iters must be >= 1")
+        return last_actions, times_ms
+
+    def _single_trace_1cq_loop(self, images, lang_tokens, iters):
+        """Single-trace 1CQ baseline: (pixel, lang, noise) H2D serialized on CQ0
+        before the ONE e2e trace. Pre-staged host inputs (matches the 2CQ loop's
+        host amortization)."""
+        import time as _time
+
+        root = self._trace_root
+        ah = self.action_horizon
+        host_chunks = self._single_trace_host_chunks(images, lang_tokens, iters)
+        times_ms, last_actions = [], None
+        for i in range(iters):
+            t0 = _time.perf_counter()
+            hi_pix, hi_lang, hi_noise = host_chunks[i]
+            ttnn.copy_host_to_device_tensor(hi_pix, self.pixel_values_buf)
+            ttnn.copy_host_to_device_tensor(hi_lang, self.lang_tokens_buf)
+            ttnn.copy_host_to_device_tensor(hi_noise, self._driver.x_t)
+            ttnn.execute_trace(root, self._e2e_trace_id, cq_id=0, blocking=True)
+            last_actions = ttnn.to_torch(self._driver.x_t)[:, :ah, :]
+            times_ms.append((_time.perf_counter() - t0) * 1000.0)
+        if last_actions is None:
+            raise RuntimeError("iters must be >= 1")
+        return last_actions, times_ms
+
     def _socket_teardown(self) -> None:
         """Release the socket-e2e setup so a prompt change can rebuild it without
         leaking (multi-task / 400-ep). Dropping socket refs frees their L1 config
         buffers via the MeshSocket destructor."""
+        if self._e2e_trace_id is not None:
+            try:
+                ttnn.release_trace(self._trace_root, self._e2e_trace_id)
+            except Exception:
+                pass
+            self._e2e_trace_id = None
+        if getattr(self, "_trace_cat_bufs", None):
+            for t in self._trace_cat_bufs:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+            self._trace_cat_bufs = None
         if self._prefill_trace_id is not None:
             try:
                 ttnn.release_trace(self.prefill_mesh, self._prefill_trace_id)
@@ -670,9 +872,13 @@ class Pi0_5GLX16DecodePipeline:
         return self._driver.rerun(self._build_noise_torch())
 
     def _run_socket_chunk(self) -> "torch.Tensor":
-        """Per-chunk e2e replay, fully traced, NO host bounce: prefill trace
-        (compute + KV-concat + socket send) -> per-stage recv traces (recv + split
-        into _prefix_kv) -> denoise loop trace. Single stage-0 drain at the end."""
+        """Per-chunk e2e replay, fully traced, NO host bounce.
+
+        Single-trace mode: ONE execute_trace on trace_root (prefill + KV + denoise).
+        Multi-trace mode: prefill trace -> per-stage recv traces -> denoise loop trace.
+        """
+        if self._single_trace:
+            return self._single_trace_replay()
         self._socket_chunk_prefill()
         return self._socket_chunk_denoise()
 
@@ -708,6 +914,9 @@ class Pi0_5GLX16DecodePipeline:
         if not self._socket_built or self._prefill_trace_key != self._artifact_mask_key:
             self._socket_e2e_setup()
         _ = self._run_socket_chunk()  # warm replay (not timed)
+
+        if self._single_trace:
+            return self._single_trace_2cq_loop(images, lang_tokens, iters)
 
         # Pre-stage host input tensors for iters+1 chunks (host prep out of the
         # timed loop; the +1 is the initial CQ1 pre-stage).
@@ -780,6 +989,9 @@ class Pi0_5GLX16DecodePipeline:
         if not self._socket_built or self._prefill_trace_key != self._artifact_mask_key:
             self._socket_e2e_setup()
         _ = self._run_socket_chunk()  # warm replay (not timed)
+
+        if self._single_trace:
+            return self._single_trace_1cq_loop(images, lang_tokens, iters)
 
         pixel_host = self._stack_and_fold_pixels(images)
         host_chunks: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = []

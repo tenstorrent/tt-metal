@@ -151,9 +151,10 @@ class Decode16MeshHandles:
     """Live handles for the 16-chip 1x8 prefill + 8-stage decode denoise pipeline."""
 
     parent: object  # (4,8) Galaxy parent; only rows 0..1 are used by this pipeline
-    prefill_submesh: object  # (1,8) @ (0,0): SigLIP DP + TP=8 prefill
-    denoise_submesh: object  # (1,8) @ (1,0): parent for the streamed denoise stages
-    denoise_per_chip: List[object] = field(default_factory=list)  # 8 x (1,1), row 1 cols 0..7
+    prefill_submesh: object  # (1,8) @ compute(0,0): SigLIP DP + TP=8 prefill
+    denoise_submesh: object  # (1,8) @ compute(1,0): parent for the streamed denoise stages
+    denoise_per_chip: List[object] = field(default_factory=list)  # 8 x (1,1), compute row 1 cols 0..7
+    trace_root: object = None  # (2,8) compute submesh = the 16 commanded chips; single-trace root
 
 
 @dataclass

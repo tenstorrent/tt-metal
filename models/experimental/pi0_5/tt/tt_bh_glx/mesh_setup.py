@@ -170,16 +170,27 @@ def open_decode_16_mesh(
         if parent.get_num_devices() != 32:
             raise RuntimeError(f"Parent mesh has {parent.get_num_devices()} devices, expected 32 (full Galaxy)")
 
+        # (2,8) compute submesh = rows 0-1 = the 16 commanded chips. This is the
+        # single-trace root (mirrors the 28-chip's (7,4) compute submesh): a trace's
+        # blocking finish waits on the root mesh's full range, so rooting on the (4,8)
+        # parent would deadlock on idle rows 2-3 (empty completion queue). Rooting on
+        # the (2,8) waits only on the 16 chips prefill (row 0) + denoise (row 1)
+        # actually command. Prefill + denoise submeshes are carved FROM compute (not
+        # the parent) so they share it as parent -> one begin_trace_capture(compute)
+        # captures ops on all of them (incl. the cross-row KV sockets).
+        compute = parent.create_submesh(ttnn.MeshShape(2, 8), ttnn.MeshCoordinate(0, 0))
+        all_submeshes.append(compute)
+
         # 8 chips row 0: TP=8 prefill in the original working 1x8 orientation.
-        prefill_submesh = parent.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(0, 0))
+        prefill_submesh = compute.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(0, 0))
         all_submeshes.append(prefill_submesh)
 
         # 8 chips row 1: parent of the 8 streamed denoise stages.
-        denoise_submesh = parent.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(1, 0))
+        denoise_submesh = compute.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(1, 0))
         all_submeshes.append(denoise_submesh)
 
-        # 8 single-chip submeshes at (1, i) for i in 0..7 — one per stage.
-        denoise_per_chip = _carve_per_chip(parent, (1, 8), (1, 0), 8)
+        # 8 single-chip submeshes at compute (1, i) for i in 0..7 — one per stage.
+        denoise_per_chip = _carve_per_chip(compute, (1, 8), (1, 0), 8)
         all_submeshes.extend(denoise_per_chip)
 
         yield Decode16MeshHandles(
@@ -187,6 +198,7 @@ def open_decode_16_mesh(
             prefill_submesh=prefill_submesh,
             denoise_submesh=denoise_submesh,
             denoise_per_chip=denoise_per_chip,
+            trace_root=compute,
         )
     finally:
         try:

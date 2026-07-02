@@ -779,6 +779,47 @@ class TTNNPi05DenoiseStreamedPipeline:
         )
         return self.replay()
 
+    # ──────────── Single-root capture support (caller-owned trace) ──────────
+    # The per-mesh capture_loop/replay_loop path above stays the default (28-chip
+    # and other callers). These expose the build (eager socket/JIT warmup) and the
+    # per-step body so a caller can capture the WHOLE e2e (prefill + KV + N denoise
+    # steps) under ONE begin_trace_capture on a compute-submesh root that spans the
+    # denoise stages — see pipeline_16_decode's single-trace path.
+
+    def build_eager(self, x_t_init):
+        """Eager socket/JIT warmup ONLY (no capture): allocate _x_t, build the hop +
+        velocity-wrap sockets, run one forward pass to compile every kernel. Leaves
+        _x_t seeded with x_t_init. The caller then captures step(i) under its own
+        trace and re-seeds _x_t per chunk via reseed_noise()."""
+        self._warmup_caches(x_t_init)
+        self.reseed_noise(x_t_init)
+
+    def step(self, i):
+        """One euler step body (stage forwards + hop send/recv + velocity wrap +
+        in-place x_t update). Callable eagerly or inside a caller-owned trace."""
+        self._emit_step(i)
+
+    def reseed_noise(self, x_t_init):
+        """Overwrite _x_t with fresh noise (done OUTSIDE the caller's trace, before
+        each replay). Mirrors the reseed half of rerun()."""
+        ttnn.copy(
+            ttnn.from_torch(
+                x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1
+            ),
+            self._x_t,
+        )
+
+    @property
+    def x_t(self):
+        return self._x_t
+
+    @property
+    def stage0_mesh(self):
+        return self._stage0_mesh
+
+    def read_actions(self):
+        return ttnn.to_torch(self._x_t)[:, : self._ah, :]
+
     def close(self):
         self._pipe.release_loop(self._loop_tids)
         self._loop_tids = None
