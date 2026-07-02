@@ -69,11 +69,13 @@ Validated vs genuine HF reference. `random` = random-init weights; `real` = genu
 | Attention pooler | random | 0.98 | 0.98 |
 | Detokenizer | random / **real** | 0.98 / **0.98** | 0.98 |
 | Condition encoder (text+lyric+timbre) | random | 0.96 | 0.96 |
-| Condition → DiT seam | random | 0.94 | 0.94 |
+| Condition → DiT seam (2 DiT layers) | random | 0.94 | 0.94 |
 | **Full 24-layer DiT model (e2e)** | random / **real** | **0.999 / 0.9919** | **0.95** |
+| **Full pipeline (ConditionEncoder → 24-layer DiT)** | **real** | **0.9627** | **0.95** |
 
-**Headline: the full 24-layer DiT runs end-to-end at PCC 0.9919 on genuine trained weights**
-(≥ 0.95 required). Real weights score slightly below random — the trained distribution has
+**Headline: the full generation pipeline — the real ConditionEncoder feeding the real 24-layer
+DiT — runs end-to-end at PCC 0.9627 on genuine trained weights** (≥ 0.95 required); the DiT
+model alone is 0.9919. Real weights score slightly below random — the trained distribution has
 larger magnitudes/outliers that stress bf16 more — which confirms the suite is not gamed.
 
 ## Running the tests

@@ -47,15 +47,20 @@ def load_state_dict(prefix: str | None = None) -> dict[str, torch.Tensor]:
     return out
 
 
-def load_module_weights(reference_module: torch.nn.Module, prefix: str) -> None:
+def load_module_weights(reference_module: torch.nn.Module, prefix: str, *, allow_extra: bool = False) -> None:
     """Copy real checkpoint weights (under `prefix`) into an instantiated reference nn.Module.
 
     Populates the module in-place so downstream code (and our TT weight extraction helpers) can
     read genuine trained tensors from `module.<...>.weight` exactly as with random init.
+
+    ``allow_extra`` tolerates checkpoint keys the (possibly layer-reduced) module doesn't have —
+    e.g. loading a 2-layer DiT from a 24-layer checkpoint for a faster test. Every parameter the
+    module DOES have is still required to be present (no silent partial loads).
     """
     sub = load_state_dict(prefix)
     missing, unexpected = reference_module.load_state_dict(sub, strict=False)
     # Some buffers (rotary_emb.inv_freq) are non-persistent and legitimately absent — tolerate.
     real_missing = [k for k in missing if "inv_freq" not in k and "rotary" not in k]
     assert not real_missing, f"missing real weights for prefix '{prefix}': {real_missing[:8]}"
-    assert not unexpected, f"unexpected keys for prefix '{prefix}': {unexpected[:8]}"
+    if not allow_extra:
+        assert not unexpected, f"unexpected keys for prefix '{prefix}': {unexpected[:8]}"
