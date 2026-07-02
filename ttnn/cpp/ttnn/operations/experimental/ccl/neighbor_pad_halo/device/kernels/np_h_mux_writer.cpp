@@ -45,14 +45,14 @@ void kernel_main() {
 
     // ---- Per-core runtime args ----
     uint32_t arg_idx = 0;
-    const uint32_t outer_dim_start = get_arg_val<uint32_t>(arg_idx++);   // this worker's first frame
+    // Compact-buffer H-section base for this worker's first frame (h_top or h_bot section base +
+    // outer_dim_start*padding*num_sticks_per_halo_dim). The compact buffer stores H-top and H-bot as
+    // SEPARATE sections (stride padding, not output_halo_dim_size) — see np_writer's fabric_only override.
+    const uint32_t h_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dim_count = get_arg_val<uint32_t>(arg_idx++);   // frames this worker owns
-    const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);       // W_dev
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);  // W_dev (row stride)
-    const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);      // H_dev (for eff_offset)
     const uint8_t neighbor_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t neighbor_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
@@ -118,15 +118,11 @@ void kernel_main() {
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_count});
 
     if (has_neighbor && mux_connection_valid) {
-        const uint32_t row_stride = num_sticks_per_halo_dim * output_halo_dim_size;
+        // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame. h_base
+        // already includes this worker's outer_dim_start offset + the h_top/h_bot section base.
         for (uint32_t od = 0; od < outer_dim_count; od++) {
-            const uint32_t eff_offset = (outer_dim_start + od) * row_stride;
             for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
-                uint32_t base_row = direction
-                                        ? (output_halo_dim_size - (padding - pad_id)) * num_sticks_per_halo_dim +
-                                              stick_start_id
-                                        : pad_id * num_sticks_per_halo_dim + stick_start_id;
-                base_row += eff_offset;
+                const uint32_t base_row = h_base + (od * padding + pad_id) * num_sticks_per_halo_dim;
                 cb_wait_front(send_cb_id, num_sticks_to_read);
                 const uint32_t row_l1 = get_read_ptr(send_cb_id);
                 uint32_t m = 0;
