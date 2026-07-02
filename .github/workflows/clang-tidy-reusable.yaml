@@ -250,6 +250,15 @@ jobs:
 
       - name: Post inline clang-tidy suggestions on PR
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
+        # This step ONLY posts reviewer-convenience comments; it must never be the
+        # reason this job fails. continue-on-error means a persistent posting failure
+        # (transient GitHub API outage that outlasts the retry loop below, a bad token,
+        # etc.) is recorded (visible as a distinct warning indicator on this step in the
+        # Checks UI, plus the ::warning::/::error:: annotations below) but does NOT fail
+        # the job. The job's actual pass/fail signal now comes from the independent
+        # "Fail job on detected clang-tidy violations" step below, which runs regardless
+        # of this step's outcome.
+        continue-on-error: true
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
         run: |
@@ -265,9 +274,12 @@ jobs:
           # such hiccups. Retrying the entire command is safe: reviewdog re-lists existing
           # comments on each attempt and skips duplicates, so a partially-posted prior
           # attempt will not produce duplicate inline comments.
-          # NOTE: this only hardens against transient transport errors. If every attempt
-          # fails we still exit non-zero — a genuine, persistent failure (bad token, real
-          # API rejection, etc.) must still turn the job red. We do NOT swallow the error.
+          # NOTE: this still only hardens against transient transport errors within the
+          # retry window; it does not silently pretend a persistent failure succeeded.
+          # If every attempt fails we still exit non-zero — but thanks to
+          # continue-on-error above, that failure is now scoped to *this* step and no
+          # longer affects the job's pass/fail (that's decided by the dedicated
+          # violations step further down).
           # Capture the diff to a file first ($RUNNER_TEMP, NOT /tmp which is noexec here)
           # so it can be fed to reviewdog on each attempt (a piped stdin can't be reused).
           git diff > "${RUNNER_TEMP}/clang-tidy.diff"
@@ -297,8 +309,41 @@ jobs:
             fi
           done
 
-          echo "::error::Failed to post clang-tidy suggestions on PR after ${max_attempts} attempts (last exit ${status})"
+          echo "::error::Failed to post clang-tidy suggestions on PR after ${max_attempts} attempts (last exit ${status}). This does NOT fail the job (see continue-on-error) — job pass/fail is decided independently by the 'Fail job on detected clang-tidy violations' step."
           exit "$status"
+
+      - name: Fail job on detected clang-tidy violations
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
+        # This job variant (post-pr-suggestions=true, PR event) deliberately lets the
+        # "Analyze code with clang-tidy" step above pass even when clang-tidy finds
+        # violations (see _ALLOW_VIOLATIONS in that step) so findings become inline PR
+        # comments instead of a raw build failure. Before this step existed, that meant
+        # this job type could never fail on lint findings at all — the only thing able
+        # to fail it was the comment-posting step itself (now continue-on-error, see
+        # above). This step restores a real pass/fail signal for detected violations,
+        # deliberately independent of whether comments were successfully posted.
+        #
+        # Detection: clang-tidy-export-fixes-wrapper.sh runs --export-fixes for every
+        # compiled translation unit. Verified directly against clang-tidy-20 (with and
+        # without --warnings-as-errors=*, matching the CMake configure step above): a
+        # clean TU does not necessarily produce a fixes file at all, so file *existence*
+        # is not a reliable signal on its own. Every real finding, however, always
+        # appears as a top-level `- DiagnosticName:` list entry under `Diagnostics:` in
+        # that TU's YAML; nested `Notes:` entries never carry their own DiagnosticName
+        # key at that indent, so they are never double-counted. Count those instead.
+        run: |
+          FIXES_DIR=".build/clang-tidy/fixes"
+          VIOLATIONS=0
+          if ls "$FIXES_DIR"/*.yaml >/dev/null 2>&1; then
+            VIOLATIONS=$(cat "$FIXES_DIR"/*.yaml | grep -cE '^[[:space:]]*-[[:space:]]+DiagnosticName:' || true)
+          fi
+          VIOLATIONS="${VIOLATIONS:-0}"
+
+          echo "Detected clang-tidy violations: ${VIOLATIONS}"
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "::error::clang-tidy found ${VIOLATIONS} violation(s). See inline PR suggestions (if posted) or the fixes YAMLs under ${FIXES_DIR}."
+            exit 1
+          fi
 
       - name: Publish Ccache summary
         if: always()
