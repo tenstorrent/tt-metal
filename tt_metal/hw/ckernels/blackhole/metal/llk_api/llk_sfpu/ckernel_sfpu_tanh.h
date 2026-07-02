@@ -6,6 +6,7 @@
 #pragma once
 
 #include <limits>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -81,7 +82,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // (5.876733921468257904052734375e-3))))));
     sfpi::vFloat result = PolynomialEvaluator::eval(
         val,
-        sfpi::vConst0,
+        0.0f,
         0.999004364013671875,
         3.0897438526153564453125e-2,
         -0.4890659749507904052734375,
@@ -91,8 +92,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
 
     // For larger x, the polynomial approximation may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
-    sfpi::vFloat threshold_value = sfpi::vConst1;
-    sfpi::vec_min_max(result, threshold_value);
+    result = sfpi::min(result, 1.0f);
 
     result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
 
@@ -142,9 +142,9 @@ inline void calculate_tanh() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     if constexpr (APPROXIMATION_MODE) {
-        uint imm0 = 0x1DFF;  // 0.90625*x
-        uint imm1 = 0x481A;  // 0.09375*x + 0.8125
-        uint imm2 = 0xFF00;  // 1
+        std::uint32_t imm0 = 0x1DFF;  // 0.90625*x
+        std::uint32_t imm1 = 0x481A;  // 0.09375*x + 0.8125
+        std::uint32_t imm2 = 0xFF00;  // 1
         _sfpu_load_imm16_(0, imm0);
         _sfpu_load_imm16_(1, imm1);
         _sfpu_load_imm16_(2, imm2);

@@ -848,3 +848,29 @@ def assert_numeric_metrics(
         assert overall_passed, full_message
     else:
         return overall_passed, full_message
+
+
+def assert_div_by_zero_outputs(
+    golden_tensor: torch.Tensor, device_tensor: torch.Tensor, *, ulp_threshold: int = 3
+) -> None:
+    """Assert correctness of divide-by-zero outputs (golden assumed all-±inf after zero-replacement).
+
+    Three-part check:
+    1. Non-finite position mask matches exactly.
+    2. Inf sign matches where both sides are inf.
+    3. ULP safety net on any finite elements (not reached under current parametrization
+       when the numerator contains no zeros and divisor is 0.0).
+    """
+    g_nonfinite = ~torch.isfinite(golden_tensor)
+    d_nonfinite = ~torch.isfinite(device_tensor)
+    assert torch.equal(g_nonfinite, d_nonfinite), "Non-finite positions differ between golden and device"
+    both_inf = torch.isinf(golden_tensor) & torch.isinf(device_tensor)
+    if both_inf.any():
+        assert torch.equal(
+            torch.sign(golden_tensor[both_inf]),
+            torch.sign(device_tensor[both_inf]),
+        ), "Inf sign mismatch between golden and device"
+    finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(device_tensor)
+    if finite_mask.any():
+        # Safety net: not reached when golden is all ±inf after zero replacement.
+        assert_with_ulp(golden_tensor[finite_mask], device_tensor[finite_mask], ulp_threshold=ulp_threshold)
