@@ -31,3 +31,18 @@
   and are unaffected, but a production wrapper feeding short seqs must apply the same guard.
   Consider baking the guard into a shared pipeline helper (build_sliding_mask returns None when
   window>=seq) so no caller forgets it.
+
+## DEAD END (iter 19): FSQ / ResidualFSQ tokenizer
+- Attempted to fold ResidualFSQ(dim=2048,levels=[8,8,8,5,5,5],nq=1) into project_in(2048->6)
+  + bound(tanh/round/scale) + project_out(6->2048). My bound() matches the isolated FSQ layer
+  at PCC 1.0, but the FULL ResidualFSQ chain reconstruction only hits ~0.98 (norms 65.7 vs 69.6)
+  - there's additional internal state (indices roundtrip / has_projections / codes_to_indices)
+  I couldn't cleanly replicate. FSQ is ONLY used for cover-song hints (is_covers=True), NOT the
+  core text->music path. LOW PRIORITY - defer. If revisited: trace ResidualFSQ.forward line by
+  line incl. project_out input (may expect stacked codes / rearrange 'b n c d -> b n (c d)').
+
+## REUSE WIN (iter 19): timbre encoder = AceStepLyricEncoder
+- AceStepTimbreEncoder core (Linear 64->2048 + 4 layers + norm + slice[0]) is structurally
+  identical to AceStepLyricEncoder. Reused it directly (derives dims from weights) - ZERO new
+  code. special_token prepend is COMMENTED OUT in this checkpoint. unpack_timbre_embeddings is
+  data-dependent batching orchestration (not a module). Validated core pre-slice at 0.97.
