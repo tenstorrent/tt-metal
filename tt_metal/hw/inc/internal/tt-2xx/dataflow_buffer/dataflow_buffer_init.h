@@ -160,6 +160,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             dfb_interface.tc_idx = 0;
 #ifndef COMPILE_FOR_TRISC
             dfb_interface.broadcast_tc = per_risc_ptr->num_tcs_and_init.broadcast_tc;
+            dfb_interface.is_producer = per_risc_ptr->flags.is_producer;
 #endif
 
 #ifndef COMPILE_FOR_TRISC

@@ -217,9 +217,19 @@ public:
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
     uint32_t get_read_ptr()  const { return get_read_ptr_impl(); }
 
-    [[nodiscard]] auto scoped_lock() {
-        // TODO: Register with the debugger to track the lock
-        return Lock([this]() { release_scoped_lock(); });
+    // 1. Flags any NOC write into the locked region as WRITE_TO_LOCKED_DFB:
+    //    - WH/BH: the entire ring is locked (num_entries is ignored).
+    //    - Quasar: num_entries entries are locked, from the write pointer (producer) or read pointer (consumer).
+    // 2. On Quasar, runs L2 cache ops over the locked entries:
+    //    - Invalidate on acquire (both producer and consumer).
+    //    - Flush on release (producer only).
+    [[nodiscard]] auto scoped_lock(uint16_t num_entries = 1) {
+#ifndef COMPILE_FOR_TRISC
+        const ScopedLockRegion region = lock_acquire_impl(num_entries);
+        return Lock([this, region, num_entries]() { lock_release_impl(region, num_entries); });
+#else
+        return Lock([]() {});
+#endif
     }
 
 private:
@@ -232,6 +242,14 @@ private:
     uint32_t get_read_ptr_impl()  const;
 #ifndef COMPILE_FOR_TRISC
     void write_barrier_impl(const Noc &noc) const;
+
+    struct ScopedLockRegion {
+        uint32_t start;  // first locked address (WH/BH: ring base; Quasar: wr_ptr/rd_ptr at acquire)
+        uint32_t base;   // wrap base  (Quasar tc_slot; == start on WH/BH)
+        uint32_t limit;  // wrap limit (Quasar tc_slot; == fifo_limit on WH/BH)
+    };
+    ScopedLockRegion lock_acquire_impl(uint16_t num_entries);
+    void lock_release_impl(ScopedLockRegion region, uint16_t num_entries);
 #endif
 
 #ifdef ARCH_QUASAR
@@ -248,10 +266,6 @@ private:
     void commit_implicit_write();
 #endif // !COMPILE_FOR_TRISC
 #endif // ARCH_QUASAR
-
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
 
     DFBInterface& local_dfb_interface_;
     uint16_t logical_dfb_id_;

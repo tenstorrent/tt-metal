@@ -106,6 +106,19 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
     noc.async_write_barrier();
 }
 
+// WH/BH: same behavior as CircularBuffer::scoped_lock: lock the entire ring and ignore num_entries
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t /*num_entries*/) {
+    const uint32_t limit = local_dfb_interface_.fifo_limit;
+    const uint32_t base = limit - local_dfb_interface_.fifo_size;
+    RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, base, limit - base);
+    return {base, base, limit};
+}
+
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t /*num_entries*/) {
+    RECORD_SCOPED_LOCK_EVENT(
+        NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, region.start, region.limit - region.start);
+}
+
 #endif
 
 inline void DataflowBuffer::finish_impl() {}
