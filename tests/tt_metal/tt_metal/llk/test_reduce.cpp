@@ -396,14 +396,14 @@ void run_single_core_reduce_program(
         .compile_time_args = reader_cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
                         experimental::DataMovementGen2Config{.disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -416,14 +416,14 @@ void run_single_core_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
                         experimental::DataMovementGen2Config{.disable_implicit_sync_for = {DST_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec compute_spec{
@@ -452,7 +452,7 @@ void run_single_core_reduce_program(
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg = experimental::ComputeGen2Config{
@@ -469,7 +469,7 @@ void run_single_core_reduce_program(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::WorkUnitSpec wu{

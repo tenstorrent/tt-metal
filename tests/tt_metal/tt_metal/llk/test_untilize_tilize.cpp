@@ -274,13 +274,13 @@ void run_single_core_tilize_program(
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = reader_schema,
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -292,13 +292,13 @@ void run_single_core_tilize_program(
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-            }(),
+            }),
     };
 
     std::string compute_kernel;
@@ -347,7 +347,7 @@ void run_single_core_tilize_program(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg = experimental::ComputeGen2Config{
@@ -361,7 +361,7 @@ void run_single_core_tilize_program(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::WorkUnitSpec wu{
@@ -620,14 +620,14 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "scaler"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
                         .disable_implicit_sync_for = {INP_DATA_DFB, INP_SCALER_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -638,14 +638,14 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
                         experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUT_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines = {
@@ -683,7 +683,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .compile_time_args =
             {{"per_core_block_cnt", test_config.num_tiles_r}, {"per_core_block_tile_cnt", test_config.num_tiles_c}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg = experimental::ComputeGen2Config{
@@ -697,7 +697,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::WorkUnitSpec wu{
@@ -1032,7 +1032,7 @@ static void run_quasar_tilize_untilize_test(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg = experimental::ComputeGen2Config{
@@ -1046,7 +1046,7 @@ static void run_quasar_tilize_untilize_test(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::WorkUnitSpec wu{

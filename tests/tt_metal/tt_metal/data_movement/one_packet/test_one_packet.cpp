@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
@@ -95,7 +96,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
                      "responder_y"},
             },
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (device->arch() == tt::ARCH::QUASAR) {
                     return DataMovementHardwareConfig{DataMovementGen2Config{}};
                 }
@@ -103,7 +104,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
                     .processor = proc,
                     .noc = noc,
                 }};
-            }(),
+            }),
     };
 
     ProgramSpec spec{
