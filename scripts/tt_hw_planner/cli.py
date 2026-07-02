@@ -1428,57 +1428,6 @@ def _check_demo_environment_compat(
     except (ValueError, IndexError):
         major = 0
 
-    mc_path_for_grid = BRINGUP_ROOT() / "models" / "tt_transformers" / "tt" / "model_config.py"
-    if mc_path_for_grid.is_file():
-        try:
-            mc_src_grid = mc_path_for_grid.read_text()
-        except Exception:
-            mc_src_grid = ""
-        if (
-            "def find_grid(self, N):" in mc_src_grid
-            and "max_grid_size" not in mc_src_grid.split("def find_grid(self, N):")[1].split("def ")[0]
-        ):
-            problems.append(
-                "models/tt_transformers/tt/model_config.py:find_grid "
-                "uses hard-coded max_cols (e.g. 12 for BH) instead of "
-                "clamping to `self.max_grid_size` (actual "
-                "compute_with_storage_grid_size). On some BH variants "
-                "(e.g. QB2 1x4 with 11x10 compute grid) this returns "
-                "a grid that includes a dispatch core and decode "
-                "crashes with `not on_dispatch_core`."
-            )
-
-        if "def _dispatch_safe_grid(" not in mc_src_grid:
-            problems.append(
-                "models/tt_transformers/tt/model_config.py is missing "
-                "the `_dispatch_safe_grid` helper. Without it, the "
-                "SDPA / QKV / MLP program configs fall back to hard-"
-                "coded grids (e.g. (8, 10) for BH) which can include "
-                "a dispatch core on non-canonical meshes like BH QB2 "
-                "1x4 and crash with `not on_dispatch_core`."
-            )
-
-        import re as _re
-
-        _grid_lit_re = _re.compile(
-            r"compute_with_storage_grid_size\s*=\s*"
-            r"(?:ttnn\.CoreCoord\(\s*\d+\s*,\s*\d+\s*\)|\(\s*\d+\s*,\s*\d+\s*\))"
-        )
-        for m in _grid_lit_re.finditer(mc_src_grid):
-            window = mc_src_grid[max(0, m.start() - 300) : min(len(mc_src_grid), m.end() + 300)]
-            if "_dispatch_safe_grid" not in window:
-                ln = mc_src_grid.count("\n", 0, m.start()) + 1
-                problems.append(
-                    f"models/tt_transformers/tt/model_config.py:{ln} "
-                    f"hard-codes a grid literal "
-                    f"({m.group(0).replace(chr(10), ' ').strip()}) "
-                    f"without going through `_dispatch_safe_grid(...)`. "
-                    f"Risk: dispatch-core kernel-placement crash on "
-                    f"non-canonical meshes."
-                )
-
-                break
-
     if major >= 5:
         repo_files_on_demo_path = [
             BRINGUP_ROOT() / "models" / "common" / "llama_models.py",
@@ -1533,8 +1482,10 @@ def _check_demo_environment_compat(
                 common_src = ""
             if "apply_chat_template" in common_src and (
                 "_normalize_token_result_to_list" not in common_src
+                and "_chat_template_ids" not in common_src
                 and 'hasattr(result, "input_ids")' not in common_src
                 and 'hasattr(encoded, "input_ids")' not in common_src
+                and 'hasattr(encoded, "ids")' not in common_src
             ):
                 problems.append(
                     "models/tt_transformers/tt/common.py calls "
@@ -8385,121 +8336,37 @@ def _cmd_up_core(args) -> int:
     env_ok_early, env_problems_early = _check_demo_environment_compat()
     _is_external_demo_early = _early_compat is not None and getattr(_early_compat, "in_external_demo", False)
     if not env_ok_early and _is_external_demo_early:
-        _src_only = [l for l in env_problems_early if not l.startswith("transformers==")]
-        _pkg_only = [l for l in env_problems_early if l.startswith("transformers==")]
-        if _src_only and not _pkg_only:
-            print()
-            print(
-                f"  [env] source-level advisories in the tt_transformers simple_text_demo "
-                f"codepath, which {MODEL} does NOT use (it has its own external demo). "
-                f"Non-fatal -- continuing bring-up."
-            )
-            env_ok_early, env_problems_early = True, []
+        print()
+        print(
+            f"  [env] pre-flight advisories target the tt_transformers simple_text_demo "
+            f"codepath, which {MODEL} does NOT use (it has its own external demo). "
+            f"Non-fatal -- continuing bring-up."
+        )
+        for line in env_problems_early:
+            print(f"  - {line}")
+        env_ok_early, env_problems_early = True, []
     if not env_ok_early:
         sep_e = "=" * 72
         print()
         print(sep_e)
-        # Distinguish the two failure modes the check can produce:
-        #   (a) transformers version mismatch (a package-level issue
-        #       the LLM env-fix CAN resolve via pip install)
-        #   (b) source-level issues in tt_metal (missing helpers,
-        #       hard-coded grids) that ONLY a code fix or an overlay
-        #       re-apply will resolve — pip install can't help here
-        # The banner used to claim "transformers... assumes 4.x APIs"
-        # for both, which was wrong for (b) and led the LLM to refuse
-        # to propose a pip command.
-        _has_pkg_issue = any(line.startswith("transformers==") for line in env_problems_early)
-        _has_src_issue = any(
-            ("model_config.py" in line or "models/" in line) and not line.startswith("transformers==")
-            for line in env_problems_early
-        )
-        if _has_pkg_issue and not _has_src_issue:
-            print("  ENVIRONMENT INCOMPATIBLE -- transformers version mismatch (package-level)")
-        elif _has_src_issue and not _has_pkg_issue:
-            print("  ENVIRONMENT INCOMPATIBLE -- tt_metal source-level issues (NOT a package mismatch)")
-        else:
-            print("  ENVIRONMENT INCOMPATIBLE -- pre-flight check failed (mixed package + source issues)")
+        print("  ENVIRONMENT INCOMPATIBLE -- pre-flight found problems in the tt_transformers demo codepath:")
         print(sep_e)
         for line in env_problems_early:
             print(f"  - {line}" if not line.startswith("transformers==") else f"  {line}")
         print()
-        # If ALL problems are source-level (no transformers== line),
-        # explain that pip install can't fix this and skip the LLM
-        # env-fix step entirely — it would just waste an agent
-        # invocation (the LLM correctly refuses every time).
-        if _has_src_issue and not _has_pkg_issue:
-            print(
-                "  These are source-level issues in tt_metal (missing helpers, drifted code).\n"
-                "  pip install CANNOT resolve them. To fix:\n"
-                "    1. Re-apply the relevant overlays (check `_shared` overlay scope), OR\n"
-                "    2. Apply the listed source patches to the working tree.\n"
-            )
-            print(sep_e)
-            return 2
-
-        # Skip auto-fix if operator opted out or we already tried.
-        _no_env_fix = getattr(args, "no_env_fix", False)
-        _already_tried = bool(os.environ.get(_ENV_FIX_ATTEMPTED_FLAG))
-        if _no_env_fix or _already_tried:
-            print("  To resolve manually, install package versions compatible with the codebase.")
-            if _no_env_fix:
-                print("  (--no-env-fix is set; not auto-installing.)")
-            if _already_tried:
-                print(
-                    "  (auto-fix already attempted in this invocation; the proposed install didn't resolve the issue.)"
-                )
-            print(sep_e)
-            return 2
-
-        # LLM-driven fix: ask the LLM to look at the actual problems +
-        # the live `pip freeze` and propose the right install command.
-        # Falls back to manual banner if the LLM can't be reached or
-        # returns nothing valid — never silently does the wrong thing.
-        from ._cli_helpers.env_fix import run_llm_env_fix, run_pip_install
-
-        print("  Asking LLM to diagnose and propose a fix...")
-        print(sep_e)
-        proposal = run_llm_env_fix(
-            env_problems=list(env_problems_early),
-            work_dir=Path.cwd(),
+        print(
+            "  This model uses the tt_transformers simple_text_demo path, which needs a "
+            "compatible environment. The tool will NOT change your environment automatically "
+            "(a prior auto-downgrade removed torch as collateral). Install the versions pinned "
+            "in tt_metal/python_env/requirements-dev.txt by hand, e.g.:"
         )
-        if proposal is None:
-            print()
-            print(sep_e)
-            print(
-                "  Could not obtain a fix proposal from the LLM (agent unreachable, no verdict, or rejected for safety)."
-            )
-            print("  To resolve manually, install package versions compatible with the codebase.")
-            print(sep_e)
+        print("      pip install --extra-index-url https://download.pytorch.org/whl/cpu \\")
+        print("          'torch==2.11.0' 'transformers==5.10.2'")
+        print("  then re-run. To proceed anyway and accept the risk, pass --no-env-fix.")
+        print(sep_e)
+        if not getattr(args, "no_env_fix", False):
             return 2
-
-        print()
-        print(sep_e)
-        print(f"  LLM proposes: {proposal.pip_command_str}")
-        if proposal.reasoning:
-            print(f"  Reasoning:    {proposal.reasoning}")
-        print(sep_e)
-        _ok, _log = run_pip_install(proposal.pip_args)
-        if not _ok:
-            print()
-            print(sep_e)
-            print("  Proposed install FAILED. pip output tail:")
-            for line in _log.splitlines()[-15:]:
-                print(f"      {line}")
-            print()
-            print(f"  Manual fix: {proposal.pip_command_str}")
-            print(sep_e)
-            return 2
-        print()
-        print(sep_e)
-        print("  Install complete. Re-executing this command with the new environment...")
-        print(sep_e)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        _new_env = dict(os.environ)
-        _new_env[_ENV_FIX_ATTEMPTED_FLAG] = "1"
-        os.execvpe(sys.executable, [sys.executable, "-m", "scripts.tt_hw_planner", *sys.argv[1:]], _new_env)
-        return 2
+        print("  --no-env-fix set: proceeding despite advisories.")
     _already_supported = (
         _early_compat is not None
         and (
@@ -8604,36 +8471,33 @@ def _cmd_up_core(args) -> int:
     if _already_supported:
         env_ok, env_problems = _check_demo_environment_compat()
         if not env_ok and _early_compat is not None and getattr(_early_compat, "in_external_demo", False):
-            _src_only = [l for l in env_problems if not l.startswith("transformers==")]
-            _pkg_only = [l for l in env_problems if l.startswith("transformers==")]
-            if _src_only and not _pkg_only:
-                print(
-                    f"  [env] source-level advisories only; {MODEL} uses an external demo " f"-- non-fatal, continuing."
-                )
-                env_ok, env_problems = True, []
+            print(
+                f"  [env] pre-flight advisories target simple_text_demo; {MODEL} uses its own "
+                f"external demo -- non-fatal, continuing."
+            )
+            for line in env_problems:
+                print(f"  - {line}")
+            env_ok, env_problems = True, []
         if not env_ok:
             sep = "=" * 72
             print()
             print(sep)
-            print("  ENVIRONMENT INCOMPATIBLE -- aborting before demo run")
+            print("  ENVIRONMENT INCOMPATIBLE -- pre-flight found problems in the tt_transformers demo codepath:")
             print(sep)
             for line in env_problems:
                 print(f"  - {line}" if not line.startswith("transformers==") else f"  {line}")
             print()
-            print("  Options to unblock (pick ONE):")
-            print()
-            print("    1. Downgrade transformers to the version the repo")
-            print("       was written against:")
-            print("           pip install 'transformers<5.0'")
-            print()
-            print("    2. Patch the listed files to support transformers 5.x")
-            print("       (mostly try/except import aliases and ")
-            print("        rope_parameters fallbacks; see today's patches in")
-            print("        models/common/llama_models.py and")
-            print("        models/tt_transformers/tt/{model_config,common}.py).")
-            print()
+            print(
+                "  The tool will NOT change your environment automatically. Install the versions "
+                "pinned in tt_metal/python_env/requirements-dev.txt by hand, e.g.:"
+            )
+            print("      pip install --extra-index-url https://download.pytorch.org/whl/cpu \\")
+            print("          'torch==2.11.0' 'transformers==5.10.2'")
+            print("  then re-run. To proceed anyway and accept the risk, pass --no-env-fix.")
             print(sep)
-            return 2
+            if not getattr(args, "no_env_fix", False):
+                return 2
+            print("  --no-env-fix set: proceeding despite advisories.")
 
         print(
             f"  ALREADY SUPPORTED via tt_transformers/simple_text_demo. "
