@@ -676,8 +676,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         directly in this layout also removes the head/seq transposes that previously
         wrapped the SDPA-decode call.
         """
-        b, s, _, _ = hidden.shape  # B == 1, S == 1 (decode)
+        b, s, _, hidden_width = hidden.shape  # B == 1, S == 1 (decode)
         h, dh = self.num_heads, self.head_dim
+        # width_sharded_l1_config = _width_sharded_l1_config(b * s, hidden_width, self.device)
+        # hidden = ttnn.to_memory_config(hidden, width_sharded_l1_config)
         _profile(self.device)
         # hidden_input_memory_config = self.q_a_proj.get_input_memory_config(1, hidden.shape[3])
         # hidden = ttnn.to_memory_config(hidden, hidden_input_memory_config)
