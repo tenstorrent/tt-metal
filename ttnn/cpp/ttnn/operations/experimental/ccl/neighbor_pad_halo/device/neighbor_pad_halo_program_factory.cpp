@@ -577,6 +577,134 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             w_num_targets_backward,
             mesh_device);
 
+        // ---------------------------------------------------------------------
+        // FABRIC-MUX W path (middle W devices, coalesced): N workers per (link,dir) feed a mux core so
+        // the eth link is saturated (reach ~12.5 GB/s/link vs ~1.4 single-worker). Gated on num_w_workers
+        // > 1 + middle device + coalesce-eligible; else falls through to the standard 1-worker path.
+        // Uses the shipping tt_fabric_mux kernel + ccl::fabric_mux_connection_{ct,rt}_args helpers.
+        const bool use_w_mux =
+            (num_w_workers > 1) && !is_first_w_device && !is_last_w_device && (w_coalesce_n > 0);
+        if (use_w_mux) {
+            using tt::tt_fabric::FabricMuxChannelType;
+            const uint32_t l1_base =
+                mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+            const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
+                /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
+                /*num_header_only_channels=*/0,
+                /*num_buffers_full_size_channel=*/8,
+                /*num_buffers_header_only_channel=*/0,
+                mux_buf_size,
+                l1_base);
+
+            // Core layout (halo-only op: cols>=1 are free). Per (link,dir): 1 mux core (col 1) + N worker
+            // cores (cols 2+). link/dir index = w_link*2 + w_dir.
+
+            // W reader + mux writer kernels on the worker cores.
+            std::vector<uint32_t> mux_reader_ct = {sender_cb_index, is_padding_zeros, page_size};
+            TensorAccessorArgs(*halo_buffer).append_to(mux_reader_ct);
+            TensorAccessorArgs(*input_buffer).append_to(mux_reader_ct);
+            mux_reader_ct.push_back(progress_t_batch_size);
+            mux_reader_ct.push_back(use_w_two_pass);
+            mux_reader_ct.push_back(w_coalesce_n);
+            auto mux_reader_cfg = ReaderDataMovementConfig{};
+            mux_reader_cfg.compile_args = mux_reader_ct;
+
+            std::vector<uint32_t> mux_writer_ct = {sender_cb_index, page_size};
+            TensorAccessorArgs(*halo_buffer).append_to(mux_writer_ct);
+            mux_writer_ct.push_back(w_coalesce_n);
+            ttnn::ccl::fabric_mux_connection_ct_args(
+                num_w_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_cfg, mux_writer_ct);
+            auto mux_writer_cfg = WriterDataMovementConfig{};
+            mux_writer_cfg.compile_args = mux_writer_ct;
+
+            const std::string kdir =
+                "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
+            // Gather all worker + mux cores into ranges for kernel creation.
+            std::vector<CoreCoord> mux_worker_cores;   // flat: [link*2+dir][worker]
+            std::vector<CoreCoord> mux_mux_cores;      // flat: [link*2+dir]
+            for (uint32_t s = 0; s < pad2_num_links * 2; s++) {
+                mux_mux_cores.push_back(CoreCoord{1, s});
+                for (uint32_t wk = 0; wk < num_w_workers; wk++) {
+                    mux_worker_cores.push_back(CoreCoord{2 + wk, s});
+                }
+            }
+            std::set<CoreRange> worker_crs, mux_crs;
+            for (const auto& c : mux_worker_cores) worker_crs.insert(CoreRange(c));
+            for (const auto& c : mux_mux_cores) mux_crs.insert(CoreRange(c));
+            CoreRangeSet worker_crset(worker_crs), mux_crset(mux_crs);
+
+            w_reader_kernel_id = CreateKernel(program, kdir + "np_phase2_w_reader.cpp", worker_crset, mux_reader_cfg);
+            w_writer_kernel_id = CreateKernel(program, kdir + "np_w_mux_writer.cpp", worker_crset, mux_writer_cfg);
+            SetCommonRuntimeArgs(
+                program,
+                w_writer_kernel_id,
+                {halo_buffer->address(), halo_buffer->address(), op.w_neighbor_semaphore.address(),
+                 op.barrier_semaphore.address(), input_halo_dim_size, static_cast<uint32_t>(op.np_padding_h)});
+
+            auto mux_kernel_id = CreateKernel(
+                program,
+                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                mux_crset,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = mux_cfg.get_fabric_mux_compile_time_args(),
+                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+            for (uint32_t w_link = 0; w_link < pad2_num_links; w_link++) {
+                for (uint32_t w_dir = 0; w_dir < 2; w_dir++) {
+                    const uint32_t s = w_link * 2 + w_dir;
+                    const bool dir_has_neighbor = w_dir ? w_backward_coord.has_value() : w_forward_coord.has_value();
+                    // Mux kernel RT args (one mux core per (link,dir)); only meaningful if the dir has a neighbor.
+                    CoreCoord mux_lc = mux_mux_cores[s];
+                    CoreCoord mux_vc = mesh_device->worker_core_from_logical_core(mux_lc);
+                    if (dir_has_neighbor) {
+                        const auto src_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                        const auto dst_id = mesh_device->get_fabric_node_id(
+                            w_dir ? w_backward_coord.value() : w_forward_coord.value());
+                        auto mux_rt = mux_cfg.get_fabric_mux_run_time_args(src_id, dst_id, w_link, program, {mux_lc});
+                        SetRuntimeArgs(program, mux_kernel_id, {mux_lc}, mux_rt);
+                    }
+                    // Termination master = worker 0 of this (link,dir) group.
+                    CoreCoord term_master_lc = mux_worker_cores[s * num_w_workers + 0];
+                    CoreCoord term_master_vc = mesh_device->worker_core_from_logical_core(term_master_lc);
+                    // Split this (link,dir)'s W rows across workers.
+                    const uint32_t rows_this_link = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
+                    const uint32_t base_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
+                    const uint32_t per_wk = rows_this_link / num_w_workers;
+                    const uint32_t extra_wk = rows_this_link % num_w_workers;
+                    const uint32_t pw = w_dir ? op.np_pad2_right : op.np_pad2_left;
+                    const uint32_t section_base = w_dir ? w_section_wright_base : w_section_wleft_base;
+                    for (uint32_t wk = 0; wk < num_w_workers; wk++) {
+                        CoreCoord wc = mux_worker_cores[s * num_w_workers + wk];
+                        const uint32_t wk_start = base_link_start + wk * per_wk + std::min(wk, extra_wk);
+                        const uint32_t wk_count = per_wk + (wk < extra_wk ? 1 : 0);
+                        // Reader RT args (same layout as the standard W reader).
+                        std::vector<uint32_t> r_rt = {
+                            wk_count, wk_start, pw, num_h_fabric_cores, output_num_sticks_per_halo_dim,
+                            op.np_pad2_left, num_sticks_per_halo_dim,
+                            static_cast<uint32_t>(w_dir ? is_last_w_device : is_first_w_device),
+                            static_cast<uint32_t>(w_dir ? is_first_w_device : is_last_w_device),
+                            w_dir, input_buffer->address(), input_halo_dim_size, op.np_padding_h,
+                            outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim, 0u};
+                        SetRuntimeArgs(program, w_reader_kernel_id, {wc}, r_rt);
+                        // Writer RT args: per-core (base,rows,sem xy,dir,route) then mux conn (0..16).
+                        std::vector<uint32_t> w_rt = {
+                            section_base + wk_start * pw, wk_count,
+                            mux_vc.x, mux_vc.y, mux_vc.x, mux_vc.y,
+                            static_cast<uint32_t>(is_first_w_device), static_cast<uint32_t>(is_last_w_device), w_dir,
+                            0u, static_cast<uint32_t>(w_dir ? w_backward_device_offset : w_forward_device_offset)};
+                        ttnn::ccl::fabric_mux_connection_rt_args(
+                            dir_has_neighbor, /*is_termination_master=*/wk == 0,
+                            FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_vc, wk, wc, mux_cfg, program,
+                            term_master_vc, w_rt, std::nullopt);
+                        SetRuntimeArgs(program, w_writer_kernel_id, {wc}, w_rt);
+                    }
+                }
+            }
+            w_fabric_core_range = worker_crset;
+        } else {
         // W reader kernel — fused-owned copy: always fabric-only, always per-batch
         // progress-sem signalling.
         auto w_reader_kernel_config = ReaderDataMovementConfig{};
@@ -762,6 +890,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 SetRuntimeArgs(program, w_writer_kernel_id, {w_core}, w_writer_rt_args);
             }
         }
+        }  // end else (standard 1-worker W path)
     }
 
     return cached_program_t{
