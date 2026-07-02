@@ -331,15 +331,21 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*buffering_factor=*/(read_batch_size * operation_attributes.num_experts_per_tok) + 1,
         /*cb_id=*/tt::CBIndex::c_13,
         "untilize_metadata_scratch");
-    // Per-page sparse-multicast grouping (1D Ring + topk==4): widen the sender ring's route_info slot
+    // Per-page sparse-multicast grouping (1D Ring, any top-k): widen the sender ring's route_info slot
     // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], expert[4], k[4],
-    // weight[4]] = 23 u32 — so a token's co-directional destinations are one sparse-multicast payload
-    // write. The payload/metadata rings are unchanged; the sender builds each destination's metadata
-    // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other
-    // config keeps the per-expert path.
-    const bool enable_sparse_mcast = (topology == tt::tt_fabric::Topology::Ring) &&
-                                     //(operation_attributes.num_experts_per_tok == 4) &&
-                                     (operation_attributes.num_links > 0);
+    // weight[4]] = 23 u32 — so a token's co-directional destinations become sparse-multicast payload
+    // writes, each covering up to 4 destinations (writer_untilize spills wider groups into extra
+    // slots). The payload/metadata rings are unchanged; the sender builds each destination's metadata
+    // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other config
+    // keeps the per-expert path.
+    const bool enable_sparse_mcast =
+        (topology == tt::tt_fabric::Topology::Ring) && (operation_attributes.num_links > 0);
+    log_info(
+        tt::LogOp,
+        "[dispatch][tile] enable_sparse_mcast={} (topology={}, num_links={})",
+        enable_sparse_mcast,
+        (int)topology,
+        operation_attributes.num_links);
     constexpr uint32_t grouped_route_info_u32 = 23;
     const uint32_t route_info_slot_stride_bytes =
         enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
@@ -1094,15 +1100,21 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         /*cb_id=*/tt::CBIndex::c_3,
         "offsets_tensor");
 
-    // Per-page sparse-multicast grouping is enabled only for 1D Ring + topk==4 on the row-major path:
-    // a token's co-directional experts are collapsed into one per-page sparse-multicast payload write.
-    // This widens the route_info slot to hold a grouped record and toggles the SPARSE_MCAST_DISPATCH
-    // define on both kernels; every other config keeps the per-expert path unchanged.
+    // Per-page sparse-multicast grouping on the row-major path (1D Ring, any top-k): a token's
+    // co-directional experts are collapsed into per-page sparse-multicast payload writes, each covering
+    // up to NOC_SPARSE_MCAST_WRITE_MAX_DESTS destinations (the reader spills wider groups into extra
+    // writes). This widens the route_info slot to hold a grouped record and toggles the
+    // SPARSE_MCAST_DISPATCH define on both kernels; every other config keeps the per-expert path.
     // Requires fabric (num_links > 0 => DEST_CHIP_ID) since the grouped writer uses the fabric
     // connections + packet header that only exist in the cross-device build.
-    bool enable_sparse_mcast = (topology == tt::tt_fabric::Topology::Ring) &&
-                               (operation_attributes.num_experts_per_tok == 4) && (operation_attributes.num_links > 0);
-    enable_sparse_mcast = false;
+    const bool enable_sparse_mcast =
+        (topology == tt::tt_fabric::Topology::Ring) && (operation_attributes.num_links > 0);
+    log_info(
+        tt::LogOp,
+        "[dispatch][row_major] enable_sparse_mcast={} (topology={}, num_links={})",
+        enable_sparse_mcast,
+        (int)topology,
+        operation_attributes.num_links);
 
     // c_4, c_5, c_6: reader→writer CBs for (route_info, payload, metadata) per remote entry.
     // The reader pushes all three per entry in lockstep, so small buffering (2) suffices

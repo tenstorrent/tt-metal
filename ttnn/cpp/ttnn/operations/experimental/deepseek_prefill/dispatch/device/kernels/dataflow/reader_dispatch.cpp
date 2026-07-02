@@ -274,15 +274,18 @@ void kernel_main() {
 #ifdef SPARSE_MCAST_DISPATCH
             // Group this token's cross-device experts by fabric direction so co-directional
             // destinations can be collapsed into one per-page sparse-multicast payload write (drained
-            // after the k-loop). Metadata stays per-destination. topk==4 -> at most 4 per bucket.
+            // after the k-loop). Metadata stays per-destination. A direction's group emit caps at
+            // MCAST_MAX_DESTS (fabric per-call limit); a token can route all its top-k picks through one
+            // direction, so each bucket must hold top-k entries and the emit spills into extra groups.
             constexpr uint32_t MCAST_NUM_DIRS = 4;   // eth_chan_directions::COUNT
             constexpr uint32_t MCAST_MAX_DESTS = 4;  // NOC_SPARSE_MCAST_WRITE_MAX_DESTS
+            constexpr uint32_t MCAST_BUCKET_CAP = num_experts_per_tok;
             uint32_t mcast_bucket_count[MCAST_NUM_DIRS] = {0, 0, 0, 0};
-            uint32_t mcast_dist[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-            uint32_t mcast_page[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-            uint32_t mcast_k[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-            uint32_t mcast_expert[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-            uint32_t mcast_weight[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
+            uint32_t mcast_dist[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+            uint32_t mcast_page[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+            uint32_t mcast_k[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+            uint32_t mcast_expert[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+            uint32_t mcast_weight[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
 #endif
 
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
@@ -341,7 +344,7 @@ void kernel_main() {
                         // Bucket by direction; drained into grouped sparse-multicast records after the
                         // k-loop. Payload/metadata are staged there, once per direction group.
                         uint32_t bslot = mcast_bucket_count[route];
-                        ASSERT(bslot < MCAST_MAX_DESTS);
+                        ASSERT(bslot < MCAST_BUCKET_CAP);
                         mcast_dist[route][bslot] = distance;
                         mcast_page[route][bslot] = page_idx;
                         mcast_k[route][bslot] = k;

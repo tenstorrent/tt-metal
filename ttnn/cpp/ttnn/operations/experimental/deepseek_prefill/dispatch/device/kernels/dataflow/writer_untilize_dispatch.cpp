@@ -160,19 +160,28 @@ void kernel_main() {
     uint32_t local_count = 0;
 
 #ifdef SPARSE_MCAST_DISPATCH
-    // Grouped sparse-multicast staging (1D Ring, topk==4): a token's cross-device destinations are
-    // bucketed per fabric direction (entry->route) for the current token, then flushed as grouped ring
-    // slots — one sparse-multicast payload write per direction group instead of topk unicasts. The
-    // grouped route_info carries everything the sender needs to rebuild each destination's metadata, so
-    // no metadata is staged here. topk==4 bounds total cross-device dests per token to 4.
+    // Grouped sparse-multicast staging (1D Ring): a token's cross-device destinations are bucketed per
+    // fabric direction (entry->route) for the current token, then flushed as grouped ring slots — one
+    // sparse-multicast payload write per slot instead of one unicast per destination. The grouped
+    // route_info carries everything the sender needs to rebuild each destination's metadata, so no
+    // metadata is staged here.
+    //
+    // Two independent bounds shape a slot: distinct hop distances (a hop_mask bit is distance-1, so two
+    // same-distance destinations can't share one multicast) and at most MCAST_MAX_DESTS destinations
+    // (the fabric packet header holds that many address slots). A direction whose destinations exceed
+    // either bound spills into additional slots.
     constexpr uint32_t MCAST_NUM_DIRS = 4;
-    constexpr uint32_t MCAST_MAX_DESTS = 4;
+    constexpr uint32_t MCAST_MAX_DESTS = 4;  // == NOC_SPARSE_MCAST_WRITE_MAX_DESTS and the 4-dest slot layout
+    // A token can route all its top-k picks through a single direction, so each per-direction bucket
+    // must hold top-k entries. top-k is not a direct arg here, but meta_scratch_slots was sized as
+    // read_batch_size * top-k on the host.
+    constexpr uint32_t MCAST_BUCKET_CAP = meta_scratch_slots / read_batch_size;
     uint32_t bk_count[MCAST_NUM_DIRS];
-    uint32_t bk_dist[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-    uint32_t bk_page[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-    uint32_t bk_expert[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-    uint32_t bk_k[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
-    int32_t bk_weight[MCAST_NUM_DIRS][MCAST_MAX_DESTS];
+    uint32_t bk_dist[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+    uint32_t bk_page[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+    uint32_t bk_expert[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+    uint32_t bk_k[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+    int32_t bk_weight[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     for (uint32_t d = 0; d < MCAST_NUM_DIRS; d++) {
         bk_count[d] = 0;
     }
@@ -187,6 +196,45 @@ void kernel_main() {
             return;
         }
         uint32_t src_addr = untilize_read_ptr_local + cur_token_t * aligned_output_page_size;
+
+        // Emit one sparse-multicast slot: route_info header (per-dest fields already filled by the
+        // caller) plus the token payload, paced by the sender's space_avail credit.
+        auto emit_slot = [&](uint32_t dir, uint32_t gcount, uint16_t hop_mask) {
+            space_avail_sem.wait_min(produced_count + 1);
+            uint32_t slot = produced_count % writer_cb_size;
+            route_info_scratch[0] = dir;
+            route_info_scratch[1] = gcount;
+            route_info_scratch[2] = cur_token_idx;
+            DPRINT_DISPATCH(
+                "[W c={}] GROUP dir={} num_dests={} hop_mask={} slot={}\n",
+                (uint32_t)core_id,
+                dir,
+                gcount,
+                (uint32_t)hop_mask,
+                slot);
+
+            uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
+            noc_async_write_one_packet_with_trid(
+                route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+
+            // Payload: the token's untilized row, chunked to NOC_MAX_BURST_SIZE packets. Every slot of a
+            // token reads the same src_addr; the sender fans it out to gcount pages.
+            uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+            uint32_t off = 0;
+            while (off < aligned_output_page_size) {
+                uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                     ? (uint32_t)NOC_MAX_BURST_SIZE
+                                     : (aligned_output_page_size - off);
+                noc_async_write_one_packet_with_trid(src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
+                off += chunk;
+            }
+            // No metadata staged: the sender builds each destination's metadata from route_info.
+
+            noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+            noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
+            produced_count++;
+        };
+
         for (uint32_t dir = 0; dir < MCAST_NUM_DIRS; dir++) {
             uint32_t n = bk_count[dir];
             if (n == 0) {
@@ -212,10 +260,9 @@ void kernel_main() {
                 bk_k[dir][b + 1] = kv;
                 bk_weight[dir][b + 1] = wv;
             }
-            // Collision split: a hop_mask bit is (distance-1), so two same-distance destinations can't
-            // share one sparse-multicast. Assign each destination a group index = its rank within its
-            // equal-distance run; every group then has strictly distinct distances (one bit each).
-            uint32_t group_id[MCAST_MAX_DESTS];
+            // Collision split: assign each destination a group index = its rank within its equal-distance
+            // run, so every group has strictly distinct distances (one hop_mask bit each).
+            uint32_t group_id[MCAST_BUCKET_CAP];
             uint32_t max_group = 0;
             for (uint32_t a = 0; a < n; a++) {
                 group_id[a] = (a > 0 && bk_dist[dir][a] == bk_dist[dir][a - 1]) ? group_id[a - 1] + 1 : 0;
@@ -223,21 +270,17 @@ void kernel_main() {
                     max_group = group_id[a];
                 }
             }
+            // Within a group all distances are distinct; pack its members into route_info slots of at
+            // most MCAST_MAX_DESTS (the fabric per-call cap), emitting a fresh slot whenever one fills.
             for (uint32_t gg = 0; gg <= max_group; gg++) {
-                // Per-entry credit: wait until the sender has fabric-sent the slot we're about to reuse.
-                space_avail_sem.wait_min(produced_count + 1);
-                uint32_t slot = produced_count % writer_cb_size;
-
-                // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
-                // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
-                route_info_scratch[0] = dir;
-                route_info_scratch[2] = cur_token_idx;
                 uint32_t gcount = 0;
                 uint16_t hop_mask = 0;
                 for (uint32_t a = 0; a < n; a++) {
                     if (group_id[a] != gg) {
                         continue;
                     }
+                    // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
+                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
                     route_info_scratch[3 + gcount] = bk_page[dir][a];
                     route_info_scratch[7 + gcount] = bk_dist[dir][a];
                     route_info_scratch[11 + gcount] = bk_expert[dir][a];
@@ -245,36 +288,15 @@ void kernel_main() {
                     route_info_scratch[19 + gcount] = (uint32_t)bk_weight[dir][a];
                     hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a] - 1));
                     gcount++;
+                    if (gcount == MCAST_MAX_DESTS) {
+                        emit_slot(dir, gcount, hop_mask);
+                        gcount = 0;
+                        hop_mask = 0;
+                    }
                 }
-                route_info_scratch[1] = gcount;
-                DPRINT_DISPATCH(
-                    "[W c={}] GROUP dir={} num_dests={} hop_mask={} slot={}\n",
-                    (uint32_t)core_id,
-                    dir,
-                    gcount,
-                    (uint32_t)hop_mask,
-                    slot);
-
-                uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
-                noc_async_write_one_packet_with_trid(
-                    route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
-
-                // Payload: the token's untilized row, chunked to NOC_MAX_BURST_SIZE packets. All groups
-                // of a token read the same src_addr; the sender fans it out to gcount pages.
-                uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
-                uint32_t off = 0;
-                while (off < aligned_output_page_size) {
-                    uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
-                                         ? (uint32_t)NOC_MAX_BURST_SIZE
-                                         : (aligned_output_page_size - off);
-                    noc_async_write_one_packet_with_trid(src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
-                    off += chunk;
+                if (gcount > 0) {
+                    emit_slot(dir, gcount, hop_mask);
                 }
-                // No metadata staged: the sender builds each destination's metadata from route_info.
-
-                noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
-                noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
-                produced_count++;
             }
             bk_count[dir] = 0;
         }
@@ -388,12 +410,17 @@ void kernel_main() {
                     cur_token_valid = 1;
                     cur_token_t = token_t;
                     cur_token_idx = token_idx;
-                    uint32_t dst = bk_count[dir]++;
-                    bk_dist[dir][dst] = entry->distance;
-                    bk_page[dir][dst] = page_idx;
-                    bk_expert[dir][dst] = routed_expert;
-                    bk_k[dir][dst] = k;
-                    bk_weight[dir][dst] = weight;
+                    // Bucket bound: total cross-device dests per token is <= top-k == MCAST_BUCKET_CAP,
+                    // so this never trips in practice; guard defensively against OOB if that changes.
+                    uint32_t dst = bk_count[dir];
+                    if (dst < MCAST_BUCKET_CAP) {
+                        bk_count[dir] = dst + 1;
+                        bk_dist[dir][dst] = entry->distance;
+                        bk_page[dir][dst] = page_idx;
+                        bk_expert[dir][dst] = routed_expert;
+                        bk_k[dir][dst] = k;
+                        bk_weight[dir][dst] = weight;
+                    }
 #else
                     // Cross-device: stage this token into one sender slot as three NOC writes —
                     // route_info (c_4), payload (c_5), metadata (c_6) — then signal data_avail so
