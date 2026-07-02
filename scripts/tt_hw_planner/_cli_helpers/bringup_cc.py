@@ -152,14 +152,10 @@ def run_bringup_cc(
         mcp_env["TT_HW_PLANNER_SHARD"] = _shard_flag
         if _shard_tp:
             mcp_env["TT_HW_PLANNER_SHARD_TP"] = _shard_tp
-            from ..parallelism import mesh_graph_descriptor_path
-
-            _mgd = mesh_graph_descriptor_path(int(_shard_tp), repo_root)
-            if _mgd:
-                print(
-                    f"  [shard] TP={_shard_tp} → {Path(_mgd).name} "
-                    f"(applied only to shard-mode component runs, not single-device tests)"
-                )
+            _dp = max(_mesh_chips(mesh) // int(_shard_tp), 1)
+            if _dp > 1:
+                mcp_env["TT_HW_PLANNER_SHARD_DP"] = str(_dp)
+            print(f"  [shard] TP={_shard_tp} x DP={_dp} → opens {int(_shard_tp) * _dp} chips (fabric auto-discovered)")
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "bringup-mcp")
     import re as _re
 

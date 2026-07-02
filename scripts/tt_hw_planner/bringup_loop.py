@@ -1092,10 +1092,16 @@ _sd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_sd)
 
 _TP = int(os.environ.get("TT_HW_PLANNER_SHARD_TP", "{tp_default}"))
+_DP = int(os.environ.get("TT_HW_PLANNER_SHARD_DP", "1"))
+_MESH = (_DP, _TP) if _DP > 1 else _TP
 
 
-@pytest.mark.parametrize("device_params", [{{"l1_small_size": 24576}}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [_TP], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=True)
 def test_{component_safe}_sharded(mesh_device):
     torch.manual_seed(int(os.environ.get("TT_PLANNER_TEST_SEED", "0") or "0"))
 

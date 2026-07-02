@@ -23,12 +23,15 @@ def test_emits_valid_python_using_mesh_fixture(tmp_path):
     assert p is not None and p.name == "test_self_attn_sharded.py"
     src = p.read_text()
     compile(src, str(p), "exec")
-    assert 'parametrize("mesh_device", [_TP], indirect=True)' in src
+    assert 'parametrize("mesh_device", [_MESH], indirect=True)' in src
+    assert "_MESH = (_DP, _TP) if _DP > 1 else _TP" in src
     assert "def test_self_attn_sharded(mesh_device):" in src
     assert "test_self_attn.py" in src
     assert "comp_pcc" in src
     assert "_sd._build_ttnn_port(mesh_device, torch_module)" in src
     assert 'os.environ.get("TT_HW_PLANNER_SHARD_TP", "2")' in src
+    assert 'os.environ.get("TT_HW_PLANNER_SHARD_DP", "1")' in src
+    assert "FabricConfig.FABRIC_1D" in src
 
 
 def test_idempotent_without_overwrite(tmp_path):

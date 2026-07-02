@@ -316,19 +316,7 @@ def cmd_emit_e2e(args) -> int:
     _parallel_note = _parallelism_prompt_block(_pc)
     if _pc is not None and _pc.chips > 1:
         print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
-        print("  builder will open the mesh at this split and map tensors accordingly.")
-        if not os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
-            try:
-                from ..parallelism import mesh_graph_descriptor_path
-
-                _mgd = mesh_graph_descriptor_path(_pc.chips, Path(__file__).resolve().parents[2])
-                if _mgd:
-                    os.environ["TT_MESH_GRAPH_DESC_PATH"] = _mgd
-                    print(
-                        f"  TT_MESH_GRAPH_DESC_PATH={Path(_mgd).name} (Blackhole fabric mesh graph for {_pc.chips} chips opened)"
-                    )
-            except Exception:
-                pass
+        print("  builder will open the mesh at this split; tt-metal auto-discovers the fabric topology.")
         print(sep)
 
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
@@ -725,6 +713,9 @@ The tool has selected this parallelism split for `{pc.chips}` chips by checking 
 viability (largest kernel-viable TP degree that divides the mesh; the remaining chips become
 data-parallel replicas). Place the pipeline on the mesh accordingly:
 
+  - BEFORE opening the mesh, enable the inter-chip fabric: `ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)`.
+    Without this, any CCL (all_gather / all_reduce) raises `TT_FATAL ... fabric_context_ != nullptr`.
+    tt-metal AUTO-DISCOVERS the cluster topology, so do NOT set TT_MESH_GRAPH_DESC_PATH for any mesh size.
   - Open a mesh device of {pc.chips} chips via `ttnn.open_mesh_device(ttnn.MeshShape({pc.dp}, {pc.tp}))`
     (rows = DP={pc.dp}, cols = TP={pc.tp}); close it at the end. If only a single device is available
     at runtime, fall back to it and note that in the run output.
