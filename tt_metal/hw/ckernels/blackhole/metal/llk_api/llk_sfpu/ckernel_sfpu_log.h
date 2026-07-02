@@ -46,7 +46,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
 
     if constexpr (!FAST_APPROX) {
         // normalise a (-0.0 and subnormals become +0.0)
-        a = a * sfpi::vConst1 + sfpi::vConst0;
+        a = a * 1.0f + 0.0f;
     }
 
     e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
@@ -54,7 +54,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
 
     // m in [0.75, 1.5). Compute log1p(m - 1) for m - 1 in [-0.25, 0.5).
-    m -= sfpi::vConst1;
+    m -= 1.0f;
 
     v_if(a >= 0.0f) {
         sfpi::vFloat r;
@@ -103,7 +103,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         // For zero, result is negative before this multiply, so result * +inf
         // gives -inf. For +inf, result is positive, so result * +inf gives
         // +inf. NaNs either skip the main block or propagate here.
-        v_if(sfpi::exexp(a, sfpi::ExponentMode::NoDebias) - 255 >= 0) { result *= a; }
+        v_if(sfpi::exexp(a, sfpi::ExponentMode::Biased) - 255 >= 0) { result *= a; }
         v_endif;
     }
     v_endif;

@@ -59,12 +59,19 @@ class RMSNormFunction(ttml.autograd.Function):
         x_hat = ttnn.mul(x_val, rrms)
         out = ttnn.mul(x_hat, w_val)
 
-        ctx.save_for_backward(x_hat, rrms, w_val)
+        # Save the weight *autograd tensor* (not its concrete value) so backward
+        # re-reads weight.get_value() at backward time. Under FSDP the gathered
+        # weight from forward is deallocated by reshard_after_forward and
+        # re-gathered into a new tensor in the backward pre-hook; a snapshot of
+        # the forward value would dangle. Re-reading is numerically identical
+        # when the weight does not move (non-FSDP path).
+        ctx.save_for_backward(x_hat, rrms, weight)
         return ttml.autograd.create_tensor(out)
 
     @staticmethod
     def backward(ctx, grad_output):
-        x_hat, rrms, w_val = ctx.saved_tensors
+        x_hat, rrms, weight = ctx.saved_tensors
+        w_val = weight.get_value()
 
         grad_w = ttnn.mul(grad_output, x_hat)
         for d in range(3):

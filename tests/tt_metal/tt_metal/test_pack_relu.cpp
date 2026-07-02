@@ -64,7 +64,7 @@ static void run_pack_relu_test(
     const experimental::KernelSpecName COMPUTE{"compute"};
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
-    // via Gen2Config::disable_implicit_sync_for). The program-level
+    // via Gen2Config::disable_dfb_implicit_sync_for). The program-level
     // reservation flag set below is independent of per-DFB sync mode.
     experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,

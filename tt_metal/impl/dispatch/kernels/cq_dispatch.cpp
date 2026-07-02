@@ -998,6 +998,24 @@ uint32_t stream_wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
+#ifdef ARCH_QUASAR
+// Returns a pointer to the L1 worker completion counter address
+FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(uint32_t stream) {
+    return reinterpret_cast<volatile uint32_t*>(
+        l1_uncached_addr(DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (stream - first_stream_used)));
+}
+#endif
+
+FORCE_INLINE void wait_worker_completion(uint32_t stream, uint32_t wait_count) {
+#ifdef ARCH_QUASAR
+    while (!wrap_ge(*worker_completion_sem_addr(stream), wait_count)) {
+    }
+#else
+    while (!stream_wrap_ge(NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
+    }
+#endif
+}
+
 static void process_wait() {
     volatile CQDispatchCmd tt_l1_ptr* cmd =
         reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
@@ -1006,6 +1024,7 @@ static void process_wait() {
     uint32_t barrier = flags & CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER;
     uint32_t notify_prefetch = flags & CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH;
     uint32_t clear_stream = flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM;
+    uint32_t clear_memory = flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY;
     uint32_t wait_memory = flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
     uint32_t wait_stream = flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM;
     uint32_t count = cmd->wait.count;
@@ -1035,7 +1054,6 @@ static void process_wait() {
         last_wait_stream = stream;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
-        // DPRINT("DISPATCH WAIT STREAM 0x{:08x} count {}\n", stream, count);
         do {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!stream_wrap_ge(*sem_addr, count));
@@ -1055,6 +1073,10 @@ static void process_wait() {
         if constexpr (telemetry_enabled) {
             dispatch_telemetry_control->worker_stream_reset_update = ++local_worker_stream_reset_update;
         }
+    }
+    if (clear_memory) {
+        uintptr_t addr = cmd->wait.addr;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr)) = 0;
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
@@ -1116,17 +1138,13 @@ void process_go_signal_mcast_cmd() {
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
         WAYPOINT("WCW");
-        while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
-        }
+        wait_worker_completion(stream, wait_count);
         WAYPOINT("WCD");
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
         noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
         WAYPOINT("WCW");
-        while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
-        }
+        wait_worker_completion(stream, wait_count);
         WAYPOINT("WCD");
     }
 
@@ -1143,10 +1161,14 @@ void process_go_signal_mcast_cmd() {
             // the number of cores specified inside cmd->mcast.num_unicast_txns. If this is
             // greater than the number of cores actually on the chip, we must account for acks
             // from non-existent cores here.
+#ifdef ARCH_QUASAR
+            *worker_completion_sem_addr(stream) += (num_virtual_unicast_cores - num_physical_unicast_cores);
+#else
             NOC_STREAM_WRITE_REG(
                 stream,
                 STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
                 (num_virtual_unicast_cores - num_physical_unicast_cores) << REMOTE_DEST_BUF_WORDS_FREE_INC);
+#endif
         }
     }
 
@@ -1517,13 +1539,16 @@ void kernel_main() {
     }
 
     for (size_t i = 0; i < max_num_worker_sems; i++) {
-        uint32_t index = i + first_stream_used;
-
+        const uint32_t index = i + first_stream_used;
+#ifdef ARCH_QUASAR
+        *worker_completion_sem_addr(index) = 0;
+#else
         NOC_STREAM_WRITE_REG(
             index,
             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
             -NOC_STREAM_READ_REG(index, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)
                 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+#endif
     }
 
     uint32_t l1_cache[l1_cache_elements_rounded];
