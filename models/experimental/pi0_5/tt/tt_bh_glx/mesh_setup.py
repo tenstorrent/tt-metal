@@ -98,6 +98,7 @@ def open_decode_16_mesh(
     l1_small_size: Optional[int] = None,
     trace_region_size: Optional[int] = None,
     enable_fabric: bool = True,
+    num_command_queues: int = 1,
 ):
     """Open a 16-chip layout on the BH Galaxy for TP=8 prefill + 8-stage
     streamed denoise. Opens the full Galaxy as a (4,8) parent and carves two
@@ -124,6 +125,10 @@ def open_decode_16_mesh(
         open_kwargs["l1_small_size"] = l1_small_size
     if trace_region_size is not None:
         open_kwargs["trace_region_size"] = trace_region_size
+    # 2 CQs enable H2D input upload on CQ1 overlapped with CQ0 compute (the
+    # socket-KV 2CQ perf loop). Carved submeshes inherit the parent's CQ count.
+    if num_command_queues != 1:
+        open_kwargs["num_command_queues"] = num_command_queues
 
     # set_fabric_config can raise IndexError when an earlier import-time probe
     # closed the cluster and left the topology unordered_map empty. Mirror the

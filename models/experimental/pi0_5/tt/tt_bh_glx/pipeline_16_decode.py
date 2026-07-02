@@ -584,11 +584,18 @@ class Pi0_5GLX16DecodePipeline:
         self._close_driver()  # frees denoise weights + traces
         self._socket_built = False
 
-    def _run_socket_chunk(self) -> "torch.Tensor":
-        """Per-chunk e2e replay, NO host bounce: prefill trace (compute) -> EAGER
-        device-direct KV-concat sockets (prefill(0,c)->denoise(1,c)) -> split into
-        per-layer _prefix_kv -> denoise loop replay."""
+    def _socket_chunk_prefill(self) -> None:
+        """Dispatch the prefill compute trace on CQ0 (non-blocking). Consumes
+        pixel_values_buf / lang_tokens_buf and writes KV into _kv_persist. Split
+        out of _run_socket_chunk so the 2CQ loop can record an event right after
+        the inputs are consumed and stage the next chunk on CQ1."""
         ttnn.execute_trace(self.prefill_mesh, self._prefill_trace_id, cq_id=0, blocking=False)
+
+    def _socket_chunk_denoise(self) -> "torch.Tensor":
+        """KV-concat sockets (prefill(0,c)->denoise(1,c)) -> split into per-layer
+        _prefix_kv -> denoise loop replay. Assumes _socket_chunk_prefill already
+        dispatched the prefill trace on CQ0 (same queue, so the concat below is
+        correctly ordered after it)."""
         bounds = self._denoise_bounds()
         # Concat each chip's per-layer KV (replicated on prefill mesh) along dim 0.
         cats = {}
@@ -617,6 +624,144 @@ class Pi0_5GLX16DecodePipeline:
             ttnn.deallocate(cats[c][0])
             ttnn.deallocate(cats[c][1])
         return self._driver.rerun(self._build_noise_torch())
+
+    def _run_socket_chunk(self) -> "torch.Tensor":
+        """Per-chunk e2e replay, NO host bounce: prefill trace (compute) -> EAGER
+        device-direct KV-concat sockets (prefill(0,c)->denoise(1,c)) -> split into
+        per-layer _prefix_kv -> denoise loop replay."""
+        self._socket_chunk_prefill()
+        return self._socket_chunk_denoise()
+
+    def sample_actions_socket_2cq_loop(
+        self,
+        images: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+        iters: int,
+    ) -> Tuple["torch.Tensor", List[float]]:
+        """Socket-KV e2e replay loop with the NEXT chunk's input H2D on the
+        prefill mesh's CQ1 overlapped with the current chunk's compute on CQ0.
+
+        Requires PI0_KV_SOCKET=1 and the mesh opened with num_command_queues=2
+        (see open_decode_16_mesh). Returns (last_actions, per_iter_wall_ms).
+
+        The prefill trace consumes pixel_values_buf / lang_tokens_buf; we record
+        an event right after it dispatches so CQ1 can stage the next chunk's
+        inputs while CQ0 runs the KV sockets + streamed denoise. Noise is
+        refreshed per chunk inside the denoise driver (denoise mesh) and is NOT
+        part of the 2CQ overlap. Mirrors pipeline_1x8.sample_actions_traced_2cq_loop.
+        """
+        import time as _time
+
+        if not self._socket_mode:
+            raise RuntimeError("sample_actions_socket_2cq_loop requires PI0_KV_SOCKET=1")
+        mesh = self.prefill_mesh
+
+        # One-time: masks/artifacts, socket e2e build (prefill trace + sockets +
+        # denoise loop trace), and a warm chunk to JIT everything.
+        if self._expert_attn_mask_torch is None:
+            self._build_upstream_artifacts()
+        self._ensure_persistent_input_buffers(images, lang_tokens)
+        if not self._socket_built or self._prefill_trace_key != self._artifact_mask_key:
+            self._socket_e2e_setup()
+        _ = self._run_socket_chunk()  # warm replay (not timed)
+
+        # Pre-stage host input tensors for iters+1 chunks (host prep out of the
+        # timed loop; the +1 is the initial CQ1 pre-stage).
+        pixel_host = self._stack_and_fold_pixels(images)
+        host_chunks: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = []
+        for _ in range(iters + 1):
+            h_pix = ttnn.from_torch(
+                pixel_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
+            h_lang = ttnn.from_torch(
+                lang_tokens.to(torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            host_chunks.append((h_pix, h_lang))
+
+        # Pre-stage chunk 0 inputs on CQ1.
+        h0_pix, h0_lang = host_chunks[0]
+        ttnn.copy_host_to_device_tensor(h0_pix, self.pixel_values_buf, cq_id=1)
+        ttnn.copy_host_to_device_tensor(h0_lang, self.lang_tokens_buf, cq_id=1)
+        write_event = ttnn.record_event(mesh, 1)
+
+        times_ms: List[float] = []
+        last_actions = None
+        for i in range(iters):
+            t0 = _time.perf_counter()
+            # CQ0 waits until CQ1 finished staging this iter's inputs.
+            ttnn.wait_for_event(0, write_event)
+            self._socket_chunk_prefill()  # prefill trace on CQ0 (non-blocking)
+            op_event = ttnn.record_event(mesh, 0)  # prefill trace has consumed the inputs
+
+            # Stage next iter's inputs on CQ1, overlapped with CQ0 sockets + denoise.
+            if i + 1 < iters:
+                hn_pix, hn_lang = host_chunks[i + 1]
+                ttnn.wait_for_event(1, op_event)
+                ttnn.copy_host_to_device_tensor(hn_pix, self.pixel_values_buf, cq_id=1)
+                ttnn.copy_host_to_device_tensor(hn_lang, self.lang_tokens_buf, cq_id=1)
+                write_event = ttnn.record_event(mesh, 1)
+
+            last_actions = self._socket_chunk_denoise()  # sockets + streamed denoise -> actions
+            times_ms.append((_time.perf_counter() - t0) * 1000.0)
+
+        if last_actions is None:
+            raise RuntimeError("iters must be >= 1")
+        return last_actions, times_ms
+
+    def sample_actions_socket_1cq_loop(
+        self,
+        images: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+        iters: int,
+    ) -> Tuple["torch.Tensor", List[float]]:
+        """Single-CQ socket-KV e2e replay with host input tensors PRE-STAGED
+        before the timed loop (mirrors the 2CQ loop's host amortization). The
+        input H2D is serialized on CQ0 before the prefill trace. Use as the 1CQ
+        baseline for the 2CQ loop — the difference is how much of the input DMA
+        hides behind compute. Mirrors pipeline_1x8.sample_actions_traced_1cq_prestaged_loop.
+        """
+        import time as _time
+
+        if not self._socket_mode:
+            raise RuntimeError("sample_actions_socket_1cq_loop requires PI0_KV_SOCKET=1")
+
+        if self._expert_attn_mask_torch is None:
+            self._build_upstream_artifacts()
+        self._ensure_persistent_input_buffers(images, lang_tokens)
+        if not self._socket_built or self._prefill_trace_key != self._artifact_mask_key:
+            self._socket_e2e_setup()
+        _ = self._run_socket_chunk()  # warm replay (not timed)
+
+        pixel_host = self._stack_and_fold_pixels(images)
+        host_chunks: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = []
+        for _ in range(iters):
+            h_pix = ttnn.from_torch(
+                pixel_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.prefill_mesh, dim=0),
+            )
+            h_lang = ttnn.from_torch(lang_tokens.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            host_chunks.append((h_pix, h_lang))
+
+        times_ms: List[float] = []
+        last_actions = None
+        for i in range(iters):
+            t0 = _time.perf_counter()
+            hi_pix, hi_lang = host_chunks[i]
+            ttnn.copy_host_to_device_tensor(hi_pix, self.pixel_values_buf)
+            ttnn.copy_host_to_device_tensor(hi_lang, self.lang_tokens_buf)
+            last_actions = self._run_socket_chunk()
+            times_ms.append((_time.perf_counter() - t0) * 1000.0)
+
+        if last_actions is None:
+            raise RuntimeError("iters must be >= 1")
+        return last_actions, times_ms
 
     def sample_actions(
         self,
