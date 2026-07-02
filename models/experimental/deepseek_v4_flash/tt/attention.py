@@ -136,27 +136,62 @@ def make_rope_table(cos_half: torch.Tensor, sin_half: torch.Tensor) -> tuple[tor
     return cos, sin
 
 
+# ``rot`` (the ``[Rd, Rd]`` interleaved rotate matrix) is block-diagonal in 32-wide
+# blocks, so the single top-left ``[32, 32]`` tile is the per-tile ``rotate_half`` the
+# fused device op applies to every rope tile. Derive + cache it once per ``rot`` object.
+_TRANS_MAT_CACHE: dict[int, ttnn.Tensor] = {}
+
+
+def _trans_mat_for(rot: ttnn.Tensor) -> ttnn.Tensor:
+    tm = _TRANS_MAT_CACHE.get(id(rot))
+    if tm is None:
+        tm = ttnn.reshape(
+            ttnn.slice(rot, [0, 0], [ttnn.TILE_SIZE, ttnn.TILE_SIZE]), [1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE]
+        )
+        # The fused op reads trans_mat from a DRAM-interleaved source.
+        tm = ttnn.to_memory_config(tm, ttnn.DRAM_MEMORY_CONFIG)
+        _TRANS_MAT_CACHE[id(rot)] = tm
+    return tm
+
+
+def _rope_height_sharded_config(width: int, num_cores: int, device) -> ttnn.MemoryConfig:
+    """Height-sharded L1 config: one tile-row (32 rows) per core over ``num_cores`` cores."""
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+    shard_spec = ttnn.ShardSpec(grid, [ttnn.TILE_SIZE, width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Tensor, rope_dim: int) -> ttnn.Tensor:
     """Interleaved RoPE on the trailing ``rope_dim`` channels of ``x`` ([.., D]).
 
     ``cos`` / ``sin`` are ``[1,1,L,rope_dim]`` tables (broadcast over batch/heads);
     ``rot`` is the ``[rope_dim, rope_dim]`` ``rotate_half`` matrix. Leading "nope"
     channels pass through untouched.
+
+    Delegates the whole calc to the fused ``ttnn.experimental.fused_partial_rope`` device
+    op: ``x`` is height-sharded one tile-row per core while ``cos`` / ``sin`` / ``trans_mat``
+    are DRAM-interleaved (the reader streams each core's rope tile-row), then the sharded
+    output is converted back to ``x``'s original memory config.
     """
-    shape = list(x.shape)
-    d = shape[-1]
-    if d == rope_dim:
-        nope = None
-        rope = x
-    else:
-        nope = ttnn.slice(x, [0, 0, 0, 0], [shape[0], shape[1], shape[2], d - rope_dim])
-        rope = ttnn.slice(x, [0, 0, 0, d - rope_dim], shape)
-    rotated = ttnn.add(
-        ttnn.multiply(rope, cos), ttnn.multiply(ttnn.matmul(rope, rot, compute_kernel_config=_HIFI4), sin)
-    )
-    if nope is None:
-        return rotated
-    return ttnn.concat([nope, rotated], dim=-1)
+    device = x.device()
+    orig_mem = x.memory_config()
+    d = x.shape[-1]
+    rows = x.shape[-2]
+
+    # The op reads one cos/sin tile-row per core, or a single tile-row broadcast across all
+    # rows on device (e.g. a shared decode position over heads). So cos/sin must cover either
+    # every input row or exactly one row.
+    assert cos.shape[-2] in (rows, 1), f"{cos.shape} not broadcastable to rows={rows}"
+
+    # cos/sin must already be DRAM-interleaved (the fused op's reader streams them from DRAM).
+    assert cos.memory_config().buffer_type == ttnn.BufferType.DRAM, "cos must be DRAM-interleaved"
+    assert sin.memory_config().buffer_type == ttnn.BufferType.DRAM, "sin must be DRAM-interleaved"
+
+    num_cores = (rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    x_sh = ttnn.to_memory_config(x, _rope_height_sharded_config(d, num_cores, device))
+
+    out_sh = ttnn.experimental.fused_partial_rope(x_sh, cos, sin, _trans_mat_for(rot), rope_dim)
+    return ttnn.to_memory_config(out_sh, orig_mem)
 
 
 # ---------------------------------------------------------------------------- #
@@ -581,6 +616,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         head-independent ``mask`` is broadcast across the ``H`` head axis first.
         """
         mask_h = ttnn.repeat(mask, ttnn.Shape([1, 1, self.num_heads, 1]))  # [1, 1, H, Skv]
+        # sdpa_decode requires its K/V operands in DRAM.
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             kv,
@@ -645,36 +681,14 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         _profile(self.device)
         # hidden_input_memory_config = self.q_a_proj.get_input_memory_config(1, hidden.shape[3])
         # hidden = ttnn.to_memory_config(hidden, hidden_input_memory_config)
-        print(f"hidden: {hidden.shape}")
         q_a = self.q_a_norm(self.q_a_proj(hidden))
         q = self.q_b_proj(q_a)  # [B, S, H*Dh]
-        print(f"q_a: {q_a.shape}")
-        print(f"q: {q.shape}")
-        kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
-        print(f"kv: {kv.shape}")
-        # Fuse [Q | K | V] (K==V) -> [1, 1, B, (H+2)*Dh] and split into the decode
-        # head layout. The op emits height-sharded heads; convert back to
-        # interleaved L1 so the custom RoPE / cache / SDPA path stays unchanged.
-        fused = ttnn.concat(
-            [
-                ttnn.reshape(q, [1, 1, b * s, h * dh]),
-                ttnn.reshape(kv, [1, 1, b * s, dh]),
-                ttnn.reshape(kv, [1, 1, b * s, dh]),
-            ],
-            dim=-1,
-        )
-        q_h, kv_h, v_h = ttnn.experimental.nlp_create_qkv_heads_decode(
-            fused, num_heads=h, num_kv_heads=1, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        )
-        ttnn.deallocate(v_h)  # K == V, so the duplicated V head is unused
-        ttnn.deallocate(fused)
-        q = ttnn.sharded_to_interleaved(q_h, ttnn.L1_MEMORY_CONFIG)  # [B, 1, H, Dh]
-        kv = ttnn.sharded_to_interleaved(kv_h, ttnn.L1_MEMORY_CONFIG)  # [B, 1, 1, Dh]
-        ttnn.deallocate(q_h)
-        ttnn.deallocate(kv_h)
+        q = ttnn.reshape(q, [1, 1, h, dh])
 
         q = _rms_norm_unweighted(q, self.eps)
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [B, 1, H, Dh]
+
+        kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
 
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)  # [B, 1, S, Dh]
         return q, kv
