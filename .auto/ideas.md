@@ -20,3 +20,14 @@
   models/tt_dit/blocks/transformer_block.py, models/tt_dit/blocks/attention.py.
   READ THESE before writing the AceStepDiTLayer AdaLN — SD3.5/Flux DiT blocks already do
   scale_shift_table + temb chunk(6) gated-residual modulation on TTNN. Likely near drop-in.
+
+## CORRECTNESS FINDING (Module: attention_pooler, iter 17)
+- ttnn SDPA with an ALL-ZERO additive attn_mask is NOT equivalent to mask=None: SDPA
+  tile-pads the mask with zeros, so queries attend to padding key positions -> PCC drops
+  (~0.94 at seq=6). When sliding_window >= seq_len the reference mask is all-visible, so the
+  correct TT input is None. Callers (pooler done; CHECK lyric_encoder + dit_stack) must pass
+  sliding_mask=None when window>=seq. Fixed in test by `need_mask = seq > SLIDING_WINDOW`.
+- Lyric/DiT-stack tests currently only use seq>=256 (>window 128) so they build a real mask
+  and are unaffected, but a production wrapper feeding short seqs must apply the same guard.
+  Consider baking the guard into a shared pipeline helper (build_sliding_mask returns None when
+  window>=seq) so no caller forgets it.
