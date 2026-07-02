@@ -618,6 +618,56 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
 }
 
+// Exercises the auto-discovery path that the tt-xla single-galaxy failure actually
+// hits (no MGD file -> generate_mesh_graph_from_physical_system_descriptor). For a
+// 1D ring on a UBB galaxy get_fabric_type() returns TORUS_XY; on a galaxy that only
+// wraps on Y (this board) the both-axis torus cannot cover all 32 chips, so before
+// the fix the mapper silently downgraded to an 8x2 (16-chip) mesh, which later trips
+// `requested_size <= system_size` when tt-xla asks for {1, 32}. After the fix the
+// mapper falls back to the most-connected fabric type that covers every chip
+// (TORUS_Y here) and reports the full 8x4 (32-chip) mesh.
+TEST_F(ControlPlaneFixture, ProbeWormholeGalaxyAutoDiscoveryFullCoverage) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+
+    auto report = [&](const std::string& label, tt::tt_fabric::FabricConfig cfg) {
+        try {
+            // No mesh_graph_desc_file -> auto-discovery from the physical system descriptor.
+            auto cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode);
+            std::size_t total_chips = 0;
+            std::string shapes;
+            for (const auto& mesh_id : cp->get_user_physical_mesh_ids()) {
+                const auto mesh_shape = cp->get_physical_mesh_shape(mesh_id);
+                total_chips += mesh_shape.mesh_size();
+                if (!shapes.empty()) {
+                    shapes += ", ";
+                }
+                std::string shape_str;
+                for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+                    if (i > 0) {
+                        shape_str += "x";
+                    }
+                    shape_str += std::to_string(mesh_shape[i]);
+                }
+                shapes += "mesh " + std::to_string(*mesh_id) + "=" + shape_str;
+            }
+            log_info(tt::LogTest, "[auto-probe]   {}: SUCCESS  [{}]  total_chips={}", label, shapes, total_chips);
+        } catch (const std::exception& e) {
+            std::string msg = e.what();
+            if (msg.size() > 140) {
+                msg = msg.substr(0, 140) + "...";
+            }
+            log_info(tt::LogTest, "[auto-probe]   {}: FAIL: {}", label, msg);
+        }
+    };
+
+    log_info(tt::LogTest, "[auto-probe] === auto-discovery (no MGD) fabric-type coverage ===");
+    report("FABRIC_1D_RING (galaxy -> TORUS_XY)", tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
+    report("FABRIC_2D                          ", tt::tt_fabric::FabricConfig::FABRIC_2D);
+}
+
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
