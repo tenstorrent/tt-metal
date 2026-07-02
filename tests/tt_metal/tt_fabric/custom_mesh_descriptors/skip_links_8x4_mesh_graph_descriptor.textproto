@@ -1,0 +1,12 @@
+# Test descriptor: single 8x4 BLACKHOLE torus with a ROW-axis skip-link pattern.
+# Skip links: axis=ROW (dim 0, length 8), start=2, step=4 -> blocks [2,5] and [6,1(wrap)],
+# replicated across all 4 columns. Used by MeshGraphValidation.SkipLinks8x4Torus.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [8, 4] dim_types: [LINE, RING] }
+  host_topology   { dims: [1, 1] }
+  channels { count: 2 }
+  skip_links { axis: ROW  pattern { start: 2  step: 4 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
