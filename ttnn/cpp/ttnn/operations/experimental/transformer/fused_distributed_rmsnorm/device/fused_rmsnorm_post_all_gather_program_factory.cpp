@@ -38,10 +38,16 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t W = input_shape[-1];
-    const uint32_t H = input_shape[-2];
+    const uint32_t seq_H = input_shape[-2];
+    // Leading dims (batch) are folded into the row dimension (tiles are laid out
+    // row-major), so the op processes batch * seq_H rows. ROPE and the head-split
+    // output stride cycle every seq_H rows (rows_per_batch_tiles) so each batch
+    // element reuses the same per-position rope and writes to its own output slice.
+    const uint32_t folded_H = input_tensor.physical_volume() / W;
 
     const uint32_t num_tile_cols = W / TILE_WIDTH;
-    const uint32_t num_tile_rows = H / TILE_HEIGHT;
+    const uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
+    const uint32_t rows_per_batch_tiles = seq_H / TILE_HEIGHT;
     const uint32_t head_dim_tiles = num_tile_cols / num_heads;
 
     const uint32_t stats_tiles_cols = stats_tensor.padded_shape()[-1] / TILE_WIDTH;
@@ -50,7 +56,9 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
 
     log_debug(tt::LogOp, "W: {}", W);
-    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "seq_H: {}", seq_H);
+    log_debug(tt::LogOp, "folded_H: {}", folded_H);
+    log_debug(tt::LogOp, "rows_per_batch_tiles: {}", rows_per_batch_tiles);
     log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
     log_debug(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
     log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
@@ -213,7 +221,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         dst_reg_count,
         head_dim_tiles,
         num_heads,
-        num_tile_rows,
+        rows_per_batch_tiles,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -305,7 +313,8 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
              rope_cos_buffer,
              rope_sin_buffer,
              tile_row_start,
-             tile_row_end});
+             tile_row_end,
+             rows_per_batch_tiles});
 
         compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_to_process});
 
