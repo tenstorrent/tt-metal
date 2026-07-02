@@ -29,7 +29,9 @@
 # Watcher dump lands in generated/watcher/watcher.log.
 # =============================================================================
 
+import os
 import sys
+import time
 
 import pytest
 import torch
@@ -236,4 +238,53 @@ def test_pipeline_multi_prompt_hang(*, mesh_device, submesh_shape, tp_axis) -> N
         _log(f"[hang-repro-pipe] END   gen {i + 1}/{len(_PROMPTS)} '{name}' ok std={img.std():.1f}")
 
     _log("[hang-repro-pipe] ALL generations completed — NO HANG.")
+    sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# SOAK: the 6-gen run above didn't hang, and the block-level sweep didn't either,
+# so the hang looks intermittent. This loops MANY generations cycling prompt
+# length AND preset (incl QUALITY_48, like the server did) to catch a rare wedge.
+# Run under the tensix watcher (ETH disabled — the eth watcher overflows the
+# fabric ERISC config buffer) + a hard timeout, so if it hangs we get:
+#   * the last "SOAK BEGIN i"-without-"END" line -> the exact gen/preset/n_text,
+#   * generated/watcher/watcher.log -> which tensix cores/kernels are stuck.
+#
+#   TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 SOAK_MAX_GENS=80 timeout 3600 \
+#     pytest .../test_hang_ideogram4.py::test_pipeline_soak_hang -s -q \
+#       -p no:cacheprovider --timeout=0
+# ---------------------------------------------------------------------------
+
+_SOAK_PRESETS = ["V4_TURBO_12", "V4_DEFAULT_20", "V4_QUALITY_48"]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis"),
+    [pytest.param((4, 2), (4, 2), 1, id="sp4tp2")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 65536}], indirect=True
+)
+def test_pipeline_soak_hang(*, mesh_device, submesh_shape, tp_axis) -> None:
+    from ....pipelines.ideogram4.pipeline import Ideogram4Pipeline
+
+    max_gens = int(os.environ.get("SOAK_MAX_GENS", "80"))
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    _log(f"[soak] building pipeline (SP4xTP2); will run up to {max_gens} gens…")
+    pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis)
+    _log("[soak] pipeline ready. Cycling prompt-length x preset, untraced, 2048px.")
+
+    for i in range(max_gens):
+        name, prompt = _PROMPTS[i % len(_PROMPTS)]
+        preset = _SOAK_PRESETS[i % len(_SOAK_PRESETS)]
+        n_tok = pipe.count_text_tokens(prompt)
+        _log(f"[soak] SOAK BEGIN {i + 1}/{max_gens} preset={preset} '{name}' n_text={n_tok}")
+        t0 = time.time()
+        img = pipe(prompt, height=2048, width=2048, preset=preset, seed=1000 + i, traced=False)
+        _log(
+            f"[soak] SOAK END   {i + 1}/{max_gens} preset={preset} '{name}' ok std={img.std():.1f} dt={time.time() - t0:.0f}s"
+        )
+
+    _log(f"[soak] ALL {max_gens} soak generations completed — NO HANG.")
     sys.stdout.flush()
