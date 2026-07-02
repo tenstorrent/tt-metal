@@ -156,16 +156,21 @@ def test_encoder_text_model(
     )
     tt_encoder.load_state_dict(hf_state)
 
-    # Upload inputs / masks.
+    # Upload inputs / masks. HF's create_causal_mask returns a BOOLEAN mask under the SDPA
+    # attention path (True=attend, False=masked). ttnn.transformer.scaled_dot_product_attention
+    # expects an ADDITIVE mask (0.0=attend, -inf=masked). Cast boolean → additive before upload;
+    # for float masks already in additive form (0/-inf), just pass through as bfloat16.
     tt_input_ids = ttnn.from_torch(input_ids, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_masks = {}
     for layer_type, m in hf_masks.items():
         if m is None:
             tt_masks[layer_type] = None
-        else:
-            tt_masks[layer_type] = ttnn.from_torch(
-                m.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
+            continue
+        if m.dtype == torch.bool:
+            m = torch.where(m, torch.tensor(0.0), torch.tensor(float("-inf")))
+        tt_masks[layer_type] = ttnn.from_torch(
+            m.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
 
     tt_h, _per_layer_kv = tt_encoder(tt_input_ids, position_ids, tt_masks)
     tt_h_torch = local_device_to_torch(tt_h).squeeze(0)

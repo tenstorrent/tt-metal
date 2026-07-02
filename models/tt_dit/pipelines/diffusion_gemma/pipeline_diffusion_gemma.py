@@ -355,9 +355,18 @@ class DiffusionGemmaPipeline:
             "full_attention": create_causal_mask(**mask_kwargs),
             "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
         }
+
+        # HF's create_causal_mask returns a BOOLEAN mask under the SDPA path
+        # (True=attend, False=masked). ttnn SDPA expects an ADDITIVE mask
+        # (0.0=attend, -inf=masked). Convert before upload.
+        def _to_additive(m: torch.Tensor) -> torch.Tensor:
+            if m.dtype == torch.bool:
+                m = torch.where(m, torch.tensor(0.0), torch.tensor(float("-inf")))
+            return m.to(torch.bfloat16)
+
         tt_masks = {
             lt: (
-                ttnn.from_torch(m.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+                ttnn.from_torch(_to_additive(m), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
                 if m is not None
                 else None
             )
