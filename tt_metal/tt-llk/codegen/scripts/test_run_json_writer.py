@@ -36,10 +36,10 @@ def test_init_emits_dashboard_fields(tmp_path):
         "--first-message",
         "Analyzing",
         "--git-branch",
-        "ai-code-gen/issue-1-v1",
+        "llk_code_gen/issue-1-v1",
     )
     doc = json.loads((tmp_path / "run.json").read_text())
-    assert doc["git_branch"] == "ai-code-gen/issue-1-v1"
+    assert doc["git_branch"] == "llk_code_gen/issue-1-v1"
     assert "num_turns" in doc
     assert doc["num_turns"] == 0
     assert doc["tokens"] == {

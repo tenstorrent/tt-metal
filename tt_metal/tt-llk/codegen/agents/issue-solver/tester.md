@@ -304,6 +304,10 @@ arch_results:
 combined_verdict: SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|COMPILED_ONLY
 ```
 
+`combined_verdict` is a human-readable roll-up only. The orchestrator does **not**
+consume it — it reads per-arch `arch_results` and derives its own authoritative
+`combined_status` (`success`/`partial`/`failed`/`skipped`) in Step 6.
+
 ```text
 PASS - issue #<number> (<backend>, <arch>)
 - Compilation: PASSED|NOT_RUN
