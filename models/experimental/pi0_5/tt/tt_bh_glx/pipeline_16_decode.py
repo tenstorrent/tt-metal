@@ -547,29 +547,18 @@ class Pi0_5GLX16DecodePipeline:
                 ss, rs = ttnn.create_socket_pair(self.prefill_mesh, dst, ttnn.SocketConfig([conn], mem))
                 self._kv_cat_send.append((c, w, ss))
                 self._kv_cat_recv[c].append((w, rs, rv, n, lo))
-        # 4. Prefill trace = COMPUTE only (KV -> _kv_persist). The KV socket SEND
-        #    stays EAGER: a send_direct_async on the multi-chip (1,8) prefill mesh is
-        #    rejected inside trace capture ("Writes not supported during trace
-        #    capture"). But the RECV + DRAM->L1 copy DO capture on the single-chip
-        #    (1,1) denoise meshes (step 7), so the hot path (_run_socket_chunk) is
-        #    trace + eager-send with NO host sync — the traced recv waits for the
-        #    eager send via the socket. This removes the per-chunk prefill+8×denoise
-        #    synchronize_device barriers of the fully-eager path.
-        self._prefill_trace_id = ttnn.begin_trace_capture(self.prefill_mesh, cq_id=0)
-        self._prefill_compute_to_persist()
-        ttnn.end_trace_capture(self.prefill_mesh, self._prefill_trace_id, cq_id=0)
-        self._prefill_trace_key = self._artifact_mask_key
-        # 5. Capture the denoise loop (stream_euler): warms the inter-stage hop
+        send_by = {(c, w): ss for c, w, ss in self._kv_cat_send}
+        # 4. Capture the denoise loop (stream_euler): warms the inter-stage hop
         #    sockets + JITs send/recv + inits per-chip socket infra. Zero-KV replay
         #    discarded.
         self._driver.stream_euler(self._build_noise_torch(), capture=True)
-        # 6. Eager warmup — the proven _run_socket_chunk sequence (execute prefill
-        #    trace -> concat -> send -> recv -> sync -> slice/copy). JITs the KV
-        #    send/recv/slice/copy kernels so the recv-trace capture in step 7 does not
-        #    need to JIT. This is the exact sequence the fully-eager path ran per
-        #    chunk (validated), so it does not deadlock.
-        bounds = self._denoise_bounds()
-        ttnn.execute_trace(self.prefill_mesh, self._prefill_trace_id, cq_id=0, blocking=False)
+        # 5. Eager warm the FULL KV socket round (concat + send + recv + sync + copy)
+        #    ONCE, on the valid _kv_persist from the step-1 warmup. Trace capture can't
+        #    JIT, and capturing the send COLD raises "Writes not supported during trace
+        #    capture" — the eager pre-round is exactly what makes send-in-trace work
+        #    (verified by /tmp/send_trace_repro on this build + the reference
+        #    test_xmesh_traced_pipeline.py). Operates directly on _kv_persist (the
+        #    prefill trace is not captured yet).
         _cats = {}
         for c, (lo, hi) in enumerate(bounds):
             _cats[c] = (
@@ -595,6 +584,21 @@ class Pi0_5GLX16DecodePipeline:
         for c in _cats:
             ttnn.deallocate(_cats[c][0])
             ttnn.deallocate(_cats[c][1])
+        # 6. Prefill trace = COMPUTE + KV-concat + socket SEND (fully-traced tail).
+        #    send_direct_async on the (1,8) prefill mesh DOES capture on this build
+        #    once warmed (step 5); the earlier "Writes not supported" was from
+        #    capturing the send cold. The per-chip concat outputs are transient
+        #    trace-region tensors (deterministic replay addresses); the send reads
+        #    them and nothing reuses those addresses until the next chunk's prefill
+        #    replay (after the stage-0 drain), so they are left resident in the trace.
+        self._prefill_trace_id = ttnn.begin_trace_capture(self.prefill_mesh, cq_id=0)
+        self._prefill_compute_to_persist()
+        for c, (lo, hi) in enumerate(bounds):
+            for w in (0, 1):
+                cat = ttnn.concat([self._kv_persist[g][w] for g in range(lo, hi)], dim=0)
+                ttnn.experimental.send_direct_async(cat, send_by[(c, w)])
+        ttnn.end_trace_capture(self.prefill_mesh, self._prefill_trace_id, cq_id=0)
+        self._prefill_trace_key = self._artifact_mask_key
         # 7. Per-denoise-stage RECV trace = recv + slice/copy DRAM->L1 into the stage's
         #    _prefix_kv the loop reads. recv_direct_async is CQ-ordered so the copy
         #    waits for the recv; both capture fine on the single-chip denoise meshes.
@@ -646,43 +650,29 @@ class Pi0_5GLX16DecodePipeline:
         self._socket_built = False
 
     def _socket_chunk_prefill(self) -> None:
-        """Dispatch the prefill compute trace on CQ0 (non-blocking). Consumes
-        pixel_values_buf / lang_tokens_buf and writes KV into _kv_persist. Split
-        out of _run_socket_chunk so the 2CQ loop can record an event right after
-        the inputs are consumed and stage the next chunk on CQ1."""
+        """Dispatch the prefill trace on CQ0 (non-blocking): vision + prefix + TP=8
+        prefill -> _kv_persist, then per-chip KV concat + socket SEND (all captured
+        in the trace). Consumes pixel_values_buf / lang_tokens_buf. Split out of
+        _run_socket_chunk so the 2CQ loop can record an event right after the inputs
+        are consumed and stage the next chunk on CQ1."""
         ttnn.execute_trace(self.prefill_mesh, self._prefill_trace_id, cq_id=0, blocking=False)
 
     def _socket_chunk_denoise(self) -> "torch.Tensor":
-        """Recv-side-traced KV handoff + denoise, NO host sync. Assumes
-        _socket_chunk_prefill already dispatched the prefill compute trace on CQ0
-        (so _kv_persist is fresh). Here: eager concat + eager KV send (the (1,8)
-        send can't be captured), then replay the per-stage recv traces (recv +
-        DRAM->L1 copy) and the denoise loop trace. All non-blocking; the traced
-        recv waits for the eager send via the socket, and rerun()'s replay_loop
-        drains stage0 (which transitively gates every stage's recv). The old path's
-        prefill + 8×denoise synchronize_device barriers are gone."""
-        bounds = self._denoise_bounds()
-        cats = {}
-        for c, (lo, hi) in enumerate(bounds):
-            kc = ttnn.concat([self._kv_persist[g][0] for g in range(lo, hi)], dim=0)
-            vc = ttnn.concat([self._kv_persist[g][1] for g in range(lo, hi)], dim=0)
-            cats[c] = (kc, vc)
-        for c, w, ss in self._kv_cat_send:
-            ttnn.experimental.send_direct_async(cats[c][w], ss)
+        """Fully-traced KV handoff + denoise, NO host sync. Assumes
+        _socket_chunk_prefill already dispatched the prefill trace on CQ0 — which now
+        includes the KV concat + socket SEND as its tail. Here: replay the per-stage
+        recv traces (recv + DRAM->L1 copy) and the denoise loop trace. All
+        non-blocking; the traced recv waits for the traced send via the socket, and
+        rerun()'s replay_loop drains stage0 (transitively gating every stage's recv).
+        No eager concat/send and no synchronize_device barriers on the hot path."""
         for dst, tid in self._kv_recv_tids:
             ttnn.execute_trace(dst, tid, cq_id=0, blocking=False)
-        result = self._driver.rerun(self._build_noise_torch())
-        # rerun drained stage0 -> every stage's recv (hence every send) has completed,
-        # so the eager concat buffers are safe to free now.
-        for c in cats:
-            ttnn.deallocate(cats[c][0])
-            ttnn.deallocate(cats[c][1])
-        return result
+        return self._driver.rerun(self._build_noise_torch())
 
     def _run_socket_chunk(self) -> "torch.Tensor":
-        """Per-chunk e2e replay, NO host bounce: prefill trace (compute) -> EAGER
-        device-direct KV-concat sockets (prefill(0,c)->denoise(1,c)) -> split into
-        per-layer _prefix_kv -> denoise loop replay."""
+        """Per-chunk e2e replay, fully traced, NO host bounce: prefill trace
+        (compute + KV-concat + socket send) -> per-stage recv traces (recv + split
+        into _prefix_kv) -> denoise loop trace. Single stage-0 drain at the end."""
         self._socket_chunk_prefill()
         return self._socket_chunk_denoise()
 
