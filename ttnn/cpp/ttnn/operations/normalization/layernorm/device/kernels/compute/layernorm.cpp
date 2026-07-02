@@ -21,7 +21,7 @@
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
-#include "ttnn/operations/normalization/kernel_util/generic/scaler_tiles.h"
+#include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -409,6 +409,6 @@ void kernel_main() {
         tile_width == tt::constants::TILE_WIDTH,
         "layernorm reader generates reduce scalers using TILE_WIDTH; compute must use the same tile "
         "width or cb_scaler push/pop counts diverge (issue #48487)");
-    constexpr uint32_t num_scaler_tiles = norm::kernel_util::generic::reduce_scaler_tile_count(W, tile_width);
+    constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     CircularBuffer(cb_scaler).pop_front(num_scaler_tiles);
 }
