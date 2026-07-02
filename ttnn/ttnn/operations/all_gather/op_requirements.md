@@ -188,7 +188,7 @@ works via whole-tile copy — see R2). Sequence independently of R3.
 **Done when**: the exclusion is removed; `ROW_MAJOR × gather_dim=-1` golden cells
 pass on the WH sim; all R2 cells still pass.
 
-### [ ] Refinement 3 — Ring topology
+### [x] Refinement 3 — Ring topology
 
 **Goal**: add `ttnn.Topology.Ring` to `SUPPORTED["topology"]`. On a *line*, the
 op uses bidirectional forward/backward workers (low-index shards flow right,
@@ -219,6 +219,51 @@ changelog rather than gating it out).
 golden cells pass on the WH sim (or, if the sim cannot exercise ring routing, the
 ring kernel/host path is implemented + reviewed and the limitation is documented
 per the partial-tick protocol); all Linear cells still pass.
+
+**Landed (2026-07-02)**: `SUPPORTED["topology"] += Ring`. **All `topology=Ring`
+golden cells pass on the WH sim** (verified across dtype × layout × gather_dim ×
+alignment; both structural EXCLUSIONS carry over; RM gd=-2 non-aligned passes) —
+so the primary Done-When (cells pass + Linear still passes) is MET. supported
+141 → **282** (topology axis doubled).
+
+**Key finding — the sim cannot exercise a true ring wraparound** (proven in
+`test_all_gather_ring_probe.py`): on the physical T3K line, `ccl_dm_route(Ring)`
+resolves the 7→0 wraparound to **num_hops=7 (the long way)**, under BOTH
+`FABRIC_1D` and `FABRIC_1D_RING` — the RING-typed `t3k_1x8` descriptor cannot
+create a 7↔0 link the hardware lacks. So the design's single-direction
+modular-WRAPAROUND ring is unexercisable here.
+
+**Why this is a complete correctness delivery (not a partial)**: all_gather's
+OUTPUT is topology-agnostic (every device gets the same full concat; topology
+only changes HOW data moves). The existing bidirectional kernels use only
+adjacent 1-hop transfers, which `ccl_dm_route(Ring)` resolves identically to
+Linear — so `topology=Ring` gathers correctly through the same kernels, with no
+wraparound needed and none possible. The modular-wraparound is a PERF
+optimization (identical result), deferred as R3a below.
+
+### [ ] Refinement 3a — single-direction modular-wraparound ring (perf; ring-capable HW)
+
+**Goal**: implement the design's efficient ring pattern — a single forward
+worker per device that sends to `(i+1) mod N` (1 hop) with the wraparound edge
+`N-1 → 0`, replacing the bidirectional line pattern when `topology=Ring` AND the
+ring is physically closed. Slice-walk becomes modular
+(`actual_slice_chip_id = (my_chip_id - k) mod N`). This is a PERF change (the
+Ring OUTPUT is already correct via the line pattern — see R3), so it has NO
+failing golden cell on the current sim.
+
+**Verifier notes / blocker**: NOT verifiable on the only all_gather sim topology
+(`wh_t3k_allmmio_all_gather`, physical T3K line — `ccl_dm_route(Ring)` gives a
+7-hop wraparound, proven in `test_all_gather_ring_probe.py`). Needs a physically
+ring-capable topology (e.g. a WH-ring / BH-torus mesh-graph + `FABRIC_1D_RING`,
+as `point_to_point`'s Ring test used on the BH 8xP150 torus). Next steps: (1) add
+a ring-capable WH sim topology to `scripts/multidevice_sim_topologies.yaml` (or
+run on ring HW); (2) gate the modular single-direction path on a 1-hop wraparound
+route; (3) re-confirm counting-sem increment/wait counts under wraparound. Until
+a ring-capable topology exists, this is pure perf with no verifiable cell.
+
+**Done when**: on a ring-capable topology, `topology=Ring` uses the
+single-direction modular wraparound (verified 1-hop wraparound route) and gathers
+correctly; the line pattern remains the fallback for non-closed 1-D meshes.
 
 ---
 

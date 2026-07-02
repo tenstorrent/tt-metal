@@ -70,9 +70,16 @@ SUPPORTED = {
     # 16B-page invariant in validate() holds (1088 % 16 == 0).
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    # Ring is a noted extension (kernel selects it via the slice-walk modulo math);
-    # Linear is the proven primary topology.
-    "topology": [_Topology.Linear],
+    # Topology only affects HOW data moves, never the result (every device gets
+    # the same full concat). The bidirectional adjacent-hop kernels produce a
+    # correct all_gather on any 1-D topology; ccl_dm_route(Ring) resolves the
+    # adjacent (1-hop) neighbours identically to Linear, so Topology.Ring gathers
+    # correctly through the same kernels. (The design's single-direction
+    # modular-WRAPAROUND ring is a PERF optimization that needs physically
+    # ring-capable HW: on the WH T3K line sim the 7->0 wraparound is 7 hops, not 1
+    # — proven in test_all_gather_ring_probe.py — so it can't be exercised here.
+    # Deferred as a follow-up; see changelog / op_requirements R3.)
+    "topology": [_Topology.Linear, _Topology.Ring],
     # Index axis, canonicalized to NEGATIVE before the membership test.
     # gather_dim=0 (page-contiguous concat, -4) is the proven primary case;
     # Refinement 2 added the strided concat addressing for the inner dims

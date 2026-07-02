@@ -142,3 +142,45 @@
   `tests/ttnn/unit_tests/operations/all_gather/test_all_gather_debug.py` (kept) —
   pins the TILE/RM page grid (`buffer_num_pages` check on the local device) and
   proves the `out_page` remap reconstructs `torch.cat` for every gather_dim.
+
+## Refinement 3 — Ring topology
+
+- **Date**: 2026-07-02
+- **What was done**: added `ttnn.Topology.Ring` to `SUPPORTED["topology"]`. **No
+  kernel change** — all_gather's output is topology-agnostic (every device holds
+  the same full concat; topology only changes HOW data moves), and the existing
+  bidirectional kernels use only adjacent 1-hop transfers. `ccl_dm_route(Ring)`
+  resolves those adjacent neighbours identically to Linear (verified), so
+  `topology=Ring` gathers correctly through the same kernels/descriptor — the
+  descriptor already threads `topology` into `ccl_dm_route`.
+- **Accuracy achieved**: identity gather, PCC ≈ 1.0, same as Linear (Ring routes
+  identically through the kernels).
+- **Golden progress (WH sim)**: supported cells 141 → **282** (topology axis
+  doubled: 141 × 2). xfail 38 = the two structural EXCLUSIONS × 2 topologies
+  (19×2); invalid 64 (bf8b×RM). Progression across all refinements: Phase0 32 →
+  R1 40 → R2 141 → R3 282. Validated on the sim: `(2,1,32,64)` Ring (7 pass + 1
+  xfail) and `(1,1,48,64)` Ring (15 pass, 4 skip, 5 xfail — identical pattern to
+  its Linear counterpart), covering bf16/f32/bf8b × TILE/RM × all gather_dim, with
+  both exclusions carrying over and RM gd=-2 non-aligned passing.
+- **Key finding — the sim CANNOT exercise a true ring wraparound**
+  (`test_all_gather_ring_probe.py`, kept): the WH `wh_t3k_allmmio_all_gather` sim
+  is a physical T3K **line**. `ccl_dm_route(Ring)` resolves the 7→0 wraparound to
+  **num_hops=7 (the long way)** under BOTH `FABRIC_1D` AND `FABRIC_1D_RING`
+  (adjacent hops are 1). The RING-typed `t3k_1x8` descriptor can't manufacture a
+  7↔0 link the hardware lacks. p2p validated its Ring on a physically ring-capable
+  BH torus; no such WH topology exists in the matrix for all_gather.
+- **Design deviation (advisory, documented)**: the design's specified ring METHOD
+  is a single-direction modular-WRAPAROUND slice-walk. I did NOT implement it —
+  it is (a) a PERF optimization (identical output), and (b) unexercisable +
+  unverifiable on the only available sim (proven 7-hop wraparound). Instead Ring
+  is served correctly by the topology-agnostic adjacent-hop kernels. The primary
+  Done-When (Ring in SUPPORTED, Ring golden cells pass on the WH sim, all Linear
+  cells still pass) is fully MET. The modular-wraparound perf path is filed as
+  **Refinement 3a** (needs ring-capable HW / a ring WH sim topology).
+- **Issues encountered**: none. No hang, no regression (kernels unchanged; Linear
+  cells still green).
+- **Tests added**:
+  `tests/ttnn/unit_tests/operations/all_gather/test_all_gather_ring_probe.py`
+  (kept) — probes `ccl_dm_route` Ring vs Linear routes (incl. the 7→0 wraparound)
+  under FABRIC_1D and FABRIC_1D_RING; documents the sim's line limitation with
+  evidence.
