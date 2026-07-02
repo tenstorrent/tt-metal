@@ -194,11 +194,7 @@ class MeshFabric1DFixture : public BaseFabricFixture {
 public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
-    void SetupDevices() override {
-        ValidateEnvironment();
-        mesh_device_ = MeshDevice::create(MeshDeviceConfig(GetDeterminedMeshShape()));
-        device_open = true;
-    }
+    void SetupDevices() override { DoSetupDevices(); }
 
     void TearDown() override {
         if (device_open) {
@@ -207,16 +203,23 @@ public:
         }
     }
 
-    MeshFabric1DFixture() { this->SetupDevices(); }
+    MeshFabric1DFixture() { DoSetupDevices(); }
 
     MeshFabric1DFixture(tt::tt_fabric::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
-        this->SetupDevices();
+        DoSetupDevices();
     }
 
     ~MeshFabric1DFixture() override {
         if (device_open) {
             TearDown();
         }
+    }
+
+private:
+    void DoSetupDevices() {
+        ValidateEnvironment();
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(GetDeterminedMeshShape()));
+        device_open = true;
     }
 };
 
