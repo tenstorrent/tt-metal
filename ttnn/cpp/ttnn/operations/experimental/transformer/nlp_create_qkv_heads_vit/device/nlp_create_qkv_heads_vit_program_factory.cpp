@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -13,11 +14,14 @@ namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
+using namespace tt::tt_metal;
 
-NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgramFactory::create(
+tt::tt_metal::ProgramDescriptor NlpCreateQkvHeadsVitProgramFactory::create_descriptor(
     const NlpCreateQkvHeadsVitParams& /*operation_attributes*/,
     const NlpCreateQkvHeadsVitInputs& tensor_args,
     NlpCreateQkvHeadsVitResult& output) {
+    ProgramDescriptor desc;
+
     const auto& a = tensor_args.input_tensor;
     const auto& ashape = a.padded_shape();
 
@@ -55,9 +59,6 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Device Setup
-    ////////////////////////////////////////////////////////////////////////////
     TT_ASSERT((output.size() == 3), "Output vector must be size 3 for split fused qkv!");
     tt_metal::Tensor& q = output[0];
     tt_metal::Tensor& k = output[1];
@@ -70,16 +71,11 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
     tt_metal::Buffer* v_buffer = v.buffer();
     TT_ASSERT(v_buffer != nullptr, "Output v buffer should be allocated on device!");
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Application Setup
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
-
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
     };
-    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)q_out_h_tiles,
@@ -88,9 +84,9 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
         (std::uint32_t)num_q_heads,   // q_out_c
         (std::uint32_t)num_kv_heads,  // kv_out_c
     };
-    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*q_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*k_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*v_buffer).append_to(writer_compile_time_args);
 
     ///////////// K transpose ////////////////////
     const bool transpose_k_heads = false;
@@ -98,67 +94,94 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
     std::map<std::string, std::string> writer_defines;
     if (transpose_k_heads) {
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
-        tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
-            core_group_1,
-            tt_metal::ComputeConfig{.compile_args = compute_args_core_group_1});
+        KernelDescriptor compute_desc_1;
+        compute_desc_1.kernel_source = "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp";
+        compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_1.core_ranges = core_group_1;
+        compute_desc_1.compile_time_args = std::move(compute_args_core_group_1);
+        compute_desc_1.config = ComputeConfigDescriptor{};
+        desc.kernels.push_back(std::move(compute_desc_1));
 
         if (core_group_2.num_cores() > 0) {
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
-            tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
-                core_group_2,
-                tt_metal::ComputeConfig{.compile_args = compute_args_core_group_2});
+            KernelDescriptor compute_desc_2;
+            compute_desc_2.kernel_source = "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp";
+            compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            compute_desc_2.core_ranges = core_group_2;
+            compute_desc_2.compile_time_args = std::move(compute_args_core_group_2);
+            compute_desc_2.config = ComputeConfigDescriptor{};
+            desc.kernels.push_back(std::move(compute_desc_2));
         }
         reader_defines["TRANSPOSE_K_HEADS"] = "1";
         writer_defines["TRANSPOSE_K_HEADS"] = "1";
     }
     //////////////////////////////////////////////
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        "reader_tm_tile_layout_nlp_create_qkv_heads.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.defines = KernelDescriptor::Defines{reader_defines.begin(), reader_defines.end()};
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/kernels/dataflow/"
-        "writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        "writer_tm_tile_layout_nlp_create_qkv_heads.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.defines = KernelDescriptor::Defines{writer_defines.begin(), writer_defines.end()};
+    writer_desc.config = WriterConfigDescriptor{};
 
     // Create circular buffers
-    uint32_t src1_cb_index = 1;
+    constexpr uint8_t src1_cb_index = 1;
     uint32_t cb0_num_tiles = per_tensor_tiles * 2;  // double buffer
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb0_num_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src1_cb_index,
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
     // If we transpose_k_heads:
     // - reader will write to cb0, instead of cb1
     // - compute will wait on cb0 and write to cb16
     // - writer will wait on cb 16, instead of cb1
     if (transpose_k_heads) {
-        uint32_t src0_cb_index = 0;
-        uint32_t cb0_num_tiles = per_tensor_tiles * 2;  // double buffer
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        constexpr uint8_t src0_cb_index = 0;
+        uint32_t cb_src0_num_tiles = per_tensor_tiles * 2;  // double buffer
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cb_src0_num_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src0_cb_index,
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
 
-        uint32_t out_cb_index = 16;
+        constexpr uint8_t out_cb_index = 16;
         uint32_t out_cb_num_tiles = per_tensor_tiles * 2;  // double buffer
-        tt_metal::CircularBufferConfig cb_out_config =
-            tt_metal::CircularBufferConfig(out_cb_num_tiles * single_tile_size, {{out_cb_index, cb_data_format}})
-                .set_page_size(out_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = out_cb_num_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = out_cb_index,
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
     }
 
+    reader_desc.runtime_args.reserve(num_cores);
+    writer_desc.runtime_args.reserve(num_cores);
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_blocks_per_core = 0;
@@ -170,13 +193,15 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_runtime_args = {
-            (std::uint32_t)in0_buffer->address(),
-            (std::uint32_t)in1_buffer_addr,
-            num_blocks_per_core,
-            num_blocks_written * per_tensor_tiles,
-            0,
-        };
+        reader_desc.emplace_runtime_args(
+            core,
+            {
+                in0_buffer,
+                static_cast<uint32_t>(in1_buffer_addr),
+                num_blocks_per_core,
+                num_blocks_written * per_tensor_tiles,
+                static_cast<uint32_t>(0),
+            });
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
         uint32_t q_out_tensor_tile_id =
@@ -187,58 +212,25 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
                                             ? (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + q_out_h_dim
                                             : v_out_tensor_tile_id;
 
-        std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t)q_buffer->address(),  // q_tensor_addr
-            (std::uint32_t)k_buffer->address(),  // k_tensor_addr
-            (std::uint32_t)v_buffer->address(),  // v_tensor_addr
-            num_blocks_per_core,                 // num_blocks
-            q_out_h_dim,
-            q_out_tensor_tile_id,
-            k_out_tensor_tile_id,
-            v_out_tensor_tile_id,
-        };
-
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        writer_desc.emplace_runtime_args(
+            core,
+            {
+                q_buffer,             // q_tensor_addr
+                k_buffer,             // k_tensor_addr
+                v_buffer,             // v_tensor_addr
+                num_blocks_per_core,  // num_blocks
+                q_out_h_dim,
+                q_out_tensor_tile_id,
+                k_out_tensor_tile_id,
+                v_out_tensor_tile_id,
+            });
         num_blocks_written += num_blocks_per_core;
     }
 
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void NlpCreateQkvHeadsVitProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const NlpCreateQkvHeadsVitParams& /*operation_attributes*/,
-    const NlpCreateQkvHeadsVitInputs& tensor_args,
-    NlpCreateQkvHeadsVitResult& output) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-
-    auto* src_dram_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_dram_buffer_query = output.at(0).buffer();
-    auto* dst_dram_buffer_key = output.at(1).buffer();
-    auto* dst_dram_buffer_value = output.at(2).buffer();
-
-    for (uint32_t i = 0; i < shared_variables.num_cores; i++) {
-        CoreCoord core = {i / shared_variables.num_cores_y, i % shared_variables.num_cores_y};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer_query->address();
-            runtime_args[1] = dst_dram_buffer_key->address();
-            runtime_args[2] = dst_dram_buffer_value->address();
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim
