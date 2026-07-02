@@ -62,8 +62,12 @@ int firmware_wait_timeout_ms() {
     const auto& rtoptions = MetalContext::instance().rtoptions();
     // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
     // llrt treats timeout_ms==0 on sim as infinite wait.
-    if (rtoptions.get_simulator_enabled() && rtoptions.get_simulator_path().extension() != ".so") {
-        return 0;
+    if (rtoptions.get_simulator_enabled()) {
+        if (rtoptions.get_simulator_path().extension() == ".so") {
+            return 0;
+        }
+        // for functional sim, sometimes 10s is not enough, use half a minute.
+        return 30000;
     }
     return 10000;
 }
