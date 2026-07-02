@@ -1390,6 +1390,12 @@ std::vector<uint32_t> build_compute_args(
     // unaffected. The Welford kernel reads it at index 4 on all-to-all workers (num_reduce_tiles,
     // num_rows, use_two_stage_reduce, is_second_stage_reader, welford_reduce_w) and index 1 otherwise.
     args.push_back(idx.welford_reduce_w);
+    // The global width-block index of the last real (partial) block, and this core's own width-block
+    // index. The Welford cross-core combine (run only on all-to-all workers) uses these to weight each
+    // combined block/row by its true logical width: the partial block sits at a single global position,
+    // not in every row. Read at indices 5 and 6 on all-to-all workers.
+    args.push_back(ctx.last_core_width_index);
+    args.push_back(idx.width_index);
     return args;
 }
 

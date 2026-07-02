@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_layer_norm_sharded,
     run_sharded_norm_logical_width_multicore,
+    run_sharded_norm_logical_width_two_stage,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -532,4 +533,28 @@ def test_layer_norm_sharded_uneven_multicore_logical_width_row_major(device, w, 
         dtype=dtype,
         use_welford=use_welford,
         weight_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+# A non-tile-aligned width split across a 2D core grid selects the two-stage cross-core Welford reduce
+# (first stage combines the shards within a row, second combines the per-row results). The combine must
+# weight each block by its true logical width, including the partially-valid final block, which sits at a
+# single global position rather than in every row. The geometries below place the partial block in
+# different rows and with a single partial tile on the final core (the case most sensitive to the
+# per-row weighting). fp32 isolates the combine arithmetic from lossy-format noise.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["float32", "bfloat16"])
+@pytest.mark.parametrize(
+    ("w", "num_cores_w", "num_cores_h"),
+    [(200, 2, 2), (488, 2, 3), (328, 2, 3), (552, 2, 3), (488, 2, 4)],
+    ids=["w200_2x2", "w488_2x3", "w328_2x3", "w552_2x3", "w488_2x4"],
+)
+def test_layer_norm_sharded_uneven_multicore_logical_width_two_stage(device, w, num_cores_w, num_cores_h, dtype):
+    run_sharded_norm_logical_width_two_stage(
+        device,
+        is_rmsnorm=False,
+        w=w,
+        num_cores_w=num_cores_w,
+        num_cores_h=num_cores_h,
+        dtype=dtype,
+        use_welford=True,
     )

@@ -66,30 +66,67 @@
  *       the rest of layernorm for their row(s) width slices.
  */
 namespace {
-// Get the set size of the next block in the Welford combine
-inline auto get_next_set_size(
+// Element count (Welford weight) of the width block at a given GLOBAL width-block index: a full block
+// before the logical boundary, the partially-valid boundary block itself, or zero for a pure-padding
+// block past the logical width. The boundary is the single global position where the logical width ends.
+inline uint32_t block_set_size(
+    const uint32_t global_block_index,
+    const uint32_t boundary_width_index,
+    const uint32_t block_w,
+    const uint32_t last_block_w) {
+    if (global_block_index < boundary_width_index) {
+        return block_w;
+    }
+    if (global_block_index == boundary_width_index) {
+        return last_block_w;
+    }
+    return 0;
+}
+
+// Total logical width of a first-stage row (num_blocks_first_stage consecutive blocks starting at
+// row * num_blocks_first_stage): a full row before the boundary row, zero for a row entirely past it,
+// or the summed real widths of the boundary row (full blocks up to the boundary plus the partial block).
+inline uint32_t row_set_size(
+    const uint32_t row,
+    const uint32_t num_blocks_first_stage,
+    const uint32_t boundary_width_index,
+    const uint32_t block_w,
+    const uint32_t last_block_w) {
+    const uint32_t boundary_row = boundary_width_index / num_blocks_first_stage;
+    if (row < boundary_row) {
+        return num_blocks_first_stage * block_w;
+    }
+    if (row > boundary_row) {
+        return 0;
+    }
+    const uint32_t full_blocks_before_boundary = boundary_width_index - row * num_blocks_first_stage;
+    return full_blocks_before_boundary * block_w + last_block_w;
+}
+
+// Weight of the b-th block in this core's Welford combine, by its true logical width.
+inline uint32_t get_next_set_size(
     const uint32_t block,
-    const uint32_t num_blocks_combine,
     const bool is_second_stage_reader,
     const uint32_t num_blocks_first_stage,
-    const uint32_t second_stage_w,
+    const uint32_t own_row,
+    const uint32_t boundary_width_index,
     const uint32_t block_w,
     const uint32_t last_block_w) {
     if (is_second_stage_reader) {
-        // The next block is either one of the second-stage
-        // blocks from our core column  or one of the
-        // first-stage blocks from our core row (if row major).
-        // This logic relies on the fact that the second stage
-        // readers in a two-stage reduce get the reduce results
-        // from its core column (for row major) streamed in last
-        // (after the results for its core row)
-        return block >= num_blocks_first_stage ? second_stage_w : block_w;
+        // The first num_blocks_first_stage blocks are this reader's own row, streamed in width order;
+        // the rest are the per-row combined results of the other rows, streamed in row order (for row
+        // major, from this reader's core column). Weight own-row blocks by their global block width and
+        // each other-row result by that row's total logical width.
+        if (block < num_blocks_first_stage) {
+            return block_set_size(
+                own_row * num_blocks_first_stage + block, boundary_width_index, block_w, last_block_w);
+        }
+        const uint32_t row = own_row + (block - num_blocks_first_stage) + 1;
+        return row_set_size(row, num_blocks_first_stage, boundary_width_index, block_w, last_block_w);
     }
 
-    // We're either not doing a two-stage reduce or we're
-    // not a second stage reader, so the next block will either
-    // be a full block or a partial one if it's the last
-    return block == num_blocks_combine - 1 ? last_block_w : block_w;
+    // First-stage worker (or single-stage): the blocks are this core's own row, in width order.
+    return block_set_size(own_row * num_blocks_first_stage + block, boundary_width_index, block_w, last_block_w);
 }
 }  // namespace
 void kernel_main() {
@@ -215,9 +252,13 @@ void kernel_main() {
     // final block owns last_block_wt tiles (<= block_wt), the last of which has last_tile_w valid
     // columns; the other blocks each own a full block_w.
     constexpr uint32_t last_block_w = (last_block_wt - 1) * tile_width + last_tile_w;
-    uint32_t first_stage_w =
-        use_two_stage_reduce ? num_blocks_first_stage * block_w : (num_blocks_first_stage - 1) * block_w + last_block_w;
-    uint32_t second_stage_w = use_two_stage_reduce ? (num_blocks_first_stage - 1) * block_w + last_block_w : 0;
+    // Global width-block index of the partial boundary block and this core's own width-block index,
+    // read only on all-to-all workers (the cores that run the cross-core combine). own_row is this
+    // core's first-stage row; a width shard's global index is own_row * num_blocks_first_stage + its
+    // position within the row. These let the combine weight each block/row by its true logical width.
+    const uint32_t boundary_width_index = is_allgather_worker ? get_arg_val<uint32_t>(5) : 0;
+    const uint32_t my_width_index = is_allgather_worker ? get_arg_val<uint32_t>(6) : 0;
+    const uint32_t own_row = my_width_index / num_blocks_first_stage;
 
     // The number of blocks to combine.
     // If we're the second stage reader, we're reducing the
@@ -384,18 +425,14 @@ void kernel_main() {
                 cb_ex_external,
                 cb_ex,
                 num_blocks_combine,
-                [num_blocks_combine,
-                 is_second_stage_reader,
-                 num_blocks_first_stage,
-                 second_stage_w,
-                 block_w,
-                 last_block_w](uint32_t b) {
+                [is_second_stage_reader, num_blocks_first_stage, own_row, boundary_width_index, block_w, last_block_w](
+                    uint32_t b) {
                     return get_next_set_size(
                         b,
-                        num_blocks_combine,
                         is_second_stage_reader,
                         num_blocks_first_stage,
-                        second_stage_w,
+                        own_row,
+                        boundary_width_index,
                         block_w,
                         last_block_w);
                 },
