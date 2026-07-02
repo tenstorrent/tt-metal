@@ -519,6 +519,7 @@ _SPARSE_MCAST_TOPK4_SHAPES = _sparse_mcast_topk4_shapes()
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 def test_ttnn_dispatch_sparse_mcast(
     mesh_device,
     seq_len_per_chip,
@@ -529,12 +530,14 @@ def test_ttnn_dispatch_sparse_mcast(
     num_links,
     topology,
     use_predictable_data,
+    input_layout,
     use_fp8_output,
     run_pcc_check,
     is_ci_env,
     is_ci_v2_env,
 ):
-    # Guard the assumptions the sparse-multicast path is built on: 1D Ring, topk==4, row-major.
+    # Guard the assumptions the sparse-multicast path is built on: 1D Ring, topk==4. Both the tile and
+    # row-major input paths group co-directional destinations into per-page sparse multicasts.
     assert num_experts_per_tok == 4, "sparse-multicast dispatch path assumes topk==4"
     assert topology == ttnn.Topology.Ring
     run_dispatch(
@@ -547,7 +550,7 @@ def test_ttnn_dispatch_sparse_mcast(
         num_links,
         topology,
         use_predictable_data,
-        ttnn.ROW_MAJOR_LAYOUT,
+        input_layout,
         use_fp8_output,
         False,
         run_pcc_check,
