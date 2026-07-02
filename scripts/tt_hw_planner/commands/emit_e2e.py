@@ -321,11 +321,11 @@ def cmd_emit_e2e(args) -> int:
             try:
                 from ..parallelism import mesh_graph_descriptor_path
 
-                _mgd = mesh_graph_descriptor_path(_pc.tp, Path(__file__).resolve().parents[2])
+                _mgd = mesh_graph_descriptor_path(_pc.chips, Path(__file__).resolve().parents[2])
                 if _mgd:
                     os.environ["TT_MESH_GRAPH_DESC_PATH"] = _mgd
                     print(
-                        f"  TT_MESH_GRAPH_DESC_PATH={Path(_mgd).name} (Blackhole fabric mesh graph for TP={_pc.tp})"
+                        f"  TT_MESH_GRAPH_DESC_PATH={Path(_mgd).name} (Blackhole fabric mesh graph for {_pc.chips} chips opened)"
                     )
             except Exception:
                 pass
