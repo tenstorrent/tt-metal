@@ -27,6 +27,31 @@ HEIGHT_SHARDED_SHAPES = [
     (1, 320, 32, 32, 16),
 ]
 
+# FP32 GroupNorm coverage shapes. Interleaved shapes are
+# (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x); sharded shapes are
+# (N, C, H, W, num_groups, grid_y, grid_x) where grid_y == 1 is height-sharded and grid_y > 1 is
+# block-sharded. Chosen to cover single-core, sub-tile group widths, batch > 1, and num_out_blocks
+# slicing under FP32 (see also GN_FP32_INTERLEAVED_SHAPES in test_group_norm_DRAM.py).
+GN_FP32_INTERLEAVED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
+    (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
+    (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
+    (2, 768, 1, 512, 32, 2, 8, 8),  # batch 2 (still multicast), num_out_blocks 2
+    (1, 2560, 1, 512, 32, 2, 8, 8),  # mcast num_out_blocks 2
+    (1, 128, 1, 512, 32, 2, 4, 4),  # all groups on core fit in less than one tile
+    (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
+]
+
+GN_FP32_SHARDED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 8),  # base config (original single-shape test), height-sharded
+    (1, 256, 1, 256, 16, 1, 1),  # single core height-sharded, sub-tile group width (16 ch/group)
+    (1, 128, 1, 512, 16, 1, 4),  # height-sharded, groups on core fit in less than one tile
+    #   (num_groups <= 16 per core is required by the welford sharded path)
+    (1, 1280, 1, 512, 32, 8, 8),  # block-sharded 8x8
+    (2, 512, 32, 32, 32, 8, 8),  # block-sharded 8x8, batch 2 (C/grid_y = 64, tile-aligned)
+    (1, 1280, 16, 16, 32, 4, 8),  # block-sharded 8x4
+]
+
 BLOCK_SHARDED_V2_8X4_SHAPES = [
     (1, 1280, 16, 16, 32),
     (1, 320, 1, 8192, 32),
@@ -1502,14 +1527,17 @@ def test_group_norm_optional_weight_bias(
 # ---------------------------------------------------------------------------------------------
 # Welford GroupNorm FP32 sharded path. FP32 input + FP32/bf16 gamma/beta, TILE and
 # ROW_MAJOR output, with bf16 input as control. FP32 is welford-gated (legacy truncates to TF32 on
-# SrcA and is validation-rejected) and requires fp32_dest_acc_en=True.
+# SrcA and is validation-rejected) and requires fp32_dest_acc_en=True. Shapes cover height-sharded
+# (grid_y == 1) and block-sharded (grid_y > 1) layouts.
 # ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_FP32_SHARDED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-def test_group_norm_sharded_welford_all_config(device, layout, in_dtype, gb_dtype):
-    N, C, H, W, num_groups = 1, 320, 32, 32, 16
-    grid = ttnn.CoreGrid(y=1, x=8)
+def test_group_norm_sharded_welford_all_config(
+    device, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x
+):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)
@@ -1540,7 +1568,10 @@ def test_group_norm_sharded_welford_all_config(device, layout, in_dtype, gb_dtyp
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     shard_shape = N * H * W // grid.x, C // grid.y
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
-    mem = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if grid.y == 1 else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    mem = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
     xt = ttnn.to_memory_config(xt, mem)
 
     out = ttnn.group_norm(
@@ -1562,7 +1593,9 @@ def test_group_norm_sharded_welford_all_config(device, layout, in_dtype, gb_dtyp
     )
 
     passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert passing, f"sharded welford {in_dtype} gamma={gb_dtype} {layout} PCC failed: {pcc}"
+    assert (
+        passing
+    ), f"sharded welford {in_dtype} gamma={gb_dtype} {layout} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1573,11 +1606,11 @@ def test_group_norm_sharded_welford_all_config(device, layout, in_dtype, gb_dtyp
 # TF32-limited on biased inputs (the FPU reads x via SrcA at TF32) -- so this test uses unbiased
 # (offset 0) data, matching the LayerNorm legacy fp32 contract.
 # ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_FP32_SHARDED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
-def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype):
-    N, C, H, W, num_groups = 1, 320, 32, 32, 16
-    grid = ttnn.CoreGrid(y=1, x=8)
+def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)
@@ -1610,7 +1643,10 @@ def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype):
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     shard_shape = N * H * W // grid.x, C // grid.y
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
-    mem = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if grid.y == 1 else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    mem = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
     xt = ttnn.to_memory_config(xt, mem)
 
     out = ttnn.group_norm(
@@ -1632,18 +1668,21 @@ def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype):
     )
 
     passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert passing, f"sharded legacy {in_dtype} gamma={gb_dtype} PCC failed: {pcc}"
+    assert passing, f"sharded legacy {in_dtype} gamma={gb_dtype} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"
 
 
 # Legacy (non-welford) FP32 GroupNorm on DRAM-interleaved input. Interleaved analog of
-# test_group_norm_sharded_legacy_fp32 (same shapes/grid/dtypes, gamma+beta applied), just DRAM
+# test_group_norm_sharded_legacy_fp32 (same dtypes, gamma+beta applied), just DRAM
 # interleaved instead of sharded. Requires fp32_dest_acc_en=True; unbiased data (FPU reads x via
-# SrcA at TF32).
+# SrcA at TF32). Shapes are (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x) to exercise the
+# mcast/no_mcast factory split, num_out_blocks slicing, single-core, and sub-tile group widths.
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_FP32_INTERLEAVED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
-def test_group_norm_legacy_fp32_interleaved(device, in_dtype, gb_dtype):
-    N, C, H, W, num_groups = 1, 320, 32, 32, 16
-    grid = ttnn.CoreGrid(y=1, x=8)
+def test_group_norm_legacy_fp32_interleaved(
+    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype
+):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)
@@ -1684,8 +1723,9 @@ def test_group_norm_legacy_fp32_interleaved(device, in_dtype, gb_dtype):
         compute_kernel_config=ck,
         use_welford=False,
         output_layout=ttnn.TILE_LAYOUT,
+        num_out_blocks=num_out_blocks,
         inplace=False,
     )
     out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
     passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert passing, f"interleaved legacy {in_dtype} gamma={gb_dtype} PCC failed: {pcc}"
+    assert passing, f"interleaved legacy {in_dtype} gamma={gb_dtype} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"

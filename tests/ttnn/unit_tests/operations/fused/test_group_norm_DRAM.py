@@ -530,12 +530,27 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
 # Welford GroupNorm FP32 (issue #44650), interleaved/DRAM path (mcast/no_mcast factory). FP32 input
 # + FP32/bf16 gamma/beta, TILE output, bf16 input as control. FP32 is welford-gated and requires
 # fp32_dest_acc_en=True. (Interleaved ROW_MAJOR output is unsupported for any dtype, not covered.)
+# Shapes are (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x) to exercise the mcast/no_mcast
+# factory split, num_out_blocks slicing, single-core, and sub-tile group widths under FP32.
 # ---------------------------------------------------------------------------------------------
+GN_FP32_INTERLEAVED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
+    (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
+    (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
+    (2, 768, 1, 512, 32, 2, 8, 8),  # batch 2 (still multicast), num_out_blocks 2
+    (1, 2560, 1, 512, 32, 2, 8, 8),  # mcast num_out_blocks 2
+    (1, 128, 1, 512, 32, 2, 4, 4),  # all groups on core fit in less than one tile
+    (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
+]
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_FP32_INTERLEAVED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
-def test_group_norm_interleaved_welford_all_config(device, in_dtype, gb_dtype):
-    N, C, H, W, num_groups = 1, 320, 32, 32, 16
-    grid = ttnn.CoreGrid(y=1, x=8)
+def test_group_norm_interleaved_welford_all_config(
+    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype
+):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)
@@ -551,7 +566,9 @@ def test_group_norm_interleaved_welford_all_config(device, in_dtype, gb_dtype):
     )
 
     xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
-    xt = ttnn.from_torch(xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
     [gt, bt], mask = ttnn.dram_group_norm_params_from_torch(
         [w, b], C, num_groups, device, core_grid=grid, return_mask=True, dtype=gb_dtype
@@ -568,10 +585,10 @@ def test_group_norm_interleaved_welford_all_config(device, in_dtype, gb_dtype):
         dtype=in_dtype,
         compute_kernel_config=ck,
         use_welford=True,
-        num_out_blocks=1,
+        num_out_blocks=num_out_blocks,
         inplace=False,
     )
     out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
 
     passing, pcc = comp_pcc(ref, out, pcc=0.999)
-    assert passing, f"interleaved welford {in_dtype} gamma={gb_dtype} PCC failed: {pcc}"
+    assert passing, f"interleaved welford {in_dtype} gamma={gb_dtype} {N}x{C}x{H}x{W} g{num_groups} PCC failed: {pcc}"
