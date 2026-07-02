@@ -171,3 +171,10 @@ tray_to_pcie_device_mapping.yaml
 .auto/downloads/
 models/experimental/acestep/demo/songeval/ckpt/
 models/experimental/acestep/demo/songeval/example.mp3
+# ACE-Step: never commit weights / audio / large binaries
+models/experimental/acestep/**/*.safetensors
+models/experimental/acestep/**/*.ckpt
+models/experimental/acestep/**/*.mp3
+models/experimental/acestep/**/*.wav
+models/experimental/acestep/**/*.pt
+models/experimental/acestep/**/*.npy
