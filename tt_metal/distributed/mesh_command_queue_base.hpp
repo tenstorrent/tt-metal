@@ -156,6 +156,10 @@ public:
         uint32_t value,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+
+    virtual void wait_for_completion(bool) {}
+    // May only be called after wait_for_completion has been called on both command queues on the device.
+    virtual void finish_and_reset_in_use() {}
 };
 
 }  // namespace tt::tt_metal::distributed
