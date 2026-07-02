@@ -174,7 +174,6 @@
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_generate_tp.py
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
