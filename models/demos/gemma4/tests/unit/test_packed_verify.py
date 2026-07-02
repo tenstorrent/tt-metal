@@ -56,6 +56,26 @@ _MOE_UNSUPPORTED_REASON = (
     "checkpoints (e.g. gemma-4-26B-A4B). Dense targets (12B, 31B) run this test."
 )
 
+_L1_OVERFLOW_REASON = (
+    "packed-verify global-layer SDPA (head_dim=512, fp32-accum, P candidates folded into "
+    "heads) exceeds this core's L1 at the current TP. The per-core footprint shrinks ~TP×, "
+    "so larger targets need a larger TP mesh: e.g. gemma-4-31B overflows L1 at TP=4 "
+    "(4-chip box) but fits at TP>=8. 12B fits at TP=4. Skipping on this SKU/mesh."
+)
+
+
+def _is_l1_cb_overflow(exc):
+    """True if `exc` is the ttnn L1 circular-buffer capacity throw.
+
+    This is a deterministic, host-side program-validation failure (raised before
+    any on-device launch, so the device stays healthy), matching e.g.:
+        "Statically allocated circular buffers on core range [...] grow to
+         2005824 B which is beyond max L1 size of 1572864 B".
+    Keyed off the message text so it stays model/SKU/mesh-agnostic.
+    """
+    s = str(exc).lower()
+    return "circular buffer" in s and "l1 size" in s
+
 
 @parametrize_mesh_with_fabric()
 def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
@@ -155,7 +175,12 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
     while len(packed) < 3 * P:
         tokens = chain[it * P : it * P + P]  # the already-verified greedy chain
         positions = [pos + j for j in range(P)]
-        lh, h = spec._verify(tokens, positions)
+        try:
+            lh, h = spec._verify(tokens, positions)  # first call compiles the packed SDPA
+        except RuntimeError as e:
+            if _is_l1_cb_overflow(e):
+                pytest.skip(_L1_OVERFLOW_REASON)
+            raise
         h.deallocate(True)
         packed.extend(int(torch.argmax(lh[j])) for j in range(P))
         pos += P
@@ -196,11 +221,12 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
 #
 # Env knobs: GEMMA4_BENCH_B="1,8" (comma list), GEMMA4_BENCH_CTX=2048 (prefill
 # length per user), GEMMA4_SPEC_DRAFT_LEN=3 (K; P=K+1), GEMMA4_BENCH_ITERS=20.
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 256_000_000}, id="1x4")],
-    indirect=True,
-)
+# SKU-adaptive mesh (CI picks the largest that fits), matching matches_sequential.
+# Pinning a fixed TP (e.g. 1x4) breaks on boxes whose NAS weight cache was built at
+# a different TP: the demo populates the cache at the largest mesh's TP, so a TP4
+# pin on an 8-chip box misses the cache and tries to *write* it into the read-only
+# mount. trace_region_size is needed for this test's trace capture.
+@parametrize_mesh_with_fabric(device_params_extra={"trace_region_size": 256_000_000})
 def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     import time
 
@@ -353,7 +379,12 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
                 hot_pt=None,
             )
 
-        packed_ms, packed_lh = _run(_packed_call, B * P)
+        try:
+            packed_ms, packed_lh = _run(_packed_call, B * P)  # first call compiles the packed SDPA
+        except RuntimeError as e:
+            if _is_l1_cb_overflow(e):
+                pytest.skip(_L1_OVERFLOW_REASON)
+            raise
         for t in (x_p, pos_p, mask_full, mask_slide, pt_packed, *write_idxs):
             t.deallocate(True)
 

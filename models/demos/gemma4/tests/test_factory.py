@@ -401,11 +401,14 @@ def parametrize_batch_seq(configs=None, ids=None):
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
 
 
-def parametrize_mesh_with_fabric(mesh_shapes=None):
+def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """Universal mesh parametrization with FABRIC_1D.
 
     Generates paired mesh_device + device_params parametrization for tests at
     any TP factor. Only includes mesh shapes that fit on the current system.
+
+    ``device_params_extra`` (dict) is merged into every param's device_params —
+    e.g. ``{"trace_region_size": 256_000_000}`` for tests that capture a trace.
 
     Fabric is enabled (FABRIC_1D) for multi-device shapes, and disabled for
     (1, 1). Launching fabric on a 1x1 mesh on a multi-device system fails the
@@ -443,11 +446,12 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     if os.getenv("CI") == "true" and len(mesh_shapes) > 1:
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
+    extra = dict(device_params_extra or {})
     if not mesh_shapes:
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None},
+                {"fabric_config": None, **extra},
                 id="1x1",
                 marks=pytest.mark.skip(reason="Not enough devices"),
             )
@@ -456,7 +460,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         params = [
             pytest.param(
                 s,
-                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D},
+                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra},
                 id=f"{s[0]}x{s[1]}",
             )
             for s in mesh_shapes
