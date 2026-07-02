@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
@@ -186,10 +187,10 @@ struct KernelSpec {
 
     struct RuntimeArgSchema {
         // Runtime argument names (must be unique, valid C++ identifiers.)
-        Group<std::string> runtime_arg_names;
+        Group<RtaName> runtime_arg_names;
 
         // Common runtime argument names (must be unique, valid C++ identifiers.)
-        Group<std::string> common_runtime_arg_names;
+        Group<RtaName> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};
 

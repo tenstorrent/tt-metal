@@ -176,7 +176,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
     // Named RTA schema (per-node values supplied below). One named arg per legacy
     // positional slot; the legacy src/dst-address (slots 0,1) and semaphore-id (slot 4)
     // slots are gone — those are now bindings.
-    m2::Group<std::string> rta_names = {
+    m2::Group<m2::RtaName> rta_names = {
         "start_id",      "num_pages",           "controller_noc_x",    "controller_noc_y",  "control_value",
         "is_controller", "range_0_start_noc_x", "range_0_start_noc_y", "range_0_end_noc_x", "range_0_end_noc_y",
         "range_0_size",  "range_1_start_noc_x", "range_1_start_noc_y", "range_1_end_noc_x", "range_1_end_noc_y",

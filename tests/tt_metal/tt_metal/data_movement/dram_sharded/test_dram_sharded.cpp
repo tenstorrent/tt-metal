@@ -105,7 +105,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 
     KernelSpec::CompileTimeArgs cta_bindings(reader_compile_args);
 
-    std::vector<std::string> named_rtas = {"src_addr", "l1_addr"};
+    std::vector<tt::tt_metal::experimental::RtaName> named_rtas = {"src_addr", "l1_addr"};
 
     KernelSpec reader_spec{
         .unique_id = KernelSpecName{"reader"},
