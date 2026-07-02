@@ -305,7 +305,10 @@ def _manual_gqa_attention(tt_q, tt_k, tt_v):
         scores.deallocate(True)
         probs.deallocate(True)
 
-    return ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for tensor in outputs:
+        tensor.deallocate(True)
+    return out
 
 
 def denoise_attention(

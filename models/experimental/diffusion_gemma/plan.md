@@ -72,7 +72,7 @@ Previously top-of-queue, but **none of these advance RUN**; revisit after the mo
 |---|---|---|
 | **Decide the decision-fidelity bar** — engineering MoE-precision fix vs product-accept a degraded floor | Pure correctness; the model runs without it (output just degenerate). Decide before *shipping*, not before *running*. | **#48291** |
 | **R0.5 / R0.6 fidelity replay** — non-degenerate committed-argmax vs HF, entropy/accept drift, top-logits capture at positions `[2,3,4]` | Measures *how wrong*, not *whether it runs*. | #47464 / #48291 |
-| **Staged-GQA fallback PCC test** vs `torch.F.scaled_dot_product_attention` | The fallback *running without crashing* is covered by R-a; only its numerical accuracy is deferred. | #47464 |
+| **Staged-GQA fallback PCC test** vs `torch.F.scaled_dot_product_attention` | ✅ Covered on QB2 2026-07-02 by `test_device_bidirectional_sdpa.py::test_staged_gqa_fallback_matches_torch` using maskless GQA (`q_heads=4`, `kv_heads=2`, `scale=1.0`, PCC ≥0.99). Also cleaned up per-head fallback output tensor lifetimes after concat. | #47464 |
 | **Gate-vs-rebaseline the ungated shared-gemma4 decode edits** (R-new) | Regression hygiene for plain Gemma-4 decode, not a diffusion RUN blocker. | #47462 / #47464 |
 | **Production device RNG**, intra-block device-side early stop | Host-seeded noise hooks + bounded host readback suffice for a functional run. | #47463 / #47464 |
 | **Long-context / 256K fit**, TP-across-mesh, perf | Run small-context, batch=1 first (Phase 4). | #47464 / #47487 / #47465 |

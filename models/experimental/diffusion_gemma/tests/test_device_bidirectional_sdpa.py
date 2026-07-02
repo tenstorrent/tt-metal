@@ -24,6 +24,7 @@ import torch
 
 import ttnn
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
+from models.experimental.diffusion_gemma.tt.diffusion_attention import _manual_gqa_attention
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Opt-in: these run real kernels on a Tenstorrent device. They need an sfpi
@@ -128,6 +129,33 @@ def test_canvas_bidirectional(device):
 def test_gqa_bidirectional(device):
     # GQA shape matching the model (16 query / 8 KV heads), canonical full visibility.
     _run_canvas_sdpa(device, num_heads=16, num_kv_heads=8)
+
+
+def test_staged_gqa_fallback_matches_torch(device):
+    """Validate the maskless fallback math that runs after the QB2 SDPA L1 clash."""
+    torch.manual_seed(47464)
+    q = torch.randn(1, 4, 32, 32)
+    k = torch.randn(1, 2, 64, 32)
+    v = torch.randn(1, 2, 64, 32)
+    golden = torch.nn.functional.scaled_dot_product_attention(
+        q,
+        k.repeat_interleave(2, dim=1),
+        v.repeat_interleave(2, dim=1),
+        is_causal=False,
+        scale=1.0,
+    )
+
+    tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_k = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_out = _manual_gqa_attention(tt_q, tt_k, tt_v)
+    out = ttnn.to_torch(tt_out)
+    assert_with_pcc(golden, out, 0.99)
+    tt_q.deallocate(True)
+    tt_k.deallocate(True)
+    tt_v.deallocate(True)
+    tt_out.deallocate(True)
 
 
 # --- NON-canonical: exercise the ttnn SDPA windowed-mask path (NOT the denoise geometry) ---
