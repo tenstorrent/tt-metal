@@ -79,7 +79,9 @@ set(UNIT_TESTS_API_SOURCES
 # compile and the death tests fail. Gate them so they never enter the non-emule
 # unit_tests_api binary.
 if(TT_METAL_USE_EMULE)
-    list(APPEND UNIT_TESTS_API_SOURCES
+    list(
+        APPEND
+        UNIT_TESTS_API_SOURCES
         test_alignment_writes.cpp
         test_cb_leak.cpp
         test_cb_pages.cpp
