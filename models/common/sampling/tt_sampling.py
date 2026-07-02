@@ -478,42 +478,15 @@ class TTSampling(LightweightModule):
         # tt_transformers' TT_CCL exposes it; callers that don't -- tt_ccl=None (gpt_oss on [4,8],
         # gemma4) and CCLs with a different semaphore API (e.g. DeepSeek's get_gather_sem/get_barrier_sem)
         # -- stay on the plain ttnn.all_gather path they used before this change.
-        has_cycled_semaphores = self.tt_ccl is not None and all(
-            callable(getattr(self.tt_ccl, method_name, None))
-            for method_name in ("get_and_cycle_ag_semaphore_handles", "get_and_cycle_barrier_semaphore_handle")
-        )
-        if not has_cycled_semaphores:
-            return ttnn.all_gather(
-                tensor,
-                dim=dim,
-                num_links=num_links,
-                memory_config=memory_config,
-                cluster_axis=cluster_axis,
-                topology=ttnn.Topology.Linear,
-            )
-
-        # #48222: gather the heavy top-k/top-p candidates with a device-side barrier_semaphore,
-        # mirroring the force-argmax path. `ttnn.all_gather` does barrier, but it sets that barrier
-        # up in its program factory (a freshly-created semaphore + a host-side `Synchronize`), which
-        # only runs at trace-capture time; on trace replay the host sync is gone and the one-shot
-        # semaphore is never reset, so the barrier is effectively a no-op and the gather can read the
-        # upstream top-k output before it lands -> partial/stale candidates at batch-32 -> garbage.
-        # `all_gather_async` with the model's persistent get_and_cycle_* semaphores is trace-safe (the
-        # barrier holds on every replay), which is exactly what force-argmax uses. See #48469.
-        topology = self.ag_topology if self.mesh_device.get_num_devices() >= 8 else ttnn.Topology.Linear
-        return ttnn.experimental.all_gather_async(
+        # [determinism-probe] BROKEN config: force the prim ttnn.all_gather path (pre-#48404) to
+        # measure whether the batch-32 corruption is deterministic or intermittent.
+        return ttnn.all_gather(
             tensor,
-            persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_links,
             memory_config=memory_config,
             cluster_axis=cluster_axis,
-            topology=topology,
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=self.argmax_chunks_per_sync,
-            num_workers_per_link=self.argmax_num_workers_per_link,
-            num_buffers_per_channel=2,
+            topology=ttnn.Topology.Linear,
         )
 
     def _get_sampling_cluster_axis(self):

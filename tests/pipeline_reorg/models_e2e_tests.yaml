@@ -291,11 +291,11 @@
   cmd: |
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+    for i in 1 2 3 4; do echo "===== DETERMINISM TRIAL $i ====="; pytest --timeout 700 -s models/demos/qwen25_vl/demo/demo.py -k "bert-score" || true; done
   model: qwen2.5-vl-32b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 60
       tier: 3
     bh_quietbox_2:
       timeout: 15
