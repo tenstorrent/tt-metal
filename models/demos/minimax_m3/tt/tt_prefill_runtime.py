@@ -161,7 +161,10 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
-    ) -> None:
+        *,
+        skip_lm_head: bool = True,
+        get_last_token: int = -1,
+    ):
         """Prefill ONE chunk into user ``slot_id``'s KV cache. Returns None — the populated cache is the
         output (read back via gather_layer). Drives the cache-read attention path for actual_start > 0.
 
@@ -195,13 +198,16 @@ class TtPrefillRuntime:
             kv_cache=self.kv_cache,
             cached_len=actual_start,  # valid prefix already in the cache before this chunk
             user_id=slot_id,
-            get_last_token=-1,
-            skip_lm_head=True,  # cache-fill only: skip final norm + lm_head
+            get_last_token=get_last_token,
+            skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
         )
-        out.deallocate(True)
         for t in rope_abs:
             t.deallocate(True)
         ttnn.deallocate(input_tensor)
+        if skip_lm_head:
+            out.deallocate(True)
+            return None
+        return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
     def gather_layer(self, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -79,24 +80,30 @@ def allocate_kv_caches(
     )
     mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
 
-    def _alloc():
+    def _alloc(dtype=cache_dtype):
         # Per-chip cache is one head ([.., 1, ..]); WHICH head a chip holds (or whether index_k is
         # replicated across cols) is decided at write time by how the input chunk is mesh-mapped, not
         # here. Allocated zeroed + ReplicateTensorToMesh: every chip gets the same empty buffer; content
         # diverges on the first update_padded_kv_cache write.
         return ttnn.from_torch(
             torch.zeros(num_users * num_layers, 1, seq_local, head_dim),
-            dtype=cache_dtype,
+            dtype=dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    # index_k feeds the indexer's HARD top-16 block selection (not a smooth softmax like K/V), so bf8's
+    # ~2-3 mantissa bits perturb the block scores enough to flip many picks -> chunked vs one-shot
+    # selection diverges (~7/16 overlap) -> residual drift compounding over MSA layers. Cache it in bf16
+    # (M3_INDEX_CACHE_BF16=1) to keep selection stable; it's tiny (1 head) and only the indexer reads it.
+    index_dtype = ttnn.bfloat16 if os.getenv("M3_INDEX_CACHE_BF16") == "1" else cache_dtype
+
     return MiniMaxKVCache(
         k=_alloc(),
         v=_alloc(),
-        index_k=_alloc(),
+        index_k=_alloc(index_dtype),
         num_users=num_users,
         num_layers=num_layers,
         max_seq_len=max_seq_len,
@@ -107,11 +114,11 @@ def allocate_kv_caches(
 def _write_one(cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_axis):
     """Write one SP-sharded chunk tensor into a packed cache via update_padded_kv_cache.
 
-    The op requires TILE layout and input.dtype == cache.dtype (bf8), so cast a bf8 copy when needed
-    (the original stays live for the attention op that follows). At ``kv_actual % 32 == 0`` chunk
+    The op requires TILE layout and input.dtype == cache.dtype, so cast a copy to the cache's dtype when
+    needed (the original stays live for the attention op that follows). At ``kv_actual % 32 == 0`` chunk
     boundaries the per-device write offset is contiguous (block-cyclic degenerates to a reshape).
     """
-    src = tensor if tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
+    src = tensor if tensor.dtype == cache.dtype else ttnn.typecast(tensor, cache.dtype)
     ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
         cache,
         src,

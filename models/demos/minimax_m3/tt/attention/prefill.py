@@ -184,6 +184,7 @@ def prefill_forward(
                 chunk_local=chunk_local,
                 scale=config.head_dim**-0.5,
                 num_groups=num_local_kv_heads,
+                layer_idx=layer_idx,
             )
         else:
             tt_sdpa_out = msa_sp_attention_nocache(
@@ -198,6 +199,7 @@ def prefill_forward(
                 s_local=seq_len,
                 scale=config.head_dim**-0.5,
                 num_groups=num_local_kv_heads,
+                layer_idx=layer_idx,
             )
     elif config.sequence_parallel:
         # SP dense (first chunk, no prior cache): ring_joint over the chunk's own SP-sharded K/V, each
