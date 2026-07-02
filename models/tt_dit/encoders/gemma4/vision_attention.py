@@ -129,13 +129,25 @@ class Gemma4VisionAttention(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Pad HF projections + Q/K norm weights along the head_dim axis."""
+        """Rewrite HF's ``{q,k,v,o}_proj.linear.*`` keys to our flat ``{q,k,v,o}_proj.*``,
+        then pad projections + Q/K norm weights along the head_dim axis if head_dim_padded > head_dim.
+        """
         H = self.num_attention_heads
         D = self.head_dim
         Dp = self.head_dim_padded
         Hidden = self.hidden_size
+
+        # HF Gemma4VisionAttention wraps each projection in a small container whose actual
+        # Linear lives under ``.linear``. Rename ``<proj>.linear.<name>`` → ``<proj>.<name>``
+        # so the flat loader finds them on our ColParallel/RowParallel modules.
+        for proj in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            for suffix in ("weight", "bias"):
+                src = f"{proj}.linear.{suffix}"
+                if src in state:
+                    state[f"{proj}.{suffix}"] = state.pop(src)
+
         if Dp == D:
-            return  # No padding needed.
+            return  # No head_dim padding needed.
 
         scale = math.sqrt(Dp / D)
 
