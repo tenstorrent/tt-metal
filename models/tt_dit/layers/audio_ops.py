@@ -226,9 +226,9 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     if not prepared:
         cache[wkey] = weight
     cache[shape_key] = "conv1d"
-    # conv1d emits HEIGHT_SHARDED TILE; downstream ops expect interleaved ROW_MAJOR.
-    out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+    # conv1d emits HEIGHT_SHARDED TILE; untilize straight to interleaved DRAM ROW_MAJOR — the
+    # memory_config folds the reshard into the untilize (one op instead of to_memory_config + to_layout).
+    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return ttnn.reshape(out, (B, T_out, C))
 
 
@@ -465,9 +465,9 @@ class Conv2dViaConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi2,
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if (is_blackhole() or dtype == ttnn.float32) else ttnn.MathFidelity.HiFi2
+            ),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
