@@ -42,8 +42,12 @@ struct MatmulDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    // NOTE: No custom compute_program_hash. The Metal 2.0 MatmulMultiCoreProgramFactory port reverts
+    // to the default reflection-based TTNN hash (which folds in the full input+output TensorSpecs and
+    // the program_config that selects the factory). A custom hash that omits the output TensorSpec
+    // trips UpdateTensorArgs legality failures on program-cache hits for MetalV2FactoryConcept
+    // factories; the default hash is correct-by-construction. (Sanctioned device-op edit per the
+    // Metal 2.0 port recipe.)
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);

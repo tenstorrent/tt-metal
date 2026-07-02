@@ -1201,12 +1201,10 @@ void py_module(nb::module_& mod) {
             "compute_output_specs",
             &ttnn::prim::MatmulDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
-            nb::arg("tensor_args"))
-        .def_static(
-            "compute_program_hash",
-            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
-            nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
+    // NOTE: The "compute_program_hash" pybind hook was removed by the Metal 2.0
+    // MatmulMultiCoreProgramFactory port, which deletes the custom MatmulDeviceOperation::
+    // compute_program_hash (reverting to the default reflection-based TTNN hash).
 
     // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation
     nb::class_<ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory>(
@@ -1229,21 +1227,10 @@ void py_module(nb::module_& mod) {
             &ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
             nb::arg("device"));
 
-    // Bind MatmulMultiCoreProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreProgramFactory>(mod, "MatmulMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
+    // NOTE: MatmulMultiCoreProgramFactory no longer exposes a "create_descriptor" pybind hook — it
+    // was ported to the Metal 2.0 create_program_artifacts path (MetalV2FactoryConcept), so the
+    // legacy ProgramDescriptor entry point (and its pybind binding) was removed. The other five
+    // factories below remain on create_descriptor.
 
     // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
     nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")

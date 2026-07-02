@@ -2149,30 +2149,9 @@ MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_outpu
     return output_tensors;
 }
 
-ttsl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& args) {
-    const auto& input_tensors = args.input_tensors;
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-
-    auto factory = select_program_factory(attributes, args);
-
-    auto hash = tt::tt_metal::operation::hash_operation<MatmulDeviceOperation>(
-        attributes, factory.index(), input_tensor_a, input_tensor_b);
-
-    for (const auto& optional_input_tensor : args.optional_input_tensors) {
-        if (optional_input_tensor.has_value()) {
-            hash = ttsl::hash::hash_objects(hash, optional_input_tensor.value());
-        }
-    }
-
-    for (const auto& optional_output_tensor : args.optional_output_tensors) {
-        if (optional_output_tensor.has_value()) {
-            hash = ttsl::hash::hash_objects(hash, optional_output_tensor.value());
-        }
-    }
-    return hash;
-}
+// NOTE: The custom MatmulDeviceOperation::compute_program_hash was deleted by the Metal 2.0
+// MatmulMultiCoreProgramFactory port, reverting to the default reflection-based TTNN hash. See the
+// header declaration site for the rationale.
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<MatmulDeviceOperation::tensor_return_value_t>
 MatmulDeviceOperation::create_op_performance_model(
