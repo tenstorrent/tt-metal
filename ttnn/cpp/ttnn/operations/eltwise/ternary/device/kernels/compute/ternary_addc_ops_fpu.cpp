@@ -5,6 +5,8 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 
