@@ -1,0 +1,259 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+
+import ttnn
+from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.substate import substate
+
+
+def _dbg_sub(layer_idx, tag, t):
+    """DEBUG_LAYERS=1: probe a SUBLAYER tensor (device-0 shard) to localize the token-0 activation
+    explosion (attention-out vs MoE-out vs residual-add). Logs whole-tensor + last-row max|x|/std/finite,
+    the (row,col) of the global max, AND the value at a FIXED tracked position (env DBG_SUB_POS="row,col",
+    e.g. "183,1172") so we follow the actual exploding element rather than the moving argmax. Layer range
+    env-configurable via DBG_SUB_RANGE="lo-hi" (default all layers 0-59)."""
+    if os.getenv("DEBUG_LAYERS") != "1":
+        return
+    lo, hi = 0, 59
+    rng = os.getenv("DBG_SUB_RANGE")
+    if rng:
+        lo, hi = (int(x) for x in rng.split("-"))
+    if not (lo <= layer_idx <= hi):
+        return
+    try:
+        import torch
+        from loguru import logger
+
+        x = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        flat = x.reshape(-1, x.shape[-1])
+        last = flat[-1]
+        amax = flat.abs().max()
+        pos = (flat.abs() == amax).nonzero()[0].tolist() if torch.isfinite(amax) else [-1, -1]
+        tracked = ""
+        sp = os.getenv("DBG_SUB_POS")
+        if sp:
+            r, c = (int(v) for v in sp.split(","))
+            if r < flat.shape[0] and c < flat.shape[1]:
+                tracked = f" @[{r},{c}]={flat[r, c].item():.4e}"
+        logger.info(
+            f"[DBG L{layer_idx} {tag}] max|x|={amax.item():.3e} std={flat.std().item():.3e} "
+            f"finite={bool(torch.isfinite(x).all())} argmax_pos(row,col)={pos}{tracked} "
+            f"|| LASTROW max|x|={last.abs().max().item():.3e} std={last.std().item():.3e}"
+        )
+    except Exception as e:
+        from loguru import logger
+
+        logger.info(f"[DBG L{layer_idx} {tag}] failed: {e}")
+
+
+def _dbg_dump(layer_idx, tag, t, mesh_device):
+    """DBG_DUMP=1: save REAL intermediate activations to /tmp/m3_dump for fast isolation testing (feed real
+    massive-activation data into attn/MoE unit tests, instead of randn). Reassembles the full SP-sharded
+    tensor across the rows axis (device (r,0) holds seq rows [r*S_local:...], TP cols replicate) -> full
+    [1,1,S,H], saved as L{idx}_{tag}.pt. Layers via DBG_DUMP_LAYERS="0,3,6,..." (default every 3)."""
+    if os.getenv("DBG_DUMP") != "1":
+        return
+    layers_env = os.getenv("DBG_DUMP_LAYERS")
+    dump_layers = {int(v) for v in layers_env.split(",")} if layers_env else set(range(0, 60, 3)) | {33, 34, 35, 36}
+    if layer_idx not in dump_layers:
+        return
+    try:
+        import os as _os
+
+        import torch
+        from loguru import logger
+
+        rows, cols = tuple(mesh_device.shape)
+        dts = ttnn.get_device_tensors(t)
+        # SP-sharded on seq across rows, TP-replicated across cols -> take col-0 device of each row.
+        shards = [ttnn.to_torch(dts[r * cols]).float() for r in range(rows)]
+        full = torch.cat(shards, dim=-2)  # concat on seq
+        _os.makedirs("/tmp/m3_dump", exist_ok=True)
+        path = f"/tmp/m3_dump/L{layer_idx}_{tag}.pt"
+        torch.save(full, path)
+        logger.info(f"[DUMP L{layer_idx} {tag}] saved {tuple(full.shape)} -> {path}")
+    except Exception as e:
+        from loguru import logger
+
+        logger.info(f"[DUMP L{layer_idx} {tag}] failed: {e}")
+
+
+from .attention import Attention, AttentionConfig
+from .attention_configs import MiniMaxM3AttentionProgramConfig
+from .dense_mlp import DenseMLP
+from .mlp import MLP
+from .rms_norm import RMSNorm
+
+
+class DecoderLayer:
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        layer_idx,
+        ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=None,
+        transformation_mats=None,
+        max_seq_len=1024,
+        max_local_batch_size=1,
+        users_row_sharded=False,
+        expert_weight_dtype=ttnn.bfloat4_b,
+        use_ep_moe=False,
+        ep_seq_len_per_chip=1024,
+        sequence_parallel=False,
+    ):
+        self.input_layernorm = RMSNorm(
+            mesh_device,
+            hf_config,
+            substate(state_dict, "input_layernorm"),
+            tensor_cache_path=get_cache_file_name(tensor_cache_path, "input_layernorm"),
+            mesh_config=mesh_config,
+        )
+        self.post_attention_layernorm = RMSNorm(
+            mesh_device,
+            hf_config,
+            substate(state_dict, "post_attention_layernorm"),
+            tensor_cache_path=get_cache_file_name(tensor_cache_path, "post_attention_layernorm"),
+            mesh_config=mesh_config,
+        )
+        # Hybrid dense/MoE schedule (M3): layers with moe_layer_freq[idx]==0 are a plain dense
+        # SwiGLU MLP (mlp.{gate,up,down}_proj); the rest are MoE (block_sparse_moe.*). M2 had no
+        # dense layers (all MoE), so moe_layer_freq absent -> default to MoE.
+        moe_layer_freq = getattr(hf_config, "moe_layer_freq", None)
+        self.is_dense = (
+            moe_layer_freq is not None and layer_idx < len(moe_layer_freq) and moe_layer_freq[layer_idx] == 0
+        )
+        if self.is_dense:
+            self.mlp = DenseMLP(
+                mesh_device,
+                hf_config,
+                substate(state_dict, "mlp"),
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
+            )
+        else:
+            self.mlp = MLP(
+                mesh_device,
+                hf_config,
+                # MiniMax-M3 names the MoE block 'block_sparse_moe'.
+                substate(state_dict, "block_sparse_moe"),
+                ccl_manager,
+                dtype=dtype,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
+                mesh_config=mesh_config,
+                expert_weight_dtype=expert_weight_dtype,
+                use_ep_moe=use_ep_moe,
+                ep_seq_len_per_chip=ep_seq_len_per_chip,
+            )
+
+        # MiniMax-M2 lists per-layer attention types in `attn_type_list` (all 1 =
+        # full attention) via attn_type_list. Fall back gracefully.
+        attn_types = getattr(hf_config, "attn_type_list", None) or getattr(hf_config, "layer_types", None)
+        self.attention_type = attn_types[layer_idx] if attn_types is not None else 1
+
+        # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 (layers 3-59) run block-sparse
+        # attention; layers 0-2 (==0) stay dense. sparse_attention_config may be a dict or an object.
+        sparse_cfg = getattr(hf_config, "sparse_attention_config", None)
+        if isinstance(sparse_cfg, dict):
+            freq = sparse_cfg.get("sparse_attention_freq") if sparse_cfg.get("use_sparse_attention") else None
+        else:
+            freq = getattr(sparse_cfg, "sparse_attention_freq", None) if sparse_cfg is not None else None
+        is_sparse = bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
+
+        # Create attention configuration
+        attention_config = AttentionConfig(
+            hidden_size=hf_config.hidden_size,
+            num_heads=hf_config.num_attention_heads,
+            num_kv_heads=hf_config.num_key_value_heads,
+            head_dim=hf_config.head_dim,
+            rotary_dim=getattr(hf_config, "rotary_dim", hf_config.head_dim),
+            rms_norm_eps=hf_config.rms_norm_eps,
+            use_qk_norm=getattr(hf_config, "use_qk_norm", True),
+            use_gemma_norm=getattr(hf_config, "use_gemma_norm", False),
+            sliding_window=getattr(hf_config, "sliding_window", None),
+            max_seq_len=max_seq_len,
+            max_local_batch_size=max_local_batch_size,
+            users_row_sharded=users_row_sharded,
+            is_sparse=is_sparse,
+            sequence_parallel=sequence_parallel,
+        )
+
+        # Create attention program config
+        attention_program_config = MiniMaxM3AttentionProgramConfig()
+
+        self.self_attn = Attention(
+            mesh_device=mesh_device,
+            config=attention_config,
+            state_dict=substate(state_dict, "self_attn"),
+            ccl_manager=ccl_manager,
+            mesh_config=mesh_config,
+            program_config=attention_program_config,
+            layer_idx=layer_idx,
+            transformation_mats=transformation_mats,
+            tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
+        )
+        self.mesh_device = mesh_device
+        self.layer_idx = layer_idx
+
+    def __call__(
+        self,
+        hidden_states,
+        position_embeddings=None,
+        position_idx=None,
+        kv_cache=None,
+        user_id=0,
+        batch_size=1,
+        cached_len=0,
+    ):
+        seqlen = hidden_states.shape[-2]
+        if seqlen > 32 * 1024:
+            # Reallocate hidden states to prevent memory fragmentation.
+            hidden_states = ttnn.move(hidden_states)
+
+        # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
+        # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
+        residual = hidden_states
+        _dbg_dump(self.layer_idx, "residual_in", hidden_states, self.mesh_device)
+        hidden_states_post_norm = self.input_layernorm(hidden_states)
+
+        # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
+        # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
+        hidden_states = self.self_attn(
+            hidden_states_post_norm,
+            rope_mats=position_embeddings,
+            position_idx=position_idx,
+            kv_cache=kv_cache,
+            user_id=user_id,
+            batch_size=batch_size,
+            cached_len=cached_len,
+        )
+        hidden_states_post_norm.deallocate(True)
+        _dbg_sub(self.layer_idx, "attn_out", hidden_states)
+        _dbg_dump(self.layer_idx, "attn_out", hidden_states, self.mesh_device)
+
+        # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
+        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+        residual.deallocate(True)
+        _dbg_sub(self.layer_idx, "post_attn_resid", hidden_states)
+        residual = hidden_states
+        hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
+        _dbg_sub(self.layer_idx, "post_attn_norm", hidden_states_post_norm)
+        # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
+
+        hidden_states = self.mlp(hidden_states_post_norm)
+        hidden_states_post_norm.deallocate(True)
+        _dbg_sub(self.layer_idx, "mlp_out", hidden_states)
+        _dbg_dump(self.layer_idx, "mlp_out", hidden_states, self.mesh_device)
+
+        # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
+        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+        residual.deallocate(True)
+        _dbg_sub(self.layer_idx, "post_mlp_resid", hidden_states)
+
+        return hidden_states

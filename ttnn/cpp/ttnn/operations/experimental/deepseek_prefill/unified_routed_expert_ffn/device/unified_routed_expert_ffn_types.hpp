@@ -42,10 +42,17 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // Activation selector. false (default) = plain SiLU SwiGLU (DeepSeek, kernel
+    // unchanged). true = SwiGLU-OAI (clamp + alpha-sigmoid + (up+1)) for
+    // MiniMax-M3 / gpt-oss; drives the SWIGLU_OAI compile-time define in the
+    // compute kernel. alpha/limit are baked to the M3/gpt-oss values (1.702/7.0)
+    // in the kernel (SwiGLUConfigGPTOSS), so no extra params are needed.
+    bool swiglu_oai = false;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "swiglu_oai");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, swiglu_oai); }
 };
 
 // Tensors fed into the op.
