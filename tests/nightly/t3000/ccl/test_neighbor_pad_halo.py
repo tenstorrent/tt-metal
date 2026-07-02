@@ -189,8 +189,10 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
         [1, 3, 16, 24, 16],  # coalesce, NON-8-aligned rows (w_outer=30) + W_dev (6): exercises the relaxed gate
         [1, 7, 32, 64, 32],  # mid-size, NON-8-aligned rows (63/link), W_dev=16 (s4-like ratio)
         [1, 7, 32, 48, 32],  # mid-size, NON-8-aligned rows + W_dev=12 (s3-like non-aligned W)
+        [1, 64, 32, 64, 32],  # scale bracket: T=64 at small H/W (fast golden) to repro production-scale race
+        [1, 32, 272, 480, 128],  # s4 geometry at T=32 (the perf shape) — large H/W, moderate T
     ],
-    ids=["perstick", "coalesce", "coalesce_nonalign", "mid_wdev16", "mid_wdev12"],
+    ids=["perstick", "coalesce", "coalesce_nonalign", "mid_wdev16", "mid_wdev12", "scale_T64", "s4_T32"],
 )
 def test_neighbor_pad_halo_2d(mesh_device, device_params, padding_mode, input_shape):
     # [B, T, H, W, C]; H sharded over axis 0 (2 dev), W over axis 1 (4 dev). k333 halo (pH=pW=1).
