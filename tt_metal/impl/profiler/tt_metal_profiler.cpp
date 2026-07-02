@@ -23,6 +23,7 @@
 #include <optional>
 #include <ostream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -809,6 +810,10 @@ static void ReadDeviceProfilerResultsImpl(
         return;
     }
 
+    if (!ShouldProfileChip(device->id())) {
+        return;
+    }
+
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance(context_id).profiler_state_manager();
     auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
@@ -950,6 +955,10 @@ void ProcessDeviceProfilerResults(
         return;
     }
 
+    if (!ShouldProfileChip(device->id())) {
+        return;
+    }
+
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
 
@@ -1082,6 +1091,31 @@ void FreshProfilerDeviceLog() {
         }
     }
 #endif
+}
+
+static bool profiler_chip_filter_parsed = false;
+static std::set<uint32_t> profiler_chip_filter_set;
+static bool profiler_chip_filter_enabled = false;
+
+bool ShouldProfileChip(uint32_t device_id) {
+    if (!profiler_chip_filter_parsed) {
+        const char* val = std::getenv("TT_METAL_PROFILER_FILTER_CHIPS");
+        if (val != nullptr && val[0] != '\0') {
+            profiler_chip_filter_enabled = true;
+            std::istringstream ss(val);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                if (!token.empty()) {
+                    profiler_chip_filter_set.insert(static_cast<uint32_t>(std::stoul(token)));
+                }
+            }
+        }
+        profiler_chip_filter_parsed = true;
+    }
+    if (!profiler_chip_filter_enabled) {
+        return true;
+    }
+    return profiler_chip_filter_set.contains(device_id);
 }
 
 constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
