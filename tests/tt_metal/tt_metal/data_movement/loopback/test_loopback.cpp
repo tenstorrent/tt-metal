@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -100,7 +101,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
                 .runtime_arg_names = {"num_of_transactions", "transaction_num_pages", "dest_x", "dest_y"},
             },
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (device->arch() == tt::ARCH::QUASAR) {
                     return DataMovementHardwareConfig{DataMovementGen2Config{}};
                 }
@@ -108,7 +109,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = test_config.noc_id,
                 }};
-            }(),
+            }),
     };
 
     ProgramSpec spec{

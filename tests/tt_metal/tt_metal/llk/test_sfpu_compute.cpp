@@ -691,14 +691,14 @@ std::vector<uint32_t> run_sfpu_pipeline(
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
                         experimental::DataMovementGen2Config{.disable_implicit_sync_for = {IN_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -713,14 +713,14 @@ std::vector<uint32_t> run_sfpu_pipeline(
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
                         experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUT_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-            }(),
+            }),
     };
 
     experimental::KernelSpec compute_spec{
@@ -744,7 +744,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_size", 1u}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 auto unpack_modes =
                     test_config.unpack_to_dest_fp32
@@ -768,7 +768,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::WorkUnitSpec wu{
@@ -1071,7 +1071,7 @@ bool run_sfpu_binary_two_input_buffer(
         .compile_time_args =
             {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
         .hw_config =
-            [&] {
+            std::invoke([&] {
                 experimental::ComputeHardwareConfig cfg;
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     cfg = experimental::ComputeGen2Config{
@@ -1085,7 +1085,7 @@ bool run_sfpu_binary_two_input_buffer(
                     };
                 }
                 return cfg;
-            }(),
+            }),
     };
 
     experimental::ProgramSpec spec{
@@ -1255,7 +1255,7 @@ bool run_sfpu_ternary_three_input_buffer(
             .compile_time_args =
                 {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
             .hw_config =
-                [&] {
+                std::invoke([&] {
                     experimental::ComputeHardwareConfig cfg;
                     if (mesh_device->arch() == tt::ARCH::QUASAR) {
                         cfg = experimental::ComputeGen2Config{
@@ -1267,7 +1267,7 @@ bool run_sfpu_ternary_three_input_buffer(
                         };
                     }
                     return cfg;
-                }(),
+                }),
         };
 
         experimental::ProgramSpec spec{

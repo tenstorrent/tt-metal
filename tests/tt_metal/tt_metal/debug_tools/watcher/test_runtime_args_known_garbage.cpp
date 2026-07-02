@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <vector>
 #include <gtest/gtest.h>
 
@@ -411,13 +412,13 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
             kspec.num_threads = 1;
         }
         // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-        kspec.hw_config = [&] {
+        kspec.hw_config = std::invoke([&] {
             if (is_quasar) {
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
             }
             return experimental::DataMovementHardwareConfig{
                 experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
-        }();
+        });
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
         kspec.hw_config = experimental::ComputeHardwareConfig{};
