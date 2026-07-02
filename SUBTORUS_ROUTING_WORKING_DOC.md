@@ -41,7 +41,7 @@ eth channels.
 New proto field on `MeshDescriptor`, declares skip links by **pattern**, not enumerated pairs:
 
 ```protobuf
-skip_links { axis: ROW  pattern { start: 2  step: 4 } }
+skip_links { dim_idx: 0  pattern { start: 2  step: 4 } }
 ```
 
 - Tile the chosen `axis` into consecutive `step`-wide blocks starting at `start`.
