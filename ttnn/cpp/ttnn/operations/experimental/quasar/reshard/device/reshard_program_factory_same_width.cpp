@@ -174,7 +174,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
-            .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(role)},
+            .hw_config = DataMovementHardwareConfig{create_from_role(role)},
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kSWRemoteTensorParam}, .accessor_name = kSWRemoteTensorParam});

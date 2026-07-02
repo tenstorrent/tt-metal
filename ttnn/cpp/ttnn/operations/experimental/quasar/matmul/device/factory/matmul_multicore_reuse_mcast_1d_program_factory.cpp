@@ -6818,8 +6818,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                          "last_block_h",
                          "sparsity_addr",
                      }},
-            .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config::create_from_role(
-                m2::DataMovementRoleHint::READER)},
+            .hw_config = m2::DataMovementHardwareConfig{m2::create_from_role(m2::DataMovementRoleHint::READER)},
         });
     }
 
