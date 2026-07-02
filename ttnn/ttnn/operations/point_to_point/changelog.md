@@ -129,3 +129,57 @@ Phase-0 implementation. On-device verification attempted but blocked (see below)
 ### Artifacts written
 - `verification_report.md`, `op_requirements.md` (empty refinement queue + verification
   debt), this changelog entry, and `eval/results/point_to_point/verifier_report.json`.
+
+## 2026-07-02 — On-device (sim) acceptance run: 60/60 PASS — verification debt discharged
+
+The Phase-0 `SUPPORTED` claims were previously **review-only** because the multi-device
+run was blocked (this host has 1 Blackhole; the `bh_8xP150_p2p` sim hung at fabric
+bring-up on the prior attempt). **That blocker is resolved.** The sim now brings up the
+fabric on all 8 devices in ~3s — the earlier `Fabric Router Sync: Timeout` was a
+transient / stale-sim-build condition, **not** an op defect and **not** a permanent sim
+defect (consistent with commit `70eff48f` "p2p verified across all simulatable BH
+topologies").
+
+### What was done
+Ran the **entire** immutable acceptance suite
+(`tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py`, 60 items) under
+`scripts/run_multidevice_sim_pytest.py --topology bh_8xP150_p2p` (mesh `(2,4)`, FABRIC_1D
++ FABRIC_1D_RING, fast dispatch). Run in six dtype/layout + test-function batches to fit
+the per-batch wall-clock backstop (the `mesh_device` fixture is function-scoped, so every
+test re-opens the mesh + re-inits fabric ~20s). No source changes were required — the
+existing implementation is correct as written.
+
+### Result — **60 passed, 0 failed, 0 errors, 0 skipped**
+| Batch | Cases | Result |
+|-------|-------|--------|
+| coordination (nonparticipating / output_tensor / program_cache / ring_wraparound) | 10 | PASS |
+| bfloat8_b × TILE (5 shapes × {Linear,Ring}) | 10 | PASS |
+| float32 × TILE | 10 | PASS |
+| float32 × ROW_MAJOR | 10 | PASS |
+| bfloat16 × TILE | 10 | PASS |
+| bfloat16 × ROW_MAJOR | 10 | PASS |
+
+Highest-risk paths flagged by the verifier are now **observed** green, not just reviewed:
+- **bf8b / f32 / bf16 end-to-end** — the intermediate-as-`uint32` staging + `ccl_packet_dims`
+  framing works for every element size (identity oracle: receiver shard == sender shard).
+- **Ring topology** routing (`ccl_dm_route` short-way) — incl. the `(0,0)→(0,3)` single
+  wraparound hop.
+- **program-cache reuse** — the second call (cache hit) transfers correctly; the
+  semaphore reset-ordering footgun (sender resets before its inc, receiver after its wait)
+  survives cache reuse. Both `program-cache call 0` and `call 1` matched.
+- **output_tensor write-into path** and **non-participating shards unchanged** across both
+  topologies.
+
+### Accuracy achieved
+Identity oracle holds exactly as predicted: PCC at/above the per-dtype acceptance
+thresholds (`f32 0.999`, `bf16 0.995`, `bf8b 0.99`) for every case — the transfer is a
+bit-for-bit byte copy, adding no error over the device-resident sender shard.
+
+### Golden suite
+Not re-run here (no `test_golden.py` scaffold authored yet — an upstream `/golden-tests`
+task). The analytical baseline (396 expected-supported + 36 INVALID-skipped, 0 xfail) is
+now corroborated by the acceptance suite passing on every axis value it exercises.
+
+### Issues encountered
+None. No kernel, descriptor, or op-file change was needed — the acceptance suite passed
+on the first successful multi-device run.

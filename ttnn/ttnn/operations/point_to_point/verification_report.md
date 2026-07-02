@@ -140,7 +140,17 @@ Verdict: INVALID is well-formed; no change recommended.
 
 ---
 
-## On-device verification (BLOCKED — read this)
+## On-device verification
+
+> **UPDATE 2026-07-02 — RESOLVED.** The blocker below was **transient**. The
+> `bh_8xP150_p2p` sim now brings up the fabric on all 8 devices in ~3s, and the
+> **full acceptance suite passes 60/60** (mesh `(2,4)`, FABRIC_1D + FABRIC_1D_RING)
+> via `scripts/run_multidevice_sim_pytest.py --topology bh_8xP150_p2p`. Every
+> dtype × layout × shape × topology cell in the acceptance suite is now *observed*
+> green — including bf8b, Ring wraparound, program-cache reuse, and the
+> output_tensor / non-participating paths. The `SUPPORTED` claims are no longer
+> review-only. See `changelog.md` → 2026-07-02. The original (now-stale) blocker
+> analysis is preserved verbatim below for the audit trail.
 
 This op can only run on a `ttnn.MeshDevice` with ≥2 devices on a line and the
 fabric enabled. Two independent blockers prevent mechanical verification on this

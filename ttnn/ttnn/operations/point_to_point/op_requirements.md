@@ -76,15 +76,19 @@ Per the agent contract, items that are **not** axis-expansions and **not** moves
 out of a tracked failure category do **not** belong in this queue. The two
 remaining concerns are recorded where they belong:
 
-1. **Verification debt (a task, not a refinement).** The Phase-0 `SUPPORTED` claims
-   are verified by code review + analytical gap analysis only; **no cell has been
-   observed passing on hardware**. Re-running the acceptance + precision +
-   golden suites on real ≥2-device Blackhole hardware (or a repaired sim-bh fabric
-   model) is required to confirm them. This is verification work — explicitly *not*
-   a refinement — and is tracked in `verification_report.md` → Recommendations #1.
-   Highest-risk unverified paths to exercise first: bf8b/uint16/int32/uint32 framing,
-   the segmented packet regime (`page_segments > 1`), Ring routing, and
-   program-cache reuse (the semaphore-reset footgun).
+1. **Verification debt — DISCHARGED (2026-07-02).** The Phase-0 `SUPPORTED` claims
+   were previously verified by code review + analytical gap analysis only. They are
+   now **observed** green: the full acceptance suite
+   (`test_point_to_point.py`, 60 items) passes **60/60** on the `bh_8xP150_p2p` sim
+   (mesh `(2,4)`, FABRIC_1D + FABRIC_1D_RING) via
+   `scripts/run_multidevice_sim_pytest.py`. The prior fabric-bring-up "hang" was a
+   transient/stale-sim condition, not an op defect. Highest-risk paths (bf8b/f32/bf16
+   framing, Ring routing, program-cache reuse / semaphore-reset footgun, output_tensor
+   and non-participating paths) all confirmed. See `changelog.md` → 2026-07-02 entry.
+   *(Not re-run here: uint16/int32/uint32 — SUPPORTED but not in the acceptance
+   suite's DTYPE_LAYOUTS; the segmented packet regime `page_segments > 1` — not reached
+   by the acceptance suite's shard shapes; and the golden scaffold — an upstream
+   `/golden-tests` task. These remain analytically supported.)*
 
 2. **Out-of-TARGET enhancements (need a TARGET expansion first, via `/golden-tests`).**
    - *Sharded memory config* — `validate()` rejects sharded input; TARGET has no
