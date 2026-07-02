@@ -69,6 +69,9 @@ inline bool do_forward_sync(const bool is_forward) {
 }
 }  // namespace detail
 void kernel_main() {
+    // Reset packet header pool for trace replay compatibility (statics persist in L1)
+    PacketHeaderPool::reset();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
