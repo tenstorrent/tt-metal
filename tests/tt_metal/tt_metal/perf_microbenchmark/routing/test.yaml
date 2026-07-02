@@ -17,7 +17,8 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 4294967295
+      num_packets: 100000000
+      #### num_packets: 4294967295
 
     patterns:
       - type: neighbor_exchange

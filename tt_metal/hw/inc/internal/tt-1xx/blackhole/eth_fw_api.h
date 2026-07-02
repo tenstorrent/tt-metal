@@ -7,6 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 
+// For MEM_AERISC_RESUME_PHASE_BASE (the reserved L1 word for the resume-phase debug code).
+// dev_mem_map.h is pure preprocessor and host/device/linker safe, so including it here is fine for
+// both the device kernel build and the host HAL translation units that include this header.
+#include "dev_mem_map.h"
+
 #if defined(COMPILE_FOR_AERISC)
 // For WATCHER_RING_BUFFER_PUSH(), used by recover_eth_link_if_down(). The macro is a no-op unless the
 // watcher is enabled (TT_METAL_WATCHER), so this costs nothing in production. Guarded to device builds
@@ -384,6 +389,41 @@ constexpr uint32_t ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE = 0xCA11ED00;
 // 0xCA11ED, the FW API table never populated eth_link_recovery_ptr.
 constexpr uint32_t ETH_LINK_RECOVERY_UNAVAIL_RING_BUF_CODE = 0xDEAD0000;
 
+// ---- Resume-phase debug word ----------------------------------------------------------------------
+// A single uint32 in a reserved L1 slot (MEM_AERISC_RESUME_PHASE_BASE) that active ERISC0 stamps as it
+// moves through the link-down -> recover -> resume-traffic sequence. Read it back from L1 post-mortem
+// (or live) to see how far a recovery got:
+//   stuck at RETRAIN_ENTER -> wedged inside the FW recovery call;
+//   stuck at RETRAIN_DONE  -> recovered but the router never sent again (TX did not resume);
+//   stuck at FIRST_TX      -> sent but never received a packet back (RX did not resume);
+//   reaches FIRST_RX       -> traffic resumed both directions.
+// Values are monotonic within one recovery cycle; a fresh link-down restamps RETRAIN_ENTER, so the
+// word always reflects the most recent recovery attempt. Relies on TT_METAL_CLEAR_L1=1 for a 0 start.
+constexpr uint32_t RESUME_PHASE_RETRAIN_ENTER = 0x5E5E0001;  // about to call the FW link-recovery entry point
+constexpr uint32_t RESUME_PHASE_RETRAIN_DONE = 0x5E5E0002;   // FW recovery returned (link retrained)
+constexpr uint32_t RESUME_PHASE_FIRST_TX = 0x5E5E0003;       // first packet sent after retrain
+constexpr uint32_t RESUME_PHASE_FIRST_RX = 0x5E5E0004;       // first packet received after the first post-retrain TX
+
+// Unconditionally stamp the resume-phase word. ERISC0-only; no-op elsewhere and on the host, so call
+// sites need no guard beyond ARCH_BLACKHOLE for the macro to exist. A single direct L1 store (not a
+// NOC transaction), so it does not perturb the router's dedicated-NOC state.
+inline void fabric_dbg_set_resume_phase(uint32_t code) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RESUME_PHASE_BASE) = code;
+#endif
+}
+// Advance the phase word from `from` to `to` only if it currently holds `from`. Lets the hot TX/RX
+// paths mark the FIRST post-retrain send/receive exactly once (subsequent packets are a read+compare
+// no-op) without a separate flag.
+inline void fabric_dbg_advance_resume_phase(uint32_t from, uint32_t to) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RESUME_PHASE_BASE);
+    if (*p == from) {
+        *p = to;
+    }
+#endif
+}
+
 // This should only be run on ERISC0, and ERISC1 should not be sending/receiving traffic while this is called.
 static void recover_eth_link_if_down() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
@@ -411,9 +451,12 @@ static void recover_eth_link_if_down() {
         const uint32_t eth_link_recovery_ptr =
             (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr);
         if (eth_link_recovery_ptr != 0) {
-            // Confirm in the watcher trace that we are about to jump into FW recovery.
+            // Resume-phase: about to enter FW recovery. If the word stays here, we wedged in the call.
+            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
             reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
             WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE);
+            // Resume-phase: recovery returned (link retrained). The TX/RX paths advance from here.
+            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_DONE);
         } else {
             // FW does not provide a recovery entry point; record that we skipped the call.
             WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_UNAVAIL_RING_BUF_CODE);

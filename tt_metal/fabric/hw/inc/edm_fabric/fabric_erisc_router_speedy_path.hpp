@@ -158,6 +158,11 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+            // [RESUME-DEBUG] A packet just went out over eth. If a retrain just completed, mark the
+            // first post-retrain TX. Conditional advance -> only writes once, then a read+compare no-op.
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_advance_resume_phase(RESUME_PHASE_RETRAIN_DONE, RESUME_PHASE_FIRST_TX);
+#endif
         }
         sender_state.sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -271,6 +276,11 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 
         did_something = true;
         progress = true;
+        // [RESUME-DEBUG] A packet was received off eth and delivered locally. Once the first
+        // post-retrain TX has happened, mark the first post-retrain RX (traffic resumed both ways).
+#if defined(ARCH_BLACKHOLE)
+        fabric_dbg_advance_resume_phase(RESUME_PHASE_FIRST_TX, RESUME_PHASE_FIRST_RX);
+#endif
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(packet_header, local_fabric_telemetry);
         }
