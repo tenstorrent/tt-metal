@@ -1259,6 +1259,10 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
 }
 
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
+    if (MetalContext::instance(context_id_).rtoptions().get_disable_trace_capture()) {
+        return;
+    }
+
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
     validate_sub_device_manager_tracker();
@@ -1289,6 +1293,10 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 }
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    if (MetalContext::instance(context_id_).rtoptions().get_disable_trace_capture()) {
+        return;
+    }
+
     TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
         !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
@@ -1316,6 +1324,10 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 }
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    if (MetalContext::instance(context_id_).rtoptions().get_disable_trace_capture()) {
+        return;
+    }
+
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
@@ -1349,6 +1361,10 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
     ZoneScoped;
+    if (MetalContext::instance(context_id_).rtoptions().get_disable_trace_capture()) {
+        return;
+    }
+
     TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     const auto& trace_buffer = active_sub_device_manager->get_trace(trace_id);

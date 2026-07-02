@@ -143,6 +143,7 @@ enum class EnvVarID {
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
     TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
+    TT_METAL_DISABLE_TRACE_CAPTURE,                // Disable trace capture
 
     // ========================================
     // WATCHER SYSTEM
@@ -1064,6 +1065,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISPATCH_TELEMETRY_DISABLE:
             this->dispatch_telemetry_disabled = is_env_enabled(value);
             break;
+
+        // TT_METAL_DISABLE_TRACE_CAPTURE
+        // Disable trace capture.
+        // Default: false (trace capture enabled)
+        // Usage: export TT_METAL_DISABLE_TRACE_CAPTURE=1
+        case EnvVarID::TT_METAL_DISABLE_TRACE_CAPTURE: {
+            if (is_env_enabled(value)) {
+                this->disable_trace_capture = true;
+            }
+            break;
+        }
 
         // ========================================
         // WATCHER SYSTEM
