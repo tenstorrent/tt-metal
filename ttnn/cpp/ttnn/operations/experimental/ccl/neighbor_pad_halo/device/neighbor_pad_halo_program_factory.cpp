@@ -363,6 +363,24 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         CreateCircularBuffer(program, w_fabric_core_range, cb_w_sender_config);
     }
 
+    // Mux gating + W worker/mux core coords, computed HERE (before the H-writer setup) so the H->W
+    // barrier signal can target the relocated mux W-reader cores. TT_NP_W_MUX forces the mux path at any
+    // worker count (bring-up). See PLAN_NP_FABRIC_MUX_IMPL.md.
+    const bool w_force_mux = std::getenv("TT_NP_W_MUX") != nullptr;
+    const bool use_w_mux = is_2d && ((num_w_workers > 1) || w_force_mux) && !is_first_w_device &&
+                           !is_last_w_device && (w_coalesce_n > 0);
+    std::vector<CoreCoord> mux_worker_logical, mux_worker_virtual, mux_core_logical;
+    if (use_w_mux) {
+        for (uint32_t s = 0; s < pad2_num_links * 2; s++) {
+            mux_core_logical.push_back(CoreCoord{1, s});
+            for (uint32_t wk = 0; wk < num_w_workers; wk++) {
+                CoreCoord wc{2 + wk, s};
+                mux_worker_logical.push_back(wc);
+                mux_worker_virtual.push_back(mesh_device->worker_core_from_logical_core(wc));
+            }
+        }
+    }
+
     // Compute H fabric unicast and multicast route configurations
     auto [h_unicast_forward_args, h_unicast_backward_args] =
         ::ttnn::ccl::get_forward_backward_line_unicast_configuration(
@@ -505,13 +523,16 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 true,                                                // use_barrier_semaphore
                 virtual_opposite_core.x,                             // barrier_sem_noc0_x
                 virtual_opposite_core.y};                            // barrier_sem_noc0_y
-            // Phase 2 signal targets (W fabric reader cores)
+            // Phase 2 signal targets (W fabric reader cores). Mux path: signal the relocated mux
+            // worker-reader cores (each waits the H->W barrier) instead of the standard column-0 W cores.
             constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
-            writer_rt_args.push_back(num_w_fabric_cores);
+            const std::vector<CoreCoord>& w_sig_cores = use_w_mux ? mux_worker_virtual : w_fabric_virtual_cores;
+            const uint32_t n_w_sig = static_cast<uint32_t>(w_sig_cores.size());
+            writer_rt_args.push_back(n_w_sig);
             for (uint32_t s = 0; s < MAX_PHASE2_SIGNAL_TARGETS; s++) {
-                if (s < num_w_fabric_cores) {
-                    writer_rt_args.push_back(w_fabric_virtual_cores[s].x);
-                    writer_rt_args.push_back(w_fabric_virtual_cores[s].y);
+                if (s < n_w_sig) {
+                    writer_rt_args.push_back(w_sig_cores[s].x);
+                    writer_rt_args.push_back(w_sig_cores[s].y);
                 } else {
                     writer_rt_args.push_back(0);
                     writer_rt_args.push_back(0);
@@ -591,8 +612,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         // the eth link is saturated (reach ~12.5 GB/s/link vs ~1.4 single-worker). Gated on num_w_workers
         // > 1 + middle device + coalesce-eligible; else falls through to the standard 1-worker path.
         // Uses the shipping tt_fabric_mux kernel + ccl::fabric_mux_connection_{ct,rt}_args helpers.
-        const bool use_w_mux =
-            (num_w_workers > 1) && !is_first_w_device && !is_last_w_device && (w_coalesce_n > 0);
+        // use_w_mux + mux core coords are computed above (before the H-writer barrier signal setup).
         if (use_w_mux) {
             using tt::tt_fabric::FabricMuxChannelType;
             const uint32_t l1_base =
@@ -629,15 +649,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
             const std::string kdir =
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
-            // Gather all worker + mux cores into ranges for kernel creation.
-            std::vector<CoreCoord> mux_worker_cores;   // flat: [link*2+dir][worker]
-            std::vector<CoreCoord> mux_mux_cores;      // flat: [link*2+dir]
-            for (uint32_t s = 0; s < pad2_num_links * 2; s++) {
-                mux_mux_cores.push_back(CoreCoord{1, s});
-                for (uint32_t wk = 0; wk < num_w_workers; wk++) {
-                    mux_worker_cores.push_back(CoreCoord{2 + wk, s});
-                }
-            }
+            // Reuse the hoisted core lists (flat: [link*2+dir][worker] for workers, [link*2+dir] for mux).
+            const std::vector<CoreCoord>& mux_worker_cores = mux_worker_logical;
+            const std::vector<CoreCoord>& mux_mux_cores = mux_core_logical;
             std::set<CoreRange> worker_crs, mux_crs;
             for (const auto& c : mux_worker_cores) worker_crs.insert(CoreRange(c));
             for (const auto& c : mux_mux_cores) mux_crs.insert(CoreRange(c));
