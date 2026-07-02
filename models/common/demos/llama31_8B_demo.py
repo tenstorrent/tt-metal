@@ -51,6 +51,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.common.utility_functions import skip_for_wormhole_b0
 
 # =============================================================================
 # Constants and Expected Metrics
@@ -444,6 +445,7 @@ _collect_all_baselines()
 # =============================================================================
 
 
+@skip_for_wormhole_b0("Tensor cache directory mounted read-only on wh_llmbox T3K runners, refs #47720")
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 50000000, "num_command_queues": 1}],
