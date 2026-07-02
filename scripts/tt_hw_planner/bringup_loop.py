@@ -489,6 +489,18 @@ def _build_torch_reference():
             _last_err = _e
             continue
     if model is None:
+        try:
+            import importlib.util as _ilu
+            import os as _os
+            _rl = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "_reference_loader.py")
+            if _os.path.isfile(_rl):
+                _spec = _ilu.spec_from_file_location("_reference_loader", _rl)
+                _rlmod = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_rlmod)
+                model = _rlmod.load_reference_model(HF_MODEL_ID)
+        except Exception as _rle:
+            _last_err = _rle
+    if model is None:
         raise RuntimeError(
             f"Could not load {{HF_MODEL_ID}} via AutoModelForCausalLM or "
             f"AutoModel; last error: {{type(_last_err).__name__}}: {{_last_err}}"
