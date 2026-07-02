@@ -311,10 +311,9 @@ struct KernelConfig {
     // Legacy (non-Welford) column masking for non-tile-aligned widths: zero the padding columns of
     // the final tile so they do not enter E[x] or the variance.
     bool do_col_mask = false;
-    // Non-distributed stage generates the CB 19 mask on-device in the writer; these feed that
-    // generation: the logical (un-padded) width and the data format the generated mask tiles must match.
+    // Non-distributed stage generates the CB 19 mask on-device in the writer; this feeds that generation:
+    // the logical (un-padded) width, i.e. where the padding columns begin.
     uint32_t logical_K = 0;
-    bool mask_fp32 = false;
 };
 
 // Struct to hold CB configuration for building CB descriptors
