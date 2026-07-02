@@ -9,6 +9,7 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 /**
  * Internal implementation header for HostTensor.
@@ -19,6 +20,17 @@
  */
 
 namespace tt::tt_metal {
+
+// Returns true if a buffer of element type T is a valid source or fill value for a tensor with
+// the given dtype.  Rules (same as HostTensor::from_xxx):
+//   - exact match: convert_to_data_type<T>() == dtype
+//   - block-float (BFLOAT8_B / BFLOAT4_B): T must be float or bfloat16 (packed/unpacked via float)
+template <typename T>
+constexpr bool is_buffer_type_compatible_with_dtype(DataType dtype) noexcept {
+    constexpr DataType buffer_dtype = convert_to_data_type<T>();
+    return buffer_dtype == dtype || ((dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B) &&
+                                     (buffer_dtype == DataType::FLOAT32 || buffer_dtype == DataType::BFLOAT16));
+}
 
 class HostTensorImpl {
 public:
