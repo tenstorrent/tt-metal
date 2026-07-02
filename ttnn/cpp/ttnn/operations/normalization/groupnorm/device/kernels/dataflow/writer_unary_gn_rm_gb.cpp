@@ -156,6 +156,14 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
+                    // Datum-aware stick offsets: a gamma RM stick of TILE_WIDTH(32) datums is split
+                    // across face 0 row 0 and face 1 row 0. bf16 hardcoded 64/512/32; derive from the
+                    // datum width (gamma_tile_bytes/1024 = 2 for bf16, 4 for fp32) so fp32 gamma reads
+                    // the correct byte ranges (matches the sharded writer). face_row = 16 datums,
+                    // face = 16*16 datums.
+                    const uint32_t gamma_datum_bytes = gamma_tile_bytes / 1024;
+                    const uint32_t gamma_face_row_bytes = 16 * gamma_datum_bytes;
+                    const uint32_t gamma_face_bytes = 256 * gamma_datum_bytes;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     cb_gamma.reserve_back(num_cols_tile_gamma_beta);
@@ -164,36 +172,36 @@ void kernel_main() {
                     uint32_t l1_write_addr_gamma = base_l1_write_addr_gamma;
 
                     // We want this data to appear as the first row of the tile.
-                    // This is 32B at the start of the first face, 32B at the start of the second face
+                    // This is face_row bytes at the start of face 0, face_row bytes at the start of face 1.
                     // However we must read at a 64 byte granularity for Blackhole NOC compatibility on DRAM reads
-                    // So instead of two 32B reads to the correct addresses, we read 64 bytes into the first face here
-                    // Then later, copy the second set of 32 bytes into the start of the second face
+                    // So instead of two reads to the correct addresses, we read both face-rows into the first face here
+                    // Then later, copy the second face-row into the start of the second face
                     // L1-L1 NOC transactions only need 16 byte alignment on BH, so this is legal after data is loaded
                     // to L1
 
-                    // Read the first 64 bytes of the tile into the first face
+                    // Read the first two face-rows of the tile into the first face
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = gamma_tile_start_id + w;
                         noc.async_read(
                             gamma,
                             CoreLocalMem<uint32_t>(l1_write_addr_gamma),
-                            64,
+                            2 * gamma_face_row_bytes,
                             {.page_id = tile_id},
                             {});
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
                     noc.async_read_barrier();
 
-                    // Copy the second set of 32 bytes into the second face
+                    // Copy the second face-row into the second face
                     l1_write_addr_gamma = base_l1_write_addr_gamma;
 
                     UnicastEndpoint self_ep_gamma;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         noc.async_read(
                             self_ep_gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
+                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + gamma_face_bytes),
+                            gamma_face_row_bytes,
+                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + gamma_face_row_bytes},
                             {});
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
@@ -204,8 +212,12 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
-                    // Then copy the second set of 32 bytes into the second face
+                    // Then copy the second face-row into the second face. Datum-aware offsets (see the
+                    // gamma block) so fp32 beta reads the correct byte ranges (matches the sharded writer).
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
+                    const uint32_t beta_datum_bytes = beta_tile_bytes / 1024;
+                    const uint32_t beta_face_row_bytes = 16 * beta_datum_bytes;
+                    const uint32_t beta_face_bytes = 256 * beta_datum_bytes;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     cb_beta.reserve_back(num_cols_tile_gamma_beta);
@@ -213,29 +225,29 @@ void kernel_main() {
                     const uint32_t base_l1_write_addr_beta = cb_beta.get_write_ptr();
                     uint32_t l1_write_addr_beta = base_l1_write_addr_beta;
 
-                    // Read the first 64 bytes of the tile into the first face
+                    // Read the first two face-rows of the tile into the first face
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = beta_tile_start_id + w;
                         noc.async_read(
                             beta,
                             CoreLocalMem<uint32_t>(l1_write_addr_beta),
-                            64,
+                            2 * beta_face_row_bytes,
                             {.page_id = tile_id},
                             {});
                         l1_write_addr_beta += beta_tile_bytes;
                     }
                     noc.async_read_barrier();
 
-                    // Copy the second set of 32 bytes into the second face
+                    // Copy the second face-row into the second face
                     l1_write_addr_beta = base_l1_write_addr_beta;
 
                     UnicastEndpoint self_ep_beta;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         noc.async_read(
                             self_ep_beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
+                            CoreLocalMem<uint32_t>(l1_write_addr_beta + beta_face_bytes),
+                            beta_face_row_bytes,
+                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + beta_face_row_bytes},
                             {});
                         l1_write_addr_beta += beta_tile_bytes;
                     }

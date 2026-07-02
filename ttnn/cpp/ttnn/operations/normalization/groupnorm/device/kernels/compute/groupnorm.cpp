@@ -704,6 +704,11 @@ void kernel_main() {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
                                 mul_bcast_rows_init_short(cb_reread_write_out_id, cb_gamma_id);
+                                // fp32: the reread stage left SrcB bound to a fp32 CB (cb_xmm);
+                                // cb_gamma is bf16. Reset both src formats so the bf16 gamma tile
+                                // isn't misread as fp32. (bf16 path: no-op.)
+                                reconfig_data_format_srca(cb_reread_write_out_id);
+                                reconfig_data_format_srcb(cb_gamma_id);
                             } else {
                                 copy_tile_init(cb_reread_write_out_id);
                             }
@@ -737,6 +742,11 @@ void kernel_main() {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
                                 add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
+                                // fp32: mirror the sharded kernel — cb_inbeta is fp32 but cb_beta is
+                                // bf16; reset both src formats so the bf16 beta tile isn't misread as
+                                // fp32. (bf16 path: no-op.)
+                                reconfig_data_format_srca(cb_inbeta_id);
+                                reconfig_data_format_srcb(cb_beta_id);
                             } else {
                                 copy_tile_init(cb_inbeta_id);
                             }

@@ -1635,25 +1635,57 @@ def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype):
     assert passing, f"sharded legacy {in_dtype} gamma={gb_dtype} PCC failed: {pcc}"
 
 
-# Legacy (non-welford) FP32 GroupNorm is validation-gated to sharded inputs; interleaved FP32 input
-# without use_welford must be rejected (rather than emit silently-wrong output).
-def test_group_norm_legacy_fp32_interleaved_rejected(device, expect_error):
+# Legacy (non-welford) FP32 GroupNorm on DRAM-interleaved input. Interleaved analog of
+# test_group_norm_sharded_legacy_fp32 (same shapes/grid/dtypes, gamma+beta applied), just DRAM
+# interleaved instead of sharded. Requires fp32_dest_acc_en=True; unbiased data (FPU reads x via
+# SrcA at TF32).
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_group_norm_legacy_fp32_interleaved(device, in_dtype, gb_dtype):
     N, C, H, W, num_groups = 1, 320, 32, 32, 16
+    grid = ttnn.CoreGrid(y=1, x=8)
     torch.manual_seed(0)
-    x = torch.rand((N, 1, H * W, C), dtype=torch.float32)
-    xt = ttnn.from_torch(
-        x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for legacy FP32 (fp32 DEST accumulation)
+        packer_l1_acc=False,
     )
-    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, 1, ttnn.DataType.BFLOAT8_B), device)
-    with expect_error(RuntimeError, "only supported for sharded"):
-        ttnn.group_norm(
-            xt,
-            num_groups=num_groups,
-            input_mask=mask,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=ttnn.CoreGrid(y=1, x=8),
-            dtype=ttnn.float32,
-            use_welford=False,
-            output_layout=ttnn.TILE_LAYOUT,
-            inplace=False,
-        )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.DataType.BFLOAT8_B), device)
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        inplace=False,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+    passing, pcc = comp_pcc(ref, out, pcc=0.999)
+    assert passing, f"interleaved legacy {in_dtype} gamma={gb_dtype} PCC failed: {pcc}"

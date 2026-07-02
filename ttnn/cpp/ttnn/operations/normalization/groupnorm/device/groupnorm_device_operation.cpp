@@ -59,13 +59,6 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::FLOAT32,
         "Input tensor must be BFLOAT16 or FLOAT32, got: {}",
         a.dtype());
-    // FLOAT32 on the legacy (non-welford) path is currently only supported for sharded inputs.
-    // The interleaved (mcast/no_mcast) legacy fp32 affine/reread output path is not yet correct;
-    // welford fp32 works on any layout. Gate it here rather than emit silently-wrong output.
-    TT_FATAL(
-        !(a.dtype() == DataType::FLOAT32 && !args.use_welford && !a.is_sharded()),
-        "Legacy (non-welford) GroupNorm with FLOAT32 input is only supported for sharded inputs; "
-        "use use_welford=true for interleaved FLOAT32, or a sharded input.");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");

@@ -389,11 +389,11 @@ Tensor group_norm(
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-        // Welford keeps stats/intermediates in fp32 when the fp32 intake path is active, i.e.
-        // fp32 input with fp32 DEST (matches welford_unpack_fp32_active in the factories). The
-        // compute kernel's reconfig sequence is tuned for that combo; bf16 input keeps bf16 stats
-        // (baseline) because bf16-input + fp32-stats needs a separate reconfig retune.
-        .im_data_format = (use_welford && fp32_dest_acc_en && input_tensor.dtype() == DataType::FLOAT32)
+        // fp32 intermediates/stats when the fp32 intake path is active (mirrors the sharded branch
+        // and LayerNorm cb_data_format): legacy fp32 always, and welford fp32 input with fp32 DEST
+        // (matches welford_unpack_fp32_active in the factories). bf16 input keeps bf16 stats because
+        // bf16-input + fp32-stats needs a separate reconfig retune.
+        .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
                               ? DataType::FLOAT32
                               : DataType::BFLOAT16,
         .out_data_format = dtype.value_or(input_tensor.dtype()),

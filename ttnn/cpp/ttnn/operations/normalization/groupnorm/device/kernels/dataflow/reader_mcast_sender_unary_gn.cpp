@@ -429,15 +429,22 @@ void kernel_main() {
 
                             for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                                 for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                    noc.async_read(
-                                        dst_a,
-                                        CoreLocalMem<uint32_t>(l1_write_addr),
-                                        single_tile_size_bytes,
-                                        {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
-                                            index_b_offset + index_g_offset},
-                                        {});
+                                    // Mirror the writer's bounds guard: it only writes tiles with
+                                    // (index_g_offset + nt) < per_core_N, so tiles past that were never
+                                    // written. Rereading them pulls out-of-bounds/uninitialized DRAM
+                                    // (fp32: ~3.4e38 garbage, PCC collapse). Skip them, matching the writer;
+                                    // keep advancing l1_write_addr so the tile layout stays aligned.
+                                    if ((index_g_offset + nt) < per_core_N) {
+                                        noc.async_read(
+                                            dst_a,
+                                            CoreLocalMem<uint32_t>(l1_write_addr),
+                                            single_tile_size_bytes,
+                                            {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                                index_b_offset + index_g_offset},
+                                            {});
+                                        noc.async_read_barrier();
+                                    }
                                     l1_write_addr += dst_tile_bytes;
-                                    noc.async_read_barrier();
                                 }
                             }
                             cb_reread_out.push_back(out_block_hw_normal);
