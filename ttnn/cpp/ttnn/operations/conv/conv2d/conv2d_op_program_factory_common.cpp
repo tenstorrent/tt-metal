@@ -215,7 +215,7 @@ std::vector<CBInfo> get_cb_info(
     //    (0-page entry; allocate_cbs skips the device allocation).
     //  - Multiple height blocks, non-coalesced: out_cb is the persistent sharded output and cannot
     //    double as the dest-reuse scratch across blocks, so allocate a small double-buffered scratch
-    //    CB in the output data format (compute_depthwise_conv1d.cpp::mul_and_accumulate_block_scratch).
+    //    CB in the output data format (compute_depthwise_conv1d.cpp::mul_and_accumulate_block).
     const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
                                               sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
                                               !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
