@@ -14,6 +14,7 @@ from __future__ import annotations
 from numbers import Integral
 from typing import Callable, NamedTuple
 
+from loguru import logger
 import torch
 import ttnn
 
@@ -734,6 +735,7 @@ def generate_blocks(
     trajectories: list[DenoiseTrajectory] = []
 
     for block_idx in range(num_blocks):
+        logger.info(f"[generate_blocks] block {block_idx + 1}/{num_blocks} start_pos={next_pos}")
         init_canvas = init_canvas_fn(block_idx, next_pos)
         try:
             block = block_fn(
@@ -758,6 +760,7 @@ def generate_blocks(
         trajectories.append(block.trajectory)
         next_pos = block.next_pos
         if _contains_stop_token(block.committed, stop_token_ids):
+            logger.info(f"[generate_blocks] stop token in block {block_idx + 1}; halting at next_pos={next_pos}")
             break
 
     generated = (
