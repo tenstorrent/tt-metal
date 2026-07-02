@@ -27,6 +27,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from ..cache import cache_file
 from .rms_norm import HunyuanTtRMSNorm
 from .rope_2d import HunyuanTtRoPE2D
 
@@ -100,6 +101,13 @@ class HunyuanTtAttention(LightweightModule):
 
         prefix = f"model.layers.{layer_num}.self_attn"
 
+        # Attention matmuls stay bf16 even when MoE experts are bf8 — same policy as
+        # RMSNorm. bf8 attention weight upload can hang once device DRAM fills during
+        # the multi-layer resident load; experts are the dominant memory lever.
+        attn_dtype = weight_dtype
+        if attn_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            attn_dtype = ttnn.bfloat16
+
         # ------------------------------------------------------------------
         # QKV projection weight (column-parallel for TP).
         # Hunyuan ships an interleaved GQA layout; we reorder into per-TP-shard
@@ -126,48 +134,34 @@ class HunyuanTtAttention(LightweightModule):
 
         o_w = state_dict[f"{prefix}.o_proj.weight"].to(torch.float32).T.contiguous()  # [Q_dim, hidden]
 
-        if tp_factor > 1:
-            # Replicate on the non-TP axis, shard on tp_axis: qkv on the column
-            # (output) dim, o_proj on the row (input) dim. ShardTensor2dMesh dims[ax]
-            # is the tensor dim sharded on mesh axis ax (None == replicate).
-            mesh_shape = tuple(device.shape)
-            qkv_dims = [None, None]
-            qkv_dims[tp_axis] = 1  # shard output columns
-            o_dims = [None, None]
-            o_dims[tp_axis] = 0  # shard input rows
-            self.qkv_proj = ttnn.from_torch(
-                qkv_w,
-                dtype=weight_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=qkv_dims),
-            )
-            self.o_proj = ttnn.from_torch(
-                o_w,
-                dtype=weight_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=o_dims),
-            )
-        else:
-            self.qkv_proj = ttnn.as_tensor(
-                qkv_w,
-                device=device,
-                dtype=weight_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=None if weight_cache_path is None else weight_cache_path / f"{prefix}.qkv_proj.weight",
-            )
-            self.o_proj = ttnn.as_tensor(
-                o_w,
-                device=device,
-                dtype=weight_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=None if weight_cache_path is None else weight_cache_path / f"{prefix}.o_proj.weight",
-            )
+        # Replicate on the non-TP axis, shard on tp_axis: qkv on the column
+        # (output) dim, o_proj on the row (input) dim. ShardTensor2dMesh dims[ax]
+        # is the tensor dim sharded on mesh axis ax (None == replicate).
+        mesh_shape = tuple(device.shape)
+        qkv_dims = [None, None]
+        qkv_dims[tp_axis] = 1  # shard output columns
+        o_dims = [None, None]
+        o_dims[tp_axis] = 0  # shard input rows
+        qkv_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=qkv_dims) if tp_factor > 1 else None
+        o_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=o_dims) if tp_factor > 1 else None
+        self.qkv_proj = ttnn.as_tensor(
+            qkv_w,
+            device=device,
+            dtype=attn_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=qkv_mapper,
+            cache_file_name=cache_file(weight_cache_path, f"{prefix}.qkv_proj.weight"),
+        )
+        self.o_proj = ttnn.as_tensor(
+            o_w,
+            device=device,
+            dtype=attn_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=o_mapper,
+            cache_file_name=cache_file(weight_cache_path, f"{prefix}.o_proj.weight"),
+        )
 
         # ------------------------------------------------------------------
         # Per-head QK norms (weight shape [head_dim] → [1,1,head_dim//TILE,TILE])
@@ -179,7 +173,7 @@ class HunyuanTtAttention(LightweightModule):
                 state_dict=state_dict,
                 weight_key=f"{prefix}.query_layernorm.weight",
                 eps=eps,
-                weight_dtype=weight_dtype,
+                weight_dtype=attn_dtype,
                 weight_cache_path=weight_cache_path,
             )
             self.key_norm = HunyuanTtRMSNorm(
@@ -188,7 +182,7 @@ class HunyuanTtAttention(LightweightModule):
                 state_dict=state_dict,
                 weight_key=f"{prefix}.key_layernorm.weight",
                 eps=eps,
-                weight_dtype=weight_dtype,
+                weight_dtype=attn_dtype,
                 weight_cache_path=weight_cache_path,
             )
 

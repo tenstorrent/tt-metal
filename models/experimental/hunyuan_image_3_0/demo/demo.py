@@ -17,7 +17,7 @@
 # and skips recaption by default; enable only when you want recaption/think explicitly.
 #
 # The whole pipeline runs on the TT mesh: the backbone with the model that fits
-# DRAM (bf8 + 4-way expert sharding, first/last 4 layers bf16), and the VAE decode
+# DRAM (bf8 + 4-way expert sharding, first/last 3 layers bf16), and the VAE decode
 # sharded H/W-spatial across the 2x2 mesh (each device a 512x512 quadrant of the
 # 1024x1024 image; validated end-to-end vs the fp32 reference — see
 # MEMORY_FIT_PLAN.md). No host round-trip for the VAE.
@@ -61,7 +61,7 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
 )
 from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 from models.experimental.hunyuan_image_3_0.tt.attention.mask import build_attention_mask_tt
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
@@ -99,6 +99,9 @@ TOP_P = float(os.environ.get("HY_TOP_P", str(_SAMPLE_DEFAULTS.top_p)))
 REP_PENALTY = float(os.environ.get("HY_REP_PENALTY", str(_SAMPLE_DEFAULTS.repetition_penalty)))
 
 _INDEX = WEIGHTS / "model.safetensors.index.json"
+# Persist pre-tilized mesh weights across runs (see README § Weight cache).
+if not os.environ.get("TT_DIT_CACHE_DIR"):
+    os.environ["TT_DIT_CACHE_DIR"] = str(Path.home() / ".cache" / "tt-dit")
 if not _INDEX.is_file():
     raise SystemExit(
         f"Base HunyuanImage-3 weights not found at {_INDEX}\n"
@@ -167,15 +170,21 @@ def _pe_dims(down_sd):
     return int(latent), int(hid), int(hsz)
 
 
+def _parse_bf16_layers(num_layers: int) -> set[int]:
+    if os.environ.get("HY_BF16_LAYERS"):
+        return {int(s) for s in os.environ["HY_BF16_LAYERS"].split(",") if s.strip() != ""}
+    return default_bf16_layers(num_layers)
+
+
 def _build_backbone(mesh_device, ccl, c, *, num_layers, apply_final_norm, embed_sd=None, norm_sd=None):
-    """Resident bf8 backbone on the 2x2 mesh (4-way expert shard, first/last 4 layers bf16).
+    """Resident bf8 backbone on the 2x2 mesh (4-way expert shard, first/last 3 layers bf16).
 
     ``apply_final_norm=True`` + ``embed_sd``/``norm_sd`` builds the LM-backbone variant
     (device wte embed + ln_f) the AR recaption stage needs; the denoise path passes
     ``apply_final_norm=False`` and feeds pre-embedded hidden states instead.
     """
     layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in _load_prefix(f"model.layers.{i}").items()}
-    bf16_layers = {0, 1, 2, 3, num_layers - 4, num_layers - 3, num_layers - 2, num_layers - 1}
+    bf16_layers = _parse_bf16_layers(num_layers)
     print(f"[demo] building resident backbone ({num_layers} layers, bf8 + bf16 layers {sorted(bf16_layers)}) ...")
     return HunyuanTtModel(
         mesh_device,
@@ -203,6 +212,7 @@ def _build_backbone(mesh_device, ccl, c, *, num_layers, apply_final_norm, embed_
         sp_axis=0,  # SP=2 on axis 0: sequence sharded across rows (gather-KV attn)
         sp_factor=2,
         bf16_layers=bf16_layers,
+        model_cache_name="hunyuan-image-3.0",
     )
 
 

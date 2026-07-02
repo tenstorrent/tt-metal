@@ -20,6 +20,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from ..cache import cache_file
+
 
 class HunyuanTtTopKGate(LightweightModule):
     """
@@ -47,6 +49,7 @@ class HunyuanTtTopKGate(LightweightModule):
         weight_key: str,
         norm_topk_prob: bool = True,
         weight_dtype=ttnn.float32,
+        weight_cache_path=None,
     ):
         super().__init__()
         self.device = device
@@ -62,12 +65,15 @@ class HunyuanTtTopKGate(LightweightModule):
         # the projection in fp32 here avoids bf16 ties flipping borderline
         # expert selections.
         w_t = w.transpose(0, 1).contiguous().float()
-        self.wg = ttnn.from_torch(
+        is_mesh = device.__class__.__name__ == "MeshDevice"
+        self.wg = ttnn.as_tensor(
             w_t,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+            cache_file_name=cache_file(weight_cache_path, key),
         )
 
         # High-fidelity matmul so routing logits stay close to fp32.
