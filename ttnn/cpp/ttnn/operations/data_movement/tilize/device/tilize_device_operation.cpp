@@ -59,7 +59,9 @@ bool can_use_sharded_optimized_factories(
                 return false;
             }
             if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-                return false;  // DRAM output cannot be zero-copy; fall back to default factory.
+                // DRAM interleaved output always requires NoC writes regardless of the factory used,
+                // so there is no performance benefit from the optimized path. Fall back to the default factory.
+                return false;
             }
         } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
