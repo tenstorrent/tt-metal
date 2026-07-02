@@ -33,12 +33,13 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 // P[r] = (lr/cl)*chunk_size + c*cl + (lr%cl), where c = r/sll, lr = r%sll, sll = T/ring_size,
 // cl = chunk_size/ring_size. The reader reads K back in LOGICAL token order (invP per tile), so the causal
 // mask and block-max-pool -- both keyed on the logical column -- stay byte-identical and the score columns
-// come out in natural token order. PASSED EXPLICITLY by the caller (slab_sp / slab_chunk_size), NOT derived
-// from the mesh: the cache's slab layout (how K was gathered) is independent of how THIS op splits Q -- e.g.
-// a cache gathered with SP=8 (chunk_size/8 per shard) may be scored by an SP=32 indexer with a smaller Sq.
-// Hashed (it shapes the reader binary). ring_size == 1 is the identity, represented as no slab at all.
+// come out in natural token order. RESOLVED at the ttnn entry (interface matches sparse_sdpa): the caller
+// names the mesh axis the cache was striped over (block_cyclic_sp_axis) and passes the per-shard chunk length
+// (block_cyclic_chunk_local); ring_size = the mesh extent on that axis (DERIVED, not free), chunk_size =
+// ring_size * block_cyclic_chunk_local. Hashed (it shapes the reader binary). ring_size == 1 is the identity,
+// represented as no slab at all.
 struct SlabLayout {
-    uint32_t ring_size;   // SP shard count the cache was gathered across (the cache's SP, NOT this op's SP)
+    uint32_t ring_size;   // SP shard count the cache was gathered across (derived from the mesh sp axis)
     uint32_t chunk_size;  // global prefill chunk granularity (elements); per-shard slab = chunk_size/ring_size
 };
 
