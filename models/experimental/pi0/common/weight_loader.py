@@ -62,9 +62,14 @@ class PI0Config:
     @classmethod
     def from_json(cls, json_path: Union[str, Path]) -> "PI0Config":
         """Load config from JSON file."""
+        import dataclasses
+
         with open(json_path, "r") as f:
             data = json.load(f)
-        return cls(**data)
+        # Filter to only fields that exist in this dataclass
+        valid_fields = {f.name for f in dataclasses.fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered)
 
 
 def load_pi0_state_dict(
