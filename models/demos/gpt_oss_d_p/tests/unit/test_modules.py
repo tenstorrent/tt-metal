@@ -626,9 +626,10 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
 @pytest.mark.parametrize(
     # We want to test the first two layers so we capture both sliding and global attention layers
     "layer_idx",
-    [0],
+    [0, 1],
     ids=[
         "layer_0",
+        "layer_1",
     ],
 )
 @pytest.mark.parametrize(
@@ -667,12 +668,6 @@ def test_decoder(
         pytest.skip(
             f"Skipping batch size {batch_size} for mesh shape {tuple(mesh_device.shape)}. "
             "Only batch size 1 is supported for mesh shape without row-sharding."
-        )
-
-    if is_blackhole() and mesh_device.shape[0] > 1 and batch_size * seq_len > 1:
-        pytest.skip(
-            f"Skipping batch={batch_size} seq_len={seq_len} on Blackhole {tuple(mesh_device.shape)}: "
-            "this configuration uses throughput experts which are not supported on Blackhole."
         )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
