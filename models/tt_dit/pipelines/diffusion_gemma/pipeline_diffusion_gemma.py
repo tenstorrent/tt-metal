@@ -108,9 +108,22 @@ class DiffusionGemmaPipeline:
     @staticmethod
     def _build_tt_model_from_hf(hf_model, config: DiffusionGemmaPipelineConfig) -> DiffusionGemmaForBlockDiffusion:
         """Construct our TT model with hyperparameters from the HF config and load weights."""
+        import os
+
         hf_cfg = hf_model.config
         text_cfg = hf_cfg.text_config
         vision_cfg = hf_cfg.vision_config
+
+        # Disk cache path for demos/gemma4's MoE weight loader. Without this, every expert
+        # weight (~24 MB × 128 experts × 30 layers ≈ 92 GB at bf16, ~23 GB at bfp8) is
+        # re-uploaded host→device on every construction, which can take many minutes.
+        # ``TT_DIT_CACHE_DIR`` follows the convention used by other tt_dit pipelines
+        # (mochi, ltx, qwenimage). The path is keyed by expert dtype so we can flip between
+        # bfp8 and bf16 without a stale-cache collision.
+        cache_base = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
+        model_key = str(hf_model.config._name_or_path).rstrip("/").split("/")[-1] or "diffusion_gemma"
+        dtype_key = "bfp8" if config.expert_dtype == ttnn.bfloat8_b else "bf16"
+        moe_cache_root = os.path.join(cache_base, model_key, f"experts_{dtype_key}")
 
         mesh_device = config.mesh_device
         tp_factor = tuple(mesh_device.shape)[config.tp_axis]
@@ -159,8 +172,16 @@ class DiffusionGemmaPipeline:
             router_dtype=config.router_dtype,
         )
 
-        encoder_text_kwargs = {**text_kwargs, "moe_state_dicts": _per_layer_moe("model.encoder.language_model.")}
-        decoder_text_kwargs = {**text_kwargs, "moe_state_dicts": _per_layer_moe("model.decoder.")}
+        encoder_text_kwargs = {
+            **text_kwargs,
+            "moe_state_dicts": _per_layer_moe("model.encoder.language_model."),
+            "tensor_cache_path": os.path.join(moe_cache_root, "encoder"),
+        }
+        decoder_text_kwargs = {
+            **text_kwargs,
+            "moe_state_dicts": _per_layer_moe("model.decoder."),
+            "tensor_cache_path": os.path.join(moe_cache_root, "decoder"),
+        }
 
         # Vision tower kwargs (only when vision_config is present and has standardize).
         vision_kwargs = None

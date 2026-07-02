@@ -29,7 +29,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.diffusion_gemma.pipeline_diffusion_gemma import DiffusionGemmaPipeline, DiffusionGemmaPipelineConfig
@@ -102,20 +101,13 @@ def test_pipeline_diffusion_gemma(
         DiffusionGemmaForBlockDiffusion as HFForBlockDiffusion,
     )
 
-    # WH T3K memory check: 51 GB checkpoint on 8x12 GB ≈ 96 GB. Tight; skip until validated.
     mesh_shape = tuple(mesh_device.shape)
-    if mesh_shape == (2, 4) and topology == ttnn.Topology.Ring and not is_blackhole():
-        if os.environ.get("DIFFUSIONGEMMA_FORCE_T3K", "0") != "1":
-            pytest.skip(
-                "WH T3K memory is tight for the 51 GB model. "
-                "Set DIFFUSIONGEMMA_FORCE_T3K=1 to override after validating it fits."
-            )
 
-    # DRAM ceiling: bf16 expert weights don't fit on 2x4 meshes (either linear or ring). The
-    # 4x8 Blackhole galaxy has 4x the DRAM banks, so bf16 fits there. Skip 2x4 bf16 variants
-    # to keep the suite green — the bf16 signal is preserved on the galaxy mesh, and bfp8
-    # covers both 2x4 topologies. Override with DIFFUSIONGEMMA_FORCE_BF16=1 if you've validated
-    # the DRAM math on a specific config.
+    # DRAM ceiling on 2x4 meshes: bf16 expert weights are ~91 GB for MoE alone → doesn't fit
+    # on WH T3K (8x12 GB = 96 GB) or Blackhole 2x4. bfp8 experts (~23 GB for MoE) fit
+    # comfortably on both. The 4x8 Blackhole galaxy has 4x the DRAM banks and fits both dtypes.
+    # Escape hatch: DIFFUSIONGEMMA_FORCE_BF16=1 if you've validated the DRAM math on a
+    # specific config (e.g. reduced num_hidden_layers).
     if expert_dtype == ttnn.bfloat16 and mesh_shape == (2, 4):
         if os.environ.get("DIFFUSIONGEMMA_FORCE_BF16", "0") != "1":
             pytest.skip(

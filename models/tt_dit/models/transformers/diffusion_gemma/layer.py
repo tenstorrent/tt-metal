@@ -65,6 +65,7 @@ class DiffusionGemmaLayer(Module):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         expert_dtype: ttnn.DataType = ttnn.bfloat16,
         router_dtype: ttnn.DataType = ttnn.bfloat16,
+        tensor_cache_path: str | None = None,
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
@@ -109,6 +110,7 @@ class DiffusionGemmaLayer(Module):
             topology=topology,
             expert_dtype=expert_dtype,
             router_dtype=router_dtype,
+            tensor_cache_path=tensor_cache_path,
         )
 
         # Seven Gemma-3-sandwich norms. All have learned scale, no bias.
