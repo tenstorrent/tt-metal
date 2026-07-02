@@ -103,7 +103,7 @@ struct ShardSpecBuffer {
         const std::array<uint32_t, 2>& page_shape,
         const std::array<uint32_t, 2>& tensor2d_shape_in_pages) :
         tensor_shard_spec(shard_spec), page_shape(page_shape), tensor2d_shape_in_pages(tensor2d_shape_in_pages) {}
-    CoreRangeSet grid() const { return tensor_shard_spec.grid; }
+    const CoreRangeSet& grid() const { return tensor_shard_spec.grid; }
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
     void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
