@@ -105,8 +105,15 @@ def run_one(
     env["GLM4_MOE_LITE_CCL_TOPOLOGY"] = "linear"
     env["GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"] = "1"
     env["GLM4_MOE_LITE_SKIP_TYPECAST"] = "1"
-    env["GLM4_MOE_LITE_TP"] = "1"
-    env["GLM4_MOE_LITE_ATTN_DP"] = "1"
+    # TP/ATTN_DP/expert-precision default to the perf config, but are env-overridable so the
+    # sweep can also run the accuracy (PCC>=0.95) config: TP=0, ATTN_DP=0, EXPERTS_TT_DTYPE=bf8,
+    # MOE_FP32_ACC=1. (TP=1 currently scores ~0.65 PCC on 2x4; see agent_logs/opt_progress.md.)
+    env.setdefault("GLM4_MOE_LITE_TP", "1")
+    env.setdefault("GLM4_MOE_LITE_ATTN_DP", "1")
+    if os.environ.get("GLM4_MOE_LITE_EXPERTS_TT_DTYPE"):
+        env["GLM4_MOE_LITE_EXPERTS_TT_DTYPE"] = os.environ["GLM4_MOE_LITE_EXPERTS_TT_DTYPE"]
+    if os.environ.get("GLM4_MOE_LITE_MOE_FP32_ACC"):
+        env["GLM4_MOE_LITE_MOE_FP32_ACC"] = os.environ["GLM4_MOE_LITE_MOE_FP32_ACC"]
     env["GLM4_MOE_LITE_HEAD_PARALLEL_KVB2"] = "1"
     env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
     env["GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED"] = "1"

@@ -205,6 +205,22 @@ meshes. On 2D meshes with DP>1: reduce shared over `tp_axis` only, reduce routed
 non-fused routed path's size-1-axis crash so it runs on 2x4. Verify with the per-layer TP test
 (target 0.999/layer) then full-model pcc_vs_hf (expect ~0.95 at TP=1).
 
+## Sweep verified on WH LB with the accuracy (PCC>=0.95) config
+Made `run_sweep_isl_batch.py` knobs env-overridable (TP/ATTN_DP/EXPERTS_TT_DTYPE/MOE_FP32_ACC
+were hard-set to the TP=1 perf config that scores 0.65 PCC). Ran the sweep with the 0.95-passing
+knobs (TP=0, bf8 experts, MOE_FP32_ACC=1), batch 1:
+
+| ISL | prefill_s | per-user tok/s | TTFT ms | decode ms | status |
+|----:|----------:|---------------:|--------:|----------:|--------|
+| 128 | 0.3 | 16.5 | 404  | 60.6 | ok |
+| 512 | 1.6 | 16.2 | 1651 | 61.6 | ok |
+| 2048| —   | —    | —    | —    | L1 OOM (program.cpp:1492) |
+
+Tradeoff vs production (TP=1 bf4 ~20.8 tok/s but PCC 0.65): the accuracy config is ~20% slower
+(TP=0 = no tensor-parallel) and memory-limited at long ISL. Confirms the value of fixing the TP=1
+bug (get both ~20.8 tok/s AND 0.95 PCC). Sweep output artifacts NOT committed (kept local);
+numbers recorded here.
+
 ## Reality note
 Each remaining iteration is deep fused-op code surgery + 10-min reprofile + PCC verify. This is the
 long autonomous grind the PLAN is built for; it is not flag-flipping. Batches 8/16/32 repeat this
