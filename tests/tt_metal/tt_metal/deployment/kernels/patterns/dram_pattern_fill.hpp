@@ -1,4 +1,9 @@
-#pragma once
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef _DRAM_PATTERN_FILL_H
+#define _DRAM_PATTERN_FILL_H
 
 #include <stdint.h>
 
@@ -139,3 +144,5 @@ static inline void dram_fill_pattern_buffer_range(
 static inline void dram_fill_pattern_buffer(uint32_t* out_words, const DramPatternFillParams& p) {
     dram_fill_pattern_buffer_range(out_words, p, 0u, p.word_count);
 }
+
+#endif /* _DRAM_PATTERN_FILL_H */

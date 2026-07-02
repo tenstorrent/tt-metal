@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
 #include "dram_base.hpp"
 #include "kernels/common_dram.hpp"

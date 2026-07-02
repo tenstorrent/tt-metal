@@ -1,4 +1,9 @@
-#pragma once
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef _DRAM_BASE_H
+#define _DRAM_BASE_H
 
 #include "command_queue_fixture.hpp"
 #include "kernels/common_dram.hpp"
@@ -142,3 +147,5 @@ inline std::string format_duration_seconds(uint64_t total_seconds) {
 }
 
 }  // namespace tt::tt_metal
+
+#endif /* _DRAM_BASE_H */

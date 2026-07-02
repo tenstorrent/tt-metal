@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
 from pathlib import Path
