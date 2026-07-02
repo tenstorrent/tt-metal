@@ -24,6 +24,9 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.xtts.reference.xtts_gpt_block import (
     HIDDEN_SIZE,
+    MAX_GPT_SEQ_LEN,
+    MAX_MEL_POS,
+    MAX_TEXT_POS,
     load_xtts_state_dict,
     reference_gpt_block,
 )
@@ -40,7 +43,14 @@ def xtts_state_dict():
 
 
 @pytest.mark.parametrize("layer_idx", [0])
-@pytest.mark.parametrize("seq_len", [32, 64, 96])
+@pytest.mark.parametrize(
+    "seq_len",
+    [
+        MAX_TEXT_POS,  # 404 — max text stream length
+        MAX_MEL_POS,  # 608 — max mel/audio stream length
+        MAX_GPT_SEQ_LEN,  # 1012 — full concatenated [text]+[mel] GPT context
+    ],
+)
 @pytest.mark.parametrize("pcc", [0.99])
 def test_xtts_gpt_block(device, xtts_state_dict, layer_idx, seq_len, pcc, reset_seeds):
     # Reference: one repeating GPT block with real weights (causal self-attention).
