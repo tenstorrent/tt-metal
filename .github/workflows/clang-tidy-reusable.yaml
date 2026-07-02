@@ -256,14 +256,49 @@ jobs:
           # /tmp is noexec (--tmpfs /tmp). Install reviewdog to /usr/local/bin instead.
           curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh \
             | sh -s -- -b /usr/local/bin v0.21.0
-          git diff | reviewdog \
-            -f diff \
-            -name clang-tidy \
-            -reporter github-pr-review \
-            -filter-mode diff_context \
-            -level warning \
-            -fail-level none \
-            -fail-on-error false
+
+          # reviewdog's github-pr-review reporter first does a GET on the PR's existing
+          # comments (to dedupe before posting). That call can hit a transient GitHub API
+          # error (e.g. a bare 503) that has nothing to do with clang-tidy findings, and
+          # would non-deterministically take down this required job.
+          # Retry the whole invocation a bounded number of times with backoff to ride out
+          # such hiccups. Retrying the entire command is safe: reviewdog re-lists existing
+          # comments on each attempt and skips duplicates, so a partially-posted prior
+          # attempt will not produce duplicate inline comments.
+          # NOTE: this only hardens against transient transport errors. If every attempt
+          # fails we still exit non-zero — a genuine, persistent failure (bad token, real
+          # API rejection, etc.) must still turn the job red. We do NOT swallow the error.
+          # Capture the diff to a file first ($RUNNER_TEMP, NOT /tmp which is noexec here)
+          # so it can be fed to reviewdog on each attempt (a piped stdin can't be reused).
+          git diff > "${RUNNER_TEMP}/clang-tidy.diff"
+
+          max_attempts=4
+          status=0
+          for attempt in $(seq 1 "$max_attempts"); do
+            # Capture the exit code directly (not via `if reviewdog; then`): with an `if`
+            # guard, a subsequent `status=$?` reads the `if` construct's status, not
+            # reviewdog's, which would mask a real failure as exit 0 (a false pass).
+            reviewdog \
+              -f diff \
+              -name clang-tidy \
+              -reporter github-pr-review \
+              -filter-mode diff_context \
+              -level warning \
+              -fail-level none \
+              -fail-on-error false \
+              < "${RUNNER_TEMP}/clang-tidy.diff"
+            status=$?
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            echo "::warning::reviewdog attempt ${attempt}/${max_attempts} failed (exit ${status})"
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              sleep $((attempt * 10))
+            fi
+          done
+
+          echo "::error::Failed to post clang-tidy suggestions on PR after ${max_attempts} attempts (last exit ${status})"
+          exit "$status"
 
       - name: Publish Ccache summary
         if: always()
