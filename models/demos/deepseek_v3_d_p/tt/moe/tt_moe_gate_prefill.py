@@ -289,6 +289,11 @@ class TtMoEGatePrefill(LightweightModule):
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
+        # Trace-safe memoization of the per-(actual_isl, padding_side) padding_config. build_padding_config
+        # does a host ttnn.from_torch, which is an illegal host->device write inside trace capture. Building
+        # it once (in warmup) and reusing the same device tensor on every forward/trace-replay keeps the
+        # captured command stream free of host transfers. Owned here => callers must NOT deallocate it.
+        self._padding_config_cache: dict = {}
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
@@ -498,6 +503,11 @@ class TtMoEGatePrefill(LightweightModule):
         if padding_side not in ("right", "left"):
             raise ValueError(f"padding_side must be 'right' or 'left', got {padding_side!r}")
 
+        cache_key = (actual_isl, padding_side)
+        cached = self._padding_config_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         sp_factor = self.mesh_device.shape[0]
         seq_len_per_chip = self.config.sp_dim
         total_tokens = sp_factor * seq_len_per_chip
@@ -535,7 +545,7 @@ class TtMoEGatePrefill(LightweightModule):
 
                 padding_config.append([local_real_tokens, pad_side])
 
-        return ttnn.from_torch(
+        config_tensor = ttnn.from_torch(
             torch.tensor(padding_config, dtype=torch.int32),
             device=self.mesh_device,
             dtype=ttnn.uint32,
@@ -547,6 +557,8 @@ class TtMoEGatePrefill(LightweightModule):
                 mesh_shape=self.mesh_device.shape,
             ),
         )
+        self._padding_config_cache[cache_key] = config_tensor
+        return config_tensor
 
     def _device_grouped_gate_fp32(
         self,
@@ -586,8 +598,8 @@ class TtMoEGatePrefill(LightweightModule):
         )
         ttnn.deallocate(logits_f32)
         ttnn.deallocate(bias_f32)
-        if owns_padding_config and padding_config is not None:
-            ttnn.deallocate(padding_config)
+        # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
+        # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
         return ttnn_scores, ttnn_top_k_experts_indices
 
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

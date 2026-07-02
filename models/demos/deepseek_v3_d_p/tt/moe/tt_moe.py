@@ -587,10 +587,10 @@ class TtMoe(LightweightModule):
                 self._trace_controller.sub_device_clear()
             else:
                 self.mesh_device.clear_loaded_sub_device_manager()
-        # padding_config was shared with both the gate and dispatch; free it now that
-        # dispatch (its last consumer) has been issued.
-        if padding_config is not None:
-            ttnn.deallocate(padding_config)
+        # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
+        # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
+        # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
+        # would leave the cache holding a deallocated tensor (next forward's cache hit fails is_allocated()).
         x = ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
