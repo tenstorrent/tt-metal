@@ -250,6 +250,10 @@ init_packages() {
             fi
             ;;
     esac
+
+    if declare -F init_packages_custom >/dev/null; then
+        init_packages_custom
+    fi
 }
 
 prep_system() {
@@ -616,6 +620,12 @@ main() {
     cleanup
 
 }
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CUSTOM_DEPENDS_SCRIPT="${SCRIPT_DIR}/install_depends_custom.sh"
+if [ -f "${CUSTOM_DEPENDS_SCRIPT}" ]; then
+    source "${CUSTOM_DEPENDS_SCRIPT}"
+fi
 
 if [ "${1}" != "--source-only" ]; then
     main "${@}"

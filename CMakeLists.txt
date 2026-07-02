@@ -216,6 +216,9 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
 )
 
+# Optional settings for custom platform, include only when file exists.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/custom_platform.cmake" OPTIONAL)
+
 # Planned to be temporary, remove later.
 if(TT_ENABLE_LIGHT_METAL_TRACE)
     add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=1)
