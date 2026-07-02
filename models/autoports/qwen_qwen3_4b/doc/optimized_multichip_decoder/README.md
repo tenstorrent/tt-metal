@@ -20,7 +20,7 @@ Kept changes:
 
 The public layer boundary remains a replicated BF16 hidden-state tensor of shape `[1, 1, logical_seq_or_batch, 2560]`. Inside a layer, QKV, attention heads, gate/up, and down are TP-local. There is no gather, reshard, or all-reduce between decoder layers. Full-model bringup should preserve this replicated inter-layer residual contract unless it also implements a distributed residual, RMSNorm, and projection stack.
 
-The context capacity is unchanged: paged KV cache remains BF16, local KV heads per device, 2560 blocks of 16 tokens, maximum context 40960. `doc/context_contract.json` was updated for this optimized stage with the persistent decode CCL buffer accounting: two BF16 L1 scratch buffers of logical shape `[1, 1, 32, 10240]` per device plus semaphores, conservatively 1,314,816 bytes per device. These buffers are L1-resident and context-independent, so they do not reduce the 40960-token KV-cache capacity.
+The context capacity is unchanged: paged KV cache remains BF16, local KV heads per device, 1280 blocks of 32 tokens, maximum context 40960. `doc/context_contract.json` was updated for this optimized stage with the persistent decode CCL buffer accounting: two BF16 L1 scratch buffers of logical shape `[1, 1, 32, 10240]` per device plus semaphores, conservatively 1,314,816 bytes per device. These buffers are L1-resident and context-independent, so they do not reduce the 40960-token KV-cache capacity.
 
 ## Correctness
 

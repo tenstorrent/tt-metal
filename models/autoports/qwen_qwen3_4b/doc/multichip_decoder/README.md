@@ -24,16 +24,16 @@ Per-device Qwen3-4B shapes:
 | O projection | `[2560, 4096]` | `[2560, 1024]` | Row parallel; ring all-reduce to hidden |
 | Gate/up projection | `[9728, 2560]` each | `[2432, 2560]` each | Column parallel |
 | Down projection | `[2560, 9728]` | `[2560, 2432]` | Row parallel; ring all-reduce to hidden |
-| KV cache per K or V | `[2560, 8, 16, 128]` across TP | `[2560, 2, 16, 128]` | Local KV heads, replicated tensor object across mesh |
-| Page table | `[1, 2560]` | `[1, 2560]` | Replicated |
+| KV cache per K or V | `[1280, 8, 32, 128]` across TP | `[1280, 2, 32, 128]` | Local KV heads, replicated tensor object across mesh |
+| Page table | `[1, 1280]` | `[1, 1280]` | Replicated |
 | Current positions | `[batch]` | `[batch]` | Replicated |
 | RoPE and masks | Context-sized | Context-sized | Replicated |
 
-The default multichip KV config is `max_num_blocks=2560`, `block_size=16`,
+The default multichip KV config is `max_num_blocks=1280`, `block_size=32`,
 `cache_dtype=BF16`, so the decoder-layer KV capacity is the full HF-advertised
 context of `40960`. Per device, the full-layer-stack KV expectation is:
 
-- One K cache plus one V cache per layer: `2 * 2560 * 2 * 16 * 128 * 2` bytes =
+- One K cache plus one V cache per layer: `2 * 1280 * 2 * 32 * 128 * 2` bytes =
   `41,943,040` bytes.
 - Full 36-layer decoder stack: `1,509,949,440` bytes per device for KV cache.
 
@@ -121,8 +121,8 @@ The tests validate:
 
 - Single-chip optimized baseline comparison for prefill and paged decode.
 - Non-aligned logical lengths (`seq_len=17`, `decode_prefix=17`).
-- Local KV cache layout: `[2560, 2, 16, 128]` per K or V cache tensor.
-- Replicated page table `[1, 2560]` and current position `[1]`.
+- Local KV cache layout: `[1280, 2, 32, 128]` per K or V cache tensor.
+- Replicated page table `[1, 1280]` and current position `[1]`.
 - Traced decode replay on the target mesh.
 - No host fallback in `prefill_forward` or `decode_forward`.
 

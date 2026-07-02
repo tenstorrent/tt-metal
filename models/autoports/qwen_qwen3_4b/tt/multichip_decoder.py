@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - tracy is optional outside profiling ru
         return None
 
 
-DEFAULT_MULTICHIP_KV_CONFIG = PagedKVConfig(max_num_blocks=2560, block_size=16)
+DEFAULT_MULTICHIP_KV_CONFIG = PagedKVConfig(max_num_blocks=1280, block_size=32)
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ class MultichipDecoder(LightweightModule):
         post_attention_layernorm_weight: ttnn.Tensor,
         position_cos: ttnn.Tensor,
         position_sin: ttnn.Tensor,
-        attention_mask: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None,
         max_seq_len: int,
         paged_kv_config: PagedKVConfig,
         attention_math_fidelity: ttnn.MathFidelity,
@@ -158,8 +158,8 @@ class MultichipDecoder(LightweightModule):
         self.sdpa_decode_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             exp_approx_mode=False,
-            q_chunk_size=0,
-            k_chunk_size=0,
+            q_chunk_size=32,
+            k_chunk_size=128,
         )
 
     @staticmethod
@@ -461,6 +461,7 @@ class MultichipDecoder(LightweightModule):
         mlp_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Ring,
+        static_position_table_seq_len: int | None = None,
         **kwargs,
     ) -> "MultichipDecoder":
         if kwargs:
@@ -496,8 +497,9 @@ class MultichipDecoder(LightweightModule):
             else None
         )
 
-        position_cos, position_sin = cls._build_rope_tables(cfg, max_seq_len, mesh_device)
-        attention_mask = cls._build_causal_mask(max_seq_len, mesh_device)
+        position_table_seq_len = static_position_table_seq_len or max_seq_len
+        position_cos, position_sin = cls._build_rope_tables(cfg, position_table_seq_len, mesh_device)
+        attention_mask = None
 
         return cls(
             cfg=cfg,
@@ -890,6 +892,13 @@ class MultichipDecoder(LightweightModule):
 
     def _decode_qkv(self, hidden_states, position_cos, position_sin, batch_size):
         decode_head_memcfg = self._decode_head_memory_config(batch_size)
+        hidden_states = ttnn.rms_norm(
+            hidden_states,
+            epsilon=RMS_NORM_EPS,
+            weight=self.input_layernorm_weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.auxiliary_compute_kernel_config,
+        )
         qkv_input_memcfg, qkv_program_config = self._qkv_decode_geometry()
         if qkv_input_memcfg is not None:
             hidden_states = ttnn.to_memory_config(hidden_states, qkv_input_memcfg)
@@ -960,8 +969,22 @@ class MultichipDecoder(LightweightModule):
             raise ValueError(f"decode expects one logical token per user, got shape {hidden_states.shape}")
         q, k, v = self._decode_qkv(hidden_states, position_cos, position_sin, batch_size)
         k_cache, v_cache = kv_cache
-        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
-        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
+        ttnn.experimental.paged_update_cache(
+            k_cache,
+            k,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
+            block_size=self.paged_kv_config.block_size,
+            num_kv_heads=self.local_num_key_value_heads,
+        )
+        ttnn.experimental.paged_update_cache(
+            v_cache,
+            v,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
+            block_size=self.paged_kv_config.block_size,
+            num_kv_heads=self.local_num_key_value_heads,
+        )
 
         sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
@@ -973,6 +996,8 @@ class MultichipDecoder(LightweightModule):
             program_config=self.sdpa_decode_program_config,
             compute_kernel_config=self.auxiliary_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            block_size=self.paged_kv_config.block_size,
+            num_kv_heads=self.local_num_key_value_heads,
         )
         sdpa = ttnn.to_memory_config(sdpa, self._decode_head_memory_config(batch_size))
         attn = ttnn.experimental.nlp_concat_heads_decode(sdpa, num_heads=self.local_num_attention_heads)

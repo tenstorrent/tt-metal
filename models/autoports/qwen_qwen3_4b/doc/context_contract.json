@@ -3,8 +3,8 @@
   "autoport_dir": "models/autoports/qwen_qwen3_4b",
   "hf_advertised_context": 40960,
   "current_supported_context": 40960,
-  "decode_status": "optimized_multichip_single_layer_paged_prefill_decode_validated",
-  "stage": "optimized-multichip-decoder",
+  "decode_status": "full_model_readiness_gates_passed",
+  "stage": "full-model",
   "limiting_reason": "none",
   "mesh_contract": {
     "target_mesh": "1x4 Blackhole p150b ring",
@@ -17,15 +17,15 @@
     "status": "full_hf_context_capacity_planned_and_allocated_for_optimized_decoder_layer",
     "hf_context": 40960,
     "paged_kv_config": {
-      "max_num_blocks": 2560,
-      "block_size": 16,
+      "max_num_blocks": 1280,
+      "block_size": 32,
       "max_seq_len": 40960,
       "cache_dtype": "bfloat16"
     },
     "per_device_kv_cache_shape_per_layer": [
-      2560,
+      1280,
       2,
-      16,
+      32,
       128
     ],
     "per_device_kv_cache_bytes_per_layer": 41943040,
@@ -85,10 +85,22 @@
       "per_device_total_persistent_decode_ccl_bytes_upper_bound": 1314816,
       "context_impact": "none; persistent decode CCL scratch is L1-resident, allocated for the fixed tile-padded decode M=32 and hidden width, and does not scale with KV-cache pages or advertised context length"
     },
+    "full_model_weight_and_state_estimate": {
+      "status": "full-model logical payload estimate added; no context reduction claimed",
+      "embedding_weight_bytes_replicated_per_device_bfloat16": 777912320,
+      "lm_head_weight_bytes_per_device_bfloat4_b_vocab_sharded_tp4": 48619520,
+      "final_norm_weight_bytes_replicated_per_device_bfloat16": 5120,
+      "decoder_stack_kv_cache_bytes_per_device": 1509949440,
+      "decoder_stack_weight_bytes_per_device": 454551552,
+      "persistent_decode_ccl_bytes_upper_bound_per_device": 1314816,
+      "trace_region_size_bytes_used_in_reduced_probe": 134217728,
+      "per_device_total_logical_payload_bytes_before_allocator_overhead": 2926570496,
+      "context_impact": "none; full HF context 40960 remains advertised because the added embedding, final norm, LM-head shard, trace region, decoder stack weights, KV cache, and persistent CCL estimate fit within p150b device DRAM in the logical payload calculation"
+    },
     "notes": [
       "Qwen3-4B has 36 decoder layers, hidden_size=2560, 32 Q heads, 8 KV heads, head_dim=128, intermediate_size=9728.",
       "TP4 gives per-device local heads: 8 Q heads and 2 KV heads.",
-      "The multichip decoder allocates one local-head K cache and one local-head V cache per device with 2560 pages of 16 tokens, preserving the 40960-token HF context capacity.",
+      "The multichip decoder allocates one local-head K cache and one local-head V cache per device with 1280 pages of 32 tokens, preserving the 40960-token HF context capacity while satisfying TTNN paged-op block geometry.",
       "Per-device memory estimate for the full decoder stack is about 1.51 GB KV cache plus 0.45 GB decoder weights before TT runtime allocator overhead.",
       "The optimized decoder adds persistent L1 all-reduce scratch for traced decode: two BF16 logical buffers of shape [1, 1, 32, 10240] per device plus two semaphores, conservatively 1,314,816 bytes per device. This is context-independent L1 scratch and does not reduce the 40960-token paged KV-cache capacity.",
       "Largest PCC validation in this stage uses shorter logical lengths to keep single-layer CI/runtime tractable; no context reduction is claimed."

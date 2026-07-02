@@ -34,6 +34,7 @@ import argparse
 import bz2
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
@@ -130,6 +131,8 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
+    if isinstance(prompt_tokens, Mapping):
+        prompt_tokens = prompt_tokens["input_ids"]
     if not prompt_tokens:
         raise ValueError("Prompt tokenization produced no tokens")
     return [int(token_id) for token_id in prompt_tokens]

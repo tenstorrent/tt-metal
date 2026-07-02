@@ -178,7 +178,7 @@ def test_optimized_paged_decode_matches_full_hf_layer(hf_config, mesh_device, pr
         layer_idx=0,
         mesh_device=mesh_device,
         max_seq_len=LARGE_SEQ_LEN,
-        paged_kv_config=PagedKVConfig(max_num_blocks=4, block_size=16),
+        paged_kv_config=PagedKVConfig(max_num_blocks=2, block_size=32),
     )
 
     reference = _run_reference_layer(layer, rotary_emb, hidden_states, total_len)[:, -1:, :]
@@ -198,7 +198,7 @@ def test_optimized_real_weight_non_aligned_paged_decode_matches_hf(hf_config, me
         layer_idx=0,
         mesh_device=mesh_device,
         max_seq_len=LARGE_SEQ_LEN,
-        paged_kv_config=PagedKVConfig(max_num_blocks=4, block_size=16),
+        paged_kv_config=PagedKVConfig(max_num_blocks=2, block_size=32),
     )
 
     reference = _run_reference_layer(model.model.layers[0], model.model.rotary_emb, hidden_states, total_len)[:, -1:, :]
@@ -221,7 +221,7 @@ def test_optimized_batched_decode_uses_disjoint_page_rows(hf_config, mesh_device
         layer_idx=0,
         mesh_device=mesh_device,
         max_seq_len=LARGE_SEQ_LEN,
-        paged_kv_config=PagedKVConfig(max_num_blocks=4, block_size=16),
+        paged_kv_config=PagedKVConfig(max_num_blocks=2, block_size=32),
     )
     kv_cache = decoder.init_paged_kv_cache()
     page_table = decoder.make_identity_page_table(batch_size=batch_size)
@@ -259,7 +259,7 @@ def test_optimized_trace_replay_is_deterministic(hf_config, mesh_device):
         layer_idx=0,
         mesh_device=mesh_device,
         max_seq_len=LARGE_SEQ_LEN,
-        paged_kv_config=PagedKVConfig(max_num_blocks=4, block_size=16),
+        paged_kv_config=PagedKVConfig(max_num_blocks=2, block_size=32),
     )
     hidden_states = torch.randn(1, total_len, hf_config.hidden_size, dtype=torch.bfloat16)
     kv_cache = decoder.init_paged_kv_cache()
@@ -308,7 +308,7 @@ def test_optimized_perf_signposts(hf_config, mesh_device):
         layer_idx=0,
         mesh_device=mesh_device,
         max_seq_len=LARGE_SEQ_LEN,
-        paged_kv_config=PagedKVConfig(max_num_blocks=4, block_size=16),
+        paged_kv_config=PagedKVConfig(max_num_blocks=2, block_size=32),
     )
     hidden_states = torch.randn(1, total_len, hf_config.hidden_size, dtype=torch.bfloat16)
 

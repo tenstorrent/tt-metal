@@ -32,8 +32,12 @@ except ImportError:  # pragma: no cover - tracy is optional outside profiling ru
 @dataclass(frozen=True)
 class PagedKVConfig:
     max_num_blocks: int = 4
-    block_size: int = 16
+    block_size: int = 32
     cache_dtype: ttnn.DataType = ttnn.bfloat16
+
+    def __post_init__(self) -> None:
+        if self.block_size % 32 != 0:
+            raise ValueError("Paged KV cache block_size must be a multiple of 32 for TTNN paged ops")
 
     @property
     def max_seq_len(self) -> int:
@@ -148,8 +152,8 @@ class OptimizedDecoder(LightweightModule):
         self.sdpa_decode_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             exp_approx_mode=False,
-            q_chunk_size=0,
-            k_chunk_size=0,
+            q_chunk_size=32,
+            k_chunk_size=32,
         )
         self.decode_head_memcfg = self._decode_head_memory_config(1)
 
@@ -552,6 +556,13 @@ class OptimizedDecoder(LightweightModule):
 
     def _decode_qkv(self, hidden_states, position_cos, position_sin, batch_size):
         decode_head_memcfg = self._decode_head_memory_config(batch_size)
+        hidden_states = ttnn.rms_norm(
+            hidden_states,
+            epsilon=RMS_NORM_EPS,
+            weight=self.input_layernorm_weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.auxiliary_compute_kernel_config,
+        )
         qkv = ttnn.matmul(
             hidden_states,
             self.qkv_decode_weight,
@@ -608,8 +619,22 @@ class OptimizedDecoder(LightweightModule):
             raise ValueError(f"decode expects one logical token per user, got shape {hidden_states.shape}")
         q, k, v = self._decode_qkv(hidden_states, position_cos, position_sin, batch_size)
         k_cache, v_cache = kv_cache
-        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
-        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
+        ttnn.experimental.paged_update_cache(
+            k_cache,
+            k,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
+            block_size=self.paged_kv_config.block_size,
+            num_kv_heads=self.cfg.num_key_value_heads,
+        )
+        ttnn.experimental.paged_update_cache(
+            v_cache,
+            v,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
+            block_size=self.paged_kv_config.block_size,
+            num_kv_heads=self.cfg.num_key_value_heads,
+        )
 
         sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
@@ -621,6 +646,8 @@ class OptimizedDecoder(LightweightModule):
             program_config=self.sdpa_decode_program_config,
             compute_kernel_config=self.auxiliary_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            block_size=self.paged_kv_config.block_size,
+            num_kv_heads=self.cfg.num_key_value_heads,
         )
         sdpa = ttnn.to_memory_config(sdpa, self._decode_head_memory_config(batch_size))
         attn = ttnn.experimental.nlp_concat_heads_decode(sdpa, num_heads=self.cfg.num_attention_heads)

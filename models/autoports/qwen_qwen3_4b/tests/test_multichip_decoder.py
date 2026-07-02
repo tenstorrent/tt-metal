@@ -158,7 +158,7 @@ def _single_chip_prefill_then_decode(hf_config, state_dict, hidden_states, prefi
             layer_idx=0,
             mesh_device=mesh,
             max_seq_len=LARGE_SEQ_LEN,
-            paged_kv_config=PagedKVConfig(max_num_blocks=4, block_size=16),
+            paged_kv_config=PagedKVConfig(max_num_blocks=2, block_size=32),
         )
         kv_cache = decoder.init_paged_kv_cache()
         page_table = decoder.make_identity_page_table()
@@ -189,7 +189,7 @@ def _single_chip_warmed_perf(hf_config, state_dict, hidden_states, prefix_len):
             layer_idx=0,
             mesh_device=mesh,
             max_seq_len=LARGE_SEQ_LEN,
-            paged_kv_config=PagedKVConfig(max_num_blocks=4, block_size=16),
+            paged_kv_config=PagedKVConfig(max_num_blocks=2, block_size=32),
         )
         tt_prefill = _tt_tensor(hidden_states[:, :prefix_len, :].reshape(1, 1, prefix_len, hf_config.hidden_size), mesh)
         decoder.prefill_forward(tt_prefill)
