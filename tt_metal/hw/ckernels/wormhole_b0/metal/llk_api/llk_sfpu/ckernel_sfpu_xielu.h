@@ -74,8 +74,8 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Step 4: Scale by 2^k using exponent manipulation
     // ldexp(p, k_int) = p * 2^k
     // We do this by adding k_int to the exponent of p
-    // Get the current exponent of p (without bias)
-    sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
+    // Get the biased exponent of p
+    sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::Biased);
     // Add k_int to get the new exponent
     sfpi::vInt new_exp = p_exp + k_int;
 

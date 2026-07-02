@@ -16,7 +16,7 @@ from typing import Optional
 
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.model_variants import TestVariant
+from models.demos.common.prefill.adapter import PrefillModelAdapter as TestVariant
 
 
 def run_reference_moe(
