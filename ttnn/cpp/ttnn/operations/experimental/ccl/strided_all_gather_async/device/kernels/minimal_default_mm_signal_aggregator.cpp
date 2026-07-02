@@ -48,10 +48,10 @@ void kernel_main() {
     }
 
     // Per-worker semaphore addresses (this core's L1) that the AG writer workers increment.
+    // GlobalSemaphore L1 addresses (already resolved host-side); do NOT get_semaphore() them.
     volatile tt_l1_ptr uint32_t* per_worker_sem_ptrs[num_ag_workers];
     for (uint32_t w = 0; w < num_ag_workers; w++) {
-        per_worker_sem_ptrs[w] =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+        per_worker_sem_ptrs[w] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     }
 
     // Matmul receiver core NOC coords (this device) to signal, [x0, y0, x1, y1, ...].
@@ -89,7 +89,6 @@ void kernel_main() {
                     }
                     // Signal every matmul core's direction semaphore exactly once.
                     {
-                        DeviceZoneScopedN("AGG-MM-SIGNAL");
                         for (uint32_t c = 0; c < num_mm_cores; c++) {
                             uint64_t mm_sem_noc_addr = get_noc_addr(
                                 mm_core_noc_coords[c * 2], mm_core_noc_coords[c * 2 + 1], mm_signal_sem_addr);

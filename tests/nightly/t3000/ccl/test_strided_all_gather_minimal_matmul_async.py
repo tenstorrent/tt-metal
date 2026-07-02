@@ -14,9 +14,14 @@ from models.common.utility_functions import skip_for_blackhole
 from tracy import signpost
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_extra=0):
+    # 2 out-ready semaphores (one per direction), plus num_extra aggregator per-worker
+    # semaphores for the writer-signals-matmul path. The aggregator per-worker sems are
+    # incremented over the fabric by writer workers on the receiving device, so they must be
+    # GlobalSemaphores (mesh-consistent reserved address) just like the out-ready sems.
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2 + num_extra)
+    ]
     return ccl_semaphore_handles
 
 
@@ -90,7 +95,15 @@ def run_strided_all_gather_minimal_matmul_impl(
     )
 
     # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(mesh_device, num_devices, all_cores, 0) for _ in range(num_iters)]
+    # For the writer-signals-matmul path, the aggregator needs 2 directions x (num_links x
+    # num_workers_per_link) per-worker semaphores appended after the 2 out-ready sems. These are
+    # created unconditionally (unused/harmless when the path is off) so the address layout the
+    # device op reads is stable.
+    num_agg_sems = 2 * num_links * (num_workers_per_link or 0)
+    ccl_semaphore_handles = [
+        create_global_semaphores(mesh_device, num_devices, all_cores, 0, num_extra=num_agg_sems)
+        for _ in range(num_iters)
+    ]
 
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
