@@ -138,6 +138,13 @@ class TestConfig:
     PERF_DATA_DIR: ClassVar[Path]
     DEFAULT_STIMULI_CACHE_FOLDER: ClassVar[Path]
 
+    # Precompiled-header (PCH) scratch dir + checked-in source dir (Quasar only).
+    # PCH_AVAILABLE flips to True once the per-run .gch files are built; if
+    # generation fails for any reason it stays False and compiles run unchanged.
+    PCH_DIR: ClassVar[Path]
+    PCH_SOURCE_DIR: ClassVar[Path]
+    PCH_AVAILABLE: ClassVar[bool] = False
+
     # Sources directories
     LLK_ROOT: ClassVar[Path]
     TESTS_WORKING_DIR: ClassVar[Path]
@@ -407,6 +414,9 @@ class TestConfig:
         TestConfig.DEFAULT_STIMULI_CACHE_FOLDER = (
             TestConfig.ARTEFACTS_DIR / "temp_stimuli"
         )
+        # Per-run PCH scratch (.gch live here) + checked-in PCH source headers.
+        TestConfig.PCH_DIR = TestConfig.ARTEFACTS_DIR / "pch"
+        TestConfig.PCH_SOURCE_DIR = TestConfig.HELPERS / "pch"
 
     @staticmethod
     def create_build_directories():
@@ -425,6 +435,7 @@ class TestConfig:
                 TestConfig.PROFILER_SHARED_OBJ_DIR,
                 TestConfig.PROFILER_SHARED_ELF_DIR,
                 TestConfig.COVERAGE_INFO_DIR,
+                TestConfig.PCH_DIR,
             ]
         )
         TestConfig._BUILD_DIRS_CREATED = True
@@ -975,6 +986,98 @@ class TestConfig:
             done_marker.touch()
             TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
 
+    @staticmethod
+    def _pch_trisc_define(component: str) -> str:
+        """Command-line TRISC define for a KERNEL_COMPONENTS entry (matches build_kernel_part)."""
+        return "ISOLATE_SFPU" if component == "sfpu" else component.upper()
+
+    def build_pch(self):
+        """Precompile the per-role Quasar PCH prefixes once per job run.
+
+        A single Quasar `--compile-producer` run fans out ~400k
+        `riscv-tt-elf-g++` calls; without a PCH each one re-parses the same
+        stable header prefix (ckernel.h/ckernel_ops.h etc.) from scratch. We
+        precompile that prefix once per role into `.gch` files under PCH_DIR and
+        force-include them from build_kernel_part.
+
+        Safety: this is Quasar-only, opt-outable via TT_LLK_DISABLE_PCH=1, and
+        fail-open — any error leaves PCH_AVAILABLE False so compiles run exactly
+        as before. The `.gch` are built with the same compute flags as the
+        common-case variant; build_kernel_part only force-includes them for
+        variants whose flags match (see there), and even a stale/mismatched
+        `.gch` would be silently ignored by GCC (`-include` falls back to
+        parsing the header from source), never miscompiled.
+        """
+        if TestConfig.PCH_AVAILABLE:
+            return
+        # Quasar-only: the checked-in PCH headers and role set are Quasar-specific.
+        if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            return
+        if os.environ.get("TT_LLK_DISABLE_PCH") == "1":
+            logger.debug("PCH disabled via TT_LLK_DISABLE_PCH=1")
+            return
+
+        done_marker = TestConfig.PCH_DIR / ".pch_complete"
+        if done_marker.exists():
+            TestConfig.PCH_AVAILABLE = True
+            return
+
+        lock = FileLock("/tmp/tt-llk-build-pch.lock")
+        with lock:
+            if done_marker.exists():
+                TestConfig.PCH_AVAILABLE = True
+                return
+
+            os.makedirs(TestConfig.PCH_DIR, exist_ok=True)
+
+            # Canonical common-case compute flags. Constructed from the same
+            # TestConfig options as resolve_compile_options()/build_kernel_part
+            # so the PCH is byte-for-byte flag-compatible with the variants that
+            # will consume it: no coverage/profiler/device-print, and
+            # -DRUNTIME_FORMATS present (compile_time_formats defaults to False).
+            canonical_options = (
+                f"{' '.join(TestConfig.INCLUDES)} {TestConfig.INITIAL_OPTIONS_COMPILE} "
+                "-DLLK_BOOT_MODE_TRISC -DRUNTIME_FORMATS "
+            )
+
+            try:
+                for component in TestConfig.KERNEL_COMPONENTS:
+                    trisc_define = TestConfig._pch_trisc_define(component)
+                    src_header = TestConfig.PCH_SOURCE_DIR / f"quasar_pch_{component}.h"
+                    if not src_header.exists():
+                        raise FileNotFoundError(
+                            f"missing PCH source header {src_header}"
+                        )
+                    # Colocate a copy of the header with its .gch so that
+                    # `-include {staged_header}` resolves `{staged_header}.gch`.
+                    staged_header = TestConfig.PCH_DIR / f"quasar_pch_{component}.h"
+                    shutil.copyfile(src_header, staged_header)
+                    gch_path = f"{staged_header}.gch"
+
+                    pch_command = (
+                        f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} "
+                        f"{TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
+                        f"-I{TestConfig.RISCV_SOURCES} {canonical_options} "
+                        f"-DLLK_TRISC_{trisc_define} "
+                        f"-x c++-header {staged_header} -o {gch_path}"
+                    )
+                    logger.trace(pch_command)
+                    run_shell_command(pch_command, TestConfig.TESTS_WORKING_DIR)
+
+                done_marker.touch()
+                TestConfig.PCH_AVAILABLE = True
+                logger.debug(
+                    "Precompiled Quasar PCH headers for roles: {}",
+                    ", ".join(TestConfig.KERNEL_COMPONENTS),
+                )
+            except Exception as e:
+                # Fail open: disable PCH for this run, leave compiles unchanged.
+                TestConfig.PCH_AVAILABLE = False
+                logger.warning(
+                    "PCH generation failed ({}); continuing without precompiled headers.",
+                    e,
+                )
+
     def generate_compile_time_data_formats(self) -> list[str]:
         header_content: list[str] = [
             "// Data formats inferred by Python inference model"
@@ -1203,6 +1306,7 @@ class TestConfig:
             return
 
         self.build_shared_artefacts()
+        self.build_pch()
 
         # Fast path: if build is already complete, skip entirely
         if done_marker.exists():
@@ -1283,9 +1387,30 @@ class TestConfig:
                         f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
+                # Force-include the precompiled header prefix for this role, but
+                # only for variants whose compile flags match those the .gch was
+                # built with (the common case). The PCH is built with the
+                # canonical flag set (no coverage/profiler/device-print,
+                # -DRUNTIME_FORMATS present, no -DDISABLE_SFPLOADMACRO); using it
+                # on a variant with a different macro set would make GCC discard
+                # it anyway (-Winvalid-pch, which under -Werror could fail the
+                # build), so we simply skip -include there and compile as before.
+                pch_include = ""
+                if TestConfig.PCH_AVAILABLE:
+                    canonical_variant = (
+                        self.coverage_build == CoverageBuild.No
+                        and self.profiler_build == ProfilerBuild.No
+                        and not self.compile_time_formats
+                        and not device_print_flags
+                        and os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
+                    )
+                    if canonical_variant:
+                        pch_header = TestConfig.PCH_DIR / f"quasar_pch_{name}.h"
+                        pch_include = f"-include {pch_header} -Winvalid-pch "
+
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
-                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
+                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {pch_include}{local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
                     f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
