@@ -73,6 +73,7 @@ _HARD_CAP = max(3, _MAX_ATTEMPTS * 2)
 _PCC = float(os.environ.get("BRINGUP_MCP_PCC", "0.99"))
 _TIMEOUT = int(os.environ.get("BRINGUP_MCP_TIMEOUT", "1800"))
 _SHARD_TP = int(os.environ.get("TT_HW_PLANNER_SHARD_TP", "2"))
+_SHARD_DP = int(os.environ.get("TT_HW_PLANNER_SHARD_DP", "1"))
 
 
 def _shard_enabled() -> bool:
@@ -334,7 +335,6 @@ def run_component(component: str, mode: str = "single") -> dict:
                 except OSError:
                     pass
     _prev_run = os.environ.get("TT_HW_PLANNER_SHARD_RUN")
-    _prev_mgd = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     if mode == "shard":
         _st0 = _load_state()
         if not _st0.get("shard_reset_done"):
@@ -346,15 +346,6 @@ def run_component(component: str, mode: str = "single") -> dict:
             _save_state(_st0)
         os.environ["TT_HW_PLANNER_SHARD_RUN"] = "1"
         os.environ["TT_HW_PLANNER_SHARD_TP"] = str(_SHARD_TP)
-        if not _prev_mgd:
-            try:
-                from scripts.tt_hw_planner.parallelism import mesh_graph_descriptor_path
-
-                _mgd = mesh_graph_descriptor_path(int(_SHARD_TP), str(_REPO))
-                if _mgd:
-                    os.environ["TT_MESH_GRAPH_DESC_PATH"] = _mgd
-            except Exception:
-                pass
     try:
         res = _run_pcc(component)
     finally:
@@ -363,10 +354,6 @@ def run_component(component: str, mode: str = "single") -> dict:
                 os.environ.pop("TT_HW_PLANNER_SHARD_RUN", None)
             else:
                 os.environ["TT_HW_PLANNER_SHARD_RUN"] = _prev_run
-            if _prev_mgd is None:
-                os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-            else:
-                os.environ["TT_MESH_GRAPH_DESC_PATH"] = _prev_mgd
     st = _load_state()
     cls = ""
     harness_skip = False
