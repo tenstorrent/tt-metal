@@ -14,11 +14,17 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
+#endif
 #include <utility>
 #include <unordered_set>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#ifdef TT_METAL_USE_EMULE
+#include <thread>
+#endif
 
 namespace {
 
@@ -202,6 +208,11 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
+    // Emule note: the register/run split is bracketed by enqueue_mesh_workload around the whole
+    // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
+    // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
+    // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
+
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);
 
@@ -255,6 +266,27 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     auto& range_program_map = mesh_workload.get_programs();
+
+#ifdef TT_METAL_USE_EMULE
+    if (this->get_target_device_type() == tt::TargetDevice::Emule) {
+        // Co-schedule every program in this workload in one fiber run so cross-chip sender/receiver
+        // programs co-run in one scheduler generation and the teleport's fiber wake reaches the
+        // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
+        // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
+        tt::tt_metal::emule::begin_mesh_dispatch();
+        for (auto& [coord_range, program] : range_program_map) {
+            dispatch_program(coord_range, program, /*blocking=*/false);  // register only (defer)
+        }
+        tt::tt_metal::emule::run_mesh_dispatch();  // one concurrent run across all programs/chips
+        // run_until_idle completed every program synchronously, so all cores are idle now; keep the
+        // "previous workload cores" map empty (the emule invariant wait_for_cores_idle relies on).
+        {
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+            logical_cores_for_previous_workload_.clear();
+        }
+        return;
+    }
+#endif
 
     if (launch_thread_pool_) {
         // Dispatch programs in parallel
