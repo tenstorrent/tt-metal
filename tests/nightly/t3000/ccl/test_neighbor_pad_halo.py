@@ -9,6 +9,7 @@
 # then slice out exactly the halo bands in the compact-buffer stick order and compare byte-for-byte
 # (bf16 copy, no arithmetic).
 
+import time
 import torch
 import pytest
 import ttnn
@@ -16,6 +17,23 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 from ttnn import ShardTensor2dMesh
 from tests.nightly.t3000.ccl.test_neighbor_pad_async import compute_2d_pad_golden
+
+
+def _trace_and_time(mesh_device, run_op, num_iters=30):
+    """Trace-replay wall/iter = device latency (untraced wall is host-dispatch-bound)."""
+    run_op()  # warmup + cold compile
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    run_op()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(num_iters):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    us = (time.perf_counter() - t0) * 1e6 / num_iters
+    ttnn.release_trace(mesh_device, tid)
+    return us
 
 
 def compact_halo_reference(golden, outer, H_dev, W_dev, pH, pW):
@@ -165,4 +183,119 @@ def test_neighbor_pad_halo_2d(mesh_device, device_params, padding_mode):
         pW=1,
         padding_mode=padding_mode,
         num_links=1,
+    )
+
+
+def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, num_links):
+    """Trace-timed device latency: halo-only op vs full-pad neighbor_pad_async on the same input."""
+    mesh_shape = tuple(mesh_device.shape)
+    h_factor, w_factor = mesh_shape[h_axis], mesh_shape[w_axis]
+    torch.manual_seed(0)
+    inp = torch.rand(input_shape).bfloat16()
+
+    outer = 1
+    for d in range(h_dim):
+        outer *= input_shape[d]
+    H_dev, W_dev, C = input_shape[h_dim] // h_factor, input_shape[w_dim] // w_factor, input_shape[-1]
+    h_total = H_dev + 2 * pH
+    total_sticks = outer * 2 * pH * W_dev + outer * 2 * pW * h_total
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    sub_id = ttnn.SubDeviceId(0)
+    mesh_device.set_sub_device_stall_group([sub_id])
+
+    h_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    w_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dims = [None, None]
+    dims[h_axis], dims[w_axis] = h_dim, w_dim
+    inp_mesh = ttnn.from_torch(
+        inp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+    halo_buf = ttnn.from_torch(
+        torch.zeros([total_sticks, C]).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+    )
+    # persistent full-pad output for the async op (needed for tracing)
+    out_shape = list(input_shape)
+    out_shape[h_dim] += h_factor * 2 * pH
+    out_shape[w_dim] += w_factor * 2 * pW
+    persist = ttnn.from_torch(
+        torch.zeros(out_shape).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+
+    def run_halo():
+        return ttnn.experimental.neighbor_pad_halo(
+            inp_mesh,
+            halo_buf,
+            np_padding_h=pH,
+            np_padding_w=pW,
+            np_cluster_axis=h_axis,
+            np_num_links=num_links,
+            np_topology=ttnn.Topology.Linear,
+            h_neighbor_semaphore=h_sem,
+            barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem,
+            np_pad_dim2=w_dim,
+            np_pad2_left=pW,
+            np_pad2_right=pW,
+            np_pad2_cluster_axis=w_axis,
+            np_pad2_num_links=num_links,
+            padding_mode="zeros",
+        )
+
+    def run_async():
+        return ttnn.experimental.neighbor_pad_async(
+            inp_mesh,
+            [h_dim, w_dim],
+            [pH, pW],
+            [pH, pW],
+            "zeros",
+            [h_axis, w_axis],
+            [h_sem, w_sem],
+            [barrier_sem],
+            num_links=[num_links, num_links],
+            memory_config=mem,
+            topology=ttnn.Topology.Linear,
+            persistent_output_buffer=persist,
+        )
+
+    halo_us = _trace_and_time(mesh_device, run_halo)
+    async_us = _trace_and_time(mesh_device, run_async)
+    print(f"\n=== PERF (trace wall/iter, device latency) shape={input_shape} 2x4 ===")
+    print(f"  neighbor_pad_async (full-pad): {async_us:8.1f} us")
+    print(f"  neighbor_pad_halo  (compact):  {halo_us:8.1f} us")
+    print(f"  speedup: {async_us / halo_us:.2f}x")
+
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112 * 64}], indirect=True
+)
+def test_neighbor_pad_halo_perf(mesh_device, device_params):
+    # s4_out-like: full [1,8,272,480,128] -> per-device outer=8, H=136, W=120, C=128, k333 halo.
+    run_halo_vs_async_perf(
+        mesh_device, input_shape=[1, 8, 272, 480, 128], h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
     )
