@@ -178,6 +178,27 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_in_tiled,
     int block_size);
 
+// In-place halo config generator. Self-contained sibling of generate_halo_kernel_config_tensors:
+// it emits the SEPARATE flat-uint16 layout consumed by the in-place halo device kernel and returns
+// the max remote-temp reference size (max_ref_size) used to size the remote-temp CB. The LOCAL
+// config uses a forward-then-reverse entry ordering that pairs with the kernel's overlapping-copy
+// direction logic; do not reorder. `device` is a MeshDevice* so callers can reuse the same handle
+// they pass to move_config_tensor_to_device(). Returns {config, max_ref_size} where config is the
+// 6-vector {pad0, pad1, local0, local1, remote0, remote1}.
+std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
+    bool is_block_sharded,
+    bool transpose_mcast,
+    bool remote_read,
+    bool is_in_tiled,
+    tt::tt_metal::distributed::MeshDevice* device,
+    uint32_t num_cores_x,
+    uint32_t max_out_nsticks_per_core,
+    uint32_t in_nsticks_per_core,
+    bool in_place,
+    uint32_t in_out_shard_size_delta);
+
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
