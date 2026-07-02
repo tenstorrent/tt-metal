@@ -80,6 +80,7 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
                     tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0x0>();
                 }
             }
+            // This increments dest by 8 rows for face_r_dim <= 8, and 16 otherwise
             tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0x0>();
 
             // <<< Starting Point = NUM_FIDELITY_PHASES + 1: For num_faces = 1 || narrow_tile >>> //
@@ -90,6 +91,7 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
                     tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0x0>();
                 }
             }
+            // This resets dest for accumulation
             tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0x0>();
         });
 
@@ -145,11 +147,6 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
                                                       ? (tensor_shape.total_num_faces() >> 1)
                                                       : tensor_shape.total_num_faces();
 
-    // minimum 7 instructions + NUM_FIDELITY PHASES
-    //     - if tensor_shape.total_num_faces() > 1, +(NUM_FIDELITY_PHASES + 1)
-    //     - if tensor_shape.total_num_faces() == NUM_FACES, +1
-    //     - if tensor_shape.face_r_dim > ELTWISE_MATH_ROWS, +1
-    // maximum total = 7 + 3 + 4 + 1 + 1 = 16
     std::uint32_t replay_buf_len = 7 + NUM_FIDELITY_PHASES;
     if (tensor_shape.total_num_faces() > 1 && tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim)
     {
@@ -177,6 +174,8 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
         [tensor_shape]
         {
             // Each face is transposed in the unpacker, and then faces 0 & 1 are pooled together
+            // 16x16 case (num_faces == 1) and 32x16 (narrow) case pools one face per row, all others pool
+            // two faces per row. Skip this first pool for 16x16, 32x16.
             if (tensor_shape.total_num_faces() > 1 && tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim)
             {
                 if constexpr (RUN_FID_LOOPS)
@@ -345,7 +344,7 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
         if (tensor_shape.face_r_dim < (FACE_R_DIM >> 1))
         {
             // For face_r_dim < 8, dest will be sparse with faces placed every 8 rows.
-            addr_mod_0_dest_incr = 8;
+            addr_mod_0_dest_incr = static_cast<std::uint16_t>(ELTWISE_MATH_ROWS);
         }
         else
         {
