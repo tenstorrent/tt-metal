@@ -1,26 +1,31 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """point_to_point — self-contained Python CCL op (generic_op + MeshProgramDescriptor).
 
-Sends one mesh device's interleaved shard to another device over the Tenstorrent
-fabric. Pure data movement (no arithmetic): the receiver device's output shard
-becomes a bit-for-bit copy of the sender's input shard, and every other device's
-output shard is left equal to its own input shard.
+Copies one mesh device's interleaved shard of a mesh-sharded tensor to another
+device over the Tenstorrent fabric. It is pure data movement (identity byte copy,
+no arithmetic; PCC ~1.0): after the op the RECEIVER device's shard equals the
+SENDER device's input shard bit-for-bit, and every other device's shard is
+unchanged.
 
-The op (a) seeds ``output == input`` on every device, (b) dispatches a two-program
-mesh workload (SEND at ``sender_coord``, RECEIVE at ``receiver_coord``) that
-overwrites only the receiver shard via the fabric, coordinated by one cached
-op-internal ``GlobalSemaphore``.
+Newly authored sender/receiver dataflow kernels under ``kernels/`` are assembled
+by a ``ttnn.generic_op`` over a ``ttnn.MeshProgramDescriptor`` (one
+``ProgramDescriptor`` per participating coordinate). This op does NOT wrap,
+import, call, or dispatch to the bound C++ ``ttnn.point_to_point``.
+
+Cross-chip coordination uses ONE op-internal ``GlobalSemaphore`` (created once
+per mesh_device, parked on ``MeshProgramDescriptor.semaphores`` so its L1 survives
+program-cache hits) carrying a two-phase handshake:
+  (1) receiver -> sender "ready", then (2) sender -> receiver "done".
 """
 
 from __future__ import annotations
 
 import ttnn
 
-# Topology lives on the C++ module; the top-level ``ttnn.Topology`` alias is only
-# bound AFTER ``ttnn.operations`` is auto-imported, so reference the source module
-# directly to stay safe at eager-import time.
+# Topology lives on the C++ module; the top-level ttnn.Topology alias only binds
+# AFTER ttnn.operations is auto-imported, so reference the source module directly.
 from ttnn._ttnn.operations.ccl import Topology as _Topology
 
 try:  # registry-model refusal types; fall back when the shared module is absent.
@@ -34,18 +39,17 @@ except ImportError:  # pragma: no cover
         pass
 
 
-from .point_to_point_program_descriptor import create_mesh_program_descriptor, resolve_intermediate_spec
+from .point_to_point_program_descriptor import PacketDims, create_mesh_program_descriptor
 
 
 # ---------------------------------------------------------------------------
 # Registry-model declarations
 # ---------------------------------------------------------------------------
-# The 16-byte page-size constraint is a shape x dtype validate() gate (kept
-# satisfiable by INPUTS), not an axis. `alignment` IS a shape-derived axis
-# (the golden suite tags it from the per-device shard's last two dims): the op
-# is pure byte movement and never tilizes/untilizes, so it copies the physical
-# pages (padded tiles for TILE, last-dim rows for ROW_MAJOR) verbatim and is
-# alignment-agnostic — both tile_aligned and non_tile_aligned are supported.
+# point_to_point is pure byte movement (never tilizes/untilizes), so it is
+# format-agnostic in principle. `alignment` IS a shape-derived axis tagged from
+# the per-device shard's last two dims: the op copies the physical pages (padded
+# tiles for TILE, last-dim rows for ROW_MAJOR) verbatim, so non-tile-aligned
+# shards transfer just like aligned ones.
 
 
 def tag_alignment(inputs, axes):
@@ -59,21 +63,14 @@ def tag_alignment(inputs, axes):
 INPUT_TAGGERS: dict = {"alignment": tag_alignment}
 
 SUPPORTED = {
-    # Pure byte movement: every fixed-width dtype is correct. bfloat8_b is a
-    # tiled block-float format (TILE only — the {bf8b, ROW_MAJOR} cell is
-    # structurally INVALID and ttnn cannot construct it).
-    "dtype": [
-        ttnn.bfloat16,
-        ttnn.float32,
-        ttnn.bfloat8_b,
-        ttnn.uint16,
-        ttnn.int32,
-        ttnn.uint32,
-    ],
+    # Pure data movement: every fixed-width dtype is correct in principle. The
+    # proven primary set is the acceptance-test dtypes (bf16/fp32/bf8b). Integer
+    # passthrough (uint16/int32/uint32) stays a refinement candidate.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    # Both topologies run on the same FABRIC_1D fabric; the route (and Ring
+    # short-way choice) is owned by ccl_dm_route, so the kernels are identical.
     "topology": [_Topology.Linear, _Topology.Ring],
-    # Shape-derived (tagged from the shard's last two dims). Format is preserved
-    # end to end, so non-tile-aligned shards transfer just like aligned ones.
     "alignment": ["tile_aligned", "non_tile_aligned"],
 }
 
@@ -98,56 +95,96 @@ def _get_or_create_semaphore(mesh_device):
     return sem
 
 
-def validate(input_tensor, sender_coord, receiver_coord, *, topology, output_tensor, intermediate_tensor):
-    """Runtime gate. Structural input errors raise ValueError; axis refusals raise
-    the registry-model UnsupportedAxisValue / ExcludedCell."""
+def _coord_in_mesh(coord, mesh_shape) -> bool:
+    return 0 <= coord[0] < mesh_shape[0] and 0 <= coord[1] < mesh_shape[1]
+
+
+def _compute_packet_dims(input_tensor) -> PacketDims:
+    """Frame the input shard's pages into fabric packets (owns bf16 bit_floor +
+    both packing regimes). Drives the intermediate shape and all packet args."""
+    l1_alignment = ttnn.get_l1_alignment()
+    pd = ttnn._ttnn.fabric.ccl_packet_dims(
+        input_tensor.dtype,
+        input_tensor.buffer_page_size(),
+        input_tensor.buffer_num_pages(),
+        l1_alignment,
+    )
+    return PacketDims(
+        packet_size_bytes=pd.packet_size_bytes,
+        pages_per_packet=pd.pages_per_packet,
+        page_segments=pd.page_segments,
+        total_packets=pd.total_packets,
+    )
+
+
+def _resolve_intermediate_spec(input_tensor, packet_dims: PacketDims):
+    """Intermediate (fabric landing zone) shape/dtype/layout/memory match the input
+    layout, but the shape is packet-framed: {total_packets, packet_page_dim}."""
+    datum_size = ttnn.element_size(input_tensor.dtype)
+    packet_page_dim = packet_dims.packet_size_bytes // datum_size
+    return ttnn.Shape([packet_dims.total_packets, packet_page_dim])
+
+
+def validate(input_tensor, sender_coord, receiver_coord, *, topology, output_tensor, intermediate_tensor, packet_dims):
+    """Runtime gate. Structural errors raise ValueError; axis refusals raise the
+    registry-model UnsupportedAxisValue / ExcludedCell. Structural checks first."""
     device = input_tensor.device()
     if not isinstance(device, ttnn.MeshDevice):
-        raise ValueError("point_to_point: input_tensor must be on a MeshDevice")
+        raise ValueError("point_to_point: input must be on a MeshDevice")
 
     mesh_shape = tuple(device.shape)
-    if len(mesh_shape) != 2:
-        raise ValueError(f"point_to_point: expected a 2-D mesh view, got shape {mesh_shape}")
 
-    s = (sender_coord[0], sender_coord[1])
-    r = (receiver_coord[0], receiver_coord[1])
-    if s == r:
+    # 2. cannot send to self
+    if sender_coord == receiver_coord:
         raise ValueError("point_to_point: cannot send to self (sender_coord == receiver_coord)")
-    for name, c in (("sender_coord", s), ("receiver_coord", r)):
-        if not (0 <= c[0] < mesh_shape[0] and 0 <= c[1] < mesh_shape[1]):
-            raise ValueError(f"point_to_point: {name} {c} is outside the mesh {mesh_shape}")
-    if s[0] != r[0] and s[1] != r[1]:
-        raise ValueError(
-            "point_to_point: sender_coord and receiver_coord must share a row or column (1-D fabric route)"
-        )
-
+    # 3 / 4. coords inside the mesh view
+    if not _coord_in_mesh(sender_coord, mesh_shape):
+        raise ValueError(f"point_to_point: sender_coord {tuple(sender_coord)} outside mesh {mesh_shape}")
+    if not _coord_in_mesh(receiver_coord, mesh_shape):
+        raise ValueError(f"point_to_point: receiver_coord {tuple(receiver_coord)} outside mesh {mesh_shape}")
+    # 5. 1-D fabric: coords must share a row or a column (diagonal is illegal)
+    if sender_coord[0] != receiver_coord[0] and sender_coord[1] != receiver_coord[1]:
+        raise ValueError("point_to_point: sender_coord and receiver_coord must share a row or column")
+    # 6. interleaved only
     if input_tensor.is_sharded():
         raise ValueError("point_to_point: sharded input not yet supported (interleaved only)")
 
+    # 7. Load-bearing: the fabric writer sends align(page_size, l1_alignment) bytes
+    # per page (ccl_helpers_dataflow.inl:35). The output TensorAccessor spaces pages
+    # by the raw page_size, so a non-16-aligned page would overrun into the next
+    # output page. Requiring a 16B-aligned page makes the round-up a no-op.
     page = input_tensor.buffer_page_size()
-    if page % 16 != 0 and page != 16:
-        raise ValueError(f"point_to_point: per-shard page size ({page} B) must be 16-byte aligned")
+    l1_alignment = ttnn.get_l1_alignment()
+    if page % l1_alignment != 0 and page != l1_alignment:
+        raise ValueError(f"point_to_point: page size ({page} B) must be 16-byte aligned")
 
+    # 8. supplied output_tensor spec must equal the resolved output spec (== input).
     if output_tensor is not None:
         if (
-            tuple(output_tensor.shape) != tuple(input_tensor.shape)
+            list(output_tensor.shape) != list(input_tensor.shape)
             or output_tensor.dtype != input_tensor.dtype
             or output_tensor.layout != input_tensor.layout
             or output_tensor.memory_config().buffer_type != input_tensor.memory_config().buffer_type
         ):
-            raise ValueError("point_to_point: output_tensor spec must equal the resolved output spec (== input spec)")
+            raise ValueError("point_to_point: output_tensor spec must equal input spec")
 
+    # 9. supplied intermediate_tensor spec must equal the resolved intermediate spec.
     if intermediate_tensor is not None:
-        spec = resolve_intermediate_spec(input_tensor)
+        expected_shape = _resolve_intermediate_spec(input_tensor, packet_dims)
         if (
-            tuple(intermediate_tensor.shape) != tuple(spec.shape)
-            or intermediate_tensor.dtype != spec.dtype
-            or intermediate_tensor.layout != spec.layout
+            list(intermediate_tensor.shape) != list(expected_shape)
+            or intermediate_tensor.dtype != input_tensor.dtype
+            or intermediate_tensor.layout != input_tensor.layout
+            or intermediate_tensor.memory_config().buffer_type != input_tensor.memory_config().buffer_type
         ):
-            raise ValueError("point_to_point: intermediate_tensor spec must equal the resolved intermediate spec")
+            raise ValueError("point_to_point: intermediate_tensor spec mismatch")
 
-    # Axis gate (registry model).
-    axes = {"dtype": input_tensor.dtype, "layout": input_tensor.layout, "topology": topology}
+    # 10. Axis gate (registry model). No index/sign axis to canonicalize.
+    axes = {
+        "dtype": input_tensor.dtype,
+        "layout": input_tensor.layout,
+        "topology": topology,
+    }
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((tuple(input_tensor.shape),), axes)
     for axis, allowed in SUPPORTED.items():
@@ -167,11 +204,17 @@ def point_to_point(
     output_tensor: ttnn.Tensor = None,
     intermediate_tensor: ttnn.Tensor = None,
 ) -> ttnn.Tensor:
-    """Send ``input_tensor``'s shard at ``sender_coord`` to ``receiver_coord``.
+    """Send ``input_tensor``'s shard from ``sender_coord`` to ``receiver_coord``.
 
-    Returns the output tensor: ``output[receiver_coord] == input[sender_coord]``
-    and ``output[d] == input[d]`` for every other device ``d``.
+    After the op the receiver device's shard equals the sender's input shard;
+    every other device's shard is unchanged.
+
+    When ``output_tensor is None`` the op aliases ``input_tensor`` (in-place):
+    only the receiver device's shard is overwritten, so the sender's own shard
+    and every non-participating device's shard stay bit-identical to the input.
     """
+    packet_dims = _compute_packet_dims(input_tensor)
+
     validate(
         input_tensor,
         sender_coord,
@@ -179,20 +222,28 @@ def point_to_point(
         topology=topology,
         output_tensor=output_tensor,
         intermediate_tensor=intermediate_tensor,
+        packet_dims=packet_dims,
     )
 
     mesh_device = input_tensor.device()
 
-    # Op-internal per-packet staging buffer that lands the fabric payload.
-    if intermediate_tensor is None:
-        intermediate_tensor = ttnn.allocate_tensor_on_device(resolve_intermediate_spec(input_tensor), mesh_device)
-
-    # Seed output == input on EVERY device (guarantees non-receiver shards stay
-    # unchanged). The receiver's writer overwrites only the receiver shard.
+    # Output defaults to the input tensor (in-place alias): only the receiver's
+    # shard is written; every other shard stays equal to the input.
     if output_tensor is None:
-        output_tensor = ttnn.clone(input_tensor, memory_config=input_tensor.memory_config())
-    else:
-        ttnn.copy(input_tensor, output_tensor)
+        output_tensor = input_tensor
+
+    # The intermediate (fabric landing zone) is a mesh tensor at the SAME
+    # device-local address on both endpoints — the sender fabric-writes packets
+    # into the receiver's copy; the receiver reads its local copy back.
+    if intermediate_tensor is None:
+        intermediate_shape = _resolve_intermediate_spec(input_tensor, packet_dims)
+        intermediate_tensor = ttnn.allocate_tensor_on_device(
+            intermediate_shape,
+            input_tensor.dtype,
+            input_tensor.layout,
+            mesh_device,
+            input_tensor.memory_config(),
+        )
 
     sem = _get_or_create_semaphore(mesh_device)
     sem_addr = ttnn.get_global_semaphore_address(sem)
@@ -205,9 +256,12 @@ def point_to_point(
         receiver_coord,
         topology,
         sem_addr,
+        packet_dims,
     )
     # Park the semaphore so the framework keeps its L1 alive across cache hits.
     mesh_program_descriptor.semaphores = [sem]
 
+    # io_tensors: input, intermediate, output (output last). When output aliases
+    # input the last element is the input tensor itself (in-place).
     ttnn.generic_op([input_tensor, intermediate_tensor, output_tensor], mesh_program_descriptor)
     return output_tensor
