@@ -8383,6 +8383,18 @@ def _cmd_up_core(args) -> int:
             return backend_quality_rc
 
     env_ok_early, env_problems_early = _check_demo_environment_compat()
+    _is_external_demo_early = _early_compat is not None and getattr(_early_compat, "in_external_demo", False)
+    if not env_ok_early and _is_external_demo_early:
+        _src_only = [l for l in env_problems_early if not l.startswith("transformers==")]
+        _pkg_only = [l for l in env_problems_early if l.startswith("transformers==")]
+        if _src_only and not _pkg_only:
+            print()
+            print(
+                f"  [env] source-level advisories in the tt_transformers simple_text_demo "
+                f"codepath, which {MODEL} does NOT use (it has its own external demo). "
+                f"Non-fatal -- continuing bring-up."
+            )
+            env_ok_early, env_problems_early = True, []
     if not env_ok_early:
         sep_e = "=" * 72
         print()
@@ -8591,6 +8603,14 @@ def _cmd_up_core(args) -> int:
             _already_supported = False
     if _already_supported:
         env_ok, env_problems = _check_demo_environment_compat()
+        if not env_ok and _early_compat is not None and getattr(_early_compat, "in_external_demo", False):
+            _src_only = [l for l in env_problems if not l.startswith("transformers==")]
+            _pkg_only = [l for l in env_problems if l.startswith("transformers==")]
+            if _src_only and not _pkg_only:
+                print(
+                    f"  [env] source-level advisories only; {MODEL} uses an external demo " f"-- non-fatal, continuing."
+                )
+                env_ok, env_problems = True, []
         if not env_ok:
             sep = "=" * 72
             print()
