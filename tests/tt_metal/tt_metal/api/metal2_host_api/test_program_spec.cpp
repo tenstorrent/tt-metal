@@ -1001,18 +1001,17 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
             "KernelSpec 'kernel' has too many threads. The architecture supports up to 4 for compute kernels")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
-    // Gen2 config is fully optional even on Quasar: absence is treated as "use defaults"
-    // (empty disable_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
-    // permitted at the spec layer (whether such a kernel actually does anything useful on
-    // Gen2 hardware is a separate question, outside the validator's scope).
+TEST_F(ProgramSpecTestQuasar, DMKernelWithGen1ConfigFails) {
+    // The config's generation must match the target platform: on Gen2 (Quasar) a DM kernel must
+    // carry a DataMovementGen2Config. Supplying an explicit Gen1 config is a hard error — it is not
+    // silently substituted with a default Gen2 config.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
-    // Replace the default Gen2 config with an explicit Gen1 config.
+    // Replace the default Gen2 config with an explicit Gen1 config (wrong generation for Quasar).
     auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
     dm_config = DataMovementGen1Config{
         .processor = DataMovementProcessor::RISCV_0,
@@ -1023,7 +1022,9 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("holds a DataMovementGen1Config")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithDefaultGen2ConfigSucceeds) {
@@ -1043,9 +1044,10 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithDefaultGen2ConfigSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
-    // A READER/WRITER role hint is a Gen1 concept; on Gen2 it is informational and imposes no
-    // requirement (no explicit Gen1Config needed, gen2_config still optional).
+TEST_F(ProgramSpecTestQuasar, RoleBasedGen1ConfigOnGen2Fails) {
+    // create_from_role(READER/WRITER) builds a Gen1 placement (DataMovementGen1Config), which is the
+    // wrong generation for Gen2 (Quasar): the platform requires a DataMovementGen2Config, so the
+    // mismatch is a hard error rather than a silently-ignored role hint.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1056,7 +1058,9 @@ TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("holds a DataMovementGen1Config")));
 }
 
 // Cross-node DFBs are part of the API surface but not yet supported by the runtime.
@@ -3138,8 +3142,8 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
-    // On Gen1, a DM kernel with no Gen1Config must be rejected: it has no way to resolve its
-    // processor/NOC placement.
+    // The config's generation must match the target platform: on Gen1 (WH/BH) a DM kernel carrying a
+    // Gen2 config is a hard error — it has no way to resolve its processor/NOC placement.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -3153,7 +3157,7 @@ TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no Gen1 config")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("holds a DataMovementGen2Config")));
 }
 
 TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
