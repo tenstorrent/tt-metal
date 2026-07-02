@@ -181,6 +181,30 @@ Ran the built-in TP-vs-no-TP PCC checks (which compare TP=1 output to replicated
 - **FIX SCOPE (not done): correct the MoE-layer TP sharded compute / all-reduce so TP=1 matches
   no-TP to ~0.999 per layer; then production (TP=1) should reach the ~0.95 HF ceiling.**
 
+### ROOT CAUSE (2x4 TP=1): invalid FUSE_MLP_MOE_REDUCE on 2D meshes
+`decoder_layer_tt.py` MoE path: with `FUSE_MLP_MOE_REDUCE=1` (default) + tp_enabled,
+`_skip_shared_reduce=True` (L768). Then:
+- shared expert all_reduce is SKIPPED (L1331) — shared_out left TP-column-partial;
+- routed experts run with `skip_final_reduce=True` (L1392) — their `_moe_all_reduce_across_mesh`
+  (which reduces over BOTH mesh axes) is skipped, leaving routed_out EP-partial;
+- `mlp_out = shared + routed`, then ONE `all_reduce(cluster_axis=tp_axis)` (L1405-1412).
+
+The bug: that single reduce covers only `tp_axis` (columns, size 4). But:
+- routed (EP) is sharded across ALL 8 chips → needs reduction over BOTH axes; the **DP-row axis
+  (size 2) sum is dropped** → ~half the routed-expert contribution missing → full-model PCC 0.65.
+- shared is column-partial AND replicated across the DP rows → it must NOT be reduced over rows
+  (would double-count). So shared and routed **cannot share one all_reduce on a 2D (DP>1) mesh**.
+
+Evidence chain: TP=0 (no fusion, replicated) = 0.935 ✓; 1x4 (DP=1, single axis covers both) ~ok;
+2x4 (DP=2) = 0.65 ✗. Confirmed the fusion is the site; `FUSE_MLP_MOE_REDUCE=0` on 2x4 CRASHES
+(`all_gather num_devices=1`), so the non-fused path also has a 2x4/DP bug (size-1 axis).
+
+**Fix design (delicate, distributed):** the shared+routed reduce fusion is only correct on 1D
+meshes. On 2D meshes with DP>1: reduce shared over `tp_axis` only, reduce routed over the FULL mesh
+(both axes), then add — i.e. gate `_skip_shared_reduce` on `dp_axis_size == 1`, AND fix the
+non-fused routed path's size-1-axis crash so it runs on 2x4. Verify with the per-layer TP test
+(target 0.999/layer) then full-model pcc_vs_hf (expect ~0.95 at TP=1).
+
 ## Reality note
 Each remaining iteration is deep fused-op code surgery + 10-min reprofile + PCC verify. This is the
 long autonomous grind the PLAN is built for; it is not flag-flipping. Batches 8/16/32 repeat this
