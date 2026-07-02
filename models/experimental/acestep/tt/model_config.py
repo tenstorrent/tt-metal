@@ -360,11 +360,14 @@ def _text_encoder_layer_config(rl, args, device):
     )
 
 
-def build_text_encoder(mesh_device, *, dtype=None):
-    """Build the TT AceStepTextEncoder (Qwen3-Embedding-0.6B) from the pipeline bundle.
+def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None):
+    """Build a TT AceStepTextEncoder from a causal Qwen3Model checkpoint in the pipeline bundle.
 
-    The 28-layer causal Qwen3 text encoder turns tokenized prompt text into text_hidden_states
-    that the ConditionEncoder's text_projector consumes. Reuses AceStepEncoderLayer + RMSNorm1D.
+    Both the ACE-Step text encoder (Qwen3-Embedding-0.6B) and the 5Hz LM planner
+    (acestep-5Hz-lm-1.7B) are base causal Qwen3Model with the SAME layer structure (self_attn
+    q/k/v/o + q/k-norm, SwiGLU MLP, pre-norms). They differ only in dims (hidden 1024 vs 2048),
+    vocab, and layer count — all read from the checkpoint — so one builder covers both. Reuses
+    AceStepEncoderLayer + RMSNorm1D; causal via an additive mask; vocab embed on host.
     """
     import ttnn as _ttnn
     from transformers import AutoModel
@@ -372,10 +375,7 @@ def build_text_encoder(mesh_device, *, dtype=None):
     from models.experimental.acestep.tt.text_encoder import AceStepTextEncoder, AceStepTextEncoderConfig
 
     dt = dtype or _ttnn.bfloat16
-    text_dir = str(pipeline_dir() / "Qwen3-Embedding-0.6B")
-    hf_te = AutoModel.from_pretrained(text_dir, dtype=torch.float32).eval()
-
-    prev = args_weight_dtype = None  # noqa: F841 (clarity: builder-local dtype only)
+    hf_te = AutoModel.from_pretrained(str(pipeline_dir() / subdir), dtype=torch.float32).eval()
 
     class _A:  # tiny arg carrier so the layer helper can read weight_dtype
         weight_dtype = dt
@@ -389,6 +389,20 @@ def build_text_encoder(mesh_device, *, dtype=None):
         eps=hf_te.config.rms_norm_eps,
     )
     return AceStepTextEncoder(cfg), hf_te
+
+
+def build_text_encoder(mesh_device, *, dtype=None):
+    """Build the TT text encoder (Qwen3-Embedding-0.6B): prompt tokens -> text_hidden_states."""
+    return _build_qwen3_encoder(mesh_device, "Qwen3-Embedding-0.6B", dtype=dtype)
+
+
+def build_lm_planner(mesh_device, *, dtype=None):
+    """Build the TT 5Hz LM planner base (acestep-5Hz-lm-1.7B): a causal Qwen3Model, hidden 2048.
+
+    Reuses the exact same Qwen3-encoder path as the text encoder (same layer structure). Returns
+    the last_hidden_state model; the tied-embedding LM head (logits) is a separate projection.
+    """
+    return _build_qwen3_encoder(mesh_device, "acestep-5Hz-lm-1.7B", dtype=dtype)
 
 
 def build_vae_decoder(mesh_device, *, dtype=None):
