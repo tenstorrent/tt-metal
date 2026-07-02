@@ -6,6 +6,7 @@ import math
 import os
 import re
 from enum import Enum
+from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional, Union
 
@@ -872,6 +873,16 @@ def get_hf_tt_cache_path(model_path: str) -> str:
         os.makedirs(tt_cache_path, exist_ok=True)
 
     return tt_cache_path
+
+
+def get_tt_kv_cache_path(default_cache_path: Optional[Union[str, Path]]) -> Optional[Path]:
+    """Return the disk cache root for generated KV cache tensors."""
+    kv_cache_path = os.getenv("TT_KV_CACHE_PATH")
+    if kv_cache_path:
+        return Path(kv_cache_path)
+    if default_cache_path is None:
+        return None
+    return Path(default_cache_path)
 
 
 def create_tt_model(

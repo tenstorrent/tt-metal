@@ -13,6 +13,7 @@ import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import ModelArgs as ReferenceModelArgs
 from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, load_llama_state_dict, setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 
 
 class TtLlamaForCausalLM(TtLlamaModelForGeneration):
@@ -72,6 +73,7 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
         return super().prefill_forward(tokens, 0, page_table, kv_cache, prompt_lens)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        kv_cache_path = get_tt_kv_cache_path(self.cache_path)
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
         for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer"):
@@ -85,7 +87,7 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.bfloat8_b,
-                    cache_file_name=self.cache_path / f"empty_cache_paged_attention{kv_cache_shape}",
+                    cache_file_name=kv_cache_path / f"empty_cache_paged_attention{kv_cache_shape}",
                 )
                 for lp in (cache_kv, cache_kv)
             ]
