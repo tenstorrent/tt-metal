@@ -30,7 +30,6 @@ from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # 
     indirect=True,
 )
 @pytest.mark.parametrize("layer_name", [("layer_norm1"), ("layer_norm2")])
-@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_layernorm_inference(mesh_device, reset_seeds, layer_name, dummy_weights):
     dtype = ttnn.bfloat16
 

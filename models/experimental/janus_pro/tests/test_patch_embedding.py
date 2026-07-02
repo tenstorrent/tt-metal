@@ -30,7 +30,6 @@ from ttnn import ConcatMeshToTensor
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_conv2d_inference(
     mesh_device,
     reset_seeds,

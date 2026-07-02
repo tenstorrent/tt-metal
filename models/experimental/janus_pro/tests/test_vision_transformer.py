@@ -35,7 +35,6 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_image_transformer_inference(batch, num_chunks, mesh_device, dummy_weights):
     pcc_required = 0.99
 

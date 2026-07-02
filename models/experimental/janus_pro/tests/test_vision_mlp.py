@@ -35,7 +35,6 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, dummy_weights):
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)

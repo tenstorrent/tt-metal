@@ -32,7 +32,6 @@ from ttnn import ConcatMeshToTensor
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
-@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_vision_embedding_integration(
     mesh_device,
     reset_seeds,

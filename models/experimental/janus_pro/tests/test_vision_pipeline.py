@@ -32,7 +32,6 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
-@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_janus_vision(
     mesh_device,
     reset_seeds,
@@ -90,7 +89,6 @@ def test_janus_vision(
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
-@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_janus_vision_piecewise(
     mesh_device,
     reset_seeds,
