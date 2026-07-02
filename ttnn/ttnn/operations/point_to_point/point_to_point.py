@@ -108,22 +108,36 @@ def _allocate_intermediate(input_tensor, mesh_device):
     """Allocate the (replicated) fabric landing buffer.
 
     Shape ``(total_packets, packet_size_bytes // element_size)`` — one page per fabric
-    packet, sized from ``ccl_packet_dims``. Layout/dtype/memory_config mirror the input
-    (so bfloat8_b, which has no ROW_MAJOR representation, stays TILE); the buffer is only
-    ever addressed as `total_packets` packet-size pages via the kernels' page-size
-    override, so the layout is internal staging detail.
+    packet, sized from ``ccl_packet_dims``. The buffer is only ever addressed as
+    ``total_packets`` packet-size pages via the kernels' page-size override, so its
+    dtype/layout is internal raw-byte staging detail, independent of the input.
+
+    For most dtypes we mirror the input dtype/layout. Block-float formats (bfloat8_b)
+    have no per-element byte size (``element_size()`` raises) and no ROW_MAJOR
+    representation, so the landing buffer uses a raw-byte proxy (uint8 ROW_MAJOR); the
+    bytes copied through it are format-agnostic, so the receiver still reconstructs the
+    sender's bfloat8_b tile bit-for-bit.
     """
     l1_alignment = ttnn.get_l1_alignment()
     page_size = input_tensor.buffer_page_size()
     num_pages = input_tensor.buffer_num_pages()
     pd = ttnn._ttnn.fabric.ccl_packet_dims(input_tensor.dtype, page_size, num_pages, l1_alignment)
-    element_size = input_tensor.element_size()
+
+    if input_tensor.dtype == ttnn.bfloat8_b:
+        inter_dtype = ttnn.uint8  # 1 byte/element raw-byte proxy
+        inter_layout = ttnn.ROW_MAJOR_LAYOUT
+        element_size = 1
+    else:
+        inter_dtype = input_tensor.dtype
+        inter_layout = input_tensor.layout
+        element_size = input_tensor.element_size()
+
     packet_page_dim = pd.packet_size_bytes // element_size
     inter_shape = [pd.total_packets, packet_page_dim]
     return ttnn.allocate_tensor_on_device(
         ttnn.Shape(inter_shape),
-        input_tensor.dtype,
-        input_tensor.layout,
+        inter_dtype,
+        inter_layout,
         mesh_device,
         input_tensor.memory_config(),
     )
