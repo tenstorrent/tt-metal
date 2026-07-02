@@ -40,10 +40,17 @@ Data regime here (~1MB/link) wants 4 workers/link (all_gather default_workers he
 - [x] Branch created; template studied; root cause source-verified
 - [x] WIP scaffold committed (6b326507e26); ExecPlan
 - [x] Factory: data-driven num_w_workers computed + logged (buildable, no behavior change yet)
-- [ ] Resolve obstacle 1: 2D core placement for mux+workers
-- [ ] Resolve obstacle 2: fork np_w_mux_writer.cpp with mux CT/RT args + fabric_async_write send
-- [ ] Factory: allocate mux+worker cores, FabricMuxConfig, mux kernel, per-worker row split + conn args
-- [ ] Resolve obstacle 3: mux termination handshake
+- [x] Resolve obstacle 2: np_w_mux_writer.cpp written — mux lifecycle (build/wait-ready/connect),
+      barrier+coalesced-data+sem all through the mux, termination-master handshake. (v1: middle-device
+      coalesced path; edge per-stick + corners TODO.) NOT yet wired (JIT-compiled only when CreateKernel'd).
+- [ ] Resolve obstacle 1: 2D core placement — halo-only op => cols 1+ free; allocate mux+worker block there
+- [ ] Factory: FabricMuxConfig(num_full_size_channels=num_w_workers), CreateKernel(tt_fabric_mux.cpp) on
+      mux cores + get_fabric_mux_run_time_args; restructure W loop (link,worker,dir) split rows; CreateKernel
+      np_w_mux_writer on worker cores with CT(send_cb,stick,dst_accessor,W_COALESCE,mux 5 CT) + RT(base,
+      rows,sem xy,dir,route,mux conn 10 RT,termination). W reader (np_phase2_w_reader) on same worker cores,
+      sub-range. Gate: num_w_workers>1 uses mux path; else current direct path.
+- [x] Resolve obstacle 3: termination handshake in np_w_mux_writer (master waits num_mux_clients-1, terminates)
+- [ ] BUILD (wire factory) -> PCC (W_WORKERS=2) -> debug hangs (timeout+tt-smi -r) -> perf
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
 - [ ] np_writer: gated mux-connection send path for W (build_connection + fabric_async_write)
 - [ ] np_phase2_w_reader: N reader cores (already range-parameterized)

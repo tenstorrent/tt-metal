@@ -1,0 +1,166 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Fabric-MUX W writer for neighbor_pad_halo (reach fabric link BW; see PLAN_NP_FABRIC_MUX_IMPL.md).
+//
+// Purpose: the single-worker-per-link W send caps at ~1.4 GB/s/link because the EDM exposes only one
+// direct local-worker sender channel per link (fabric.cpp:226). To saturate the eth link (~12.5 GB/s
+// Linear) multiple workers must feed it through a MUX core. This kernel is one such worker: it connects
+// to a fabric-mux endpoint and routes ALL fabric ops (startup barrier atomic-inc, coalesced W-halo data,
+// and the W recv-sem atomic-inc) through the mux connection, mirroring the all_gather worker-mux pattern
+// (ttnn/.../all_gather_async/device/kernels/minimal_default_writer.cpp, USE_WORKER_MUX path).
+//
+// Scope (v1, middle W devices, coalesced path): each (link,direction) is served by N workers + 1 mux
+// core; each worker owns a contiguous sub-range of this direction's W rows (split host-side). Bank-major
+// coalescing is identical to np_writer's W-coalesce send (base+r, base+r+8, ... contiguous on one bank).
+// Edge-device per-stick + corner handling is TODO before this replaces np_writer for all W cores.
+
+#include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/buffer_types.hpp>
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+#include <cstdint>
+
+using address_t = uint32_t;
+using namespace tt::tt_fabric::linear::experimental;
+
+// ---- Compile-time args ----
+constexpr uint32_t send_cb_id = get_compile_time_arg_val(0);
+constexpr uint32_t stick_size = get_compile_time_arg_val(1);
+constexpr auto dst_ct_args = TensorAccessorArgs<2>();
+constexpr uint32_t ct_after_dst = dst_ct_args.next_compile_time_args_offset();
+constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst);
+constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+// Mux connection CT args (lockstep with FabricMuxConfig on the host).
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(ct_after_dst + 1);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(ct_after_dst + 2);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(ct_after_dst + 3);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(ct_after_dst + 4);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(ct_after_dst + 5);
+
+void kernel_main() {
+    // ---- Common runtime args ----
+    const address_t output_tensor_address = get_common_arg_val<address_t>(1);
+    const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
+    const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
+
+    // ---- Per-core runtime args ----
+    uint32_t arg_idx = 0;
+    const uint32_t base = get_arg_val<uint32_t>(arg_idx++);            // compact-buffer W-section base for this worker
+    const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);  // this worker's row count
+    const uint8_t neighbor_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t neighbor_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
+    const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
+    const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    auto unicast_route_info = ccl_routing_utils::line_unicast_route_info_t{
+        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
+        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
+
+    // Mux connection RT args.
+    const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    // Termination coordination.
+    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
+
+    // Nothing to send from an outward-facing edge worker (no neighbor this direction).
+    const bool has_neighbor = direction ? !is_first_chip : !is_last_chip;
+
+    // ---- Build + connect the mux endpoint ----
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
+    if (mux_connection_valid) {
+        mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+            fabric_mux_x,
+            fabric_mux_y,
+            fabric_mux_channel_id,
+            fabric_mux_num_buffers_per_channel,
+            fabric_mux_channel_buffer_size_bytes,
+            fabric_mux_channel_base_address,
+            fabric_mux_connection_info_address,
+            fabric_mux_connection_handshake_address,
+            fabric_mux_flow_control_address,
+            fabric_mux_buffer_index_address);
+        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+        tt::tt_fabric::fabric_client_connect(mux_connection);
+    }
+
+    auto pkt_hdr = PacketHeaderPool::allocate_header();
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
+    auto pkt_hdr_sem = PacketHeaderPool::allocate_header();
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem, unicast_route_info);
+
+    // ---- Startup barrier (1-hop unicast atomic-inc to the immediate W neighbor, through the mux) ----
+    if (has_neighbor && mux_connection_valid) {
+        uint64_t nb_sem = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, barrier_sem, 0);
+        pkt_hdr_sem->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nb_sem, 1u});
+        tt::tt_fabric::fabric_atomic_inc(mux_connection, pkt_hdr_sem);
+    }
+    // Wait for a barrier inc from each existing adjacent W device.
+    uint32_t barrier_wait = (is_first_chip ? 0u : 1u) + (is_last_chip ? 0u : 1u);
+    if (barrier_wait > 0) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_wait);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
+
+    // ---- Coalesced W send through the mux (bank-major; lockstep with np_phase2_w_reader) ----
+    if (has_neighbor && mux_connection_valid) {
+        for (uint32_t j = 0; j < NP_NUM_DRAM_BANKS; j++) {
+            uint32_t r = j;
+            while (r < outer_dim_size) {
+                uint32_t g = 0;
+                for (uint32_t rr = r; g < W_COALESCE && rr < outer_dim_size; rr += NP_NUM_DRAM_BANKS) {
+                    g++;
+                }
+                cb_wait_front(send_cb_id, g);
+                const uint32_t l1_read_addr = get_read_ptr(send_cb_id);
+                const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+                pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, g * stick_size);
+                tt::tt_fabric::fabric_async_write(mux_connection, pkt_hdr, l1_read_addr, g * stick_size);
+                cb_pop_front(send_cb_id, g);
+                r += g * NP_NUM_DRAM_BANKS;
+            }
+        }
+        // ---- Raise the neighbor's W recv sem (deferred single inc of the full row count) ----
+        uint64_t nb_recv = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, neighbor_sem, 0);
+        pkt_hdr_sem->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nb_recv, outer_dim_size});
+        tt::tt_fabric::fabric_atomic_inc(mux_connection, pkt_hdr_sem);
+    }
+
+    // ---- Disconnect + termination handshake (avoid mux-kernel hang) ----
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+    if (mux_connection_valid) {
+        tt::tt_fabric::fabric_client_disconnect(mux_connection);
+        if (is_termination_master) {
+            auto* term_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+            noc_semaphore_wait(term_ptr, num_mux_clients - 1);
+            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        } else {
+            uint64_t dest =
+                safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+            noc_semaphore_inc(dest, 1);
+            noc_async_atomic_barrier();
+        }
+    }
+}
