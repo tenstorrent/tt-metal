@@ -10,7 +10,6 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "experimental/kernel_args.h"
-#include "internal/risc_attribs.h"  // tt_l1_ptr (named in get_unsafe_ptr's return type)
 
 // Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -104,7 +103,10 @@ public:
      *
      * @return Number of T-sized elements in this scratchpad.
      */
-    [[nodiscard]] size_type size() const noexcept { return size_type{size_in_bytes() / sizeof(T)}; }
+    [[nodiscard]] size_type size() const noexcept {
+        // sizeof(T) is size_t (64-bit on Gen2); narrow explicitly to size_type (always safe).
+        return static_cast<size_type>(size_in_bytes() / sizeof(T));
+    }
 
     /** @brief Get the size of this scratchpad in number of bytes.
      *
@@ -113,7 +115,8 @@ public:
      * @return size of the scratchpad in bytes.
      */
     [[nodiscard]] size_type size_in_bytes() const noexcept {
-        return size_type{sentinel_addr_.get_address() - start_addr_.get_address()};
+        // get_address() returns uintptr_t (64-bit on Gen2); narrow explicitly (always safe).
+        return static_cast<size_type>(sentinel_addr_.get_address() - start_addr_.get_address());
     }
 
     /** @brief L1 base address of the scratchpad, as a raw uint32_t byte address.
@@ -126,15 +129,6 @@ public:
         return static_cast<uint32_t>(start_addr_.get_address());
     }
 
-    /** @brief Raw, directly-dereferenceable L1 pointer to the start of the scratchpad.
-     *
-     * Escapes the bounds-checked index accessor; staying within size() is the caller's responsibility.
-     * Indexed access via operator[] should be preferred where possible (it has an ASSERT bounds check).
-     *
-     * @return a raw pointer to the start of the scratchpad
-     */
-    [[nodiscard]] tt_l1_ptr T* get_unsafe_ptr() const noexcept { return start_addr_.get_unsafe_ptr(); }
-
     // begin/end pair to enable range-based-for over the entire scratchpad region.
     // NOTE: This does not support standard-library algorithms that require a conforming iterator:
     //       `CoreLocalMem<T>` does not satisfy the named iterator requirements.
@@ -144,8 +138,12 @@ public:
 
     /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
      * (pointer arithmetic, scoped_lock, comparisons, ...).
+     *
+     * For element access, prefer operator[] (bounds-checked); reach for this only when you need the
+     * raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
      */
-    [[nodiscard]] const pointer& local_mem() const noexcept { return start_addr_; }
+    // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized (matches begin()/end()).
+    [[nodiscard]] pointer local_mem() const noexcept { return start_addr_; }
 
 private:
     // constexpr note:
