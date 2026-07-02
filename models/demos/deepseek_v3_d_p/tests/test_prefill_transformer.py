@@ -23,6 +23,7 @@ import gc
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -32,6 +33,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -234,6 +236,17 @@ def run_model(
             f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers}, "
             f"native_isl={trace_isl}, sliced={trace_sliced})"
         )
+    # Fallback: a variant may pin an explicit trace via variant.test_prefill_trace_default that
+    # find_trace_dir's (R1-centric, use_pretrained/256-expert) TRACE_LOOKUP doesn't cover — e.g. GLM-5.1's
+    # 55k chunked_group_a_v1 golden. load_debug_trace reads both the standard and chunked layouts and
+    # slices to isl_total, so the single-shot non-chunked test just chops the part it needs (e.g. the first
+    # 5120 rows == a 5120 single-shot prefill).
+    elif pcc_validation and getattr(variant, "test_prefill_trace_default", None):
+        _pinned = variant.test_prefill_trace_default
+        if _pinned and os.path.isdir(_pinned) and os.path.exists(os.path.join(_pinned, "metadata.json")):
+            trace_dir = Path(_pinned)
+            trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
+            logger.info(f"Loaded pinned debug trace from {trace_dir} (num_layers={num_layers}, isl={isl_total})")
 
     cache_key = ReferenceCacheKey(
         weight_type=weight_type,
@@ -1077,6 +1090,111 @@ def test_kimi_prefill_transformer(
     tokenizer,
     request,
 ):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        num_layers,
+        n_routed_experts,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        determinism_check,
+        num_iterations,
+        input_source,
+        use_pretrained,
+        return_kv_cache,
+        temperature,
+        weight_cache_path,
+        is_ci_env,
+        is_ci_v2_env,
+        tokenizer,
+        request,
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
+@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
+@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
+@pytest.mark.parametrize("input_source", ["json_prompts"])
+@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
+@pytest.mark.parametrize(
+    "isl_total, dispatch_buffer_capacity_factor",
+    [(SEQ_LEN_5K, 8)],
+    ids=["5k"],
+)
+@pytest.mark.parametrize(
+    "num_layers",
+    [
+        5,
+        12,
+        pytest.param(78, marks=pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer prefill only on Galaxy")),
+    ],
+    ids=["5_layers", "12_layers", "78_layers"],
+)
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode",
+    [(256, GateComputeMode.DEVICE)],
+    ids=["e256_device"],
+)
+@pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
+@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm"])
+@pytest.mark.timeout(0)
+def test_glm_prefill_transformer(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    num_layers,
+    n_routed_experts,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    determinism_check,
+    num_iterations,
+    input_source,
+    use_pretrained,
+    return_kv_cache,
+    temperature,
+    weight_cache_path,
+    is_ci_env,
+    is_ci_v2_env,
+    tokenizer,
+    request,
+):
+    # GLM-5.1 must run tp2 (mesh 8x2): sparse_sdpa needs per-chip n_heads/tp >= 32 and GLM has 64 heads,
+    # so tp4 is invalid. Full-transformer end-to-end validates against the GPU trace
+    # (variant.prefill_trace_default; approach B) — MLA/DSA + MoE correctness live in their op-level tests.
     run_model(
         variant,
         config_only,

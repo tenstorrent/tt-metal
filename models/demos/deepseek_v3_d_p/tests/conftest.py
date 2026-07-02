@@ -123,9 +123,14 @@ def pytest_collection_modifyitems(config, items):
 
         # Architecture-specific constraints
         elif is_blackhole():
-            # BH: only supports all available devices configs
-            if devices_needed != num_devices:
-                skip_reason = f"Blackhole only supports {num_devices}-device mesh configs (requested {devices_needed})"
+            # BH: full-device configs, plus evenly-dividing sub-meshes (a smaller mesh opened over a
+            # subset of the SystemMesh — e.g. GLM-5.1 tp2 = (8,2) over the 8x4 Galaxy, which the tp/head
+            # constraint requires and open_mesh_device supports as a submesh). Odd/non-dividing shapes,
+            # which can't tile the SystemMesh, are still skipped.
+            if devices_needed != num_devices and (devices_needed > num_devices or num_devices % devices_needed != 0):
+                skip_reason = (
+                    f"Blackhole mesh {mesh_shape} ({devices_needed} dev) doesn't fit the {num_devices}-device system"
+                )
 
         elif is_wormhole_b0():
             # WH: ring topology only works with 8 devices
@@ -328,6 +333,29 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
         raise
 
 
+def _resolve_hf_snapshot_dir(path: Path) -> Path:
+    """If `path` is an HF hub-cache repo root (``models--org--name/`` with a ``snapshots/`` subdir),
+    return the active snapshot dir (the ``refs/main`` commit, else the newest snapshot that has the
+    safetensors index) so callers see the real config.json + shards. Otherwise return `path` as-is.
+
+    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.1``) or a plain
+    checkout dir. The hash snapshot dir also sidesteps the trust_remote_code dot-in-path import issue.
+    """
+    if (path / "model.safetensors.index.json").exists():
+        return path
+    snaps = path / "snapshots"
+    if snaps.is_dir():
+        ref = path / "refs" / "main"
+        if ref.is_file():
+            cand = snaps / ref.read_text().strip()
+            if (cand / "model.safetensors.index.json").exists():
+                return cand
+        cands = [d for d in snaps.iterdir() if d.is_dir() and (d / "model.safetensors.index.json").exists()]
+        if cands:
+            return max(cands, key=lambda d: d.stat().st_mtime)
+    return path
+
+
 def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
     """
     Get model path, downloading from HuggingFace if necessary.
@@ -346,6 +374,9 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     if env_path:
         model_path = Path(env_path)
         if model_path.exists():
+            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1)
+            # by descending into its current snapshot, where config.json + the safetensors index live.
+            model_path = _resolve_hf_snapshot_dir(model_path)
             index_file = model_path / "model.safetensors.index.json"
             if index_file.exists():
                 logger.info(f"Using existing model from {variant.env_var}: {model_path}")
