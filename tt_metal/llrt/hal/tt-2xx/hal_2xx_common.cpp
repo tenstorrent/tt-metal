@@ -74,6 +74,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
         case HalProgrammableCoreType::DISPATCH: {
             TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
             defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+            defines.push_back("COMPILE_FOR_DISPATCH_ENGINE=1");
             break;
         }
         default:
