@@ -863,25 +863,50 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
     // Path A: worker op -> read_metadata (no barrier)
     auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < iters; ++i) {
+        // (1) Create metadata: seed a distinct per-iter pattern and stage it on device.
+        const auto expected = make_metadata_pattern(i, md);
+        std::vector<uint32_t> words(n);
+        std::memcpy(words.data(), expected.data(), md);
+        auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
+        tt::tt_metal::copy_to_device(host_record, record_dev);
+        // (2) Forward to service.
         ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+        // (3) Service to host.
         std::vector<std::byte> out(md);
         service.read_metadata(out);
+        // (4) Verify on host.
+        std::vector<uint8_t> got(md);
+        std::memcpy(got.data(), out.data(), md);
+        EXPECT_EQ(got, expected) << "Path A readback mismatch at iter " << i;
     }
     auto t1 = std::chrono::high_resolution_clock::now();
 
     // Path B: worker op -> full device sync (the barrier we're replacing)
     auto t2 = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < iters; ++i) {
+        // (1) Create metadata.
+        const auto expected = make_metadata_pattern(i, md);
+        std::vector<uint32_t> words(n);
+        std::memcpy(words.data(), expected.data(), md);
+        auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
+        tt::tt_metal::copy_to_device(host_record, record_dev);
+        // (2) Forward to service.
         ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+        // (2.5) Old-style completion: full mesh barrier.
         tt::tt_metal::distributed::Synchronize(this->mesh_device_.get(), /*cq_id=*/std::nullopt);
+        // (3) Service to host.
         std::vector<std::byte> out(md);
         service.read_metadata(out);
+        // (4) Verify on host.
+        std::vector<uint8_t> got(md);
+        std::memcpy(got.data(), out.data(), md);
+        EXPECT_EQ(got, expected) << "Path B readback mismatch at iter " << i;
     }
     auto t3 = std::chrono::high_resolution_clock::now();
 
     const double a_us = std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
     const double b_us = std::chrono::duration<double, std::micro>(t3 - t2).count() / iters;
-    std::cout << "[d2h-md] read_metadata=" << a_us << "us  Finish=" << b_us << "us\n";
+    std::cout << "[d2h-md] read_metadata=" << a_us << "us  read+Synchronize=" << b_us << "us\n";
     EXPECT_LT(a_us, b_us) << "metadata path should be cheaper than a full device sync";
 }
 
