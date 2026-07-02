@@ -148,7 +148,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
     // Per-row-group reserve/push on out_cb breaks the shared out/interm0 L1 region assumption,
     // so force separate regions when the flag is on.
-    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
+    // TRM force-separate applies only to the non-l1_acc software-reload path (per-M-row-group
+    // reserve/push breaks the shared-L1 invariant); TRM + l1_acc does one reserve / no reload, so it
+    // can alias interm onto out. Format-mismatch + sharded-geometry still force separate downstream.
+    bool do_not_inplace_interm0_out_CB =
+        (output_is_sharded && (per_core_M != out_block_h)) || (tile_pack_row_major && !packer_l1_acc_en);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1170,7 +1174,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
     // Per-row-group reserve/push on out_cb breaks the shared out/interm0 L1 region assumption,
     // so force separate regions when the flag is on.
-    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
+    // TRM force-separate applies only to the non-l1_acc software-reload path (per-M-row-group
+    // reserve/push breaks the shared-L1 invariant); TRM + l1_acc does one reserve / no reload, so it
+    // can alias interm onto out. Format-mismatch + sharded-geometry still force separate downstream.
+    bool do_not_inplace_interm0_out_CB =
+        (output_is_sharded && (per_core_M != out_block_h)) || (tile_pack_row_major && !packer_l1_acc_en);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3000,7 +3008,11 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
     // The descriptor path previously dropped tile_pack_row_major; force separate out/interm0
     // regions when it is set so the row-major per-row-group pack doesn't overwrite unconsumed partials.
-    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
+    // TRM force-separate applies only to the non-l1_acc software-reload path (per-M-row-group
+    // reserve/push breaks the shared-L1 invariant); TRM + l1_acc does one reserve / no reload, so it
+    // can alias interm onto out. Format-mismatch + sharded-geometry still force separate downstream.
+    bool do_not_inplace_interm0_out_CB =
+        (output_is_sharded && (per_core_M != out_block_h)) || (tile_pack_row_major && !packer_l1_acc_en);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4023,7 +4035,11 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
-    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
+    // TRM force-separate applies only to the non-l1_acc software-reload path (per-M-row-group
+    // reserve/push breaks the shared-L1 invariant); TRM + l1_acc does one reserve / no reload, so it
+    // can alias interm onto out. Format-mismatch + sharded-geometry still force separate downstream.
+    bool do_not_inplace_interm0_out_CB =
+        (output_is_sharded && (per_core_M != out_block_h)) || (tile_pack_row_major && !packer_l1_acc_en);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
