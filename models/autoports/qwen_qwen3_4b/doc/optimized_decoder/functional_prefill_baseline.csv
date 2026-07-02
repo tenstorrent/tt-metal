@@ -1,0 +1,4 @@
+model,decoder,layer,mode,seq_len,batch,host_ms
+Qwen/Qwen3-4B,FunctionalDecoder,0,prefill,16,1,1.952949
+Qwen/Qwen3-4B,FunctionalDecoder,0,prefill,16,1,1.675441
+Qwen/Qwen3-4B,FunctionalDecoder,0,prefill,16,1,1.661491

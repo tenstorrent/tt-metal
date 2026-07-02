@@ -1,0 +1,11 @@
+model,decoder,profile,layer,mode,seq_len,decode_pos,batch,traced,host_ms
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,prefill,16,,1,False,1.626882
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,decode,1,16,1,True,0.502557
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,prefill,16,,1,False,1.712621
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,decode,1,16,1,True,0.504977
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,prefill,16,,1,False,1.658071
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,decode,1,16,1,True,0.502467
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,prefill,16,,1,False,1.691041
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,decode,1,16,1,True,0.501138
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,prefill,16,,1,False,1.837620
+Qwen/Qwen3-4B,OptimizedDecoder,qwen3_4b_optimized_decoder_single_chip_v1,0,decode,1,16,1,True,0.501527

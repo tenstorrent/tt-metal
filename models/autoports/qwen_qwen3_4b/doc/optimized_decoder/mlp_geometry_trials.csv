@@ -1,0 +1,10 @@
+candidate,status,pcc,passes_0_99,trace_pcc,traced_decode_ms,gate_cfg,up_cfg,down_num_cores,down_in0_block_w,error
+control_default_programs,ok,0.999104342904898,True,1.0,0.7306160405278206,None,None,,,
+gate_up_99c_i4_sub4,ok,0.9764238582674671,False,1.0,0.6418656557798386,"(11, 9, 4, 4, 4)","(11, 9, 4, 4, 4)",,,
+gate_up_99c_i8_sub4,ok,0.9757735251608588,False,1.0,0.6322269327938557,"(11, 9, 8, 4, 4)","(11, 9, 8, 4, 4)",,,
+gate_up_80c_i4_sub4,ok,0.9764238582674671,False,1.0,0.6493963301181793,"(10, 8, 4, 4, 4)","(10, 8, 4, 4, 4)",,,
+gate_up_64c_i5_sub5,ok,0.9782249973361682,False,1.0,0.6240569055080414,"(8, 8, 5, 5, 5)","(8, 8, 5, 5, 5)",,,
+gate_fused_silu_99c_i4_sub4,ok,0.9764238582674671,False,1.0,0.6467062048614025,"(11, 9, 4, 4, 4)","(11, 9, 4, 4, 4)",,,
+down_4core_i76,error,,,,,None,None,4,76,"RuntimeError('TT_THROW @ /home/ubuntu/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 6-9] grow to 1756416 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(+0x16d8d2a) [0x7f4883042d2a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_"
+down_8core_i19,ok,0.999103663920951,True,1.0,0.7259668782353401,None,None,8,19,
+down_8core_i38_control_explicit,ok,0.999104342904898,True,1.0,0.7252362556755543,None,None,8,38,

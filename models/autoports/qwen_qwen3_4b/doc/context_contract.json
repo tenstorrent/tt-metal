@@ -3,8 +3,8 @@
   "autoport_dir": "models/autoports/qwen_qwen3_4b",
   "hf_advertised_context": 40960,
   "current_supported_context": 64,
-  "decode_status": "pending_emitted_decode_version",
-  "stage": "forge-functional-decoder",
+  "decode_status": "optimized_single_layer_paged_decode_validated",
+  "stage": "optimized-decoder",
   "limiting_reason": "device_dram",
   "actual_limiting_reason": "Functional decoder stage translated a static-shape prefill-only forge emit and validated prefill through seq_len 64 in this pass; downstream stages must extend and revalidate longer context.",
   "capacity_evidence": {
@@ -40,6 +40,28 @@
       }
     },
     {
+      "command": "pytest -q models/autoports/qwen_qwen3_4b/tests/test_optimized_decoder.py --tb=short",
+      "largest_validated_prefill_seq": 64,
+      "largest_validated_decode_prefix": 17,
+      "status": "passed",
+      "pcc": {
+        "synthetic_prefill_seq_16": 0.9809843252778568,
+        "synthetic_prefill_seq_17": 0.981131986546066,
+        "synthetic_prefill_seq_64": 0.9840664352946937,
+        "real_weight_prefill_seq_16": 0.9998327198039121,
+        "synthetic_paged_decode_prefix_16": 0.9790784289995924,
+        "synthetic_paged_decode_prefix_17": 0.9756355391883302,
+        "real_weight_paged_decode_prefix_17": 0.9993245850219447,
+        "batched_paged_decode": 0.9779632339133275,
+        "trace_replay": 1.0
+      }
+    },
+    {
+      "command": "TT_METAL_WATCHER=10 pytest -q -s models/autoports/qwen_qwen3_4b/tests/test_optimized_decoder.py --tb=short",
+      "status": "passed",
+      "result": "12 passed, 1 skipped in 65.83s; watcher attached/detached cleanly across all four local Blackhole devices and reported no errors."
+    },
+    {
       "command": ".agents/scripts/check_context_contract.py --model-dir models/autoports/qwen_qwen3_4b",
       "status": "passed",
       "output": "Context contract OK for models/autoports/qwen_qwen3_4b: target=40960, supported=64 (DRAM-limited)."
@@ -47,7 +69,8 @@
   ],
   "notes": [
     "This context reduction is a functional starting-point validation limit, not a claimed hard DRAM or model limit.",
-    "The delivered runtime is prefill-only; there is no decode or paged-KV path until a forge emitted-decode graph is provided.",
+    "The functional decoder remains a prefill-only starting point; optimized-decoder adds a single-chip paged prefill/decode path validated at the same advertised current_supported_context.",
+    "Optimized-decoder keeps KV cache dtype BF16 and does not reduce the current supported context of 64.",
     "RoPE tables and causal masks are rebuilt during decoder setup for the requested max_seq_len instead of copying the forge seq_len=16 constants."
   ]
 }
