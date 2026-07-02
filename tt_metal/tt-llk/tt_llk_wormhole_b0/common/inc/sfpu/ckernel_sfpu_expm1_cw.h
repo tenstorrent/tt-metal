@@ -30,8 +30,7 @@ constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
 sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 {
     // Clamp to prevent exponent underflow (k < -127 wraps setexp)
-    sfpi::vFloat lo = -87.0f;
-    sfpi::vec_min_max(lo, x);
+    x = sfpi::max(x, -87.0f);
 
     // Cody-Waite range reduction: x = k*ln(2) + r
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
