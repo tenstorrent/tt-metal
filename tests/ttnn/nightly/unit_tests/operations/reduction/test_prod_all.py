@@ -71,8 +71,13 @@ def test_prod(shapes, npu_dtype, device):
     )
 
 
+BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+BLOCK_FLOAT_RESULT_ATOL = {ttnn.bfloat8_b: 5e-2, ttnn.bfloat4_b: 2e-1}
+
+
 def _block_float_input(shape):
-    # Block-float (bfp8_b / bfp4_b) shares one exponent per 16 elements. A full tile of random values
+    # Block-float (bfp8_b / bfp4_b) shares one exponent per 16 elements. Mostly ones with a few 2.0s:
+    # powers of two, so the whole product is exact in block-float regardless of dtype.
     torch_input = torch.ones(shape, dtype=torch.float32)
     flat = torch_input.view(-1)
     num_twos = 5
@@ -80,7 +85,28 @@ def _block_float_input(shape):
     return torch_input, torch.prod(torch_input)
 
 
-@pytest.mark.parametrize("npu_dtype", (ttnn.bfloat8_b, ttnn.bfloat4_b), ids=["bfloat8_b", "bfloat4_b"])
+def _block_float_nontrivial_input(shape):
+    # Non-trivial but block-float-exact input: values are integer multiples of 0.25 with |k| <= 7,
+    # which are represented exactly in bfp4_b/bfp8_b.
+    torch_input = torch.ones(shape, dtype=torch.float32)
+    factors = torch.tensor([1.5, 0.75, 1.25, 0.75, 1.5, 0.75, -1.0, 1.25, 0.75], dtype=torch.float32)
+    torch_input.view(-1)[: factors.numel()] = factors
+    return torch_input, torch.prod(torch_input)
+
+
+def _check_block_float_full_product(shape, npu_dtype, device, make_input, atol):
+    torch_input, torch_output = make_input(shape)
+    tt_input = ttnn.Tensor(torch_input, npu_dtype).to(ttnn.TILE_LAYOUT).to(device)
+
+    tt_result = ttnn.prod(tt_input)
+    assert tt_result.dtype == npu_dtype, f"expected {npu_dtype} result, got {tt_result.dtype}"
+
+    tt_output = ttnn.to_torch(tt_result).flatten()[0]
+    logger.info(f"{npu_dtype} full-product: expected={torch_output.item()} got={tt_output.item()}")
+    assert torch.isclose(tt_output, torch_output, atol=atol), f"expected {torch_output.item()}, got {tt_output.item()}"
+
+
+@pytest.mark.parametrize("npu_dtype", BLOCK_FLOAT_DTYPES, ids=lambda d: d.name.lower())
 @pytest.mark.parametrize(
     "shapes",
     (
@@ -90,12 +116,20 @@ def _block_float_input(shape):
     ),
 )
 def test_prod_all_block_float(shapes, npu_dtype, device):
-    torch_input, torch_output = _block_float_input(shapes)
-    tt_input = ttnn.Tensor(torch_input, npu_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    # Powers-of-two data is exact in block-float, so a single tight tolerance holds for every dtype.
+    _check_block_float_full_product(shapes, npu_dtype, device, _block_float_input, atol=1e-2)
 
-    tt_result = ttnn.prod(tt_input)
-    assert tt_result.dtype == npu_dtype, f"expected {npu_dtype} result, got {tt_result.dtype}"
 
-    tt_output = ttnn.to_torch(tt_result).flatten()[0]
-    logger.info(f"{npu_dtype} full-product: expected={torch_output.item()} got={tt_output.item()}")
-    assert torch.isclose(tt_output, torch_output, atol=1e-2), f"expected {torch_output.item()}, got {tt_output.item()}"
+@pytest.mark.parametrize("npu_dtype", BLOCK_FLOAT_DTYPES, ids=lambda d: d.name.lower())
+@pytest.mark.parametrize(
+    "shapes",
+    (
+        ([1, 4, 32, 32]),
+        ([1, 16, 32, 32]),
+    ),
+)
+def test_prod_all_block_float_nontrivial(shapes, npu_dtype, device):
+    # Off-grid partial products: the result tolerance is per-dtype (see BLOCK_FLOAT_RESULT_ATOL).
+    _check_block_float_full_product(
+        shapes, npu_dtype, device, _block_float_nontrivial_input, atol=BLOCK_FLOAT_RESULT_ATOL[npu_dtype]
+    )

@@ -31,10 +31,10 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
             output_shape[i]);
     }
 
-    // prod supports bfloat16 and float32, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
     TT_FATAL(
-        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "Error - unsupported data type for prod, expected BFLOAT16 or FLOAT32 but got {}.",
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Error - unsupported data type for prod, expected BFLOAT16, FLOAT32 or BFLOAT8_B but got {}.",
         input.dtype());
 
     const auto& out_memory_config = output.memory_config();

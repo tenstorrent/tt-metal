@@ -31,10 +31,14 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
 ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
+    const auto output_dtype =
+        (input.dtype() == tt::tt_metal::DataType::FLOAT32 || tt::tt_metal::is_block_float(input.dtype()))
+            ? tt::tt_metal::DataType::FLOAT32
+            : input.dtype();
     return TensorSpec(
         ttnn::Shape({1, 1, 1, input.tensor_spec().tile().get_tile_hw()}),
         tt::tt_metal::TensorLayout(
-            input.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
+            output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }
 
 ProdAllDeviceOperation::tensor_return_value_t ProdAllDeviceOperation::create_output_tensors(

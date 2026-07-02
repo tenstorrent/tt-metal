@@ -110,12 +110,13 @@ Tensor prod_impl(
         return result;
     }
 
-    // Block-float can't seed the reduction's identity tile and loses precision under permute, so
-    // compute the dim reduction in FLOAT32 (the public prod re-quantizes the result to the input dtype).
-    const Tensor dim_input = (input_a_padded.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
-                              input_a_padded.dtype() == tt::tt_metal::DataType::BFLOAT4_B)
-                                 ? ttnn::typecast(input_a_padded, tt::tt_metal::DataType::FLOAT32)
-                                 : input_a_padded;
+    // bfloat4_b is not supported on the dim path: the reduction dim may be repositioned with
+    // ttnn::permute, which re-quantizes bfloat4_b. Permute has a bf16 fallback for bfloat8_b but
+    // not bfloat4_b, see issue #48813. The full-product path above still supports bfloat4_b.
+    TT_FATAL(
+        input_a_padded.dtype() != tt::tt_metal::DataType::BFLOAT4_B,
+        "ttnn.prod with a dim argument does not support bfloat4_b");
+    const Tensor& dim_input = input_a_padded;
 
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {

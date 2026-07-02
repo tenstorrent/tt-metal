@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -85,7 +85,15 @@ def test_prod_dims(input_shape, dims, npu_dtype, device):
     assert passing
 
 
-@pytest.mark.parametrize("npu_dtype", (ttnn.bfloat8_b, ttnn.bfloat4_b), ids=["bfloat8_b", "bfloat4_b"])
+DIM_PATH_BLOCK_FLOAT_SUPPORT = {
+    ttnn.bfloat8_b: True,
+    ttnn.bfloat4_b: False,
+}
+_dim_supported = [d for d, ok in DIM_PATH_BLOCK_FLOAT_SUPPORT.items() if ok]
+_dim_unsupported = [d for d, ok in DIM_PATH_BLOCK_FLOAT_SUPPORT.items() if not ok]
+
+
+@pytest.mark.parametrize("npu_dtype", _dim_supported, ids=lambda d: d.name.lower())
 @pytest.mark.parametrize("dim", (0, 1, 2, 3))
 def test_prod_dims_block_float(dim, npu_dtype, device):
     # Mostly-ones input with a few 2.0s: exact in block-float, product stays a small power of two.
