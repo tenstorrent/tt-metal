@@ -111,7 +111,7 @@ def _build_and_prefill(mesh_device, text: str):
     # tables for the longest sequence we might decode (prompt + new tokens).
     # ``DEEPSEEK_V4_TRACED_DECODE``: replay one captured ttnn trace per submesh per
     # step (fixed-size in-place caches) instead of the host-bound eager decode.
-    traced = False  # os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "0") not in ("0", "", "false", "False")
+    traced = True  # os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "0") not in ("0", "", "false", "False")
 
     prompt = render_message(0, [{"role": "user", "content": text}], "chat")
     prompt_ids: list[int] = list(tokenizer(prompt)["input_ids"])
