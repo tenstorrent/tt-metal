@@ -143,12 +143,16 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     // Layout detection: ND_SHARDED tensors with `num_shards == ring_size` are
     // the receiver-contiguous DRAM-core layout. Under ROUND_ROBIN_1D shard
     // distribution, the natural GCB pairing is strided (bank b feeds ring
-    // positions b, b + num_senders, ...). Legacy WIDTH_SHARDED keeps the
-    // row-major GCB (bank b -> contiguous block of ring positions).
+    // positions b, b + num_senders, ...). Under CONTIGUOUS_1D (shard-contiguous) shard
+    // distribution, bank b owns a contiguous run of shards, so it feeds the
+    // contiguous ring arc b*R .. b*R+R-1 (same pairing as legacy WIDTH_SHARDED).
     const bool is_recv_contig =
         source_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
         tensor_buffer->buffer_distribution_spec().has_value() &&
         tensor_buffer->buffer_distribution_spec()->num_shards() == ring_size;
+    const bool is_shard_contiguous_recv_contig =
+        is_recv_contig && tensor_buffer->buffer_distribution_spec()->shard_distribution_strategy() ==
+                              tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D;
 
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
@@ -203,11 +207,13 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
                 bank_local_recv,
                 receivers_per_bank);
             // ring_pos formula differs by layout:
-            //   legacy K-row-major: bank b's slot k -> ring_pos = b * receivers_per_bank + k
-            //   recv-contig + strided GCB: bank b's slot k -> ring_pos = b + k * num_dram_banks
+            //   round-robin recv-contig + strided GCB: bank b's slot k -> ring_pos = b + k * num_dram_banks
+            //   shard-contiguous recv-contig and legacy K-row-major: bank b's slot k -> ring_pos = b *
+            //   receivers_per_bank + k
             // With dual senders, k is the bank-local receiver index across both senders.
-            const uint32_t ring_pos = is_recv_contig ? (bank_id + bank_local_recv * num_dram_banks)
-                                                     : (bank_id * receivers_per_bank + bank_local_recv);
+            const bool strided_pairing = is_recv_contig && !is_shard_contiguous_recv_contig;
+            const uint32_t ring_pos = strided_pairing ? (bank_id + bank_local_recv * num_dram_banks)
+                                                      : (bank_id * receivers_per_bank + bank_local_recv);
             const uint32_t n_col_start = ring_pos * n_per_recv_tiles;
             std::vector<uint32_t> rt_args = {
                 bank_id,

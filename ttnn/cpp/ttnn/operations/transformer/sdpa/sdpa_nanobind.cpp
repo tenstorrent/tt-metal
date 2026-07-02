@@ -298,6 +298,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
+            cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
 
 
         Returns:
@@ -320,7 +321,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("cu_window_seqlens") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
@@ -343,6 +345,14 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
                 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+            block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), `indices` are NATURAL
+                token positions and kv is stored block-cyclic across an SP-sharded cache; the kernel remaps each
+                index natural->physical page on the fly (no host reorder needed). This is the MESH axis the cache
+                was striped over: `sp` is read from the mesh shape on that axis (the op derives it, so it cannot
+                disagree with the device). T % sp == 0 required. Both must be set together.
+            block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
+                Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
+                q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
@@ -356,7 +366,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("k_chunk_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("cache_batch_idx") = nb::none());
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

@@ -216,9 +216,7 @@ inline void _llk_pack_untilize_init_(
     _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
-    std::uint32_t x_stride       = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                   : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                   : 1;
+    std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride       = FACE_C_DIM * x_stride;
     const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);

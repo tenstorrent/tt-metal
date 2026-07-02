@@ -36,9 +36,11 @@ from ttnn.device import is_blackhole, is_wormhole_b0
 import ttml
 import ttml.common.muon_optimizer
 from ttml.common.config import DeviceConfig, SpeedrunSchedulerConfig, TrainingConfig as BaseTrainingConfig, load_config
-from ttml.common.data import CharTokenizer, build_causal_mask
+from ttml.common.data import CharTokenizer
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
+    build_causal_mask,
+    build_mesh,
     create_optimizer,
     get_available_device_memory_in_bytes,
     get_tt_metal_runtime_root,
@@ -113,52 +115,6 @@ class TrainingConfig(BaseTrainingConfig):
 
 
 # ── Mesh / device ─────────────────────────────────────────────────────────────
-
-
-def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
-    """Construct a named mesh from `device_config`; axis names follow the C++ `(dp → fsdp → tp)` order.
-
-    First enabled name claims axis 0, the next claims axis 1, etc. — matching PyTorch FSDP2's HSDP
-    convention (replicate/`dp` outermost, shard/`fsdp` inner). A line mesh (≤1 dim > 1) needs exactly
-    one of enable_ddp/enable_fsdp/enable_tp. HSDP+TP (a full 3D mesh) is not supported by the
-    dataloader batch sharding below.
-    """
-    shape = tuple(int(s) for s in device_config.mesh_shape)
-    n = len(shape)
-    nontrivial = [i for i, s in enumerate(shape) if s > 1]
-    is_line = len(nontrivial) <= 1
-
-    # Ordered (dp → fsdp → tp): maps mesh axis index → parallelism name.
-    enabled_names: list[str] = []
-    if device_config.enable_ddp:
-        enabled_names.append("dp")
-    if device_config.enable_fsdp:
-        enabled_names.append("fsdp")
-    if device_config.enable_tp:
-        enabled_names.append("tp")
-
-    # ttml.Mesh requires a name per axis; "_i" is a placeholder for unassigned axes.
-    axis_names = [f"_{i}" for i in range(n)]
-    if not enabled_names:
-        return ttml.Mesh(shape, tuple(axis_names))
-
-    if is_line:
-        if len(enabled_names) != 1:
-            raise ValueError(
-                f"Line mesh {shape} requires exactly one of enable_ddp / enable_fsdp / enable_tp; "
-                f"got enabled={enabled_names}"
-            )
-        active = nontrivial[0] if nontrivial else 0
-        axis_names[active] = enabled_names[0]
-    else:
-        if len(enabled_names) != n:
-            raise ValueError(
-                f"Mesh {shape} requires {n} parallelisms enabled "
-                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
-            )
-        for i, name in enumerate(enabled_names):
-            axis_names[i] = name
-    return ttml.Mesh(shape, tuple(axis_names))
 
 
 def _device_arch_name() -> str:
@@ -548,7 +504,9 @@ def run_training(
     else:
         mapper = None
     collate = partial(causal_lm_collate_fn, seq_len=seq_len, mapper=mapper)
-    dataloader = InMemoryDataloader(dataset, collate, batch_size=training_cfg.batch_size, shuffle=True, drop_last=True)
+    dataloader = InMemoryDataloader(
+        dataset, collate, batch_size=training_cfg.batch_size, shuffle=True, drop_last=True, seed=training_cfg.seed
+    )
 
     peak_tflops = get_device_peak_tflops_bf16() * mesh.num_devices() if flops_per_token > 0 else 0.0
 

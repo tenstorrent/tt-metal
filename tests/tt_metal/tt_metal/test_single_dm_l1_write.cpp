@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/device_fixture.hpp"
+#include "context/metal_context.hpp"
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -28,7 +29,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
 
-    const uint32_t address = 100 * 1024;
+    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t value = 0x12345678;
     std::vector<uint32_t> outputs(1);
     outputs[0] = 0;

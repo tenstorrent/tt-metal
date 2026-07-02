@@ -222,6 +222,13 @@ void py_module(nb::module_& m) {
         py_auto_context.def("set_seed", &AutoContext::set_seed, nb::arg("seed"), "Set seed");
         py_auto_context.def("get_seed", &AutoContext::get_seed, "Get seed");
         py_auto_context.def(
+            "get_generator_state", &AutoContext::get_generator_state, "Serialize the RNG generator state");
+        py_auto_context.def(
+            "set_generator_state",
+            &AutoContext::set_generator_state,
+            nb::arg("state"),
+            "Restore the RNG generator state");
+        py_auto_context.def(
             "add_backward_node",
             [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
                 // Handle empty list case where nanobind can't infer element type

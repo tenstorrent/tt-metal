@@ -48,19 +48,20 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
     CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
 
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
+    CreateKernel(
+        program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
     return pass;
