@@ -422,8 +422,8 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=fidelity,
-        math_approx_mode=True,
-        fp32_dest_acc_en=True,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
 
