@@ -536,7 +536,10 @@ void kernel_main() {
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
-        const bool do_joint_kv = ring_id == ring_size - 1;
+        // Joint K/V is gathered over the FULL ring; consume it on the LAST ACTIVE ring iteration,
+        // not when ring_id == ring_size-1. Kept consistent with the reader and compute kernels
+        // (keying off ring_size-1 deadlocked the device that owns that shard). See ring_joint_reader.cpp.
+        const bool do_joint_kv = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
             if (do_joint_kv) {
