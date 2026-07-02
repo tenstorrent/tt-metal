@@ -820,14 +820,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
             // On Gen1 (WH/BH), the kernel must declare its placement via a Gen1 config — either built
-            // with Gen1Config::create_from_role(READER/WRITER) or constructed directly. There is no
+            // with create_from_role(READER/WRITER) or constructed directly. There is no
             // safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional: absence is
             // treated as "use defaults" (implicit sync left on for all bound DFBs).
             if (is_gen1_arch()) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but has no Gen1 config. Supply a gen1_config "
-                    "(e.g. Gen1Config::create_from_role(READER/WRITER)).",
+                    "(e.g. create_from_role(READER/WRITER)).",
                     kernel.unique_id);
             }
         }

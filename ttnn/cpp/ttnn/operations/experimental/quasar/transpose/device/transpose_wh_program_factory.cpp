@@ -152,8 +152,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"W_size_bytes", W * input_tensor.element_size()},
                  {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
-            .hw_config =
-                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
+            .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
         };
 
         KernelSpec writer_spec{
@@ -174,8 +173,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"H_size_bytes", H * output_tensor.element_size()},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
-            .hw_config =
-                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+            .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
         };
 
         ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
@@ -251,8 +249,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"}},
-            .hw_config =
-                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
+            .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
         };
 
         KernelSpec writer_spec{
@@ -265,8 +262,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
             .compile_time_args = {{"page_size", dst_single_tile_size}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config =
-                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+            .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
         };
 
         ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};

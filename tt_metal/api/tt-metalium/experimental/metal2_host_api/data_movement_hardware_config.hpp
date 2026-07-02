@@ -26,7 +26,7 @@ namespace tt::tt_metal::experimental {
 //
 // Gen1 DM config (i.e., which RISC and NOC a kernel uses) is performance-critical,
 // but the common case is handled for you: build the DataMovementGen1Config with
-// DataMovementGen1Config::create_from_role(READER/WRITER), which fills in the
+// create_from_role(READER/WRITER), which fills in the
 // conventional processor/NOC/NOC-mode. Power users who want to override that
 // convention construct a DataMovementGen1Config directly.
 //
@@ -37,17 +37,17 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 // Names the common DM kernel roles, used only as an argument to
-// DataMovementGen1Config::create_from_role() to build the conventional Gen1 placement.
+// create_from_role() to build the conventional Gen1 placement.
 enum class DataMovementRoleHint { READER, WRITER };
 
 struct DataMovementGen1Config {
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
     tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
     tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-
-    // Create a generic Gen1 config based on the role of the kernel.
-    static DataMovementGen1Config create_from_role(DataMovementRoleHint role);
 };
+
+// Create a generic Gen1 config based on the role of the kernel.
+DataMovementGen1Config create_from_role(DataMovementRoleHint role);
 
 struct DataMovementGen2Config {
     // Opt-out of DFB implicit sync (on a per-DFB basis)

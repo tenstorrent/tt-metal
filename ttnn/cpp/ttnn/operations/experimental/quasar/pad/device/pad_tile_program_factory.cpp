@@ -118,7 +118,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                 TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
     };
 
     // -------- Writer KernelSpec (consumes SRC0, fills PAD scratch, writes output) --------
@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                   "num_padded_Yt",
                   "num_unpadded_Xt",
                   "num_padded_Xt"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     ProgramSpec spec{

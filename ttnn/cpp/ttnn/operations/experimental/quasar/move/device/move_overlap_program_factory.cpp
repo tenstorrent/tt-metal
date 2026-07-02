@@ -165,8 +165,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
-        .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config::create_from_role(
-            m2::DataMovementRoleHint::READER)},
+        .hw_config = m2::DataMovementHardwareConfig{m2::create_from_role(m2::DataMovementRoleHint::READER)},
     };
 
     // Named CTA: the stick-layout kernel needs the (unaligned) page size at compile time.
@@ -209,8 +208,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config::create_from_role(
-            m2::DataMovementRoleHint::WRITER)},
+        .hw_config = m2::DataMovementHardwareConfig{m2::create_from_role(m2::DataMovementRoleHint::WRITER)},
     };
 
     // The stick-layout writer needs the (unaligned) page size at compile time, like its reader.

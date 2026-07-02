@@ -221,7 +221,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
                   "start_dim_h",
                   "start_dim_c",
                   "start_dim_n"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
     };
     if (has_pad_align) {
         reader_spec.compiler_options.defines = {{"HAS_PAD_ALIGN", "1"}};
@@ -245,7 +245,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = writer_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks_per_core", "num_sticks_per_barrier", "start_page_id"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // ------------------------------------------------------------------------
