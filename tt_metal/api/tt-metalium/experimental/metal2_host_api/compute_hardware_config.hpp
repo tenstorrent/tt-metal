@@ -31,6 +31,11 @@ namespace tt::tt_metal::experimental {
 //
 // The ComputeHardwareConfig fields configure this pipeline.
 //
+// NOTE: The Unpack, Math, and Pack stages are hardware pipeline stages internal
+//       to a single kernel thread, not to be confused with KernelSpec::num_threads!
+//       Each thread of a multi-threaded compute kernel runs its own independent
+//       Unpack/Math/Pack pipeline.
+//
 // ============================================================================
 
 struct ComputeHardwareConfig {
@@ -44,6 +49,11 @@ struct ComputeHardwareConfig {
     //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
     //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
     bool dst_full_sync_en = false;
+
+    // (Quasar only) Explicitly route this kernel's unpacked operands into dest
+    // running the unpack→math→pack semaphore handshake, independent of operand data format.
+    // Default false. On WH/BH this is ignored (unpack-to-dest stays inferred from 32-bit format).
+    bool unpack_to_dest_en = false;
 
     // Pack-side precision tweak for the Bfp8 block-float format.
     // (Affects how exponents are reconciled when converting Dest contents to Bfp8)

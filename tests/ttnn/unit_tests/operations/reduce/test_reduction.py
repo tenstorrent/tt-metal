@@ -4,10 +4,10 @@
 
 import pytest
 import torch
-import ttnn
 
+import ttnn
+from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_blackhole, torch_random, comp_allclose_and_pcc
 
 TEST_PADDING_VALUE = -42
 

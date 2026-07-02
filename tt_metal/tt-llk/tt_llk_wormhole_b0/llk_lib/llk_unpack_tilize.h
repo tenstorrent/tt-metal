@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -225,7 +226,9 @@ inline void unpack_tilize_to_dest_impl(
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
-    unpack_to_dest_tile_done(unp_cfg_context);
+    // Pair unpack_to_dest_tile_done with set_dst_write_addr above (both keyed on unpack_src_format),
+    // so the canonical Z-stride restore matches the value programmed on entry.
+    unpack_to_dest_tile_done(unp_cfg_context, unpack_src_format);
 }
 
 /**
@@ -532,26 +535,33 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize operation.
  *
- * Reverts the tile descriptor Y and Z dimensions to defaults and rewrites the unpack config
- * (clearing tilize mode) so subsequent ops see a normal tile layout. x-start/x-end is transient
- * and reprogrammed by each operation's init (see tt-llk#1036), so it is not restored here.
+ * Drains the unpacker, reverts the tile-descriptor Y/Z dimensions to the canonical operand
+ * baseline programmed by configure_unpack_AB, rewrites the unpack config (clearing tilize mode)
+ * and restores the face_r_dim-aware canonical Tile_x_dim so subsequent ops see a normal tile
+ * layout. x-start/x-end is transient and reprogrammed by the next operation's init (see
+ * tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
+ * @param tensor_shape: Tile geometry; total_num_faces() restores the descriptor Z dimension
+ *                      (valid values = <1, 2, 4>) and face_r_dim restores the canonical Tile_x_dim.
  * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+
     // Stalling SETDMAREG done by THCON until UNPACK finishes
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
-    // Revert Z and Y dim value back to default:
-    // THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1 - word 1 of the same-named register
-    // y-dim sits in lower 16 bits and is set to 1 by default
-    // z-dim sits in upper 16 bits and is set to unpA_num_faces which is 4 by default
-    // TODO NC: Make this configurable and restored to a default operand state under tt-llk#1161
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(4);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(1);
+    // Restore tile-descriptor Y/Z dim to the canonical operand baseline programmed by
+    // configure_unpack_AB. Y-dim is always 1, Z-dim equals the operand's num_faces.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(CANONICAL_UNPA_TILE_Y_DIM);
 
+    // The unpack-config[0] write below also clears tileize_mode, haloize_mode, and the
+    // other word-0 fields back to 0, mirroring what the zero-initialised config struct
+    // produces in configure_unpack_AB.
     unpack_config_u config   = {0};
     config.f.out_data_format = unpack_dst_format;
     config.f.throttle_mode   = 2;
@@ -559,13 +569,14 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format)
     TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32,
                  p_gpr_unpack::TMP0); // Load unpack config[0]
-    TTI_REG2FLOP(
-        1,
-        0,
-        0,
-        0,
-        THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32,
-        p_gpr_unpack::FACE_DIM_16x16); // GPR preloaded with  16 | (16 << 16)}
+
+    // Restore Tile_x_dim_cntx0 to the canonical face_dim-derived value. The previous
+    // FACE_DIM_16x16 GPR was correct only for face_r_dim=16; tiny tiles need a
+    // face_r_dim-aware value to match the baseline programmed by configure_unpack_AB.
+    const std::uint32_t canonical_x_dim_cntx = canonical_unpA_tile_x_dim_cntx(face_r_dim);
+    TT_SETDMAREG(0, LOWER_HALFWORD(canonical_x_dim_cntx), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(canonical_x_dim_cntx), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
 }
 
 /**

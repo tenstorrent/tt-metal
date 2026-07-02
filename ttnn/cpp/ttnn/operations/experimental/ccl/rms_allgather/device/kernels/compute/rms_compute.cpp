@@ -127,8 +127,7 @@ void kernel_main() {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    reconfig_data_format_srca(cb_in, cb_x2);
-    reconfig_data_format_srcb(cb_in, cb_scaler);
+    reconfig_data_format(cb_scaler, cb_x2);
 
     cb_wait_front(cb_x2, num_tiles_per_block);
     cb_wait_front(cb_scaler, 1);

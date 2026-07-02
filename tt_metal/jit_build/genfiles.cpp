@@ -151,7 +151,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include <cstdint>\n";
         }
         if (!ta_entries.empty()) {
-            content << "#include \"api/tensor/tensor_accessor.h\"\n";
+            // This header defines TensorBindingToken, a type which can be used
+            // to construct a TensorAccessor or LocalTensorAccessor.
+            content << "#include \"api/tensor/tensor_binding_token.h\"\n";
         }
         content << "\n";
 
@@ -172,17 +174,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!ta_entries.empty()) {
-            // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA. The kernel-side TensorAccessor(token) constructor
-            // unpacks both pieces.
+            // its implicit base-address CRTA.
+            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
-                content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
-                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
+                        << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             content << "}  // namespace tensor\n";
@@ -719,13 +721,21 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
 
-void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options) {
+void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
+    // (Quasar only) Explicit op-writer unpack-to-dest flag, baked here like DST_ACCUM_MODE so it is
+    // visible to the compute/LLK headers that consume it (all included after this descriptor file).
+    // WH/BH keep UnpackToDestEn hardcoded in their llk_defs.h (format-inferred routing), so we do not emit it
+    // for them doing so would redefine their constexpr.
+    if (arch == tt::ARCH::QUASAR) {
+        fmt::format_to(
+            std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", options.unpack_to_dest_en);
+    }
 }
 
 void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
@@ -779,7 +789,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
-    emit_compute_scalar_descriptors(out, options);
+    emit_compute_scalar_descriptors(out, options, env.get_arch());
     out << "#endif\n";
 
     if (!out) {

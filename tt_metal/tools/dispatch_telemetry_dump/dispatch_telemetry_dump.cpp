@@ -73,7 +73,7 @@ bool require_supported_kernel() {
 }
 
 bool print_snapshot(IDevice* device, DispatchTelemetry& telemetry) {
-    auto infos = telemetry.read_info();
+    auto info = telemetry.read_info();
     fmt::print(
         "dispatch_telemetry_dump  chip={}  num_hw_cqs={}  telemetry_api_version={}  ts={}s\n",
         device->id(),
@@ -81,7 +81,7 @@ bool print_snapshot(IDevice* device, DispatchTelemetry& telemetry) {
         telemetry.version(),
         std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 
-    if (infos.empty()) {
+    if (!info.has_value()) {
         fmt::print(stderr, "Failed to read dispatch telemetry info; see log warnings for validation details.\n");
         return false;
     }
@@ -93,21 +93,21 @@ bool print_snapshot(IDevice* device, DispatchTelemetry& telemetry) {
         "waiting",
         "blocked_since_last_read",
         "work_since_last_read");
-    for (const auto& info : infos) {
+    for (const auto& cq_info : info->info_cqs) {
         fmt::print(
             "{:>3} {:<9} {:>8} {:>26} {:>24}\n",
-            info.cq_id,
+            cq_info.cq_id,
             "prefetch",
-            info.prefetch_waiting_on_upstream ? "yes" : "no",
-            info.prefetch_blocked_count_since_last_read,
-            info.prefetch_command_count_since_last_read);
+            cq_info.prefetch_waiting_on_upstream ? "yes" : "no",
+            cq_info.prefetch_blocked_count_since_last_read,
+            cq_info.prefetch_command_count_since_last_read);
         fmt::print(
             "{:>3} {:<9} {:>8} {:>26} {:>24}\n",
-            info.cq_id,
+            cq_info.cq_id,
             "dispatch",
-            info.dispatch_waiting_on_upstream ? "yes" : "no",
-            info.dispatch_blocked_count_since_last_read,
-            info.dispatch_program_count_since_last_read);
+            cq_info.dispatch_waiting_on_upstream ? "yes" : "no",
+            cq_info.dispatch_blocked_count_since_last_read,
+            cq_info.program_count_since_last_read);
     }
     std::cout.flush();
     return true;
@@ -117,7 +117,7 @@ Program create_blank_program(const CoreCoord& core) {
     Program program = CreateProgram();
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     return program;
@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
     IDevice* device = mesh_device->get_devices().front();
 
     DispatchTelemetry telemetry(*device);
-    if (telemetry.read_info().empty()) {
+    if (!telemetry.read_info().has_value()) {
         fmt::print(
             stderr, "Failed to read initial dispatch telemetry info; see log warnings for validation details.\n");
         return 1;

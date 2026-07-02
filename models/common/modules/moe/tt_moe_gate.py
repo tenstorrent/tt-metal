@@ -42,7 +42,6 @@ import torch
 
 import ttnn
 from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
-from models.common.utility_functions import is_blackhole
 
 _TOKEN_SHAPE = (16, 16)  # 256 experts laid out as a 16×16 face per token
 _SHARD_SHAPE = (32, 32)  # one 32×32 tile per core (the op's per-token shard)
@@ -172,18 +171,6 @@ class TTMoEGate:
             raise ValueError(
                 f"generalized_moe_gate kernel op supports topk {_KERNEL_TOPK}; got {select_experts_k} "
                 "(this k should have taken the ttnn fallback)"
-            )
-        # Blackhole: the generalized_moe_gate KERNEL op has no Blackhole LLK (only tt_llk_wormhole_b0 ships
-        # llk_*generalized_moe_gate*; the compute API header has no ARCH_BLACKHOLE branch), so the n_group=1
-        # kernel path (k∈{4,6,8}, N≤512) does not build on BH. Fail here with a clear reason instead of a
-        # cryptic kernel-compile error deep in the op. EXEMPT (both run on BH): the grouped deepseek_moe_gate
-        # (n_group=8, which DOES ship a Blackhole LLK) and the arch-portable ttnn fallback (use_fallback).
-        if n_group == 1 and not use_fallback and is_blackhole():
-            raise NotImplementedError(
-                f"TTMoEGate: the generalized_moe_gate kernel op is Wormhole-only (no Blackhole LLK yet), so "
-                f"the n_group=1 kernel path (k={select_experts_k}, N={num_experts} ≤ 512) is unsupported on "
-                "Blackhole. Run on Wormhole/Galaxy, or use a config that takes the ttnn fallback "
-                "(k∉{4,6,8} or N>512). Pending a BH LLK port (tracked follow-up)."
             )
 
         self.mesh_device = mesh_device
@@ -428,8 +415,17 @@ class TTMoEGate:
             • ``per_core_N`` = smallest divisor ≥ 2 of ``N_tiles`` that fits the grid
               (``N_tiles / per_core_N ≤ grid.x``): 2 on an 8-wide grid, growing to 4 on a narrower one.
             • ``out_block_{h,w}`` = ``per_core_{M,N}``; ``out_subblock_{h,w}`` = largest factors with
-              ``h * w ≤ 8`` (the DEST half-register tile cap).
+              ``h * w ≤ dst_subblock_cap`` — the DEST subblock budget = HALF of the DEST tile capacity
+              (MATH/PACK double-buffer): 8 tiles for bf16 accumulation, but **4 for fp32 accumulation**
+              (an fp32 tile takes 2× the DEST space, so half as many fit). This matches ttnn's own
+              ``get_subblock_sizes`` rule (``h*w ≤ 4`` iff ``fp32_dest_acc_en``). The gate DEFAULTS to fp32
+              accumulation (see ``_matmul_compute_config``), so the cap is normally 4.
         """
+        # DEST subblock tile budget: fp32 accumulation halves the usable DEST (8->4 tiles). Read the flag off
+        # the already-built compute config (None = ttnn default = bf16 accumulate). Must match the cap ttnn's
+        # own auto-derivation enforces, else a hand-built subblock could exceed the fp32 DEST budget.
+        fp32_dest_acc_en = bool(getattr(self.compute_kernel_config, "fp32_dest_acc_en", False))
+        dst_subblock_cap = 4 if fp32_dest_acc_en else 8
         batch = self.config.batch_per_device or 32
         m_tiles = (batch + 31) // 32
         k_tiles = self.hidden_size // 32
@@ -437,8 +433,12 @@ class TTMoEGate:
         grid_x = self._grid.x
         in0_block_w = max(d for d in range(1, 33) if k_tiles % d == 0)
         per_core_n = next((d for d in range(2, n_tiles + 1) if n_tiles % d == 0 and n_tiles // d <= grid_x), n_tiles)
-        out_subblock_w = next((w for w in range(min(per_core_n, 8), 0, -1) if per_core_n % w == 0), 1)
-        out_subblock_h = next((h for h in range(m_tiles, 0, -1) if m_tiles % h == 0 and h * out_subblock_w <= 8), 1)
+        # out_subblock_w capped at dst_subblock_cap too: out_subblock_h can be 1, so w alone can equal the
+        # h*w budget — without the cap a wide per_core_n (e.g. 8) would pick w=8,h=1 = 8 tiles, busting fp32's 4.
+        out_subblock_w = next((w for w in range(min(per_core_n, dst_subblock_cap), 0, -1) if per_core_n % w == 0), 1)
+        out_subblock_h = next(
+            (h for h in range(m_tiles, 0, -1) if m_tiles % h == 0 and h * out_subblock_w <= dst_subblock_cap), 1
+        )
         return {
             "in0_block_w": in0_block_w,
             "out_subblock_h": out_subblock_h,
