@@ -21,9 +21,9 @@
 // the exp2 sigmoid compose (1/(1+exp(-x))), sigmoid-product compose
 // (x/(1+exp(-x))), and the pow path's final 1/result
 // (rsqrt = 1/sqrt(x), tagged expalu_reciprocal -> POW_HW_RECIPROCAL).
-#if (                                                                                                             \
-    defined(RANGE_REDUCTION_TAN) || defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT) || \
-    defined(POW_HW_RECIPROCAL)) &&                                                                                \
+#if (                                                                                                         \
+    defined(RANGE_REDUCTION_TAN) || defined(EVAL_METHOD_TAN_STANDALONE) || defined(EXP_HW_COMPOSE_SIGMOID) || \
+    defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT) || defined(POW_HW_RECIPROCAL)) &&                                 \
     defined(TRISC_MATH)
 #include "ckernel_sfpu_recip.h"
 #endif
@@ -305,11 +305,7 @@ inline vFloat tan_standalone_eval(vFloat x) {
     }
     r = r * a;
 
-    v_if(i < 0) {
-        vFloat t = approx_recip(r);
-        vFloat e = -r * t + vConst1;
-        r = -t * e - t;
-    }
+    v_if(i < 0) { r = -ckernel::sfpu::sfpu_reciprocal_iter<3>(r); }
     v_endif;
     return r;
 }
@@ -2996,7 +2992,7 @@ void kernel_main() {
     sfpi::vConstFloatPrgm2 = 0.63661974668502808f;
 #endif
 
-#if defined(RANGE_REDUCTION_TAN) && defined(TRISC_MATH)
+#if (defined(RANGE_REDUCTION_TAN) || defined(EVAL_METHOD_TAN_STANDALONE)) && defined(TRISC_MATH)
     ckernel::sfpu::sfpu_reciprocal_init<false>();
 #endif
 #if (defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)) && defined(TRISC_MATH)
