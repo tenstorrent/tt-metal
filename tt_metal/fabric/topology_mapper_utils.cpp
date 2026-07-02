@@ -709,10 +709,21 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
-        // find_all_in_psd returns one placement per matched set (the grouping that matched, its ASIC footprint,
+        // find_all_in_psd returns all placements per matched set (the grouping that matched, its ASIC footprint,
         // and the composed MGD chip_id -> AsicID pinning). Reuse the already-built flat_graph.
-        const auto placements =
-            physical_grouping_descriptor.find_all_in_psd(groupings, physical_system_descriptor, flat_graph);
+        std::vector<std::string> find_all_errors;
+        const auto placements = physical_grouping_descriptor.find_all_in_psd(
+            groupings, physical_system_descriptor, flat_graph, &find_all_errors);
+        if (placements.empty()) {
+            for (const auto& error : find_all_errors) {
+                log_error(
+                    tt::LogFabric,
+                    "Physical groupings adjacency: '{}' found no PSD placements from {} committed grouping(s): {}",
+                    mesh_name,
+                    groupings.size(),
+                    error);
+            }
+        }
         std::vector<std::unordered_set<tt::tt_metal::AsicID>> placed_groupings;
         std::vector<std::map<std::uint32_t, tt::tt_metal::AsicID>> placement_pinnings;
         placed_groupings.reserve(placements.size());

@@ -1788,18 +1788,9 @@ std::map<ChipId, tt::tt_metal::AsicID> compose_mesh_node_to_asic(
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
-    std::vector<std::string> errors;
     PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
     AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
-    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors);
-}
-
-std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
-    const std::vector<GroupingInfo>& groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const AdjacencyGraph<AsicID>& physical_graph) const {
-    std::vector<std::string> errors;
-    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors);
+    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph);
 }
 
 // NOTE this only works on flattenable meshes right now
@@ -1807,7 +1798,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const AdjacencyGraph<AsicID>& physical_graph,
-    std::vector<std::string>& errors_out) const {
+    std::vector<std::string>* errors_out) const {
     // Flatten each grouping and collect all non-empty flat meshes
     std::vector<GroupingInfo> flat_meshes;
     for (const auto& grouping : groupings) {
@@ -1849,14 +1840,13 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
         }
     }
 
-    // If no mappings found, populate errors
-    if (placements.empty()) {
+    if (errors_out != nullptr && placements.empty()) {
         if (flat_meshes.empty()) {
-            errors_out.push_back("No valid groupings found for PSD");
+            errors_out->push_back("No valid groupings found for PSD");
         } else {
             const GroupingInfo& mesh_to_use = flat_meshes.back();
             auto result = solve_for_one_grouping_to_psd(mesh_to_use, physical_graph, physical_system_descriptor);
-            errors_out.push_back(build_pgd_mapping_failure_message(mesh_to_use.name, mesh_to_use, result));
+            errors_out->push_back(build_pgd_mapping_failure_message(mesh_to_use.name, mesh_to_use, result));
         }
     }
 

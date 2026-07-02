@@ -846,19 +846,21 @@ void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshI
         << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray pair must be "
         << (psd.is_bh_galaxy_rev_c() ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
 
-    std::set<std::set<uint32_t>> asic_location_groups_by_tray;
     for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
         EXPECT_EQ(asic_locations.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                              << " 2x4 rank group tray " << tray_id << " must contain exactly 4 chips";
-        asic_location_groups_by_tray.insert(asic_locations);
     }
 
-    EXPECT_EQ(asic_location_groups_by_tray, valid_half_tray_asic_location_groups)
+    // 8 chips total; all asic locations must be one half-tray group ({1,2,5,6} or {3,4,7,8}), not a mix of both.
+    EXPECT_TRUE(valid_half_tray_asic_location_groups.contains(all_asic_locations))
         << "mesh " << *mesh_id << " host_rank " << *host_rank
-        << " 2x4 rank group split across two trays must use {1,2,5,6} on one tray and {3,4,7,8} on the other";
-    EXPECT_EQ(all_asic_locations, full_tray_asic_locations)
-        << "mesh " << *mesh_id << " host_rank " << *host_rank
-        << " 2x4 rank group must collectively use asic locations {1,2,3,4,5,6,7,8}";
+        << " 2x4 rank group split across two trays must use asic locations {1,2,5,6} or {3,4,7,8}";
+
+    for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
+        EXPECT_EQ(asic_locations, all_asic_locations)
+            << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray " << tray_id
+            << " must use the same half-tray asic location group as the rank group";
+    }
 }
 
 void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {

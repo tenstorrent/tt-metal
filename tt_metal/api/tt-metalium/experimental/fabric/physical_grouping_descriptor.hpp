@@ -185,19 +185,13 @@ public:
 
     // Same as above, but uses a prebuilt flat ASIC adjacency graph from the PSD (from
     // build_flat_adjacency_map_from_psd). Callers that already built the graph can pass it to avoid a
-    // duplicate O(|PSD|) scan and graph construction.
-    std::vector<PsdPlacement> find_all_in_psd(
-        const std::vector<GroupingInfo>& groupings,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph) const;
-
-    // Same as above, but `errors_out` receives detailed messages when mapping fails or no valid combined mapping
-    // can be formed.
+    // duplicate O(|PSD|) scan and graph construction. When non-null, `errors_out` receives detailed
+    // messages if no valid packing is found.
     std::vector<PsdPlacement> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-        std::vector<std::string>& errors_out) const;
+        std::vector<std::string>* errors_out = nullptr) const;
 
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled

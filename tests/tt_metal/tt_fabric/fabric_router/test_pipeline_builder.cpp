@@ -231,7 +231,7 @@ std::string describe_layouts(const std::vector<SubmeshLayout>& layouts) {
 // Resolve and validate the canonical blaze pipeline ring for whatever MGD is loaded:
 // one stage per host-rank submesh at its native shape, full loopback ring, single
 // resolve_graph_layout call (the exact API tt-blaze build_topology* drives).
-TEST_F(ControlPlaneFixture, TestPipelineBuilderGraphLayout) {
+TEST_F(ControlPlaneFixture, TestPipelineBuilderCheck) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
