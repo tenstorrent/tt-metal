@@ -5,6 +5,7 @@
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/work_split.hpp"
 
@@ -12,6 +13,14 @@
 #include <string>
 
 using namespace tt::tt_metal;
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+tt::tt_metal::DeviceAddr get_buffer_address(const tt::tt_metal::MeshTensor& tensor) {
+    return tensor.mesh_buffer().get_reference_buffer()->address();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace ttnn::prim {
 
@@ -263,7 +272,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
                         id,
                         work_per_core,
                         tensor_args.indices.has_value()
-                            ? static_cast<uint32_t>(tensor_args.indices->mesh_tensor().address())
+                            ? static_cast<uint32_t>(
+                                  CMAKE_UNIQUE_NAMESPACE::get_buffer_address(tensor_args.indices->mesh_tensor()))
                             : 0u,  // Optional indices tensor
                     });
                 writer_desc.emplace_runtime_args(

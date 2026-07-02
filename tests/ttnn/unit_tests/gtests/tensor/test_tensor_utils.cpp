@@ -86,7 +86,7 @@ TEST_F(GetCbAddressTest, TensorOnlyReturnsTensorAddressPlusOffset) {
     desc.tensor = mt;
     desc.address_offset = 128;
 
-    EXPECT_EQ(get_cb_address(desc), mt->address() + 128u);
+    EXPECT_EQ(get_cb_address(desc), mt->mesh_buffer().get_reference_buffer()->address() + 128u);
 }
 
 TEST_F(GetCbAddressTest, BufferTakesPrecedenceOverTensor) {

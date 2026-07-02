@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -923,7 +924,8 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     std::vector<uint32_t> output_data;
     detail::ReadFromBuffer(output_buffer, output_data);
 
-    const uint32_t expected_address = static_cast<uint32_t>(local_tensor.address());
+    const uint32_t expected_address =
+        static_cast<uint32_t>(local_tensor.mesh_buffer().get_reference_buffer()->address());
     constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
     ASSERT_EQ(output_data.size(), total_bytes / sizeof(uint32_t));
     for (uint32_t e = 0; e < num_tiles; ++e) {

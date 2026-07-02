@@ -10,11 +10,20 @@
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+tt::tt_metal::DeviceAddr get_buffer_address(const tt::tt_metal::MeshTensor& tensor) {
+    return tensor.mesh_buffer().get_reference_buffer()->address();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace tt::tt_metal::experimental {
 
@@ -352,7 +361,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 // here, so it must not be forwarded/moved-from.
 template <typename Emit>
 void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& tensor, const Emit& emit) {
-    const auto address = tensor.address();
+    const auto address = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(tensor);
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
         "Tensor argument for TensorParameter '{}' base address {} exceeds uint32_t max",
