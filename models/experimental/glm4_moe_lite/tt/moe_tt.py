@@ -1692,11 +1692,43 @@ def moe_sparse_experts_forward_tt(
     # For prefill (total_tokens > sparsity_block_size), sparse_matmul needs per_core_M
     # matching num_blocks.  We create dynamic program configs in the compute section below.
     # Cap chunk size so each call processes at most `prefill_pcm` blocks (L1 bounded).
-    prefill_pcm = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_PREFILL_PCM", "1").strip() or "1")
+    #
+    # `prefill_pcm` controls how many `sparsity_block_size`-token blocks a single
+    # sparse_matmul call handles. Chunking is PCC-neutral (MoE is token-wise), so its
+    # only purpose is to bound the L1/DRAM footprint on *long* prefills. Splitting a
+    # short prefill into many tiny chunks is pure launch + TM (slice/concat) overhead:
+    # each extra chunk adds per-chunk hidden/idx/weight/sparsity slices, an output
+    # concat, and doubles the sparse_matmul op-count (gate_up + down per chunk).
+    #
+    # When unset, adapt: run the whole prefill in one call up to a safe per-call token
+    # ceiling, then fall back to chunking above it. This collapses e.g. ISL-128 from 4
+    # chunks -> 1 chunk (SparseMatmul 8/layer -> 2/layer, ~4x fewer chunk-entry slices)
+    # with zero numerical change, while still bounding footprint for large prefills.
+    _pcm_env = os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_PREFILL_PCM", "").strip()
+    if _pcm_env:
+        prefill_pcm = int(_pcm_env or "1")
+    else:
+        # Safe single-call token ceiling (bounds the E*T*inter intermediate). Above
+        # this, chunk. 512 tokens/call is comfortably L1/DRAM-safe for this model and
+        # covers the common short-context prefills in one shot.
+        _safe_tokens_per_call = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_SAFE_TOKENS", "512").strip() or "512")
+        _block = int(rt.sparsity_block_size)
+        _blocks_needed = (int(total_tokens) + _block - 1) // _block
+        _blocks_safe = max(1, _safe_tokens_per_call // _block)
+        prefill_pcm = max(1, min(_blocks_needed, _blocks_safe))
     if not use_all_to_all and total_tokens > int(rt.sparsity_block_size):
         max_tokens_per_call = int(rt.sparsity_block_size) * prefill_pcm
         if total_tokens > max_tokens_per_call:
             chunk_total_tokens = max_tokens_per_call
+    if os.environ.get("GLM4_MOE_LITE_MOE_CHUNK_DEBUG", "").strip() == "1":
+        _will_chunk = chunk_total_tokens > 0 and total_tokens > chunk_total_tokens
+        _nchunks = ((total_tokens + chunk_total_tokens - 1) // chunk_total_tokens) if _will_chunk else 1
+        print(
+            f"[glm4_moe_lite][chunk_decision] total_tokens={total_tokens} prefill_pcm={prefill_pcm} "
+            f"chunk_total_tokens={chunk_total_tokens} use_all_to_all={use_all_to_all} "
+            f"will_chunk={_will_chunk} n_chunks={_nchunks}",
+            flush=True,
+        )
     if chunk_total_tokens > 0 and total_tokens > chunk_total_tokens:
         if debug:
             print(
