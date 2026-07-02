@@ -88,6 +88,11 @@ void kernel_main() {
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_out_id);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
+#ifdef UNTILIZE_OUT
+    constexpr uint32_t tile_hw = get_named_compile_time_arg_val("TILE_HW");
+    constexpr uint32_t tile_height = tile_hw / tile_width;
+    const uint32_t datum_size_bytes = single_tile_size_bytes / tile_hw;
+#endif
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
@@ -263,6 +268,36 @@ void kernel_main() {
                 cb_out.wait_front(out_block_hw_normal);
                 uint32_t l1_read_addr = cb_out.get_read_ptr();
 
+#ifdef UNTILIZE_OUT
+                // Output is row-major, so write cb_out's rows back to the output one tile_width-wide chunk
+                // at a time (the inverse of the reader's input gather).
+                const uint32_t row_chunk_bytes = tile_width * datum_size_bytes;
+                for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                    for (uint32_t r = 0; r < tile_height; r++) {
+                        for (uint32_t nt = 0; nt < block_w_curr; nt++) {
+                            // Only relevant to the last group: avoid indexing past the channel width
+                            // when the last group does not span the full max tile span for a group.
+                            if ((index_g_offset + nt) < row_tile_max_index) {
+                                const uint32_t out_tile_id = out_start_id + out_block_start_id_offset +
+                                                             (mt * num_channels_tiles) + nt + index_b_offset +
+                                                             index_g_offset;
+                                const uint32_t tile_row = out_tile_id / num_channels_tiles;
+                                const uint32_t tile_col = out_tile_id % num_channels_tiles;
+                                const uint32_t rm_row = (tile_row * tile_height) + r;
+                                const uint32_t col_off_bytes = tile_col * row_chunk_bytes;
+                                const uint32_t l1_addr =
+                                    l1_read_addr + ((((mt * tile_height) + r) * block_w + nt) * row_chunk_bytes);
+                                noc.async_write(
+                                    CoreLocalMem<uint32_t>(l1_addr),
+                                    dst_a,
+                                    row_chunk_bytes,
+                                    {},
+                                    {.page_id = rm_row, .offset_bytes = col_off_bytes});
+                            }
+                        }
+                    }
+                }
+#else
                 for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                     for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                         // Checks, only relevant to the last group, that we are not indexing out of bounds
@@ -279,6 +314,7 @@ void kernel_main() {
                         l1_read_addr += single_tile_size_bytes;
                     }
                 }
+#endif
                 out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 noc.async_write_barrier();
                 cb_out.pop_front(out_block_hw_normal);

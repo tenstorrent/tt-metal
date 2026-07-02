@@ -319,6 +319,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         xmm_CB_size_group_1 = single_tile_size * 3;
     }
 
+    // The default in0/in CB sizes above hold a single out-block; that is not enough for welford+ROW_MAJOR
+    // because the reader gathers the whole per-core batch once and the compute keeps it tilized in c_0/c_29
+    // across both the welford-stats and normalization passes (no per-tile pop). The output CBs (c_16/c_30)
+    // stay per out-block.
+    uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
+    if (use_welford && (tilize_in || untilize_out)) {
+        const uint32_t welford_batch_tiles = block_ht_group_1 * per_core_Nt;
+        const uint32_t welford_outblk_tiles = (block_ht_group_1 / num_out_blocks) * per_core_Nt;
+        in0_CB_size_group_1 = welford_batch_tiles * in_single_tile_size;
+        in_CB_size_group_1 = welford_batch_tiles * in_single_tile_size;
+        out_CB_size_group_1 = welford_outblk_tiles * out_single_tile_size;
+        rm_untilize_CB_size_group_1 = welford_outblk_tiles * in_single_tile_size;
+    }
+
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
     std::set<CoreRange> all_cores_group_1_core_ranges;
@@ -454,6 +468,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"per_core_N", per_core_Nt},
         {"per_core_N_bytes", per_core_N_bytes_padded},
         {"per_core_N_bytes_with_stride", per_core_Nt * tile_width * datum_size_bytes},
+        {"datum_size_bytes", datum_size_bytes},
         {"per_core_M", per_core_Mt_group_1},
         {"TILE_HEIGHT", tile_height},
         {"TILE_WIDTH", tile_width},
@@ -574,12 +589,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    std::map<std::string, std::string> writer_defines;
+    if (untilize_out) {
+        writer_defines["UNTILIZE_OUT"] = "1";
+    }
+
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = writer_kernel;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores_group_1;
     writer_desc.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc.named_compile_time_args = to_named_args_mcast(writer_named_compile_time_args_group_1);
+    writer_desc.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -795,7 +816,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (untilize_out) {
         constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_1,
+            .total_size = rm_untilize_CB_size_group_1,
             .core_ranges = all_cores_group_1,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -803,6 +824,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 .page_size = in_single_tile_size,
             }}},
         });
+
+        // The c_20 reread scratch is only used by the legacy compute path (cross-group output
+        // accumulation); the welford path combines stats via mcast instead and never reads it.
+        if (!use_welford) {
+            constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_CB_size_group_1,
+                .core_ranges = all_cores_group_1,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+        }
     }
 
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
