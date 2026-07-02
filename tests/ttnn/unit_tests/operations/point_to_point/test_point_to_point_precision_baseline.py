@@ -93,7 +93,7 @@ def _metrics(golden: torch.Tensor, calc: torch.Tensor):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT), (ttnn.float32, ttnn.TILE_LAYOUT)])
 @pytest.mark.parametrize("shard_shape", SHAPES)
 def test_point_to_point_precision_baseline(mesh_device, topology, dtype, layout, shard_shape):

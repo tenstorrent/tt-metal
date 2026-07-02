@@ -125,7 +125,7 @@ def validate(input_tensor, sender_coord, receiver_coord, *, topology, output_ten
         raise ValueError("point_to_point: sharded input not yet supported (interleaved only)")
 
     page = input_tensor.buffer_page_size()
-    if page % 16 != 0 and page != 16:
+    if page % 16 != 0:
         raise ValueError(f"point_to_point: per-shard page size ({page} B) must be 16-byte aligned")
 
     if output_tensor is not None:

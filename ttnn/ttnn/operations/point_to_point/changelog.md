@@ -1,5 +1,54 @@
 # point_to_point — changelog
 
+## 2026-07-02 — Registry-model verification pass (golden suite + verify_supported + precision)
+
+Second verification pass: executed the **registry golden suite** through the
+`verify_supported` CLI and the **precision baseline** on the 8-device craq-sim
+(`bh_8xP150_p2p`, pinned `(2,4)` + FABRIC_1D). The prior 2026-07-02 entry had run
+only the acceptance suite; this pass adds the golden/verifier signal and the
+first successful precision-baseline run, and lands two verification fixes.
+
+### Fixes
+- **`test_point_to_point_precision_baseline.py`: `(1,2)` → `(2,4)` mesh (real test
+  bug).** The baseline pinned a `(1,2)` mesh against the `(2,4)` `bh_8xP150_p2p`
+  topology; a `(1,2)` open against the fixed `(2,4)` mesh-graph descriptor hangs
+  fabric init (`Fabric Router Sync: Timeout`). Fixed to `(2,4)` (matches the
+  acceptance suite). Baseline now runs 8/8.
+- **`point_to_point.py`: dead conditional in `validate()`.** `if page % 16 != 0
+  and page != 16:` → `if page % 16 != 0:` (the `and page != 16` term was
+  unreachable). Behavior identical; no functional change.
+- **No kernel / descriptor / entry-point logic changed.**
+
+### Results (observed on device)
+- **Golden slice + `verify_supported`** — 16 cells covering every SUPPORTED
+  `(axis, value)` once (all 6 dtypes incl. `uint16`/`int32`/`uint32`, both layouts,
+  both topologies, both alignments) + the bf8b×ROW_MAJOR INVALID skip + large/
+  rank-varied shapes (`512×512`, `4×32×96`, `2×4×64×64`, `32×48`):
+  **supported_pass=15, invalid_skipped=1, supported_fail=0, xpass_drift=0,
+  xfail_wrong_mode=0, xfail_expected=0** → verifier-clean.
+- **Precision baseline** — **8/8**, PCC=1.000000, max/mean-abs=0, rel-RMS=0
+  (bit-exact identity copy) across `(1,1,32,32)`, `(1,1,64,128)`, `(1,1,96,64)`,
+  `(1,1,512,512)` × {bf16, f32}.
+- **Acceptance (targeted re-run)** — `program_cache` (cache-reuse semaphore
+  re-arm) + `output_tensor` (bf16 TILE, f32 ROW_MAJOR) all pass.
+
+### SUPPORTED vs TARGET
+- `SUPPORTED == TARGET` on every axis → `TARGET − SUPPORTED = ∅` →
+  **0 axis-expansion refinements** (queue remains empty). No drift: `xpass_drift=0`.
+
+### Artifacts
+- `eval/results/point_to_point/{verifier_report.json, test_results.json, test_axes.json}`
+- Updated `verification_report.md` (observed counts + precision table) and
+  `op_requirements.md` (Phase-0 baseline reflects observed golden counts).
+
+### Environment note
+The multi-device runner launches pytest with `sys.executable`. It must be this
+clone's interpreter (`python_env/bin/python3 scripts/run_multidevice_sim_pytest.py …`
+or `source python_env/bin/activate` first); the base `/localdev/wransom/tt-metal`
+env has an older `_ttnn` lacking `ttnn.fp8_e4m3`, which makes the shared
+`tests/ttnn/utils_for_testing.py` fail at import (collection error) — infra/env, not
+the op.
+
 ## 2026-07-02 — On-device acceptance verification (Mode 1, resolves verification debt)
 
 The Phase-0 implementation had **never run on device** — the prior host had a single

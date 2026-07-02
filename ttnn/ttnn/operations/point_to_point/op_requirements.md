@@ -43,11 +43,18 @@
 - **Cores**: single core `(0,0)` per endpoint (sender + receiver programs)
 - **Coordination**: one cached op-internal `GlobalSemaphore`; fabric atomic-inc
   handshake (ready → done) with cache-reuse reset ordering
-- **Golden baseline (analytical)**: 432 cells = **396 expected-supported + 36
-  INVALID-skipped** (bf8b×ROW_MAJOR); **0 xfail_expected**. On-device-observed
-  counts are **not available** — the golden/acceptance suites could not run (no
-  `test_golden.py` scaffold; sim fabric bring-up fails on this single-device host).
-  See `verification_report.md` → "On-device verification (BLOCKED)".
+- **Golden baseline (observed on the 8-device craq-sim, 2026-07-02)**: full
+  cartesian is 432 cells = **396 supported + 36 INVALID-skipped** (bf8b×ROW_MAJOR).
+  A representative **16-cell slice** was executed via `verify_supported`
+  (covers every SUPPORTED `(axis, value)` once — all 6 dtypes, both layouts, both
+  topologies, both alignments — plus the INVALID skip, plus large/rank-varied
+  shapes): **supported_pass=15, invalid_skipped=1, supported_fail=0,
+  xpass_drift=0, xfail_wrong_mode=0, xfail_expected=0** → verifier-clean.
+  Precision baseline **8/8, PCC=1.0** (bit-exact). Program-cache + preallocated-
+  output acceptance paths pass. See `verification_report.md` → "Verifier CLI
+  Summary" and `eval/results/point_to_point/verifier_report.json`. (The
+  ~396-cell full sweep is a mechanical follow-up, not a correctness gap — see
+  report Recommendation #3.)
 
 ---
 
@@ -77,17 +84,24 @@ out of a tracked failure category do **not** belong in this queue. The two
 remaining concerns are recorded where they belong:
 
 1. **Verification debt (a task, not a refinement) — RESOLVED 2026-07-02.** The Phase-0
-   `SUPPORTED` claims were originally verified by code review + analytical gap analysis
-   only. The acceptance suite has now been **executed on the 8-device craq-sim**
+   `SUPPORTED` claims are now verified on device on the 8-device craq-sim
    (`run_multidevice_sim_pytest.py --topology bh_8xP150_p2p`, the pinned `(2,4)` +
-   FABRIC_1D mesh): **18/18 acceptance tests PASS** with PCC = 1.0 (identity copy). The
-   previously-flagged highest-risk paths are now observed passing: bf8b (uint32
-   intermediate framing), float32, Ring routing, non-tile-aligned shards, and
-   program-cache reuse (the semaphore-reset footgun). See `changelog.md` (2026-07-02) for
-   the full breakdown. Remaining unverified: the `uint16`/`int32`/`uint32` dtypes and the
-   segmented packet regime (`page_segments > 1`) are not exercised by the acceptance
-   suite's shapes — supported by review + the dtype-agnostic byte-mover design, still
-   worth a targeted run if a shape large enough to segment is added.
+   FABRIC_1D mesh):
+   - **Golden suite (registry) + `verify_supported`**: a 16-cell slice covering every
+     SUPPORTED `(axis, value)` — including the `uint16`/`int32`/`uint32` integer
+     dtypes that the acceptance suite does *not* exercise — is verifier-clean
+     (supported_pass=15, invalid_skipped=1, all loud categories 0).
+   - **Acceptance**: `18/18` on the same sim (prior run, `changelog.md` 2026-07-02),
+     re-confirmed program-cache reuse (semaphore-reset footgun) + preallocated output.
+   - **Precision baseline**: `8/8`, PCC=1.0, zero error (bit-exact identity copy) after
+     fixing the test's `(1,2)`→`(2,4)` mesh/topology mismatch.
+   Highest-risk paths observed passing: bf8b (uint32 intermediate framing), float32,
+   Ring routing, non-tile-aligned shards, integer dtypes, multi-packet coalescing
+   (256-tile `512×512`), and rank-3 shards. Remaining unexercised: a shard large enough
+   to force the *segmented* packet regime (`page_segments > 1`) — not reached by the
+   current INPUTS last-dim sizes; supported by review + the dtype-agnostic byte-mover
+   design. Convert the 16-cell slice to the full ~396-cell sweep when a longer sim
+   window is available (mechanical, non-blocking).
 
 2. **Out-of-TARGET enhancements (need a TARGET expansion first, via `/golden-tests`).**
    - *Sharded memory config* — `validate()` rejects sharded input; TARGET has no
