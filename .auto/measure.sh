@@ -59,6 +59,14 @@ else
   MIN_PCC=0; AVG_PCC=0
 fi
 
+# E2E pipeline PCC (STRICT gate >=0.95). Tests print "E2E_PCC: 0.xxxx"; take the minimum seen.
+E2E_VALS=$(grep -oiE 'e2e_pcc[:= ]+0\.[0-9]+' "$LOG" | grep -oE '0\.[0-9]+' || true)
+if [ -n "$E2E_VALS" ]; then
+  E2E_PCC=$(echo "$E2E_VALS" | sort -g | head -1)
+else
+  E2E_PCC=0
+fi
+
 rm -f "$LOG"
 
 echo "METRIC modules_passing=${PASSED}"
@@ -66,4 +74,5 @@ echo "METRIC tests_total=${TOTAL}"
 echo "METRIC tests_failing=${FAILING}"
 echo "METRIC min_pcc=${MIN_PCC}"
 echo "METRIC avg_pcc=${AVG_PCC}"
+echo "METRIC e2e_pcc=${E2E_PCC}"
 echo "METRIC suite_seconds=${SUITE_SECONDS}"

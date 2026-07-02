@@ -22,6 +22,33 @@ from safetensors import safe_open
 
 _HF_HUB = Path.home() / ".cache/huggingface/hub/models--ACE-Step--acestep-v15-base/snapshots"
 
+# Full generation pipeline (LM planner + text enc + turbo DiT + VAE), downloaded outside the repo.
+# Never committed — weights live on-disk only. Overridable via ACESTEP_PIPELINE_DIR.
+import os as _os
+
+_PIPELINE_DIR = Path(_os.environ.get("ACESTEP_PIPELINE_DIR", "/local/ttuser/gtobar/acestep_pipeline"))
+
+
+def pipeline_dir() -> Path:
+    """Root of the downloaded full-pipeline checkpoints. Assert present with a clear message."""
+    assert _PIPELINE_DIR.is_dir(), (
+        f"pipeline dir {_PIPELINE_DIR} not found. Download ACE-Step/Ace-Step1.5 + the VAE there, "
+        "or set ACESTEP_PIPELINE_DIR."
+    )
+    return _PIPELINE_DIR
+
+
+def vae_dir() -> str:
+    """Path to the diffusers AutoencoderOobleck VAE (latents -> 48kHz waveform)."""
+    p = pipeline_dir() / "vae"
+    assert (p / "config.json").is_file(), f"VAE config not found under {p}"
+    return str(p)
+
+
+def have_pipeline() -> bool:
+    """True iff the full pipeline (incl. VAE) is on disk — for test skip guards."""
+    return _PIPELINE_DIR.is_dir() and (_PIPELINE_DIR / "vae" / "config.json").is_file()
+
 
 def checkpoint_path() -> str:
     """Locate the downloaded model.safetensors in the HF snapshot."""
