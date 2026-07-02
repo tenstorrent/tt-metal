@@ -131,6 +131,18 @@ class DiffusionGemmaLayer(Module):
         # against the layer output. We allocate a tile-aligned [1, 1] tensor.
         self.layer_scalar = Parameter(total_shape=[1, 1], device=mesh_device, dtype=ttnn.bfloat16)
 
+        # Precision knobs shared across the 7 layer-norms and layer-level ops. HiFi4 + fp32
+        # dest accumulator + no packer L1 accumulation matches the attention/vision-attention
+        # config. Without this the norms use device default (HiFi2 + bf16 dest) — every
+        # normalization loses precision, cascading into MoE routing near-tie flips.
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Strip the router/experts subtree (handled at __init__ time) and reshape layer_scalar."""
         # The DiffusionGemmaMoE wrapper consumes its weights at construction time, so the
@@ -171,12 +183,13 @@ class DiffusionGemmaLayer(Module):
             this layer produced (used by the encoder model to build the KV cache
             that the decoder consumes later).
         """
+        cc = self.compute_config
         # --- Self-attention block (input norm → attn → post-attn norm → residual add). ---
         residual = hidden_states
-        h = self.input_layernorm(hidden_states)
+        h = self.input_layernorm(hidden_states, compute_kernel_config=cc)
         attn_out, k_local, v_local = self.self_attn(h, cos, sin, attention_mask=attention_mask, encoder_kv=encoder_kv)
         ttnn.deallocate(h)
-        attn_out = self.post_attention_layernorm(attn_out)
+        attn_out = self.post_attention_layernorm(attn_out, compute_kernel_config=cc)
         hidden_states = ttnn.add(residual, attn_out)
         ttnn.deallocate(attn_out)
 
@@ -184,7 +197,7 @@ class DiffusionGemmaLayer(Module):
         residual = hidden_states
 
         # Dense MLP path.
-        h_dense = self.pre_feedforward_layernorm(hidden_states)
+        h_dense = self.pre_feedforward_layernorm(hidden_states, compute_kernel_config=cc)
         h_dense = self.mlp(h_dense)
         # GatedMLP emits TP-fractured hidden (RowParallel's reduce_scatter). Gather back
         # to replicated before the norm + combine + residual, which all expect the full
@@ -193,19 +206,19 @@ class DiffusionGemmaLayer(Module):
             h_dense = self.ccl_manager.all_gather_persistent_buffer(
                 h_dense, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
-        h_dense = self.post_feedforward_layernorm_1(h_dense)
+        h_dense = self.post_feedforward_layernorm_1(h_dense, compute_kernel_config=cc)
 
         # MoE path — router gets RAW residual; experts get pre_feedforward_layernorm_2'd input.
-        expert_input = self.pre_feedforward_layernorm_2(residual)
+        expert_input = self.pre_feedforward_layernorm_2(residual, compute_kernel_config=cc)
         h_moe = self.experts_and_router(router_input=residual, expert_input=expert_input)
         ttnn.deallocate(expert_input)
-        h_moe = self.post_feedforward_layernorm_2(h_moe)
+        h_moe = self.post_feedforward_layernorm_2(h_moe, compute_kernel_config=cc)
 
         # Combine and normalize.
         combined = ttnn.add(h_dense, h_moe)
         ttnn.deallocate(h_dense)
         ttnn.deallocate(h_moe)
-        combined = self.post_feedforward_layernorm(combined)
+        combined = self.post_feedforward_layernorm(combined, compute_kernel_config=cc)
         hidden_states = ttnn.add(residual, combined)
         ttnn.deallocate(combined)
 

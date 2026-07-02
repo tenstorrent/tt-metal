@@ -86,14 +86,15 @@ def test_encoder_text_model(
     # HF reference encoder.
     hf_encoder = HFEncoderTextModel(hf_config).to(dtype).eval()
 
-    # Boost router.proj.weight in each layer so softmax is peaked. Default init N(0, 0.02)
-    # gives near-uniform softmax → bf16 vs fp32 disagree on near-tie topk selections. Different
-    # experts get picked, and MoE outputs diverge significantly. This is a random-init
-    # artifact — real trained Gemma4 routing is peaked. Same trick as
-    # models/demos/gemma4/tests/unit/test_moe.py:51 and models/tt_dit/tests/models/diffusion_gemma/test_moe.py.
+    # Aggressively peak router.proj.weight in each layer so softmax picks the same top-k
+    # experts under bf16 vs fp32 for every token — the model has num_experts=8, top_k=4, so
+    # top-4 vs top-5 margin needs to be >> bf16 quantization on the score. std=3.0 pushes
+    # score gaps well above bf16 noise; without this, layer-i output drift causes layer-i+1
+    # to pick different experts and MoE outputs diverge by O(1). Real trained routing is
+    # peaked, so this mirrors deployment behavior.
     with torch.no_grad():
         for layer in hf_encoder.layers:
-            layer.router.proj.weight.normal_(0, 1.0)
+            layer.router.proj.weight.normal_(0, 3.0)
 
     # Inputs.
     input_ids = torch.randint(low=1, high=hf_config.vocab_size, size=(B, seq_len), dtype=torch.long)
