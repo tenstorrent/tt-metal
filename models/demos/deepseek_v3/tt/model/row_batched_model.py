@@ -513,6 +513,65 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         return scattered
 
     @classmethod
+    def forward_prefill_from_embeddings(
+        cls,
+        x_embedded: ttnn.Tensor,
+        user_id: int,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_tables: Sequence[ttnn.Tensor],
+        return_hidden: bool = False,
+        prompt_len: int | None = None,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Prefill entry point that skips the text-token embedding step.
+
+        Used by multimodal prefill: the caller embeds text tokens via
+        ``Embedding2D.forward_prefill``, gathers the result to host,
+        scatters vision-token embeddings into ``<image>`` positions, and
+        pushes the fused tensor back to device. That tensor — already in
+        the row-sharded `[1, 1, seq_len/num_rows, hidden]` layout the
+        embedding step produces — is then handed to this method, which
+        runs the rest of the prefill pipeline (decoder blocks ->
+        DistributedRMSNorm -> LMHead).
+
+        v1 limitations:
+          * No chunking. The text-token ``forward_prefill`` chunks at
+            ``cfg['model_chunk']`` (typically 8192 tokens) — fine for long
+            prompts. This method assumes the embedded sequence fits in a
+            single chunk, which is the common case for multimodal queries
+            (image + ~hundreds of text tokens). If a longer multimodal
+            prefill is needed, chunking on the row-sharded embedded
+            tensor is a follow-up.
+          * ``prompt_len`` is honored: when set, only the logit at that
+            token index is returned (matches the text-only behavior).
+        """
+        # The seq dim is row-sharded by the embedding step, so a chunked
+        # input would have local seq len == CHUNK_SIZE / num_rows. We don't
+        # chunk here; just translate prompt_len to lm_head_local_idx so the
+        # post-embed path slices/all-gathers a single-token logit when
+        # asked.
+        lm_head_local_idx: int | None = None
+        skip_lm_head = False
+        if prompt_len is not None:
+            # The pre-embedded tensor encodes the full sequence; prompt_len
+            # is a global token index. Pass it through as-is — the post-embed
+            # path interprets it relative to the chunk it's given, which here
+            # is the whole sequence.
+            lm_head_local_idx = prompt_len - 1
+
+        return cls._forward_prefill_from_embedded(
+            x_embedded,
+            user_id,
+            cfg,
+            rope_tensors,
+            page_tables,
+            return_hidden=return_hidden,
+            chunk_start_idx=0,
+            lm_head_local_idx=lm_head_local_idx,
+            skip_lm_head=skip_lm_head,
+        )
+
+    @classmethod
     def _forward_prefill(
         cls,
         x: ttnn.Tensor,
@@ -544,7 +603,42 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         """
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
+        return cls._forward_prefill_from_embedded(
+            x,
+            user_id,
+            cfg,
+            rope_tensors,
+            page_tables,
+            return_hidden=return_hidden,
+            chunk_start_idx=chunk_start_idx,
+            lm_head_local_idx=lm_head_local_idx,
+            skip_lm_head=skip_lm_head,
+        )
 
+    @classmethod
+    def _forward_prefill_from_embedded(
+        cls,
+        x: ttnn.Tensor,
+        user_id: int,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_tables: Sequence[ttnn.Tensor],
+        return_hidden: bool = False,
+        chunk_start_idx: int = 0,
+        lm_head_local_idx: int | None = None,
+        skip_lm_head: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Post-embedding prefill path: decoder blocks -> norm -> LM head.
+
+        Identical to the second half of ``_forward_prefill``, but operates on
+        an input that is already row-sharded `[1, 1, seq_len/num_rows, hidden]`
+        (i.e. has been through the equivalent of ``Embedding2D.forward_prefill``).
+
+        This is the entry point used by multimodal prefill — the caller embeds
+        text tokens, gathers to host, splices vision-token embeddings at
+        ``<image>`` positions, and pushes the fused tensor back to device in
+        the same layout the embedding step would have produced.
+        """
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
