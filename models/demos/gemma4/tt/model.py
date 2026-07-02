@@ -253,7 +253,9 @@ class Gemma4Model:
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping
-        self.embed_scale = hf_config.hidden_size**0.5
+        # HF stores Gemma4TextScaledWordEmbedding.embed_scale as a BF16
+        # buffer, so sqrt(hidden_size) is rounded before multiplying.
+        self.embed_scale = torch.tensor(hf_config.hidden_size**0.5, dtype=torch.bfloat16).item()
         self.ccl_manager = ccl_manager
         self.max_seq_len = max_seq_len
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
@@ -278,8 +280,11 @@ class Gemma4Model:
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
-        full_n_layers = hf_config.num_hidden_layers
+        full_n_layers = (
+            len(hf_config.layer_types) if getattr(hf_config, "layer_types", None) else hf_config.num_hidden_layers
+        )
         num_kv_shared = getattr(hf_config, "num_kv_shared_layers", 0) or 0
+        num_kv_shared = max(0, min(num_kv_shared, full_n_layers))
         first_shared_idx = full_n_layers - num_kv_shared
         self.kv_shared_layer_map = {}  # layer_idx -> source_layer_idx
         if num_kv_shared > 0 and first_shared_idx < n_layers:
@@ -428,6 +433,7 @@ class Gemma4Model:
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                is_kv_shared=i in self.kv_shared_layer_map,
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache
@@ -570,9 +576,11 @@ class Gemma4Model:
         pli_embed = F.embedding(input_ids_torch.long(), embed_w) * self.per_layer_embed_scale
         pli_embed = pli_embed.reshape(*input_ids_torch.shape, full_n_layers, pli_size)
 
-        # 2. Projection from main embeddings
+        # 2. Projection from main embeddings. HF runs the Linear in the
+        # module dtype (BF16 for Gemma4 checkpoints) and only upcasts inside
+        # RMSNorm, so keep the same dtype path here.
         proj_w = w["per_layer_model_projection"]  # [full_n_layers * pli_size, hidden]
-        pli_proj = F.linear(embeds_torch.float(), proj_w.float()) * self.per_layer_model_projection_scale
+        pli_proj = F.linear(embeds_torch.to(proj_w.dtype), proj_w) * self.per_layer_model_projection_scale
         pli_proj = pli_proj.reshape(*embeds_torch.shape[:-1], full_n_layers, pli_size)
 
         # 3. Norm the projection
@@ -580,10 +588,10 @@ class Gemma4Model:
         eps = self.hf_config.rms_norm_eps
         pli_proj_f = pli_proj.float()
         var = pli_proj_f.pow(2).mean(-1, keepdim=True)
-        pli_proj = (pli_proj_f * torch.rsqrt(var + eps) * norm_w.float()).to(pli_proj.dtype)
+        pli_proj = (pli_proj_f * torch.pow(var + eps, -0.5) * norm_w.float()).to(pli_proj.dtype)
 
         # 4. Combine: (projection + embed) * scale
-        per_layer_inputs = (pli_proj + pli_embed.float()) * self.per_layer_input_scale
+        per_layer_inputs = (pli_proj + pli_embed) * self.per_layer_input_scale
 
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
