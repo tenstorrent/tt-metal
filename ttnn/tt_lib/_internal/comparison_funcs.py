@@ -71,21 +71,24 @@ def get_atol_rtol_pcc(golden, calculated):
             if golden.numel() == 1:
                 return float(torch.equal(golden, calculated))
 
-            # If both tensors are constant
-            if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
-                return torch.isclose(torch.max(golden), torch.max(calculated)).item()
+            # If either tensor is constant (zero std dev), PCC is undefined. Fall back to
+            # allclose rather than returning a misleading 1.0 from the corrcoef diagonal.
+            if torch.max(golden) == torch.min(golden) or torch.max(calculated) == torch.min(calculated):
+                logger.warning(
+                    "One or both tensors are constant (zero std dev). PCC undefined; falling back to allclose."
+                )
+                return float(torch.allclose(golden, calculated, rtol=1e-05, atol=1e-04))
 
             cal_pcc = np.ma.corrcoef(
                 np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
                 np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
             )
-            # Remove correlation coefficient with self (typically always 1.0)
-            mask = np.ones(cal_pcc.shape, dtype=bool)
-            np.fill_diagonal(mask, 0)
-            cal_pcc = np.min(cal_pcc[mask])
+            # Read off-diagonal directly to avoid diagonal contamination.
+            cal_pcc = cal_pcc[0, 1]
 
-            if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-                return 1.0
+            if isinstance(cal_pcc, np.ma.core.MaskedConstant) or np.isnan(float(cal_pcc)):
+                logger.warning("PCC returned NaN/masked. Falling back to allclose.")
+                return float(torch.allclose(golden, calculated, rtol=1e-05, atol=1e-04))
 
             return cal_pcc
 
