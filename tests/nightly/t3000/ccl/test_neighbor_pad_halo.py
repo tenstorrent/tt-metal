@@ -288,24 +288,35 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
 
     halo_us = _trace_and_time(mesh_device, run_halo)
     async_us = _trace_and_time(mesh_device, run_async)
-    print(f"\n=== PERF (trace wall/iter, device latency) shape={input_shape} 2x4 ===")
+    # Per-device halo transport: the op sends its halo out + receives the neighbor's halo in (~2x the
+    # compact buffer). GB/s = bytes/time gauges whether the op is bandwidth-bound (near the 2-link
+    # fabric ceiling ~30 GB/s) vs overhead-bound (far below).
+    halo_bytes = total_sticks * C * 2  # compact buffer per device (bf16)
+    gbps = (halo_bytes * 2) / (halo_us * 1e-6) / 1e9
+    print(f"\n=== PERF (trace wall/iter, device latency) shape={input_shape} outer={outer} 2x4 ===")
     print(f"  neighbor_pad_async (full-pad): {async_us:8.1f} us")
     print(f"  neighbor_pad_halo  (compact):  {halo_us:8.1f} us")
     print(f"  speedup: {async_us / halo_us:.2f}x")
+    print(f"  halo per device: {halo_bytes/1e6:.2f} MB;  achieved: {gbps:.1f} GB/s (send+recv)")
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112 * 64}], indirect=True
 )
-def test_neighbor_pad_halo_perf(mesh_device, device_params):
-    # s4_out-like: full [1,8,272,480,128] -> per-device outer=8, H=136, W=120, C=128, k333 halo.
+@pytest.mark.parametrize("T", [8, 32, 96], ids=["T8", "T32", "T96"])
+def test_neighbor_pad_halo_perf(mesh_device, device_params, T):
+    # s4_out-like at varying T: outer=T, per-device H=136, W=120, C=128, k333 halo. Small T is
+    # barrier-dominated; large T shifts the op toward bandwidth-bound (fixed barriers, scaling data).
+    # num_links is HARDWARE-CAPPED at 2 on BH-LB: each inter-chip hop has exactly 2 ethernet channels
+    # (num_links=4 => TT_FATAL "Requested link index 2 is out of bounds. 2 ethernet channels available").
+    # The op already uses both, so "more fabric links" is not a lever here.
     run_halo_vs_async_perf(
-        mesh_device, input_shape=[1, 8, 272, 480, 128], h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
+        mesh_device, input_shape=[1, T, 272, 480, 128], h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
     )
 
 
