@@ -79,21 +79,24 @@ Tooling added this iter (reusable by the autonomous agent):
 - `agent_logs/verify_iter2.sh` — one-shot: chunk-decision debug + A/B PCC gate.
 - `agent_logs/reprofile_iter2.sh` — tracy prefill reprofile → ops_perf_results CSV.
 
-## Iteration 2b — prefill_pcm win across batches (generalization check)
-Ran `agent_logs/verify_multibatch.sh` (A/B PCC + timing at ISL-128) for batches 8/16/32:
-- **batch 32** (`BATCHED_PREFILL=0`, bf8): ✅ PCC=1.0, argmax match, prefill **15,695 → 11,109 ms
-  = 1.41× (+41%)**. The win generalizes to the largest batch.
-- **batch 8 & 16** (`BATCHED_PREFILL=1`, bf16): ❌ crash — but **pre-existing, not this change.**
-  Isolated diagnostic `debug_run_full_tt_greedy … --batch-size 8 --phase prefill` with
-  `GLM4_MOE_LITE_MOE_SPARSE_PREFILL_PCM=1` (exact pre-change behavior) crashes identically:
-  `TT_THROW program.cpp:1549: Statically allocated circular buffers … clash with L1 buffers`
-  (L1 OOM) — i.e. the **batched-prefill (`BATCHED_PREFILL=1`) path is broken at batch>1**
-  independent of prefill_pcm. batch-16 shows a second symptom
-  (`matmul out_block_w % out_subblock_w == 0`). **New worklist item (P1): fix batched-prefill
-  L1 OOM at batch 8/16, or run those batches with `BATCHED_PREFILL=0` like batch 32.**
+## Iteration 2b — prefill_pcm win across ALL batches (1/8/16/32) ✅
+A/B PCC + timing at ISL-128 (`agent_logs/verify_multibatch.sh` + `/tmp/ab_b8b16_bp0.sh`):
 
-Summary: prefill_pcm optimization is correct + a win at batch **1 (1.46×)** and **32 (1.41×)**;
-batch 8/16 are blocked by a separate pre-existing bug (documented above), not by this change.
+| batch | flags | prefill OLD (4-chunk) → NEW (1-chunk) | speedup | PCC |
+|------:|-------|---------------------------------------|--------:|----:|
+| 1  | BATCHED_PREFILL=1, bf16 |   492.3 →   337.3 ms | **1.46×** | 1.0 |
+| 8  | BATCHED_PREFILL=0, bf16 |  4095.3 →  2708.9 ms | **1.51×** | 1.0 |
+| 16 | BATCHED_PREFILL=0, bf16 |  8163.0 →  5862.9 ms | **1.39×** | 1.0 |
+| 32 | BATCHED_PREFILL=0, bf8  | 15695.3 → 11109.4 ms | **1.41×** | 1.0 |
+
+All bit-identical (argmax 551 match every batch). **The prefill_pcm optimization is a
+~1.4–1.5× prefill win across the entire batch matrix, zero accuracy cost.**
+
+**Gotcha found (now an invariant): batch>1 prefill MUST use `GLM4_MOE_LITE_BATCHED_PREFILL=0`.**
+My first batch-8/16 attempt used `BATCHED_PREFILL=1` and crashed with an L1 circular-buffer clash
+(`program.cpp:1549`) — this reproduces with `PREFILL_PCM=1` too, so it is the batched-prefill path
+being unsupported at batch>1, NOT the prefill_pcm change. batch 32 already used `=0`; using `=0` for
+8/16 makes them run cleanly (table above). Added to PLAN.md invariants.
 
 ## Ground-truth PCC gate (TT vs HF) + cached HF reference
 Added `scripts/pcc_vs_hf.py` (+ `agent_logs/pcc_vs_hf.sh`): computes the HF last-token prefill

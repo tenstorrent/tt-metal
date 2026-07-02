@@ -41,6 +41,9 @@ Start with **batch 1** (baseline exists). Then 8, 16, 32.
 - **`GLM4_MOE_LITE_PREFILL_MATMUL_TUNED=0`** always on WH. `=1` selects Blackhole-only 10×4
   grids → `TT_FATAL grid (10,4) must fit (8,8)`.
 - **`TT_METAL_GTEST_ETH_DISPATCH=1`** always.
+- **batch > 1 prefill MUST use `GLM4_MOE_LITE_BATCHED_PREFILL=0`.** `=1` (the batched-prefill path)
+  crashes at batch 8/16/32 with an L1 circular-buffer clash (`program.cpp:1549`). Only batch 1 may
+  use `=1`. (Verified: 8/16/32 all run cleanly with `=0`.)
 - After **any** `kill -9` of a mesh process, run **`tt-smi -r`** before the next run (SIGKILL
   skips `close_mesh_device` → orphaned fabric → next `open_mesh_device` hangs at topology
   discovery). Prefer `timeout` (SIGTERM) so Python cleanup runs.
