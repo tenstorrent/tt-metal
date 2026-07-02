@@ -46,6 +46,7 @@ import os
 import struct
 import time
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -79,6 +80,7 @@ GLOBAL_MESH_SHAPE = (_sp, _tp)
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
+NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
@@ -119,6 +121,201 @@ def _chunk_to_host_array(chunk_token_ids: list[int]):
     return token_ids_sharded.to(torch.uint32).contiguous().numpy()
 
 
+# ---------------------------------------------------------------------------
+# KV chunk table + LayerAck + PCC (mock integration, single galaxy / 1 rank)
+# ---------------------------------------------------------------------------
+
+
+def _read_kv_chunk_table(timeout_s: int):
+    """Read (deserialize) the KV chunk address table the runner serialized for this galaxy.
+
+    The runner publishes it (PREFILL_MOCK_MIGRATION=1 → runtime.build_kv_chunk_table, or the full
+    migration path) to PREFILL_MIGRATION_TABLE_PATH. This is fully device-less:
+    import_from_protobuf_file rebuilds the KvChunkAddressTable from the protobuf alone (no device /
+    ControlPlane). One galaxy => one complete table spanning all layers/slots. Polls for the file
+    since the runner writes it during setup, possibly just after exporting the H2D descriptor.
+
+    Returns the table, or None (so the producer can still push input even if the table isn't there).
+    """
+    table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+    t0 = time.perf_counter()
+    while not os.path.exists(table_path):
+        if time.perf_counter() - t0 > timeout_s:
+            logger.warning(
+                f"[producer] KV chunk table {table_path} not found after {timeout_s}s; "
+                f"run the runner with PREFILL_MOCK_MIGRATION=1 to publish it. Skipping table read."
+            )
+            return None
+        time.sleep(0.1)
+    import_fn = getattr(ttnn.experimental.disaggregation, "import_from_protobuf_file", None)
+    if import_fn is None:
+        logger.error(
+            "[producer] ttnn.experimental.disaggregation.import_from_protobuf_file is missing — "
+            "rebuild ttnn after adding the import binding (disaggregation.cpp). Skipping table read."
+        )
+        return None
+    table = import_fn(table_path)
+    cfg = table.config()
+    logger.info(
+        f"[producer] read KV chunk table {table_path}: entries={table.total_entries()} "
+        f"num_layers={cfg.num_layers} num_slots={cfg.num_slots} max_seq_len={cfg.max_sequence_length} "
+        f"chunk_n_tokens={cfg.chunk_n_tokens} chunk_size_bytes={cfg.chunk_size_bytes}"
+    )
+    return table
+
+
+def _read_device_map(timeout_s: int) -> dict:
+    """Read the runner's fabric_node -> ASIC unique_id device-map sidecar (JSON) so the device-less
+    UMD read (read_dram_umd) can select chips by unique_id without touching the ControlPlane. Returns
+    {(mesh_id, chip_id): unique_id}, or {} if absent. Polls like the table (runner writes it at setup)."""
+    import json
+
+    path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+    t0 = time.perf_counter()
+    while not os.path.exists(path):
+        if time.perf_counter() - t0 > timeout_s:
+            logger.warning(f"[producer] device map {path} not found after {timeout_s}s; skipping KV read.")
+            return {}
+        time.sleep(0.1)
+    with open(path) as mp:
+        raw = json.load(mp)
+    device_map = {tuple(int(x) for x in key.split(":")): int(uid) for key, uid in raw.items()}
+    logger.info(f"[producer] read device map {path}: {len(device_map)} chips")
+    return device_map
+
+
+def _connect_layer_ack_channel(timeout_s: int):
+    """Attach (consumer side) to the runner's per-layer LayerAck channel. The single-rank runner
+    creates `/tt_prefill_layer_acks_<service_id>` and injects 1 per layer (NUM_LAYERS per chunk);
+    this connects and drains the deltas. Returns the channel, or None if it isn't available."""
+    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+    shm = f"/tt_prefill_layer_acks_{service_id}"
+    try:
+        ch = ttnn.InterProcessCounterChannel.connect(shm, connect_timeout_ms=timeout_s * 1000)
+    except Exception as e:
+        logger.warning(
+            f"[producer] could not connect LayerAck channel {shm}: {e} "
+            f"(only the single-rank runner creates it). Skipping ack wait."
+        )
+        return None
+    logger.info(f"[producer] connected LayerAck channel {shm}")
+    return ch
+
+
+def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
+    """Block until `expected` (= NUM_LAYERS * n_chunks) per-layer acks have been drained, or timeout.
+    Non-blocking poll of try_consume_all(); returns the count actually drained."""
+    if ack_channel is None:
+        return 0
+    got = 0
+    last_logged = -1
+    t0 = time.perf_counter()
+    while got < expected:
+        got += ack_channel.try_consume_all()
+        if got != last_logged:
+            logger.info(f"[producer] layer acks {got}/{expected}")
+            last_logged = got
+        if got >= expected:
+            break
+        if time.perf_counter() - t0 > timeout_s:
+            logger.warning(f"[producer] timed out at {got}/{expected} acks after {timeout_s}s")
+            break
+        time.sleep(0.01)
+    logger.info(f"[producer] drained {got}/{expected} layer acks in {(time.perf_counter() - t0):.2f}s")
+    return got
+
+
+def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
+    """Decode a [1, 1, 32, head_dim] bfp8_b TILE chunk (raw device bytes) to a torch float32
+    [32, head_dim] in PURE numpy — no ttnn tensor ops, so it never initializes tt-metal's device
+    context (which would start_device and block on the CHIP_IN_USE lock the runner holds). Validated
+    bit-exact against ttnn._ttnn.bfp_utils.unpack_bfp8. Per 1088-byte tile: [64 exponent bytes, one
+    per (face, row)] then [1024 mantissa bytes, (face, row, col)]; value = (-1)^sign * (mant & 0x7F) *
+    2^(exp - 133); face f = fr*2 + fc maps to tile rows fr*16+r, cols fc*16+c; tiles lie along the
+    head_dim (column) axis."""
+    tile = 32
+    n_tiles = head_dim // tile
+    b = np.frombuffer(raw, dtype=np.uint8).reshape(n_tiles, 1088)
+    exps = b[:, :64].astype(np.int32).reshape(n_tiles, 4, 16)
+    mants = b[:, 64:].reshape(n_tiles, 4, 16, 16)
+    signs = (mants >> 7).astype(np.int32)
+    m7 = (mants & 0x7F).astype(np.float32)
+    scale = np.exp2((exps - 133).astype(np.float32))[..., None]
+    vals = np.where(signs > 0, -(m7 * scale), m7 * scale)  # (T, face, row, col)
+    v = vals.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, tile, tile)
+    out = v.transpose(1, 0, 2).reshape(tile, n_tiles * tile)  # tile t -> cols [t*32:(t+1)*32]
+    return torch.from_numpy(np.ascontiguousarray(out))
+
+
+def _resolve_unique_id(fabric_node_ids, device_map: dict) -> int:
+    """Return the ASIC unique_id for any replica fabric node present in the device map. Replicas hold
+    byte-identical KV, so any that is mapped works; add_device_group sorts the ids, so we can't assume
+    index 0 is a specific chip. Raises a clear error if none are mapped (e.g. a multi-rank table whose
+    remote device groups aren't in this single-rank/one-galaxy sidecar)."""
+    for fnid in fabric_node_ids:
+        key = (int(fnid.mesh_id), int(fnid.chip_id))
+        if key in device_map:
+            return device_map[key]
+    keys = [(int(f.mesh_id), int(f.chip_id)) for f in fabric_node_ids]
+    raise KeyError(f"no fabric node {keys} in device map ({len(device_map)} chips; single-rank/one-galaxy only)")
+
+
+def _read_kv_and_check_pcc(table, device_map: dict, slot_id: int, n_chunks: int) -> float:
+    """Read each KV chunk back from the device via the table and PCC-check against the golden trace.
+
+    Mirrors test_kimi_kv_cache_mock's read + kv_cache_pcc_check's golden handling (nope direct; pe
+    re-interleaved HF→Meta). The kimi table maps natural positions → block-cyclic storage, so iterating
+    natural positions yields natural order with no un-rotation. Reads over UMD via read_dram_umd (chip
+    picked by ASIC unique_id from `device_map`) and decodes bfp8→float in pure numpy — no ttnn tensor
+    ops — so the whole path is device-less and concurrent with the runner (no mesh open, no
+    start_device), the way the migration worker reads a live server's KV."""
+    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    KVPE_HEAD_DIM = 576  # qk_rope_head_dim(64) + kv_lora_rank(512); same for DeepSeek and Kimi
+    KV_LORA = 512
+    chunk_tok = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    total_len = n_chunks * CHUNK_SIZE
+    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
+    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
+
+    logger.info(f"[producer] reading KV cache via table: slot={slot_id} n_chunks={n_chunks} total_len={total_len}")
+    min_pcc = 1.0
+    failures = []
+    for layer in range(NUM_LAYERS):
+        rows = []
+        for pos in range(0, total_len, chunk_tok):
+            # Resolve this chunk's chip: table lookup -> fabric_node -> ASIC unique_id (device map),
+            # then read its DRAM over UMD device-lessly (no mesh open, concurrent with the runner).
+            loc = table.lookup(layer, pos, slot_id)
+            unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+            raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+            # Decode bfp8 -> float in PURE numpy (no ttnn tensor ops) so we never init tt-metal's
+            # device context (which would start_device and block on the CHIP_IN_USE lock the runner holds).
+            rows.append(_decode_bfp8_chunk(raw, KVPE_HEAD_DIM))
+        dev = torch.cat(rows, dim=0)[:total_len]  # natural order (table un-rotates block-cyclic)
+        g = _load_golden_kv_post(trace_dir, layer, total_len)
+        _, pcc_nope = comp_pcc(g[:, :KV_LORA], dev[:, :KV_LORA])
+        ref_pe = g[:, KV_LORA:]
+        d = ref_pe.shape[-1]
+        ref_pe = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
+        _, pcc_pe = comp_pcc(ref_pe, dev[:, KV_LORA:])
+        layer_pcc = min(pcc_nope, pcc_pe)
+        min_pcc = min(min_pcc, layer_pcc)
+        logger.info(f"[producer] layer {layer} KV PCC: nope={pcc_nope:.6f} pe={pcc_pe:.6f} -> {layer_pcc:.6f}")
+        if layer_pcc < threshold:
+            failures.append((layer, layer_pcc))
+    print(
+        f"[producer] kv_cache_pcc_complete slot={slot_id} n_chunks={n_chunks} total_len={total_len} min_pcc={min_pcc:.6f}"
+    )
+    if failures:
+        logger.error(f"[producer] KV cache PCC below {threshold} for layers: {failures}")
+    else:
+        logger.success(f"[producer] KV cache PCC PASSED (min {min_pcc:.6f} >= {threshold})")
+    return min_pcc
+
+
 def main() -> None:
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
@@ -133,6 +330,12 @@ def main() -> None:
     t0 = time.perf_counter()
     service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
     logger.info(f"[producer] attached in {(time.perf_counter() - t0):.2f}s")
+
+    # Read the KV chunk table the runner published (device-less) and attach to the per-layer LayerAck
+    # channel BEFORE pushing input — the runner serializes the table + creates the ack channel during
+    # setup, before it enters the request loop.
+    kv_table = _read_kv_chunk_table(timeout_s)
+    ack_channel = _connect_layer_ack_channel(timeout_s)
 
     task_id, slot_id, actual_isl, token_ids = _load_tokens()  # actual_isl captured BEFORE padding
 
@@ -195,9 +398,30 @@ def main() -> None:
     # been drained by the service core. (`connect`-side `barrier` is supported.)
     service.barrier()
     logger.info(
-        f"[producer] done. {len(push_times_ms)} pushes, per-push ms = {[round(t, 2) for t in push_times_ms]}; "
-        "exiting (the runner keeps its sync-op loop running)."
+        f"[producer] done pushing. {len(push_times_ms)} pushes, per-push ms = {[round(t, 2) for t in push_times_ms]}."
     )
+
+    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed. When
+    # they are all in, the KV cache for [0, n_chunks*CHUNK_SIZE) is fully populated across all layers.
+    expected_acks = NUM_LAYERS * n_chunks * num_iterations
+    _drain_layer_acks(ack_channel, expected_acks)
+
+    # Optionally read the generated KV cache back via the table and PCC-check vs the golden trace.
+    # read_dram_umd reads over UMD (like the migration worker) — device-less, no mesh open, concurrent
+    # with the runner. Opt-in via PREFILL_PRODUCER_CHECK_PCC; needs the runner's device-map sidecar.
+    if os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1" and kv_table is not None:
+        try:
+            device_map = _read_device_map(timeout_s)
+            if device_map:
+                _read_kv_and_check_pcc(kv_table, device_map, slot_id=slot_id, n_chunks=n_chunks)
+            else:
+                logger.error("[producer] no device map available; skipping KV read/PCC.")
+        except Exception as e:
+            logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
+    elif os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1":
+        logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
+
+    logger.info("[producer] exiting (the runner keeps its sync-op loop running).")
 
 
 if __name__ == "__main__":

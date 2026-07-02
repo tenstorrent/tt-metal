@@ -41,7 +41,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import publish_table_and_wait_ready
+from models.demos.common.prefill.runners.migration import publish_table_and_wait_ready, serialize_device_map
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -586,6 +586,7 @@ def _print_config() -> None:
             os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0"),
         ),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
@@ -767,6 +768,21 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
                 mesh_shape=GLOBAL_MESH_SHAPE,
                 table_path=table_path,
                 wait_ready_timeout_ms=wait_ready_ms,
+            )
+        elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
+            # Mock integration (prefill_h2d_producer.py): serialize the KV chunk table so an external
+            # producer can read it back via ttnn.experimental.disaggregation.import_from_protobuf_file
+            # and locate each chunk — WITHOUT the migration_endpoint worker (no MigrationLayerClient,
+            # no WORKER_READY). One galaxy => one complete table spanning all NUM_LAYERS / NUM_USERS.
+            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+            runtime.build_kv_chunk_table(kv_cache, path=table_path)
+            # Also publish the fabric_node -> ASIC unique_id device map so the producer can resolve chips
+            # for its device-less UMD read (read_dram_umd) without touching the ControlPlane.
+            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            serialize_device_map(mesh_device, device_map_path)
+            logger.info(
+                f"[mock-migration] KV chunk table -> {table_path}, device map -> {device_map_path} "
+                f"(no migration worker); prefill_h2d_producer can import them"
             )
 
         # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler reads the delta.

@@ -19,6 +19,13 @@ namespace tt::tt_metal::internal::disaggregation {
 // compiled into the `impl` target). Forward-declared here to bind without the impl header.
 std::string export_to_protobuf(const KvChunkAddressTable& table);
 void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path);
+// Deserializers — same TU/target as the exporters above, so they link the same way.
+KvChunkAddressTable import_from_protobuf(const std::string& data);
+KvChunkAddressTable import_from_protobuf_file(const std::string& path);
+// UMD-backed device-less DRAM read (defined in umd_dram_reader.cpp, links from libtt_metal):
+// reads a chunk over a bare tt::umd::Cluster (no start_device / no CHIP_IN_USE lock); chip selected
+// by ASIC unique_id, noc_addr = (dram_view << 32) | local_addr.
+std::vector<uint8_t> read_dram_umd(uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes);
 }  // namespace tt::tt_metal::internal::disaggregation
 
 namespace ttnn::disaggregation {
@@ -222,6 +229,43 @@ void bind_disaggregation_api(nb::module_& mod) {
         nb::arg("table"),
         nb::arg("path"),
         "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
+
+    // Deserialization — an external consumer (e.g. the prefill_h2d producer) reconstructs the
+    // table the runner exported. Pure data: builds the KvChunkAddressTable from the protobuf with
+    // no device / ControlPlane access, so it is safe to call from a device-less process. (Only a
+    // subsequent read_device_chunk() needs the device to be open in the caller's process.)
+    mod.def(
+        "import_from_protobuf_file",
+        &import_from_protobuf_file,
+        nb::arg("path"),
+        "Deserialize a KvChunkAddressTable from a protobuf file at `path`.");
+    mod.def(
+        "import_from_protobuf",
+        &import_from_protobuf,
+        nb::arg("data"),
+        "Deserialize a KvChunkAddressTable from a serialized protobuf byte string.");
+
+    // UMD-backed device-less read: reads a KV chunk's DRAM bytes over a bare tt::umd::Cluster that
+    // never calls start_device() (no CHIP_IN_USE flock), so a producer can read a live server's KV
+    // CONCURRENTLY with the runner — the mechanism the migration worker uses
+    // (disaggregation/migration/src/worker/device_io.cpp). The chip is selected by ASIC unique_id
+    // (the caller resolves fabric_node -> unique_id from the runner's device-map sidecar); noc_addr
+    // is (dram_view << 32) | local_addr, size_bytes is the chunk size (19584 for a bfp8 KV chunk).
+    mod.def(
+        "read_dram_umd",
+        [](uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes) {
+            auto buf = tt::tt_metal::experimental::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
+            return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
+        },
+        nb::arg("unique_id"),
+        nb::arg("noc_addr"),
+        nb::arg("size_bytes"),
+        R"(
+        Read a KV chunk's raw bytes over UMD from a device-less process, CONCURRENT with the running
+        server. Uses a bare tt::umd::Cluster (no start_device / no CHIP_IN_USE lock), selecting the
+        chip by ASIC unique_id and the DRAM view/offset from noc_addr = (view << 32) | local_addr.
+        Mirrors the migration worker's device_io read path.
+        )");
 }
 
 }  // namespace ttnn::disaggregation
