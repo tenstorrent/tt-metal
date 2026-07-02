@@ -65,9 +65,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "default (the NVIDIA quality-control string for video modes; empty for text2image)."
         ),
     )
-    p.add_argument(
-        "--steps", type=int, default=50, help="UniPC denoise steps. Cosmos3 paper default for Image2Video is 50."
-    )
+    p.add_argument("--steps", type=int, default=35, help="UniPC denoise steps. NVIDIA I2V framework default.")
     p.add_argument(
         "--frames", type=int, default=17, help="Number of output frames. Must be 4k+1 (TI2V VAE constraint)."
     )
