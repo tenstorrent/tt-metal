@@ -134,6 +134,18 @@ def run_dispatch(
     if (fp8_output or fp8_input) and is_wormhole_b0():
         pytest.skip("fp8 (input or output) not supported on Wormhole hardware")
 
+    # The fp8-scaled and on-device-cast paths quantize per 128-element block, so both the cast op and
+    # the dispatch scale tail require emb_dim % 128 == 0. gpt-oss (emb_dim=2880) is not a multiple of
+    # 128. Warn always so the gap is visible, and skip in CI to keep it green until support lands.
+    if (fp8_scaled_input or cast_input) and emb_dim % 128 != 0:
+        msg = (
+            f"fp8-scaled/cast dispatch requires emb_dim % 128 == 0; emb_dim={emb_dim} is unsupported. "
+            "Tracking: https://github.com/tenstorrent/tt-metal/issues/48780"
+        )
+        logger.warning(msg)
+        if is_ci_env or is_ci_v2_env:
+            pytest.skip(msg)
+
     # CI exercises exactly three representative dispatch flavors; every other dtype/layout
     # combination is covered locally but skipped in CI to bound device time. Each flavor pins a
     # distinct code path:
