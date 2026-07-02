@@ -32,4 +32,7 @@ def get_all_programs_perf_data():
     return ttnn._ttnn.profiler.get_all_programs_perf_data()
 
 
-__all__ = []
+# Re-export the one-command profiling API (issue #36650)
+from ttnn.op_perf import profile, perf_trace, OpPerfReport  # noqa: E402
+
+__all__ = ["profile", "perf_trace", "OpPerfReport"]
