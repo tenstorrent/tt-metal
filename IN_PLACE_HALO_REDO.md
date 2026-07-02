@@ -405,6 +405,54 @@ what confirms the bad outcome or reveals the good one. If in-place wins per-buff
 loses in a model, the lever is suspect #2 (lifetime), which is a *scheduling/gating*
 problem, not a kernel one.
 
+### 9e. FIRST EMPIRICAL RESULT — host-only economics probe (2026-07-02)
+
+Ran a host-only gtest (`InPlaceHaloEconomics.MaxPoolHeightSharded` in
+`tests/ttnn/unit_tests/gtests/test_sliding_window_infra.cpp`) over the archived MaxPool
+height-sharded shapes, computing from the real config generation the width-independent
+verdict `maxref < in_nsticks_per_core` (SAVE). `in/core` = input sticks/core (saved
+buffer); `maxref` = max outbound-halo sticks/core (remote-temp CB). Cores =
+`min(64, output_nhw)`.
+
+| shape | cores | in/core | maxref | ratio% | verdict |
+|---|--:|--:|--:|--:|:--|
+| resnet 2×2s2 150×150 (C128) | 64 | 352 | 176 | 50 | **SAVE** |
+| C=16 25×23 2×2s2 | 64 | 9 | 199 | 2211 | LOSE |
+| 3×3s2 pad1 ceil 28×28 (C480) | 64 | 13 | 65 | 500 | LOSE |
+| dilation C=7 24×24 | 64 | 9 | 162 | 1800 | LOSE |
+| dilation ceil C=1 59×59 | 64 | 55 | 1155 | 2100 | LOSE |
+| massive 400×544 3×3s2 (C64) | 64 | 3400 | 1157 | 34 | **SAVE** |
+| >800ch 4×4 14×14 | 36 | 6 | 66 | 1100 | LOSE |
+| 15×15 kernel 30×30 (C160) | 64 | 15 | 467 | 3113 | LOSE |
+| 8×8s6 20×20 (C224) | 12 | 34 | 202 | 594 | LOSE |
+| 36×36 kernel 48×48 (C320) | 64 | 36 | 2268 | 6300 | LOSE |
+| tiny 6×6 3×3 | 36 | 1 | 14 | 1400 | LOSE |
+| ceil edge 13×8 | 12 | 9 | 63 | 700 | LOSE |
+| N=8 112×112 3×3s2 (C64) | 64 | 1568 | 432 | 27.6 | **SAVE** |
+| N=32 264×40 5×5 (C32) | 64 | 5280 | 200 | 3.8 | **SAVE** |
+
+**Verdict: 5 SAVE / 9 LOSE — the premise is CONFIRMED for this (deliberately
+adversarial) shape mix, but the win region is real and important.** SAVE = large feature
+maps + small kernels = ResNet/UNet bread-and-butter early layers, saving **28–96 %** of the
+input-shard buffer. LOSE = tiny per-core shards (few sticks/core) or large kernel/dilation
+(halo depth ≫ shard). The physics: `maxref` ≈ halo depth `(dilated_window_h−1)·padded_W`
+is ~independent of core count, while `in/core = input_nhw/num_cores` shrinks with more
+cores — so many-core + small-spatial + big-window collapses the saving.
+
+**Path to the good outcome is now concrete:** a cheap, exact host-side gate
+`maxref < in_nsticks_per_core` (with a margin for the auxiliary costs below) turns a
+blanket loss into a *targeted* win — enable in-place exactly on the large-shard/small-kernel
+layers, fall back to normal halo elsewhere. The old feature's mistake was applying it too
+broadly.
+
+**Caveats (why this is a proxy, not the final word):** the probe counts only input-shard
+(saved) vs remote-temp (added). It ignores (a) config-CB bloat, pad CB, wide-untilize temp
+CB; (b) buffer/bank alignment rounding; (c) the over-allocation lifetime effect
+(§9c-2). And borderline verdicts depend on the real `num_cores` (I used
+`min(64, output_nhw)`); the SAVE cases (big shards) are robust, but small-output LOSE cases
+could shift if the op uses fewer cores. Real peak-L1 needs the implementation — but the
+SAVE region is large enough here that building it out for height-sharded is clearly warranted.
+
 ### 9d. Candidate levers for the good outcome (to try if the table is close)
 
 - **Shrink the temp**: it only needs to hold *outbound* halo, not `shard_width` full
