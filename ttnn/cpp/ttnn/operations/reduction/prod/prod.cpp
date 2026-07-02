@@ -10,7 +10,6 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 // TODO(nuked-op): removed include of deleted slicing op header
@@ -137,8 +136,8 @@ Tensor prod_impl(
         std::swap(post_permute_dims[third_last_dim_idx], post_permute_dims[positive_dim]);
 
         // Tensor with target reduction dim at third last position
-        ttnn::Tensor permuted =
-            permute_required ? ttnn::permute(dim_input, post_permute_dims, output_mem_config) : dim_input;
+        // TODO(nuked-op permute): restore real call
+        ttnn::Tensor permuted = input_a_padded;
 
         // Now squeeze to 4D and do the 4D prod.
         // Dim0 grows to include the rest of the dimensions, and our "third last" dim moves into dim1, which is our 4D
@@ -155,7 +154,8 @@ Tensor prod_impl(
 
         // Can now permute the reduced dim to the correct position
         if (permute_required) {
-            result = ttnn::permute(result, post_permute_dims, output_mem_config);
+            // TODO(nuked-op permute): restore real call
+            // (passthrough — no-op)
         }
 
         if (!keepdim) {
@@ -174,11 +174,13 @@ Tensor prod_impl(
     Tensor temp = input_tensor_4d;
     // Permute for dim 2,3
     if (dim_4d == 2 || dim_4d == -2) {
-        ttsl::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
-        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
+        ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
+        // TODO(nuked-op permute): restore real call
+        temp = input_tensor_4d;
     } else if (dim_4d == 3 || dim_4d == -1) {
-        ttsl::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
-        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
+        ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
+        // TODO(nuked-op permute): restore real call
+        temp = input_tensor_4d;
     }
     Tensor result = compute_prod_nc(temp, dim_4d, output_mem_config);
     // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
@@ -186,16 +188,18 @@ Tensor prod_impl(
     if (dim_4d == 0 || dim_4d == 1 || dim_4d == -4 || dim_4d == -3) {
         result = ttnn::squeeze_from_4D(result, old_rank);
     } else if (dim_4d == 2 || dim_4d == -2) {
-        ttsl::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
-        Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
+        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        // TODO(nuked-op permute): restore real call
+        Tensor required = result;
         const auto& input_shape = input_tensor_4d.logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
         result = ttnn::squeeze_from_4D(/*nuked-op*/ required, old_rank);
     } else {  // dim 3
         // permute
-        ttsl::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
-        Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
+        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        // TODO(nuked-op permute): restore real call
+        Tensor required = result;
         // unpad
         const auto& input_shape = input_tensor_4d.logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
@@ -203,7 +207,8 @@ Tensor prod_impl(
         Tensor new_unpad_tensor = /*nuked-op*/ required;
         // permute back
         after_permute_dims = {0, 1, 3, 2};
-        Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
+        // TODO(nuked-op permute): restore real call
+        Tensor res_host = new_unpad_tensor;
         result = ttnn::squeeze_from_4D(res_host, old_rank);
     }
     return keepdim ? result : ttnn::squeeze(result, *dim);

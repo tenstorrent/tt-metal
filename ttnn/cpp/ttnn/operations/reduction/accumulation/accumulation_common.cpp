@@ -47,7 +47,8 @@ Tensor preprocess_input_tensor(
         permutation[accumulation_axis] = final_cum_axis;
         permutation[final_cum_axis] = accumulation_axis;
 
-        return ttnn::permute(processed_tensor, permutation, processed_tensor.memory_config());
+        // TODO(nuked-op permute): restore real call
+        return processed_tensor;
     }
     accumulation_axis = cum_axis;
 
@@ -57,13 +58,14 @@ Tensor preprocess_input_tensor(
 Tensor postprocess_output_tensor(
     const Tensor& output_tensor,
     const int32_t& dim,
-    const permutation_t& permutation,
+    [[maybe_unused]] const permutation_t& permutation,
     const ttnn::Shape& original_shape,
     const int32_t& original_rank) {
     Tensor processed_tensor = output_tensor;
 
     if (original_rank - dim < FOUR_DIMENSIONS) {
-        processed_tensor = ttnn::permute(processed_tensor, permutation, processed_tensor.memory_config());
+        // TODO(nuked-op permute): restore real call
+        // (passthrough — no-op)
         if (original_rank < FOUR_DIMENSIONS) {
             processed_tensor = ttnn::reshape(processed_tensor, original_shape);
         }

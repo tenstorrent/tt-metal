@@ -170,9 +170,6 @@ target_sources(
             pad/device/pad_rm_sharded_width_only_program_factory.hpp
             pad/device/pad_tile_multicore_program_factory.hpp
             pad/device/pad_tile_program_factory.hpp
-            # permute/
-            permute/permute_nanobind.hpp
-            permute/device/permute_device_operation.hpp
             # repeat/
             repeat/repeat_nanobind.hpp
             repeat/device/repeat_device_operation.hpp

@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_utils.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 using namespace tt::tt_metal;
@@ -103,8 +102,10 @@ Tensor indexed_fill(
     const MemoryConfig intermediate_mem_config{
         TensorMemoryLayout::INTERLEAVED, input_tensor_a.memory_config().buffer_type()};
 
-    const auto a_perm = ttnn::permute(input_tensor_a, perm, intermediate_mem_config);
-    const auto b_perm = ttnn::permute(input_tensor_b, perm, intermediate_mem_config);
+    // TODO(nuked-op permute): restore real call
+    const auto a_perm = input_tensor_a;
+    // TODO(nuked-op permute): restore real call
+    const auto b_perm = input_tensor_b;
 
     // The device primitive always sees dim=0 after permute.
     const auto out_perm = ttnn::prim::indexed_fill(batch_id, a_perm, b_perm, intermediate_mem_config, 0);
@@ -117,7 +118,8 @@ Tensor indexed_fill(
     const auto resolved_output_mem_config = ttnn::operations::data_movement::indexed_fill::resolve_output_memory_config(
         input_tensor_a, input_tensor_a.padded_shape(), output_memory_config);
 
-    return ttnn::permute(out_perm, inv_perm, resolved_output_mem_config);
+    // TODO(nuked-op permute): restore real call
+    return out_perm;
 }
 
 }  // namespace ttnn
