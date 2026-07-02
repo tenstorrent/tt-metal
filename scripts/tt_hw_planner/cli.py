@@ -9647,6 +9647,21 @@ def _cmd_up_core(args) -> int:
             _print_bringup_summary(MODEL, box=BOX, sep=sep)
             return 0
 
+        if (getattr(args, "engine", "fsm") or "fsm") == "cc":
+            from ._cli_helpers.bringup_cc import run_bringup_cc
+            from .bringup_loop import find_demo_dir
+
+            _dd = find_demo_dir(MODEL)
+            if _dd is None:
+                print("ERROR: --engine cc requires a scaffolded demo (run bring-up first).", file=sys.stderr)
+                return 2
+            banner("Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate")
+            return run_bringup_cc(
+                model_id=MODEL,
+                demo_dir=_dd,
+                agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
+            )
+
         _phase2_only = bool(getattr(args, "phase2_only", False))
         _phase2 = bool(getattr(args, "phase2", False)) or _phase2_only
         if _phase2_only:
@@ -10550,6 +10565,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             "On failure, the worktree is preserved for debug. Pass --isolation none to opt out."
         ),
     )
+    pup.add_argument(
+        "--engine",
+        default="fsm",
+        choices=["fsm", "cc"],
+        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
+        "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
+        "graduation snapshot contract)",
+    )
     pup.set_defaults(func=cmd_up)
 
     # `auto-up` is a zero-flag entry-point: hands the model_id to `up`
@@ -10579,6 +10602,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--mesh",
         required=True,
         help="Mesh shape, e.g. '1,4' or '2x2' (required); must be canonical for --box.",
+    )
+    paut.add_argument(
+        "--engine",
+        default="fsm",
+        choices=["fsm", "cc"],
+        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
+        "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
+        "graduation snapshot contract)",
     )
     paut.set_defaults(func=cmd_bringup)
 
@@ -10750,6 +10781,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             "pipelines that pass the flag through unconditionally; in "
             "`promote` it is a no-op because op-synth defaults to off here."
         ),
+    )
+    pprom.add_argument(
+        "--engine",
+        default="fsm",
+        choices=["fsm", "cc"],
+        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
+        "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
+        "graduation snapshot contract, agent+gate driven)",
     )
     pprom.set_defaults(func=cmd_promote, auto=True, auto_model_tiered=True)
 
@@ -11231,6 +11270,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             "updated PCC/perf numbers). Does not touch demo/tt/tests/eval/ref."
         ),
     )
+    pe2e.add_argument(
+        "--engine",
+        default="fsm",
+        choices=["fsm", "cc"],
+        help="fsm = current build→gates→fix loop (default); cc = drive the fix loop through the shared "
+        "Claude-Code harness against the e2e deterministic gate (same G1–G4 gates, agent+gate driven)",
+    )
     pe2e.set_defaults(func=cmd_emit_e2e)
 
     popt = sub.add_parser(
@@ -11255,7 +11301,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--pcc-test",
         dest="pcc_test",
         help="e2e PCC test node id 'path::test_fn' (tt-metal-root-relative or absolute) used as the "
-        "correctness gate; the perf workload is auto-generated from it (no --perf-test needed)",
+        "correctness gate; the perf workload is auto-generated from it unless --perf-test is given",
+    )
+    popt.add_argument(
+        "--perf-test",
+        dest="perf_test",
+        help="explicit perf test node id 'path::test_fn' to profile (overrides auto-generation); use for "
+        "models whose e2e test overflows the profiler and that ship a bounded/layer-capped perf test",
     )
     popt.add_argument(
         "--engine",
