@@ -780,6 +780,11 @@ static int pgm_dispatch(T& state, TestInfo info) {
 
 static void BM_pgm_dispatch(benchmark::State& state, TestInfo info) {
     info.kernel_size = state.range(0);
+    // Skip load_prefetcher_test on wormhole_b0: trace buffer exceeds allocated region, refs #46983
+    if (info.load_prefetcher && tt::tt_metal::hal::get_arch_name() == std::string("wormhole_b0")) {
+        state.SkipWithError("Skipped: load_prefetcher_test exceeds trace region size on wormhole_b0, refs #46983");
+        return;
+    }
     pgm_dispatch(state, info);
 }
 
