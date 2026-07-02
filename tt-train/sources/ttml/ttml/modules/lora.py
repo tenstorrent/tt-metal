@@ -232,7 +232,7 @@ class LoraModel(AbstractModuleBase):
         verbose = config.verbose
 
         if not config.target_modules:
-            raise ValueError("[LoRA] target_modules must not be empty")
+            print("[LoRA] target_modules is empty. No injection will occur.")
 
         if verbose:
             print(
