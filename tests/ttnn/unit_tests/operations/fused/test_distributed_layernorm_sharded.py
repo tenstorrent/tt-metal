@@ -21,6 +21,10 @@ from models.common.utility_functions import (
     skip_for_wormhole_b0,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+    make_sharded_norm_mem_config,
+    to_poisoned_sharded,
+)
 
 from models.common.utility_functions import tt2torch_tensor
 
@@ -718,16 +722,7 @@ def _run_simulated_distributed_norm(device, is_rmsnorm, w, eps):
     torch_golden = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
 
     # Single-core block-sharded config; the shard width is the tile-padded width.
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        [h, padded_w],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sharded_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=shard_spec,
-    )
+    sharded_mem_config = make_sharded_norm_mem_config(num_cores_w=1, h=h, shard_w=padded_w)
     prgm_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[1, 1],
         subblock_w=1,
@@ -737,10 +732,7 @@ def _run_simulated_distributed_norm(device, is_rmsnorm, w, eps):
     )
 
     def make_poisoned_input():
-        tt = ttnn.from_torch(
-            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
-        )
-        return ttnn.fill_implicit_tile_padding(tt, _NON_TILE_ALIGNED_PAD_VALUE)
+        return to_poisoned_sharded(device, torch_input_tensor, sharded_mem_config, _NON_TILE_ALIGNED_PAD_VALUE)
 
     # Pre-all-gather: per-shard statistics.
     tt_input_tensor = make_poisoned_input()
@@ -817,16 +809,7 @@ def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, 
     torch_ex = torch.mean(torch_input_tensor.to(torch.float32), dim=-1, keepdim=True)
     torch_ex2 = torch.mean(torch_input_tensor.to(torch.float32) ** 2, dim=-1, keepdim=True)
 
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        [h, padded_w],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sharded_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=shard_spec,
-    )
+    sharded_mem_config = make_sharded_norm_mem_config(num_cores_w=1, h=h, shard_w=padded_w)
     prgm_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[1, 1],
         subblock_w=1,
@@ -835,10 +818,7 @@ def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, 
         inplace=False,
     )
 
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
-    )
-    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, _NON_TILE_ALIGNED_PAD_VALUE)
+    tt_input_tensor = to_poisoned_sharded(device, torch_input_tensor, sharded_mem_config, _NON_TILE_ALIGNED_PAD_VALUE)
 
     if is_rmsnorm:
         tt_stats = ttnn.rms_norm_pre_all_gather(tt_input_tensor, program_config=prgm_cfg)

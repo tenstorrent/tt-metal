@@ -109,6 +109,30 @@ def create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage):
     return ttnn.MemoryConfig(memory_layout=mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec)
 
 
+def make_sharded_norm_mem_config(num_cores_w, h, shard_w, num_cores_h=1):
+    """Block-sharded SRAM config over a num_cores_w x num_cores_h grid, each core owning an [h, shard_w] shard."""
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}),
+        [h, shard_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+
+def to_poisoned_sharded(device, torch_tensor, mem_config, pad_value):
+    """Tilize onto device with the given sharded config and poison the implicit tile padding with pad_value.
+
+    Poisoning makes any read of the padded columns observable: a kernel that normalizes over the logical
+    width is unaffected, while one that folds the padded columns into its statistics is grossly wrong.
+    """
+    tt = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+    return ttnn.fill_implicit_tile_padding(tt, pad_value)
+
+
 def ttnn_layer_norm_sharded(
     device, tt_input_tensor, use_welford, block_ht, block_wt, subblock_w=1, residual=None, weight=None, bias=None
 ):
@@ -517,8 +541,31 @@ _LOGICAL_WIDTH_NORM_BUDGET = {
 _LOGICAL_WIDTH_NORM_PAD_POISON = 1000.0  # poison the implicit tile padding so any leak is caught
 
 
+# Block sharding mandates that every core must get the same-sized tile-aligned shard:
+# shard_w = ceil(w / cores / 32) * 32, so the padded width is cores * shard_w.
+# This means the final core's shard may have padding.
+# Two categories are covered:
+#   - tile-aligned widths whose tiles do not divide evenly across the cores (96 over 2, 224 over 3):
+#     every tile on the final core is either fully valid or fully padding, never partial. E.g. 96 over
+#     2 gives the final core one fully-valid tile and one fully-padding tile.
+#   - non-tile-aligned widths (72 over 2, 200 over 3): the logical columns run out mid-tile, so the
+#     final core holds a partially-valid tile followed by a fully-padding tile. E.g. 72 over 2 gives
+#     the final core one partially-valid tile (8 of its 32 columns valid) and one fully-padding tile.
+# In both, the op must normalize over the logical width, not the padded per-core width.
+UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES = [(96, 2), (224, 3), (72, 2), (200, 3)]
+UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS = ["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"]
+
+
 def run_sharded_norm_logical_width_multicore(
-    device, is_rmsnorm, w, num_cores_w, dtype=ttnn.bfloat16, eps=1e-5, use_welford=False, weight_layout=ttnn.TILE_LAYOUT
+    device,
+    is_rmsnorm,
+    w,
+    num_cores_w,
+    num_cores_h=1,
+    dtype=ttnn.bfloat16,
+    eps=1e-5,
+    use_welford=False,
+    weight_layout=ttnn.TILE_LAYOUT,
 ):
     """Verify a width-sharded layer/RMS norm normalizes over the LOGICAL width when the width is split
     across cores so the final core owns fewer real tiles (and, for a non-tile-aligned width, a partially
@@ -533,21 +580,29 @@ def run_sharded_norm_logical_width_multicore(
     scale-invariant and so blind to this class of error. Tolerances come from the per-dtype budget
     defined above.
 
+    The width is spread over all num_cores_w * num_cores_h cores. A single-row grid (num_cores_h == 1)
+    uses the single-stage cross-core reduce; a 2D grid (both dimensions > 1) selects the two-stage reduce
+    (first stage combines the shards within a row, second combines the per-row results), with the
+    partially-valid boundary block on the final core in row-major order.
+
     use_welford applies to LayerNorm only, since RMSNorm does not support Welford.
 
     weight_layout selects the gamma/beta layout: TILE_LAYOUT or ROW_MAJOR_LAYOUT (which selects the
     row-major gamma/beta writer kernel).
     """
     assert not (use_welford and is_rmsnorm), "RMSNorm does not use the Welford reduction"
+    total_cores = num_cores_w * num_cores_h
     kt = -(-w // TILE_WIDTH)  # ceil: a non-tile-aligned width rounds up to a whole number of tiles
-    shard_wt = -(-kt // num_cores_w)  # tiles per core (ceil) -> last core owns fewer real tiles
+    shard_wt = -(-kt // total_cores)  # tiles per core (ceil) -> last core owns fewer real tiles
     shard_w = shard_wt * TILE_WIDTH
-    assert (num_cores_w - 1) * shard_wt < kt, "geometry must leave the last core at least one real tile"
+    assert (total_cores - 1) * shard_wt < kt, "geometry must leave the last core at least one real tile"
 
     torch.manual_seed(0)
     x = torch.randn(1, 1, TILE_HEIGHT, w)  # fp32 base; quantized to `dtype` on device below
 
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))})
+    core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}
+    )
     sharded_cfg = ttnn.create_sharded_memory_config(
         shape=(TILE_HEIGHT, shard_w),
         core_grid=core_grid,
@@ -590,7 +645,7 @@ def run_sharded_norm_logical_width_multicore(
     # fp32 dest caps subblock_w at 4; keep it a divisor of the shard width in tiles.
     subblock_w = next(d for d in range(min(shard_wt, 4), 0, -1) if shard_wt % d == 0)
     prgm = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[num_cores_w, 1],
+        compute_with_storage_grid_size=[num_cores_w, num_cores_h],
         subblock_w=subblock_w,
         block_h=1,
         block_w=shard_wt,
@@ -618,89 +673,6 @@ def run_sharded_norm_logical_width_multicore(
     else:
         beta = ttnn.from_torch(beta_torch, layout=weight_layout, device=device)
         tt_out = ttnn.layer_norm(tt_x, bias=beta, **common)
-    out = ttnn.to_torch(ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
-
-    assert_numeric_metrics(
-        ref,
-        out,
-        **_LOGICAL_WIDTH_NORM_BUDGET[dtype],
-        check_pcc=False,  # PCC is scale-invariant; a padded-width normalization is a (near-)pure scale
-    )
-
-
-def run_sharded_norm_logical_width_two_stage(
-    device, is_rmsnorm, w, num_cores_w, num_cores_h, dtype=ttnn.bfloat16, eps=1e-5, use_welford=False
-):
-    """Verify a width-sharded layer/RMS norm over a non-tile-aligned width that is split across a 2D core
-    grid, which selects the TWO-STAGE cross-core reduction (first stage combines the shards within a row,
-    second stage combines the per-row results). Both grid dimensions must exceed 1 for two-stage to engage.
-
-    The width is spread over all num_cores_w * num_cores_h cores; the final core in row-major order owns the
-    partially-valid boundary tile plus any pure-padding tiles. Correct output normalizes over the logical
-    width only. As in the single-stage harness, the check gates on the scale-sensitive Frobenius and allclose
-    metrics and disables PCC. See run_sharded_norm_logical_width_multicore for the rationale and budget.
-    """
-    assert not (use_welford and is_rmsnorm), "RMSNorm does not use the Welford reduction"
-    assert num_cores_w > 1 and num_cores_h > 1, "two-stage reduce requires both grid dimensions > 1"
-    total_cores = num_cores_w * num_cores_h
-    kt = -(-w // TILE_WIDTH)  # ceil: a non-tile-aligned width rounds up to a whole number of tiles
-    shard_wt = -(-kt // total_cores)  # tiles per core (ceil)
-    shard_w = shard_wt * TILE_WIDTH
-    assert (total_cores - 1) * shard_wt < kt, "geometry must leave the last core at least one real tile"
-
-    torch.manual_seed(0)
-    x = torch.randn(1, 1, TILE_HEIGHT, w)  # fp32 base; quantized to `dtype` on device below
-
-    core_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}
-    )
-    sharded_cfg = ttnn.create_sharded_memory_config(
-        shape=(TILE_HEIGHT, shard_w),
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        use_height_and_width_as_shard_shape=True,
-    )
-    tt_x = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    tt_x = ttnn.to_memory_config(tt_x, memory_config=sharded_cfg)
-    tt_x = ttnn.fill_implicit_tile_padding(tt_x, _LOGICAL_WIDTH_NORM_PAD_POISON)
-
-    xf = ttnn.to_torch(ttnn.to_memory_config(tt_x, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
-    if is_rmsnorm:
-        ref = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)
-    else:
-        ref = (xf - xf.mean(-1, keepdim=True)) * torch.rsqrt(xf.var(-1, unbiased=False, keepdim=True) + eps)
-
-    # gamma = 1, beta = 0 isolate the normalization; tile-layout gamma is zero-padded past the logical width.
-    ones = ttnn.from_torch(torch.ones(1, 1, 1, w, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-
-    subblock_w = next(d for d in range(min(shard_wt, 4), 0, -1) if shard_wt % d == 0)
-    prgm = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[num_cores_w, num_cores_h],
-        subblock_w=subblock_w,
-        block_h=1,
-        block_w=shard_wt,
-        use_welford=use_welford,
-        inplace=False,
-    )
-    compute_cfg = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-    common = dict(
-        epsilon=eps, weight=ones, program_config=prgm, compute_kernel_config=compute_cfg, memory_config=sharded_cfg
-    )
-    if use_welford:
-        common["recip_tensor"] = ttnn.create_layer_norm_reciprocals(
-            device, sharded_cfg.shard_spec.grid, sharded_cfg.shard_spec.shape[1]
-        )
-    if is_rmsnorm:
-        tt_out = ttnn.rms_norm(tt_x, **common)
-    else:
-        zeros = ttnn.from_torch(torch.zeros(1, 1, 1, w, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-        tt_out = ttnn.layer_norm(tt_x, bias=zeros, **common)
     out = ttnn.to_torch(ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
 
     assert_numeric_metrics(

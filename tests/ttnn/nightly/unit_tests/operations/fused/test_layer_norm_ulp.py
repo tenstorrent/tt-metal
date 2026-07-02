@@ -38,7 +38,12 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm
-from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import ttnn_layer_norm_sharded, ttnn_rms_norm_sharded
+from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+    ttnn_layer_norm_sharded,
+    ttnn_rms_norm_sharded,
+    make_sharded_norm_mem_config,
+    to_poisoned_sharded,
+)
 
 # Poison value to ensure Welford's algorithm ignores padded elements (#31982)
 PAD_VALUE = -42
@@ -339,30 +344,6 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, d
     assert passed, f"[FP32 {wb_mode} {desc} use_welford={use_welford} dist={distribution}] {msg}"
 
 
-def _make_sharded_norm_mem_config(num_cores_w: int, h: int, shard_w: int):
-    """Single-row block-sharded SRAM config spanning num_cores_w cores, each owning an [h, shard_w] shard."""
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))}),
-        [h, shard_w],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    return ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=shard_spec,
-    )
-
-
-def _to_poisoned_sharded(device, torch_tensor, mem_config):
-    """Tilize onto device with the given sharded config and poison the implicit tile padding with PAD_VALUE.
-
-    Poisoning makes any read of the padded columns observable: a kernel that normalizes over the logical
-    width is unaffected, while one that folds the padded columns into its statistics is grossly wrong.
-    """
-    tt = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
-    return ttnn.fill_implicit_tile_padding(tt, PAD_VALUE)
-
-
 # BF16 caps for the sharded non-tile-aligned tests. These are far tighter than the generic
 # BF16-accumulation cap because normalizing over the padded width leaks only a moderate error
 # (a few percent), which the generic cap would absorb. Correctly masked output is within a few
@@ -405,6 +386,49 @@ def _assert_sharded_norm_ulp(golden, actual, dtype, log_prefix: str, spec: str, 
     assert passed, f"{fail_prefix} {msg}"
 
 
+def _run_sharded_norm_ulp(device, norm, w, num_cores_w, distribution, dtype, use_welford=False, residual=False):
+    """Run a sharded layer_norm / rms_norm over width w split across num_cores_w cores and compare ULP
+    vs the torch golden. The shard width is the per-core logical share rounded up to a whole tile, so a
+    non-tile-aligned width (or one that does not divide evenly across cores) leaves padding on the final
+    shard. That implicit tile padding is poisoned, so any path that folds the padded columns into its
+    statistics is observably wrong. residual=True fuses a second poisoned input (the norm is applied to
+    a + b). use_welford applies to layer_norm only.
+    """
+    torch.manual_seed(0)
+    h = 32
+    eps = 1e-12
+    shard_w = math.ceil(w / num_cores_w / 32) * 32
+    block_wt = shard_w // 32
+
+    torch_a = _make_ln_input(h, w, dtype, distribution)
+    torch_b = _make_ln_input(h, w, dtype, distribution) if residual else None
+    src = torch_a + torch_b if residual else torch_a
+    if norm == "layernorm":
+        golden = torch.nn.functional.layer_norm(src, normalized_shape=[w])
+    else:
+        ms = src.to(torch.float32).pow(2).mean(dim=-1, keepdim=True)
+        golden = (src.to(torch.float32) * torch.rsqrt(ms + eps)).to(dtype)
+
+    sharded_mem_config = make_sharded_norm_mem_config(num_cores_w=num_cores_w, h=h, shard_w=shard_w)
+    tt_a = to_poisoned_sharded(device, torch_a, sharded_mem_config, PAD_VALUE)
+    tt_b = to_poisoned_sharded(device, torch_b, sharded_mem_config, PAD_VALUE) if residual else None
+
+    if norm == "layernorm":
+        actual = ttnn_layer_norm_sharded(
+            device, tt_a, use_welford=use_welford, block_ht=h // 32, block_wt=block_wt, subblock_w=1, residual=tt_b
+        )
+    else:
+        actual = ttnn_rms_norm_sharded(device, tt_a, block_ht=h // 32, block_wt=block_wt, subblock_w=1, residual=tt_b)
+    # Discard padding before comparison.
+    actual = actual[..., :w]
+
+    spec = (
+        f"sharded {norm} shape_hw=({h},{w}) cores={num_cores_w} shard_w={shard_w} "
+        f"welford={use_welford} residual={residual} dist={distribution} dtype={dtype}"
+    )
+    _assert_sharded_norm_ulp(golden, actual, dtype, f"ttnn.{norm} ULP (sharded)", spec, f"[{spec}]")
+
+
 # Widths that are not multiples of the tile width (32), each on a single core so the
 # whole logical row plus its tile padding lives in one shard.
 @pytest.mark.parametrize("w", [40, 72, 200])
@@ -429,36 +453,8 @@ def test_layer_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, 
     width is unaffected, while one that folds the padded columns into the mean/variance produces a
     grossly wrong result.
     """
-    torch.manual_seed(0)
-    h = 32
-    padded_w = math.ceil(w / 32) * 32
-
-    torch_input_tensor = _make_ln_input(h, w, dtype, distribution)
-    golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
-
-    # Single-core block-sharded config; the shard width is the tile-padded width.
-    sharded_mem_config = _make_sharded_norm_mem_config(num_cores_w=1, h=h, shard_w=padded_w)
-    tt_input_tensor = _to_poisoned_sharded(device, torch_input_tensor, sharded_mem_config)
-
-    actual = ttnn_layer_norm_sharded(
-        device,
-        tt_input_tensor,
-        use_welford=use_welford,
-        block_ht=h // 32,
-        block_wt=padded_w // 32,
-        subblock_w=1,
-    )
-    # Discard padding before comparison.
-    actual = actual[..., :w]
-
-    spec = f"sharded shape_hw=({h},{w}) padded_w={padded_w} welford={use_welford} dist={distribution} dtype={dtype}"
-    _assert_sharded_norm_ulp(
-        golden,
-        actual,
-        dtype,
-        "ttnn.layer_norm ULP (sharded)",
-        spec,
-        f"[sharded non-aligned dtype={dtype} w={w} welford={use_welford} dist={distribution}]",
+    _run_sharded_norm_ulp(
+        device, "layernorm", w, num_cores_w=1, distribution=distribution, dtype=dtype, use_welford=use_welford
     )
 
 
@@ -472,35 +468,8 @@ def test_layer_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, 
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_layer_norm_ulp_sharded_tile_aligned_width_split_across_cores(device, use_welford):
     """Sharded layer_norm over a tile-aligned width (w=96) split across two cores vs torch golden."""
-    torch.manual_seed(0)
-    h, w = 32, 96
-    num_cores_w = 2
-    shard_w = math.ceil(w / num_cores_w / 32) * 32
-
-    torch_input_tensor = _make_ln_input(h, w, torch.bfloat16, "normal")
-    golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
-
-    sharded_mem_config = _make_sharded_norm_mem_config(num_cores_w=num_cores_w, h=h, shard_w=shard_w)
-    tt_input_tensor = _to_poisoned_sharded(device, torch_input_tensor, sharded_mem_config)
-
-    actual = ttnn_layer_norm_sharded(
-        device,
-        tt_input_tensor,
-        use_welford=use_welford,
-        block_ht=h // 32,
-        block_wt=shard_w // 32,
-        subblock_w=1,
-    )
-    actual = actual[..., :w]
-
-    spec = f"sharded layernorm width-split shape_hw=({h},{w}) shard_w={shard_w} welford={use_welford}"
-    _assert_sharded_norm_ulp(
-        golden,
-        actual,
-        torch.bfloat16,
-        "ttnn.layer_norm ULP (sharded width-split)",
-        spec,
-        f"[sharded layernorm width-split welford={use_welford}]",
+    _run_sharded_norm_ulp(
+        device, "layernorm", w=96, num_cores_w=2, distribution="normal", dtype=torch.bfloat16, use_welford=use_welford
     )
 
 
@@ -520,38 +489,7 @@ def test_rms_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, dt
     unaffected, while one that folds the padded columns into the mean of squares produces a grossly
     wrong result.
     """
-    torch.manual_seed(0)
-    h = 32
-    padded_w = math.ceil(w / 32) * 32
-    eps = 1e-12
-
-    torch_input_tensor = _make_ln_input(h, w, dtype, distribution)
-    ms = torch_input_tensor.to(torch.float32).pow(2).mean(dim=-1, keepdim=True)
-    golden = (torch_input_tensor.to(torch.float32) * torch.rsqrt(ms + eps)).to(dtype)
-
-    # Single-core block-sharded config; the shard width is the tile-padded width.
-    sharded_mem_config = _make_sharded_norm_mem_config(num_cores_w=1, h=h, shard_w=padded_w)
-    tt_input_tensor = _to_poisoned_sharded(device, torch_input_tensor, sharded_mem_config)
-
-    actual = ttnn_rms_norm_sharded(
-        device,
-        tt_input_tensor,
-        block_ht=h // 32,
-        block_wt=padded_w // 32,
-        subblock_w=1,
-    )
-    # Discard padding before comparison.
-    actual = actual[..., :w]
-
-    spec = f"sharded rms shape_hw=({h},{w}) padded_w={padded_w} dist={distribution} dtype={dtype}"
-    _assert_sharded_norm_ulp(
-        golden,
-        actual,
-        dtype,
-        "ttnn.rms_norm ULP (sharded)",
-        spec,
-        f"[sharded rms non-aligned dtype={dtype} w={w} dist={distribution}]",
-    )
+    _run_sharded_norm_ulp(device, "rmsnorm", w, num_cores_w=1, distribution=distribution, dtype=dtype)
 
 
 # Block sharding requires every core to be assigned the same shard size,
@@ -577,38 +515,7 @@ def test_rms_norm_ulp_sharded_unevenly_split_width_across_cores(device, w, distr
     final columns; the op must still normalize over the logical width and ignore that padding.
     Poisoning the padding makes any read of the padded columns observable.
     """
-    torch.manual_seed(0)
-    h = 32
-    num_cores_w = 2
-    shard_w = math.ceil(w / num_cores_w / 32) * 32
-    padded_w = shard_w * num_cores_w
-    eps = 1e-12
-
-    torch_input_tensor = _make_ln_input(h, w, dtype, distribution)
-    ms = torch_input_tensor.to(torch.float32).pow(2).mean(dim=-1, keepdim=True)
-    golden = (torch_input_tensor.to(torch.float32) * torch.rsqrt(ms + eps)).to(dtype)
-
-    sharded_mem_config = _make_sharded_norm_mem_config(num_cores_w=num_cores_w, h=h, shard_w=shard_w)
-    tt_input_tensor = _to_poisoned_sharded(device, torch_input_tensor, sharded_mem_config)
-
-    actual = ttnn_rms_norm_sharded(
-        device,
-        tt_input_tensor,
-        block_ht=h // 32,
-        block_wt=shard_w // 32,
-        subblock_w=1,
-    )
-    actual = actual[..., :w]
-
-    spec = f"sharded rms multi-shard shape_hw=({h},{w}) shard_w={shard_w} dist={distribution} dtype={dtype}"
-    _assert_sharded_norm_ulp(
-        golden,
-        actual,
-        dtype,
-        "ttnn.rms_norm ULP (sharded multi-shard)",
-        spec,
-        f"[sharded rms multi-shard dtype={dtype} w={w} dist={distribution}]",
-    )
+    _run_sharded_norm_ulp(device, "rmsnorm", w, num_cores_w=2, distribution=distribution, dtype=dtype)
 
 
 @pytest.mark.parametrize("w", [40, 72, 200])
@@ -627,42 +534,6 @@ def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dty
     padding, so a fused residual adds no new padding risk there.
     Both a and b have their tile padding poisoned so any read of the padded columns is observable.
     """
-    torch.manual_seed(0)
-    h = 32
-    shard_w = math.ceil(w / num_cores_w / 32) * 32
-    padded_w = shard_w * num_cores_w
-    eps = 1e-12
-
-    torch_a = _make_ln_input(h, w, dtype, distribution)
-    torch_b = _make_ln_input(h, w, dtype, distribution)
-    torch_sum = torch_a + torch_b
-    if norm == "layernorm":
-        golden = torch.nn.functional.layer_norm(torch_sum, normalized_shape=[w])
-    else:
-        ms = torch_sum.to(torch.float32).pow(2).mean(dim=-1, keepdim=True)
-        golden = (torch_sum.to(torch.float32) * torch.rsqrt(ms + eps)).to(dtype)
-
-    sharded_mem_config = _make_sharded_norm_mem_config(num_cores_w=num_cores_w, h=h, shard_w=shard_w)
-
-    tt_a = _to_poisoned_sharded(device, torch_a, sharded_mem_config)
-    tt_b = _to_poisoned_sharded(device, torch_b, sharded_mem_config)
-
-    if norm == "layernorm":
-        actual = ttnn_layer_norm_sharded(
-            device, tt_a, use_welford=False, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=1, residual=tt_b
-        )
-    else:
-        actual = ttnn_rms_norm_sharded(
-            device, tt_a, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=1, residual=tt_b
-        )
-    actual = actual[..., :w]
-
-    spec = f"sharded {norm} residual shape_hw=({h},{w}) padded_w={padded_w} dist={distribution} dtype={dtype}"
-    _assert_sharded_norm_ulp(
-        golden,
-        actual,
-        dtype,
-        f"ttnn {norm} ULP (sharded residual)",
-        spec,
-        f"[sharded {norm} residual dtype={dtype} w={w} dist={distribution}]",
+    _run_sharded_norm_ulp(
+        device, norm, w, num_cores_w=num_cores_w, distribution=distribution, dtype=dtype, residual=True
     )

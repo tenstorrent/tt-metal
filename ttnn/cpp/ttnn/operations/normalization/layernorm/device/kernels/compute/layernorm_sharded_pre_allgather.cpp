@@ -12,6 +12,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#ifdef DO_COL_MASK
+#include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
+#endif
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -234,20 +237,7 @@ void kernel_main() {
     // each block's own validity (full, partial, or all-padding tiles). It was waited on near the
     // top of the kernel and is read by tile index here (never popped).
     reconfig_data_format(cb_x2_id, cb_col_mask_packed_id);
-    mul_tiles_init(cb_x2_id, cb_col_mask_packed_id);
-    for (uint32_t t = 0; t < num_tiles_per_block; t++) {
-        const uint32_t wt = t % block_w;
-        cb_x2.wait_front(1);
-        tile_regs_acquire();
-        mul_tiles(cb_x2_id, cb_col_mask_packed_id, 0, wt, 0);
-        tile_regs_commit();
-        cb_x2.pop_front(1);
-        cb_x2.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, cb_x2_id);
-        cb_x2.push_back(1);
-        tile_regs_release();
-    }
+    norm::kernel_util::compute::mask_block_in_place(cb_x2, cb_col_mask_packed_id, num_tiles_per_block, block_w);
 #endif
 
     // E(x^2)

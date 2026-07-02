@@ -13,6 +13,9 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#ifdef DO_COL_MASK
+#include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
+#endif
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -312,20 +315,7 @@ void kernel_main() {
     // SrcA already holds the (x - E[x]) tiles' format; only SrcB changes for this multiply, to read the
     // mask in its own data format (the mask format need not match the compute tiles).
     reconfig_data_format_srcb(cb_col_mask_packed_id);
-    mul_tiles_init(cb_xmm_id, cb_col_mask_packed_id);
-    for (uint32_t t = 0; t < num_tiles_per_block; t++) {
-        const uint32_t wt = t % block_w;
-        cb_xmm.wait_front(1);
-        tile_regs_acquire();
-        mul_tiles(cb_xmm_id, cb_col_mask_packed_id, 0, wt, 0);
-        tile_regs_commit();
-        cb_xmm.pop_front(1);
-        cb_xmm.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, cb_xmm_id);
-        cb_xmm.push_back(1);
-        tile_regs_release();
-    }
+    norm::kernel_util::compute::mask_block_in_place(cb_xmm, cb_col_mask_packed_id, num_tiles_per_block, block_w);
     cb_xmm.wait_front(num_tiles_per_block);
     // The masking above reads the column mask on SrcB, leaving SrcB configured for the mask's data format,
     // which need not match the (x - E[x]) tiles. Restore SrcB to their format for the squaring below.
@@ -364,20 +354,7 @@ void kernel_main() {
     // or all-padding tiles). It was waited on once near the top of the kernel and is read by tile index
     // here (never popped).
     reconfig_data_format(cb_xmm2_id, cb_col_mask_packed_id);
-    mul_tiles_init(cb_xmm2_id, cb_col_mask_packed_id);
-    for (uint32_t t = 0; t < num_tiles_per_block; t++) {
-        const uint32_t wt = t % block_w;
-        cb_xmm2.wait_front(1);
-        tile_regs_acquire();
-        mul_tiles(cb_xmm2_id, cb_col_mask_packed_id, 0, wt, 0);
-        tile_regs_commit();
-        cb_xmm2.pop_front(1);
-        cb_xmm2.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, cb_xmm2_id);
-        cb_xmm2.push_back(1);
-        tile_regs_release();
-    }
+    norm::kernel_util::compute::mask_block_in_place(cb_xmm2, cb_col_mask_packed_id, num_tiles_per_block, block_w);
     cb_xmm2.wait_front(num_tiles_per_block);
 #endif
 

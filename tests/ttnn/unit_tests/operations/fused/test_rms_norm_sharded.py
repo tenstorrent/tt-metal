@@ -14,6 +14,8 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     ttnn_rms_norm_sharded,
     rms_norm_golden,
     run_sharded_norm_logical_width_multicore,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_watcher_enabled
@@ -344,24 +346,13 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
     )
 
 
-# Block sharding mandates that every core must get the same-sized tile-aligned shard:
-# shard_w = ceil(w / cores / 32) * 32, so the padded width is cores * shard_w.
-# This means the final core's shard may have padding.
-# Two categories are covered:
-#   - tile-aligned widths whose tiles do not divide evenly across the cores (96 over 2, 224 over 3):
-#     every tile on the final core is either fully valid or fully padding, never partial. E.g. 96 over
-#     2 gives the final core one fully-valid tile and one fully-padding tile.
-#   - non-tile-aligned widths (72 over 2, 200 over 3): the logical columns run out mid-tile, so the
-#     final core holds a partially-valid tile followed by a fully-padding tile. E.g. 72 over 2 gives
-#     the final core one partially-valid tile (8 of its 32 columns valid) and one fully-padding tile.
-# In both, the op must normalize over the logical width, not the padded per-core width.
+# Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
+# tile-aligned-uneven and non-tile-aligned widths).
 @pytest.mark.parametrize(
     "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
 )
 @pytest.mark.parametrize(
-    ("w", "num_cores_w"),
-    [(96, 2), (224, 3), (72, 2), (200, 3)],
-    ids=["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"],
+    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
 )
 def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
     run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)
