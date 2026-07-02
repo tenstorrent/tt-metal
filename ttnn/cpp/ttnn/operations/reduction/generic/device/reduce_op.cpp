@@ -201,10 +201,14 @@ Tensor reduce(
     if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
-        // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
+        // Applies when the caller requests an explicit BF16 final pack (output_dtype):
+        // - FP32 input after an earlier NC-stage reduction (existing path), or
+        // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
-        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
-                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        const bool keep_w_fp32 =
+            (output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+             tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
+            (tilized_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en == true);
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
         const Tensor output_tensor = ttnn::prim::reduce(
