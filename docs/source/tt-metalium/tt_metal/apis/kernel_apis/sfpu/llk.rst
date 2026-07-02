@@ -230,7 +230,7 @@ Loading and Storing
 Values may be transfered to and from ``dst_reg`` (and on Quasar, one
 of the SrcS objects):
 
-.. code_block:: c++
+.. code-block:: c++
 
     vFloat a = dst_reg[0];
     vUInt b = dst_reg[1];
@@ -269,7 +269,7 @@ representations are permitted for all types.
 Quasar's SrcS reg accessors may also use a `done` modifier, to set the
 ''done'' bit in the load or store:
 
-.. code_block:: c++
+.. code-block:: c++
 
     ComputeSrcS srcs;
     vFloat a = srcs[0];
@@ -292,7 +292,7 @@ supported implicitly (or may be specified explicitly):
 Potentially value & bit preserving conversions may be specified using
 a functions-style cast.  For instance:
 
-.. code_block:: c++
+.. code-block:: c++
 
     vUInt a = dst_reg[0];
     auto b = vInt (a);
@@ -304,7 +304,7 @@ c++'s scalar ``int`` and ``unsigned`` types.
 Other bit-preserving conversions may be explicitly specified with the `as``
 function:
 
-.. code_block:: c++
+.. code-block:: c++
 
     vFloat a = dst_reg[0];
     auto b = as<vUInt> (a);
@@ -312,7 +312,7 @@ function:
 Other value-preserving (or approximating) conversions use the
 ``convert`` function:
 
-.. code_block:: c++
+.. code-block:: c++
 
     vFloat a = dst_reg[0];
     auto b = convert<vFloat16b> (a, RoundMode::Nearest);
@@ -460,7 +460,7 @@ Performs a left shift (when ''amt'' is positive) or right shift (when
 shifts and a compilation error will occur unless one explicitly
 specifies ``Logical``.
 
-.. code_block:: c++
+.. code-block:: c++
 
     vBool is_nan (vFloat v);
     vBool is_finite (vFloat v);
@@ -475,7 +475,7 @@ Compute the named feature of `v`. ``is_nbormal`` is true when ``v`` is
 a finite non-zero, non-subnormal number. ``is_finite`` is true when
 ``v`` is neither a nan nor an infinity.
 
-.. code_block:: c++
+.. code-block:: c++
 
    vMag fractional_mul ({vFloat,vUInt,vSMag} a, {vFloat,vUInt,vSMag} b, FractionalHalf = FractionalHalf::Low);
 
@@ -483,7 +483,7 @@ compute 23 bits of product of the low (fractional) 23-bits of ``a``
 and ``b``.  ``FractionalHalf`` may be either ``Low`` or ``High``.  Not
 available on Wormhole.
 
-.. code_block:: c++
+.. code-block:: c++
 
     void swap(vType &a, vType &b);
 
@@ -491,7 +491,7 @@ Swaps the values of ``a`` and ``b``.  Note that this uses the
 ``sfpswap`` instruction, rather than simply exchanging registers
 (unlike ``std::swap``).
 
-.. code_block:: c++
+.. code-block:: c++
 
     {vFloat,vSMag} min({vFloat,vSmag} a, {vFloat,vSmag} b);
     vFloat min(vFloat a, float b);
@@ -504,7 +504,7 @@ Swaps the values of ``a`` and ``b``.  Note that this uses the
 Return the minimum, maximum or clamped value.  ``symmetric_clamp``
 clamps to the range `[-bound,+bound]`.
 
-.. code_block:: c++
+.. code-block:: c++
 
     std::pair<{vFloat,vSmag},{vFloat,vSmag}> min_max ({vFloat,vSmag} a, {vFloat,vSmag} b, unsigned mask = 0);
 
@@ -518,24 +518,24 @@ the max/min pair will be returned. Non-permitted ``mask`` values will
 result in a compilation error. It may be convenient to use a
 structured binding to hold the result:
 
-.. code_block:: c++
+.. code-block:: c++
 
     auto [min, max] = min_max (a, b);
 
-.. code_block:: c++
+.. code-block:: c++
 
     vInt rand ();
 
 Return a random integer. Due to hardware limitations, the random
 distribution is not flat. Not available on Wormhole.
 
-.. code_block:: c++
+.. code-block:: c++
 
     vFloat rectified_linear_unit (vFloat src);
 
 Compute ReLU, which is ``max (src, 0)``.
 
-.. code_block:: c++
+.. code-block:: c++
 
     vFloat approx_recip (vFloat src, RecipMode = RecipMode::All);
     vFloat approx_exp (vFloat src);
@@ -626,7 +626,7 @@ For example:
 You may mark an lreg as used in code that the compiler cannot examine
 with the ``used`` function:
 
-.. code_block:: c++
+.. code-block:: c++
 
     l_reg[LRegs::LReg0].used();
     // your code here
