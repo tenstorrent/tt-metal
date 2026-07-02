@@ -482,3 +482,75 @@ def test_ttnn_dispatch(
         is_ci_env,
         is_ci_v2_env,
     )
+
+
+# Per-page sparse-multicast dispatch guard. The host enables SPARSE_MCAST_DISPATCH only for
+# 1D Ring + num_experts_per_tok==4 on the row-major writer, where a token's co-directional experts
+# are collapsed into one per-page sparse-multicast payload write. This pins exactly that config so the
+# path has an explicit, self-documenting correctness check (the shared PCC verify catches any missed or
+# mis-routed page). The full cross-product in test_ttnn_dispatch also covers it; this is the focused guard.
+_SPARSE_MCAST_RING_CONFIGS = [p for p in ALL_MESH_CONFIGS if p.id and "ring" in p.id]
+
+
+def _sparse_mcast_topk4_shapes():
+    # Correctness: the -pcc shapes are already topk==4 (seq=32, PCC on).
+    shapes = [p for p in dispatch_shape_params() if p.id and p.id.endswith("-pcc")]
+    # Perf: reuse the long-ISL -perf_no_pcc shapes (seq=640) but force topk==4, since the
+    # sparse-multicast path only engages at topk==4. These are no-PCC, for device-time measurement.
+    for p in dispatch_shape_params():
+        if p.id and p.id.endswith("-perf_no_pcc"):
+            v = list(p.values)
+            v[3] = 4  # num_experts_per_tok -> 4
+            shapes.append(pytest.param(*v, marks=p.marks, id=p.id.replace("-perf_no_pcc", "-perf_topk4")))
+    return shapes
+
+
+_SPARSE_MCAST_TOPK4_SHAPES = _sparse_mcast_topk4_shapes()
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    _SPARSE_MCAST_TOPK4_SHAPES,
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    _SPARSE_MCAST_RING_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+def test_ttnn_dispatch_sparse_mcast(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    use_fp8_output,
+    run_pcc_check,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    # Guard the assumptions the sparse-multicast path is built on: 1D Ring, topk==4, row-major.
+    assert num_experts_per_tok == 4, "sparse-multicast dispatch path assumes topk==4"
+    assert topology == ttnn.Topology.Ring
+    run_dispatch(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        ttnn.ROW_MAJOR_LAYOUT,
+        use_fp8_output,
+        False,
+        run_pcc_check,
+        is_ci_env,
+        is_ci_v2_env,
+    )

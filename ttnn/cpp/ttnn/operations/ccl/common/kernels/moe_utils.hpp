@@ -1076,7 +1076,7 @@ inline void fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction(
 
     auto& fabric_connection = fabric_connections[fabric_direction];
     while (size_bytes > 0) {
-        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
+        uint32_t curr_packet_size = std::min(static_cast<uint32_t>(FabricMaxPacketSzBytes), (uint32_t)size_bytes);
         tt::tt_fabric::linear::to_noc_sparse_mcast_write(
             align(curr_packet_size, alignment), packet_header, dest_pages, num_dests, addrgen, offset);
         perform_payload_send<true, true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
