@@ -198,7 +198,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // 4-worker mux is not yet validated. Zeros-only: the replicate-mode edge-outward mux path is unfixed,
     // so replicate stays on the direct single-worker path. TT_NP_W_WORKERS overrides (matches all_gather's
     // optional num_workers_per_direction).
-    constexpr uint32_t MAX_VALIDATED_W_WORKERS = 2;
     uint32_t num_w_workers = 1;
     {
         const uint32_t w_h_total_est = input_halo_dim_size + 2 * op.np_padding_h;
