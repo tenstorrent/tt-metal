@@ -95,3 +95,74 @@ def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_promp
     ttnn.synchronize_device(mesh_device)
 
     assert_with_pcc(img_base, img_rollback, pcc=1.0)
+
+
+@pytest.mark.parametrize(
+    "prompt, negative_prompt, lora_prompt",
+    [
+        (
+            "An astronaut riding a green horse",
+            "disturbing",
+            "A PE_BalloonStyle astronaut riding a green horse",
+        )
+    ],
+)
+@torch.no_grad()
+def test_text_encoder_lora_rollback(mesh_device, is_ci_env, te_lora_path, prompt, negative_prompt, lora_prompt):
+    """Rollback for a text-encoder-impacting LoRA: after unload, the base image must
+    return bit-for-bit (pcc=1.0), which requires the CLIP encoders to be restored on
+    device (`_unload_text_encoder_lora`), not just the UNet. The default rollback test
+    uses a UNet-only adapter and does not cover this.
+    """
+    prepare_device(mesh_device, use_cfg_parallel=False)
+    batch_size = determinate_min_batch_size(mesh_device, use_cfg_parallel=False)
+
+    pipeline = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_env,
+    )
+    assert isinstance(pipeline.text_encoder, CLIPTextModel)
+    assert isinstance(pipeline.text_encoder_2, CLIPTextModelWithProjection)
+
+    tt_sdxl = TtSDXLPipeline(
+        ttnn_device=mesh_device,
+        torch_pipeline=pipeline,
+        pipeline_config=TtSDXLPipelineConfig(
+            capture_trace=False,
+            vae_on_device=True,
+            encoders_on_device=True,  # required for the TE LoRA path
+            num_inference_steps=50,
+            guidance_scale=5.0,
+            is_galaxy=is_galaxy(),
+            use_cfg_parallel=False,
+            crop_coords_top_left=(0, 0),
+            guidance_rescale=0.0,
+        ),
+    )
+
+    tt_sdxl.compile_text_encoding()
+    tt_sdxl.generate_input_tensors(
+        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+        torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
+        timesteps=None,
+        sigmas=None,
+    )
+    tt_sdxl.compile_image_processing()
+
+    img_base = _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size)
+
+    tt_sdxl.load_lora_weights(te_lora_path)
+    assert tt_sdxl._lora_weights_manager.text_encoder_components(), "chosen LoRA does not impact the text encoders"
+    tt_sdxl.fuse_lora()
+    assert tt_sdxl.get_lora_status()["text_encoder"] is True
+    _run_forward_pass(tt_sdxl, pipeline, lora_prompt, negative_prompt, batch_size)
+
+    tt_sdxl.unload_lora_weights()
+    assert tt_sdxl.get_lora_status()["text_encoder"] is False
+    img_rollback = _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size)
+
+    ttnn.synchronize_device(mesh_device)
+
+    assert_with_pcc(img_base, img_rollback, pcc=1.0)
