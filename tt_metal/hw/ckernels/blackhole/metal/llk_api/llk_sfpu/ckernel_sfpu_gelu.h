@@ -374,13 +374,7 @@ inline void calculate_gelu_tanh() {
         sfpi::vFloat inner = x + kx3;
 
         sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
-
-        // Handle +-0 by using the sign of x to prevent 1 ULP difference.
-        // NOTE: 0.0f is a vCReg<vFloat>, not a vFloat. copysgn's overloads are
-        // constrained templates whose argument deduction does not apply the implicit
-        // vCReg->vFloat conversion, so materialize a real vFloat first.
-        sfpi::vFloat zero = 0.0f;
-        sfpi::vFloat result = sfpi::copysgn(zero, x);
+        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
             // Saturated positive tail: gelu_tanh(x) = x.
