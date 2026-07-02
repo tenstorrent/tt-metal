@@ -133,9 +133,51 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {
-    uintptr_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
-    volatile uint32_t* ptr = (volatile uint32_t*)offset;
-    return *ptr;
+    // NOC_TARG_ADDR_* -> cmd-buf SRC_{ADDR,COORD} (data source: remote for reads, local for writes)
+    if (addr == NOC_TARG_ADDR_LO) {
+        return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+            buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8);
+    } else if (addr == NOC_TARG_ADDR_MID) {
+        return (uint32_t)(__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+                              buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8) >>
+                          32);
+    } else if (addr == NOC_TARG_ADDR_HI) {  // NOC_TARG_ADDR_COORDINATE aliases this
+        return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+            buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8);
+    }
+    // NOC_RET_ADDR_* -> cmd-buf DEST_{ADDR,COORD} (data dest: local for reads, remote for writes)
+    else if (addr == NOC_RET_ADDR_LO) {
+        return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+            buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8);
+    } else if (addr == NOC_RET_ADDR_MID) {
+        return (uint32_t)(__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+                              buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8) >>
+                          32);
+    } else if (addr == NOC_RET_ADDR_HI) {  // NOC_RET_ADDR_COORDINATE aliases this
+        return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+            buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8);
+    }
+    // NOC_AT_LEN_BE aliases NOC_AT_LEN on Quasar
+    else if (addr == NOC_AT_LEN) {
+        return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+            buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8);
+    }
+    // Inline write / atomic data value
+    else if (addr == NOC_AT_DATA) {
+        return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
+            buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8);
+    }
+    // NOC_CMD_CTRL is the transaction trigger on BH/WH (written as 0x1 to fire);
+    // on Quasar the trigger is cmdbuf_issue_trans() with no stored state.
+    else if (addr == NOC_CMD_CTRL) {
+        return 0;
+    }
+    // NOC_NODE_ID and other NOC config registers are true MMIO globals - not cmd buf registers (buf-independent).
+    else {
+        ASSERT(buf == 0);  // cmd-buf regs route through RoCC above; this path is globals-only
+        uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
+        return *((volatile uint32_t*)offset);
+    }
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_STATUS_REG_ADDR(uint32_t noc, uint32_t reg_id) {
