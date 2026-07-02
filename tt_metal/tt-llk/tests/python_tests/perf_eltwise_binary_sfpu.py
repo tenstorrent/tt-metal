@@ -142,6 +142,9 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
+        # Integer add over Int32 dest: ADD + MATH_FORMAT==Int32 dispatches to the
+        # tt-llk _add_int_ kernel (ckernel_sfpu_add_int.h), touched on this branch.
+        MathOperation.SfpuElwadd,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[

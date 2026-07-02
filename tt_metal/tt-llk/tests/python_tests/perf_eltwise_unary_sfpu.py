@@ -188,22 +188,34 @@ def test_perf_eltwise_unary_sfpu(
 
 
 # =============================================================================
-# WH SFPU medium cleanup — MATH_ISOLATE probes for the kernels rewritten from
-# raw TT/TTI -> sfpi. These reuse the shared eltwise_unary_sfpu_perf.cpp dispatch
-# (call_unary_sfpu_operation) rather than a bespoke source: the scalar ops bake
-# their constant in sfpu_operations.h exactly like `threshold`/`relu_min`.
+# WH SFPU medium cleanup — MATH_ISOLATE probes for the medium-bucket kernels
+# touched on this branch. These reuse the shared eltwise_unary_sfpu_perf.cpp
+# dispatch (call_unary_sfpu_operation) rather than a bespoke source: the scalar
+# ops bake their constant in sfpu_operations.h exactly like `threshold`/`relu_min`.
 #   lrelu       -> tt-llk _calculate_lrelu_            (float)
 #   relu_min    -> tt-llk _relu_min_ (vFloat / vInt)   (float + int32 branches)
-#   add_int32   -> metal calculate_add_int32           (int32)
-#   sub_int32   -> metal calculate_sub_int32           (int32)
-# addcmul is intentionally excluded here: it is ternary (3 dest tiles + scalar) and
-# does not fit the unary dispatch signature, so it needs a dedicated source (like
-# swiglu/where) to be measured on-device.
+#   erfinv      -> metal  calculate_erfinv             (float, forced VectorMode::RC)
+#   heaviside   -> metal  calculate_heaviside          (float)
+#   softshrink  -> metal  calculate_softshrink         (float)
+#   softsign    -> metal  calculate_softsign           (float)
+#   log         -> tt-llk _calculate_log_              (float)
+#   add_int32   -> metal  calculate_add_int32          (int32)
+#   sub_int32   -> metal  calculate_sub_int32          (int32)
+# addcdiv/addcmul are intentionally excluded here: they are ternary (3 dest tiles
+# + scalar) and do not fit the unary dispatch signature, so they need a dedicated
+# source (like swiglu/where) to be measured on-device. conversions (helper),
+# div_int32 (int->float), dropout/rand (PRNG) and logsigmoid (fused) have no
+# standalone MathOperation to drive through this dispatch.
 # =============================================================================
 
 _SFPU_CLEANUP_FLOAT_OPS = [
     MathOperation.Lrelu,
     MathOperation.ReluMin,
+    MathOperation.Erfinv,
+    MathOperation.Heaviside,
+    MathOperation.Softshrink,
+    MathOperation.Softsign,
+    MathOperation.Log,
 ]
 
 _SFPU_CLEANUP_INT_OPS = [
