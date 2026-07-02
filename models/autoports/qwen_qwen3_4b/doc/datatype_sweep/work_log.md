@@ -60,4 +60,4 @@ Selected `baseline_bfp4_lofi_bf16kv_bf16ccl` because it was the fastest passing 
 - `python -m py_compile models/autoports/qwen_qwen3_4b/tt/model.py models/autoports/qwen_qwen3_4b/tt/generator.py models/autoports/qwen_qwen3_4b/tt/multichip_decoder.py`: passed.
 - `pytest -q models/autoports/qwen_qwen3_4b/tests/test_full_model_contract.py --tb=short`: 11 passed, 2 nanobind ref-leak warnings at process exit.
 - Stage review: clean-pass from subagent `019f2533-e829-7ff2-a7be-e3d5f95fce84`; no required work. Residual risks noted by review: nanobind ref-leak shutdown warnings, firmware newer-than-tested notices, and the one-reference AIME24 sweep scope already documented in `README.md`.
-- Local commit SHA: pending at review time; recorded in final handoff after the local commit is created.
+- Local datatype-sweep artifact/code commit SHA: `5e65428d88c` (`Add Qwen3 4B datatype sweep artifacts`). The follow-up SHA-log commit is reported in the final handoff.
