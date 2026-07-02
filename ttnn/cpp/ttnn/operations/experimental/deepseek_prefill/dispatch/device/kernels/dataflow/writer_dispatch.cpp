@@ -114,7 +114,16 @@ void kernel_main() {
     constexpr uint32_t writer_extra_args_base = dispatch_table_args.next_compile_time_args_offset();
     constexpr uint32_t writer_cb_size = get_compile_time_arg_val(writer_extra_args_base + 0);
     constexpr uint32_t num_untilizers = get_compile_time_arg_val(writer_extra_args_base + 1);
+#ifdef SPARSE_MCAST_DISPATCH
+    // Grouped record (must match dispatch_program_factory.cpp grouped_route_info_u32 and the layout
+    // written by writer_untilize_dispatch): [dir, num_dests, token_idx, page[4], dist[4], expert[4],
+    // k[4], weight[4]] = 23 u32, aligned up to the L1 alignment for the ring slot stride.
+    constexpr uint32_t grouped_route_info_u32 = 23;
+    constexpr uint32_t route_info_slot_stride =
+        ((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment;
+#else
     constexpr uint32_t route_info_slot_stride = l1_alignment;
+#endif
 #endif
 
     // ===== Runtime Args =====
@@ -333,6 +342,73 @@ void kernel_main() {
                     num_done++;
                     DPRINT_DISPATCH("[SND] ring={} SENTINEL (consumed={})\n", s, consumed[s]);
                 } else {
+#ifdef SPARSE_MCAST_DISPATCH
+                    // Grouped ring slot (1D Ring, topk==4): route_info carries a direction-group of up
+                    // to 4 destinations plus the fields the sender needs to rebuild each destination's
+                    // metadata locally (the producer leaves the meta ring slot unwritten for groups).
+                    // Layout (written by writer_untilize_dispatch): [0]=direction, [1]=num_dests,
+                    // [2]=token_idx, [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4],
+                    // [19..22]=weight[4].
+                    uint32_t direction = route_info[0];
+                    uint32_t num_dests = route_info[1];
+                    uint32_t token_idx = route_info[2];
+                    uint32_t dest_pages[4];
+                    uint32_t dest_dist[4];
+                    uint16_t hop_mask = 0;
+                    for (uint32_t i = 0; i < num_dests; ++i) {
+                        dest_pages[i] = route_info[3 + i];
+                        dest_dist[i] = route_info[7 + i];
+                        hop_mask |= static_cast<uint16_t>(1u << (dest_dist[i] - 1));  // bit (hops-1) per writing chip
+                    }
+                    uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
+                    DPRINT_DISPATCH(
+                        "[SND] SPARSE_MCAST_FIRED ring={} dir={} num_dests={} hop_mask={}\n",
+                        s,
+                        direction,
+                        num_dests,
+                        (uint32_t)hop_mask);
+
+                    // One payload write fanned out to all co-directional destinations, each at its own page.
+                    fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction<fabric_max_packet_size>(
+                        output_addr_gen,
+                        fabric_connections,
+                        unicast_packet_header,
+                        hop_mask,
+                        direction,
+                        dest_pages,
+                        static_cast<uint8_t>(num_dests),
+                        payload_addr,
+                        (int)aligned_output_page_size,
+                        l1_alignment);
+
+                    // Metadata is per-destination: build each one in-place in the meta ring slot from
+                    // the grouped route_info, then unicast it along the same direction/hop. One at a
+                    // time (single scratch slot) with a flush between so the next build can't clobber an
+                    // in-flight source.
+                    auto& metadata_sender = fabric_connections[direction];
+                    uint32_t meta_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
+                    volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
+                    for (uint32_t i = 0; i < num_dests; ++i) {
+                        meta[0] = (int32_t)linearized_mesh_coord;
+                        meta[1] = (int32_t)token_idx;
+                        meta[2] = (int32_t)route_info[15 + i];  // top-k slot
+                        meta[3] = (int32_t)route_info[11 + i];  // routed expert
+                        meta[4] = (int32_t)route_info[19 + i];  // routing weight
+                        ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+                        pkt_route_info.distance_in_hops = static_cast<uint16_t>(dest_dist[i]);
+                        ccl_routing_utils::fabric_set_line_unicast_route(
+                            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+                        fabric_send_noc_unicast<fabric_max_packet_size>(
+                            metadata_addr_gen,
+                            metadata_sender,
+                            unicast_packet_header,
+                            meta_addr,
+                            dest_pages[i],
+                            (int)aligned_metadata_page_size,
+                            l1_alignment);
+                        noc_async_writes_flushed();  // meta source reused next iteration
+                    }
+#else
                     uint32_t route = route_info[0];
                     uint32_t distance = route_info[1];
                     uint32_t page_idx = route_info[2];
@@ -396,6 +472,7 @@ void kernel_main() {
                         l1_alignment);
                     noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 #endif
+#endif  // SPARSE_MCAST_DISPATCH
                     noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);
                     consumed[s]++;
                 }

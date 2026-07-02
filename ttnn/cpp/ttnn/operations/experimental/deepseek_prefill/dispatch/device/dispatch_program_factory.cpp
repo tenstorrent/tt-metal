@@ -331,12 +331,26 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*buffering_factor=*/(read_batch_size * operation_attributes.num_experts_per_tok) + 1,
         /*cb_id=*/tt::CBIndex::c_13,
         "untilize_metadata_scratch");
-    // c_15: route_info scratch (16B = l1_alignment). Untilize writer builds the 4-u32
-    // route_info entry [route, distance, page_idx, dst_chip] here, then NOC-writes the whole
-    // block as a single noc_async_write to the sender's c_4 slot (replaces 4× inline_dw).
-    // dst_chip is the linearized dest device index used by the sender's 2D fabric route.
+    // Per-page sparse-multicast grouping (1D Ring + topk==4): widen the sender ring's route_info slot
+    // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], expert[4], k[4],
+    // weight[4]] = 23 u32 — so a token's co-directional destinations are one sparse-multicast payload
+    // write. The payload/metadata rings are unchanged; the sender builds each destination's metadata
+    // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other
+    // config keeps the per-expert path.
+    const bool enable_sparse_mcast = (topology == tt::tt_fabric::Topology::Ring) &&
+                                     //(operation_attributes.num_experts_per_tok == 4) &&
+                                     (operation_attributes.num_links > 0);
+    constexpr uint32_t grouped_route_info_u32 = 23;
+    const uint32_t route_info_slot_stride_bytes =
+        enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
+                            : l1_alignment;
+
+    // c_15: route_info scratch. Untilize writer builds the route_info entry here, then NOC-writes the
+    // whole block as a single noc_async_write to the sender's c_4 slot (replaces 4× inline_dw). Per-
+    // expert path: 4 u32 [route, distance, page_idx, dst_chip]. Sparse-mcast path: the widened grouped
+    // record. dst_chip is the linearized dest device index used by the sender's 2D fabric route.
     {
-        uint32_t route_info_scratch_size = l1_alignment;
+        uint32_t route_info_scratch_size = route_info_slot_stride_bytes;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = route_info_scratch_size,
             .core_ranges = untilize_core_grid,
@@ -378,7 +392,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // and CB creation asserts — that is the intended "breaks if too many" behaviour.
     std::vector<std::array<uint32_t, 3>> writer_cb_ids(num_untilizers);  // {route, payload, metadata}
     {
-        uint32_t route_info_page_size = l1_alignment;
+        uint32_t route_info_page_size = route_info_slot_stride_bytes;
         uint32_t next_free_cb = static_cast<uint32_t>(tt::CBIndex::c_19);
         for (uint32_t s = 0; s < num_untilizers; s++) {
             std::array<uint32_t, 3> ids;
@@ -561,6 +575,11 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
+    // Toggles the grouped sparse-multicast path in both writer_untilize (ring producer) and
+    // writer_dispatch (ring consumer / sender). Gated on the widened route_info slot above.
+    if (enable_sparse_mcast) {
+        fabric_defines["SPARSE_MCAST_DISPATCH"] = "1";
+    }
 
     // ==================== Sender writer kernel ====================
     // Tile-layout: no sender reader RISC.
@@ -687,7 +706,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             detail::get_aligned_page_size(metadata_tensor),              // 7: aligned_metadata_page_size
             static_cast<uint32_t>(tt::CBIndex::c_14),                    // 8: cb_plan_id
             linearized_mesh_coord,                                       // 9
-            l1_alignment,                                                // 10: route_info slot stride
+            route_info_slot_stride_bytes,                                // 10: route_info slot stride
             writer_cb_size,                                              // 11: sender writer CB size
             static_cast<uint32_t>(tt::CBIndex::c_15),                    // 12: cb_route_info_scratch_id
             read_batch_size * operation_attributes.num_experts_per_tok,  // 13: meta_scratch_slots
