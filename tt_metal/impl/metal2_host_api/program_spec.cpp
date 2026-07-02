@@ -814,20 +814,28 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate DM configs
+    // Validate DM configs: the config's generation must match the target platform. There is no
+    // implicit cross-generation substitution — supplying the wrong alternative is a hard error, not
+    // silently defaulted. On Gen1 (WH/BH) the kernel must carry a DataMovementGen1Config declaring its
+    // RISC/NOC placement (op-specific; no safe reader-vs-writer default), built with
+    // create_from_role(READER/WRITER) or constructed directly. On Gen2 (Quasar) the kernel must carry a
+    // DataMovementGen2Config (a default-constructed one is fine; core selection is automated and the
+    // config only carries DFB implicit-sync opt-outs).
     for (const auto& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            // On Gen1 (WH/BH), the kernel must declare its placement via a Gen1 config — either built
-            // with create_from_role(READER/WRITER) or constructed directly. There is no
-            // safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional: absence is
-            // treated as "use defaults" (implicit sync left on for all bound DFBs).
             if (is_gen1_arch()) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but has no Gen1 config. Supply a gen1_config "
-                    "(e.g. create_from_role(READER/WRITER)).",
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
+                    "DataMovementGen2Config. Supply a Gen1 config (e.g. create_from_role(READER/WRITER)).",
+                    kernel.unique_id);
+            } else if (is_gen2_arch()) {
+                TT_FATAL(
+                    std::holds_alternative<DataMovementGen2Config>(data_movement_config),
+                    "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
+                    "DataMovementGen1Config. Supply a Gen2 config (DataMovementGen2Config{{}}).",
                     kernel.unique_id);
             }
         }

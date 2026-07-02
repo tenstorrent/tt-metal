@@ -22,7 +22,10 @@ namespace tt::tt_metal::experimental {
 // The DM hardware differs between Gen1 architectures (Wormhole, Blackhole) and
 // Gen2 architectures (Quasar and derivatives). A DM kernel targets exactly one
 // generation, so the config is a variant holding either a DataMovementGen1Config
-// or a DataMovementGen2Config — the runtime uses the one matching the target arch.
+// or a DataMovementGen2Config. The alternative MUST match the target architecture:
+// there is no implicit cross-generation substitution, and a mismatch is a hard
+// error (validated at program build), not silently defaulted. Architecture-agnostic
+// host code selects the matching alternative from the device arch at build time.
 //
 // Gen1 DM config (i.e., which RISC and NOC a kernel uses) is performance-critical,
 // but the common case is handled for you: build the DataMovementGen1Config with

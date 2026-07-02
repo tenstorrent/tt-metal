@@ -5,6 +5,7 @@
 #include "interleaved_to_sharded_program_factory.hpp"
 
 #include <cmath>
+#include <functional>
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -195,7 +196,12 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     KernelSpec reader{
         .unique_id = I2S_READER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_INPUT, .accessor_name = "src"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
     };
     if (is_tile) {
         reader.source =
@@ -244,7 +250,12 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // Writer kernel.
     KernelSpec writer{
         .unique_id = I2S_WRITER,
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::WRITER);
+        }),
     };
     if (dst_is_dram) {
         writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};

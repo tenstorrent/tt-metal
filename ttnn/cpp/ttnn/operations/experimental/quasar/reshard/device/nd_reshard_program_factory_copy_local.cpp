@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/quasar/reshard/device/nd_reshard_program_factory_copy_local.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <numeric>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -130,10 +131,15 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
         // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-        }},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+            };
+        }),
     };
 
     KernelSpec ncrisc{
@@ -144,10 +150,15 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
         // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-        }},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+            };
+        }),
     };
 
     // Common runtime args (broadcast to all nodes).

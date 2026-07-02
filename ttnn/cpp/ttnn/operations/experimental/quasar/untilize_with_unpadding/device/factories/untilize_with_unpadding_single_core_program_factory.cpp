@@ -138,7 +138,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (a.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
     };
 
     // ---- Writer kernel ----
@@ -167,7 +172,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (a.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::WRITER);
+        }),
     };
 
     // ---- Compute kernel ----

@@ -12,6 +12,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include <functional>
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -128,7 +130,12 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"N", "C", "HtWt", "batch_step", "channel_step", "num_pages", "start_id", "hw", "n"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
     };
 
     // Writer KernelSpec.
@@ -152,7 +159,12 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
                 {"write_size", stick_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (device->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::WRITER);
+        }),
     };
 
     spec.kernels.push_back(std::move(reader));

@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_rm_sharded.hpp"
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <vector>
@@ -273,7 +274,12 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         .compile_time_args =
             {{"stick_size_padded", static_cast<uint32_t>(stick_size_padded)},
              {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };
 

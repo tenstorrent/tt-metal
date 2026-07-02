@@ -8,6 +8,7 @@
 #include "ttnn/operations/math.hpp"
 
 #include <bit>
+#include <functional>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -169,7 +170,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
                 {"tile_width", 1u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::READER);
+        }),
     };
 
     // Writer DFB bindings (SRC_CB consumer; PAD_CB consumer when padding).
@@ -205,7 +211,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
-        .hw_config = DataMovementHardwareConfig{create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+                return DataMovementGen2Config{};
+            }
+            return create_from_role(DataMovementRoleHint::WRITER);
+        }),
     };
 
     spec.kernels.push_back(std::move(reader));

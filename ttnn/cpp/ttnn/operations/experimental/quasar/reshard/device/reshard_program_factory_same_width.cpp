@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -174,7 +175,12 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
-            .hw_config = DataMovementHardwareConfig{create_from_role(role)},
+            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return DataMovementGen2Config{};
+                }
+                return create_from_role(role);
+            }),
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kSWRemoteTensorParam}, .accessor_name = kSWRemoteTensorParam});
