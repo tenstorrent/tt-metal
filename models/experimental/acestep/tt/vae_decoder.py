@@ -45,7 +45,14 @@ def _row_major(x: ttnn.Tensor) -> ttnn.Tensor:
 
 @dataclass
 class OobleckVAEConfig:
-    """Oobleck decoder dims (diffusers AutoencoderOobleck config.json)."""
+    """Oobleck decoder dims (diffusers AutoencoderOobleck config.json).
+
+    Note on convention: OobleckDecoder subclasses the tt_dit `Module` base (to compose the reused
+    tt_dit audio primitives), so it takes `mesh_device`/`dtype` as __init__ kwargs — the tt_dit
+    Module convention — rather than folding them into this dataclass like the acestep DiT modules
+    (which subclass LightweightModule). This config carries only architecture dims; the device is a
+    build-time kwarg. Intentional divergence to stay idiomatic with the tt_dit layer library.
+    """
 
     decoder_input_channels: int = 64
     decoder_channels: int = 128

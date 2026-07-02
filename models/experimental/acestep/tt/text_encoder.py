@@ -76,6 +76,10 @@ class AceStepTextEncoder(LightweightModule):
         self.norm = RMSNorm1D.from_config(RMSNorm1DConfig(weight=config.norm_weight, eps=config.eps))
         self._mask_cache: dict[int, ttnn.Tensor] = {}
 
+    @classmethod
+    def from_config(cls, config: AceStepTextEncoderConfig):
+        return cls(config)
+
     def _causal_mask(self, seq_len: int) -> ttnn.Tensor:
         """Additive [1,1,seq,seq] causal mask (0 on/below diagonal, -inf above)."""
         if seq_len not in self._mask_cache:
