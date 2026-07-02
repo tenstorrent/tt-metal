@@ -244,14 +244,28 @@ class AceStepPipeline:
     # ---- decode ----
     def decode(self, latents_tt):
         """VAE-decode clean latents [1,1,T,64] -> 48kHz stereo waveform torch [1,2,T*1920]."""
-        seq_len = latents_tt.shape[2]
-        lat = ttnn.to_torch(latents_tt).float().reshape(1, seq_len, self.args.audio_acoustic_hidden_dim)
-        # VAE decoder wants [B,T,C] ROW_MAJOR fp32.
-        lat_tt = ttnn.from_torch(lat, device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        wav_tt = self.vae.forward(lat_tt)
+        wav_tt = self.decode_tt(latents_tt)
         ac = self.vae_config.audio_channels
+        # Output boundary: pull the final waveform to host for the caller (outside any trace region).
         wav = ttnn.to_torch(wav_tt).float()[..., :ac].reshape(1, -1, ac).transpose(1, 2)  # [1,2,samples]
         return wav
+
+    def decode_tt(self, latents_tt):
+        """On-device DiT->VAE seam + VAE decode: latents [1,1,T,64] -> waveform ttnn tensor.
+
+        The DiT->VAE seam is pure layout/shape/dtype conversion, done ON-DEVICE (no host round-trip)
+        so this is trace-safe: TILE->ROW_MAJOR, bf16->fp32, [1,1,T,C]->[1,T,C]. The VAE decoder wants
+        [B,T,C] ROW_MAJOR fp32.
+        """
+        seq_len = latents_tt.shape[2]
+        # Typecast to fp32 while still TILE (matches the old to_torch(bf16).float() precision), then
+        # untile + reshape on-device. No host round-trip -> trace-safe.
+        lat = latents_tt
+        if lat.dtype != ttnn.float32:
+            lat = ttnn.typecast(lat, ttnn.float32)
+        lat = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
+        lat = ttnn.reshape(lat, (1, seq_len, self.args.audio_acoustic_hidden_dim))
+        return self.vae.forward(lat)
 
 
 def create_tt_pipeline(
