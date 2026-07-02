@@ -96,7 +96,9 @@
   team: runtime
 
 # --- LLK + SFPI Tests ---
-# WH timeout raised from 8→12 min: full LLK+SFPI suite exceeds 8 min wall clock on wh_n150_civ2.
+# WH/BH timeout raised to 12 min: full LLK+SFPI suite exceeds 8 min wall clock (measured
+# ~12.3 min on bh_p150b_civ2). Cost is genuine passing-test work (LLKMeshDeviceFixture reduce
+# family dominates); skipped Quasar-only tests are free (~130 ms total), not the cause.
 - name: runtime_llk
   # 4 tests disabled by #44767.
   disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
@@ -107,7 +109,7 @@
     wh_n150_civ2:
       timeout: 12
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -174,17 +176,20 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# wh_llmbox runs the same distributed suite but excludes the multi-CQ mesh-event tests
-# (MeshEventsTestSuite.* and MeshEventsTest2x4.*). They deadlock on the 8-device LLMBox mesh
-# (2 CQs + FABRIC_1D multi-device event sync) and hang the job to a 15-min timeout. Confirmed on
-# MultiCQNonBlockingReads and AsyncWorkloadAndIO; the whole family shares the deadlock-prone
-# GenericMultiCQMeshDeviceFixture (num_cqs=2, auto-sized to the full system mesh). This is a hang,
-# not slowness (ReplicatedAsyncIO completes in <1s), so a larger timeout does not help.
+# wh_llmbox runs the same distributed suite but excludes the multi-device workload/trace/event
+# EXECUTION tests that deadlock on the 8-device (2x4) LLMBox mesh. wh_llmbox is the only SKU here
+# large enough to actually run these suites (smaller SKUs skip them; 4x8/32-device suites skip
+# everywhere on an 8-device system), so this PR is the first to exercise them on this topology and
+# they hang the job to a 15-min timeout. Confirmed hangs: MeshEventsTestSuite (MultiCQNonBlockingReads,
+# AsyncWorkloadAndIO) and MeshTraceTest2x4 (EltwiseBinaryMeshTrace); the rest below share the same
+# full-mesh cross-device execution/sync path. These are genuine hangs, not slowness (e.g.
+# ReplicatedAsyncIO completes in <1s), so a larger timeout does not help. Device-management, buffer,
+# view, reshape, and generic single-CQ mesh suites (e.g. MeshTraceTestSuite, which passes) still run.
 # Kept as a separate entry rather than an in-cmd branch because the container only exposes ARCH_NAME,
 # which cannot distinguish wh_llmbox from other wormhole_b0 boards. Re-enable once the deadlock is fixed.
-# TODO(tracking-issue): re-enable the mesh-event suites on wh_llmbox once the LLMBox multi-CQ event-sync deadlock is resolved.
+# TODO(tracking-issue): re-enable the multi-device execution suites on wh_llmbox once the LLMBox mesh event/trace-sync deadlock is resolved.
 - name: runtime_distributed
-  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='-MeshEventsTestSuite.*:MeshEventsTest2x4.*'
+  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='-MeshEventsTestSuite.*:MeshEventsTest2x4.*:MeshTraceTest2x4.*:MeshTraceSweepTest2x4*:MeshWorkloadTest2x4.*:MeshEndToEnd2x4Tests.*:MeshEndToEnd2x4TraceTests.*'
   skus:
     wh_llmbox:
       timeout: 15

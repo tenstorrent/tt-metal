@@ -223,7 +223,7 @@ runtime:
     wh_n150_civ2: 226
     wh_n300_civ2: 99
     wh_llmbox: 20
-    bh_p150b_civ2: 210
+    bh_p150b_civ2: 214
     bh_p300: 69
     bh_p150b_civ2_viommu: 5
     bh_p100a_civ2_viommu: 74
