@@ -9660,6 +9660,7 @@ def _cmd_up_core(args) -> int:
                 model_id=MODEL,
                 demo_dir=_dd,
                 agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
+                mesh=getattr(args, "mesh", None),
             )
 
         _phase2_only = bool(getattr(args, "phase2_only", False))
@@ -10822,6 +10823,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     pcompat.add_argument(
         "--tp-grid", type=int, nargs="+", default=None, help="TP values to check for divisibility (default: 1 2 4 8 32)"
     )
+    pcompat.add_argument(
+        "--mesh",
+        default=None,
+        help="mesh shape e.g. 2x2; when given, prints the selected TP x DP split for that chip count",
+    )
     pcompat.set_defaults(func=cmd_compat)
 
     pscaf = sub.add_parser(
@@ -11276,6 +11282,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         choices=["fsm", "cc"],
         help="fsm = current build→gates→fix loop (default); cc = drive the fix loop through the shared "
         "Claude-Code harness against the e2e deterministic gate (same G1–G4 gates, agent+gate driven)",
+    )
+    pe2e.add_argument(
+        "--mesh",
+        default=None,
+        help=(
+            "Chip mesh to place the pipeline on, e.g. 2x2 (=4 chips). When >1 chip, the tool runs "
+            "select_parallelism (per-TP kernel viability) and instructs the builder to open the mesh "
+            "at the chosen TP x DP split and map tensors accordingly. Omitted / 1 chip = single-device "
+            "(current behavior, no parallelism guidance)."
+        ),
     )
     pe2e.set_defaults(func=cmd_emit_e2e)
 

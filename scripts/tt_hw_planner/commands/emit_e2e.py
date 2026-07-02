@@ -159,6 +159,14 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if cand.exists():
             py = str(cand)
             break
+    demo_repo_root = demo_dir
+    for parent in demo_dir.parents:
+        if (parent / "models").is_dir():
+            demo_repo_root = parent
+            break
+    gate_env = dict(os.environ)
+    gate_env["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + gate_env.get("PYTHONPATH", "")
+    gate_env["TT_METAL_HOME"] = str(demo_repo_root)
     pytest_out = ""
     try:
         proc = subprocess.run(
@@ -166,6 +174,8 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            cwd=str(demo_repo_root),
+            env=gate_env,
         )
         pytest_out = proc.stdout or ""
         if proc.returncode != 0:
@@ -302,8 +312,15 @@ def cmd_emit_e2e(args) -> int:
         print(f"  full log (complete transcript) → {full_log}")
     print(sep)
 
+    _pc = _planned_parallelism(model_id, args)
+    _parallel_note = _parallelism_prompt_block(_pc)
+    if _pc is not None and _pc.chips > 1:
+        print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
+        print("  builder will open the mesh at this split and map tensors accordingly.")
+        print(sep)
+
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
-    build_prompt = _build_agent_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
+    build_prompt = _build_agent_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc, parallel_note=_parallel_note)
     rc_build, build_final = _run_agent(
         prompt=build_prompt,
         agent_bin=agent_bin,
@@ -656,7 +673,63 @@ Do not write or edit any pipeline/stub/test files — you are read-only except f
 ambiguous, it is a FAIL with a hole describing the ambiguity."""
 
 
-def _build_agent_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
+def _mesh_chip_count(mesh_arg) -> int:
+    if not mesh_arg:
+        return 1
+    try:
+        prod = 1
+        for tok in str(mesh_arg).lower().split("x"):
+            prod *= int(tok)
+        return max(prod, 1)
+    except Exception:
+        return 1
+
+
+def _planned_parallelism(model_id: str, args):
+    chips = _mesh_chip_count(getattr(args, "mesh", None))
+    if chips <= 1:
+        return None
+    try:
+        from ..cli import evaluate_kernels, probe_model
+        from ..parallelism import select_parallelism
+
+        probe = probe_model(model_id)
+        if not getattr(probe, "raw_config", None):
+            return None
+        kr = evaluate_kernels(probe.raw_config, tp_grid=None)
+        pc = select_parallelism(chips, kr)
+    except Exception:
+        return None
+    return pc
+
+
+def _parallelism_prompt_block(pc) -> str:
+    if pc is None or pc.chips <= 1:
+        return ""
+    return f"""
+
+================ CHIP PLACEMENT — {pc.chips}-CHIP MESH (TP={pc.tp} x DP={pc.dp}) ================
+The tool has selected this parallelism split for `{pc.chips}` chips by checking per-TP kernel
+viability (largest kernel-viable TP degree that divides the mesh; the remaining chips become
+data-parallel replicas). Place the pipeline on the mesh accordingly:
+
+  - Open a mesh device of {pc.chips} chips via `ttnn.open_mesh_device(ttnn.MeshShape({pc.dp}, {pc.tp}))`
+    (rows = DP={pc.dp}, cols = TP={pc.tp}); close it at the end. If only a single device is available
+    at runtime, fall back to it and note that in the run output.
+  - DATA-PARALLEL axis (DP={pc.dp}): replicate the model across the {pc.dp} replica rows using
+    `mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)` when moving tensors on-device, and compose
+    back with the matching composer. DP replicates weights (no per-chip memory saving) and runs
+    independent data copies.
+  - TENSOR-PARALLEL axis (TP={pc.tp}): where the reused ttnn modules already support column/row
+    sharding, shard the sharded weights along the TP axis with `ttnn.ShardTensorToMesh(mesh_device, dim=<shard_dim>)`
+    on the {pc.tp} TP columns; keep embeddings / norms / lm_head replicated. If a module does not
+    expose a shard dim, keep it replicated rather than guessing a split.
+  - The e2e PCC gate is unchanged: parity is still measured against the same HF golden. Placing the
+    pipeline on more chips must NOT change the numerical result — only where it runs.
+"""
+
+
+def _build_agent_prompt(*, model_id: str, demo_dir: Path, pcc: float, parallel_note: str = "") -> str:
     return f"""You are bringing up a REAL end-to-end TTNN pipeline for the model
 `{model_id}`. Work in this repository with your tools (Read/Edit/Write/Bash).
 
@@ -752,7 +825,7 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-"""
+{parallel_note}"""
 
 
 def _resolve_demo_dir(args) -> Path:

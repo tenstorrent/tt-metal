@@ -56,6 +56,8 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
 from scripts.tt_hw_planner import cli as _cli  # noqa: E402
+from scripts.tt_hw_planner import reference_loader_resolver as _rlr  # noqa: E402
+from scripts.tt_hw_planner import shard_plan as _shard  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import auto_iterate as _auto  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import bringup_ladder  # noqa: E402
 
@@ -70,6 +72,11 @@ _MAX_ATTEMPTS = int(os.environ.get("BRINGUP_MCP_MAX_ATTEMPTS", "2"))
 _HARD_CAP = max(3, _MAX_ATTEMPTS * 2)
 _PCC = float(os.environ.get("BRINGUP_MCP_PCC", "0.99"))
 _TIMEOUT = int(os.environ.get("BRINGUP_MCP_TIMEOUT", "1800"))
+_SHARD_TP = int(os.environ.get("TT_HW_PLANNER_SHARD_TP", "2"))
+
+
+def _shard_enabled() -> bool:
+    return os.environ.get("TT_HW_PLANNER_SHARD", "") in ("1", "true", "True")
 
 
 def _load_state() -> dict:
@@ -114,6 +121,27 @@ def _is_graduated(component: str) -> bool:
     return _snap(component, ".py.last_good_native").is_file()
 
 
+def _is_shard_graduated(component: str) -> bool:
+    """Shard graduation: a `.py.last_good_sharded` snapshot exists (written when the shard-aware body
+    passed gathered-PCC on the mesh). Separate from `.py.last_good_native` so single-device graduation
+    is never disturbed."""
+    return _snap(component, ".py.last_good_sharded").is_file()
+
+
+def _pending_shard_component(comps: list[str]) -> str | None:
+    """First single-device-graduated, shard-eligible component that has no shard snapshot yet AND has
+    not exhausted the shard-attempt cap, or None. Only consulted when the shard phase is enabled AND
+    every component finished single-device bring-up. The cap stops an autonomous run from looping on a
+    component whose shard scheme won't converge."""
+    st = _load_state()
+    attempts = st.get("shard_attempts", {}) or {}
+    for c in comps:
+        if _is_graduated(c) and _shard.is_shard_eligible(c) and not _is_shard_graduated(c):
+            if attempts.get(c, 0) < _HARD_CAP:
+                return c
+    return None
+
+
 def _components() -> list[str]:
     try:
         return [_component_of(t) for t in _cli._list_component_pcc_tests(_DEMO_DIR)]
@@ -127,27 +155,53 @@ def _test_file_for(component: str) -> str | None:
     return None
 
 
+def _ensure_shard_test(component: str) -> str | None:
+    """Generate tests/pcc/test_<comp>_sharded.py if missing (additive; needs the single-device test)."""
+    try:
+        from scripts.tt_hw_planner.bringup_loop import emit_shard_test
+
+        p = emit_shard_test(_DEMO_DIR, component, tp_default=_SHARD_TP)
+        return str(p) if p else None
+    except Exception:
+        return None
+
+
 def _run_pcc(component: str) -> dict:
     """Run ONE component's PCC test on device via the SAME runner the fsm loop uses and scope the
-    report to this demo. Returns {ran, passed, failed, skipped, summary, details, skip_reason}."""
-    tf = _test_file_for(component)
+    report to this demo. Returns {ran, passed, failed, skipped, summary, details, skip_reason}.
+
+    In shard mode (TT_HW_PLANNER_SHARD_RUN set) it runs the generated `test_<comp>_sharded.py` and keys
+    the report off `<comp>_sharded` (that test's file stem), so gathered-PCC on the mesh drives the
+    shard graduation exactly as single-device PCC drives the native one."""
+    shard = bool(os.environ.get("TT_HW_PLANNER_SHARD_RUN"))
+    if shard:
+        tf = _ensure_shard_test(component)
+        key = f"{component}_sharded"
+    else:
+        tf = _test_file_for(component)
+        key = component
     if not tf:
         return {
-            "ran": False, "passed": False, "failed": False, "skipped": False,
-            "summary": f"no pcc test for '{component}'", "details": "", "skip_reason": "",
+            "ran": False,
+            "passed": False,
+            "failed": False,
+            "skipped": False,
+            "summary": f"no {'sharded ' if shard else ''}pcc test for '{component}'",
+            "details": "",
+            "skip_reason": "",
         }
     _cli._run_focused_pytest(model_id=_MODEL_ID, test_files=[tf], timeout_s=_TIMEOUT)
     report = _cli._scope_report_to_demo(_cli._parse_pytest_report(), _DEMO_DIR)
     skip_reason = ""
     for entry in (report.get("per_skipped") or {}).values():
-        if isinstance(entry, dict) and entry.get("component") == component:
+        if isinstance(entry, dict) and entry.get("component") == key:
             skip_reason = str(entry.get("message") or entry.get("reason") or "")
             break
     return {
         "ran": True,
-        "passed": component in (report.get("passed_components") or []),
-        "failed": component in (report.get("failed_components") or []),
-        "skipped": component in (report.get("skipped_components") or []),
+        "passed": key in (report.get("passed_components") or []),
+        "failed": key in (report.get("failed_components") or []),
+        "skipped": key in (report.get("skipped_components") or []),
         "summary": str(report.get("summary", "")),
         "details": str(report.get("details", "")),
         "skip_reason": skip_reason,
@@ -194,6 +248,29 @@ def _cap_verdict_warrants_decompose(component: str, st: dict) -> bool:
 
 
 @mcp.tool()
+def get_shard_plan(component: str) -> dict:
+    """TP shard GUIDANCE for a shard-eligible component (the gate routes here at rung 'shard'). This is
+    guidance, NOT a prescription: it returns the general tensor-parallel principles + the reference
+    implementations to study; YOU reason out the actual scheme for this component (which weights split
+    on which axis, which collective, expert- vs weight-parallel) and gathered-PCC judges it. eligible=
+    false = a replicate-only role (norm/embedding/rotary/activation/bias) that shards in no scheme."""
+    g = _shard.shard_guidance(component)
+    if g is None:
+        return {
+            "component": component,
+            "eligible": False,
+            "reason": "replicate-only role (norm/embedding/rotary/activation/bias); shards in no scheme",
+        }
+    return {
+        "component": component,
+        "eligible": True,
+        "tp": _SHARD_TP,
+        "principles": g["principles"],
+        "reference_hints": g["reference_hints"],
+    }
+
+
+@mcp.tool()
 def list_components() -> dict:
     """The per-component PCC tests this bring-up must resolve (NEW/ADAPT from bringup_status.json), and
     each component's status: graduated / fallen-back / attempts."""
@@ -208,9 +285,14 @@ def list_components() -> dict:
 
 
 @mcp.tool()
-def run_component(component: str) -> dict:
+def run_component(component: str, mode: str = "single") -> dict:
     """Run ONE component's PCC test on device via the SAME runner the fsm loop uses; report {ok,
     graduated, summary, failed, skipped, failure_class}.
+
+    mode='single' (default) = the normal single-device PCC run. mode='shard' = run the SAME test on a
+    TP mesh: the harness shards the stub's weights per the shard plan, gathers the output, and PCC-
+    compares to the SAME golden. A shard run reports ok only when the gathered output still matches —
+    so a wrong shard axis or misplaced collective fails here, per-component, cheaply.
 
     Snapshots on FIRST touch mirror the fsm loop exactly:
       * if the stub is the original CPU-delegating torch-wrapper and no `.py.bak` exists, save it as
@@ -241,7 +323,18 @@ def run_component(component: str) -> dict:
                     shutil.copy2(stub, preiter)
                 except OSError:
                     pass
-    res = _run_pcc(component)
+    _prev_run = os.environ.get("TT_HW_PLANNER_SHARD_RUN")
+    if mode == "shard":
+        os.environ["TT_HW_PLANNER_SHARD_RUN"] = "1"
+        os.environ["TT_HW_PLANNER_SHARD_TP"] = str(_SHARD_TP)
+    try:
+        res = _run_pcc(component)
+    finally:
+        if mode == "shard":
+            if _prev_run is None:
+                os.environ.pop("TT_HW_PLANNER_SHARD_RUN", None)
+            else:
+                os.environ["TT_HW_PLANNER_SHARD_RUN"] = _prev_run
     st = _load_state()
     cls = ""
     harness_skip = False
@@ -271,15 +364,29 @@ def run_component(component: str) -> dict:
 
 
 @mcp.tool()
-def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str = "") -> dict:
+def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str = "", mode: str = "single") -> dict:
     """Persist the outcome of working `component`: bump attempts, advance the consecutive-same-class
     counter using the DETERMINISTIC class from run_component (your `failure_class` arg is only a
     fallback if run_component didn't classify), track last PCC, and snapshot the best-PCC NATIVE stub
     as `.py.best_native` using the SAME rule the fsm loop applies (`_should_snapshot_best_native`:
     write on no-prior / prior-None / strict improvement; skip if PCC unmeasured; skip torch-wrappers).
     On ok, writes the `.py.last_good_native` graduation snapshot (the shared contract promote/emit-e2e
-    read)."""
+    read).
+
+    mode='shard' records a shard-rung outcome INSTEAD: it bumps a separate shard-attempt counter and,
+    on ok, writes `.py.last_good_sharded` — it NEVER touches `.py.last_good_native`/`.py.best_native`,
+    so single-device graduation is preserved untouched."""
     st = _load_state()
+    if mode == "shard":
+        st.setdefault("shard_attempts", {})[component] = (st.get("shard_attempts", {}) or {}).get(component, 0) + 1
+        stub = _stub_path(component)
+        if ok and stub.is_file():
+            try:
+                shutil.copy2(stub, _snap(component, ".py.last_good_sharded"))
+            except OSError:
+                pass
+        _save_state(st)
+        return {"recorded": True, "component": component, "shard_graduated": ok, "mode": "shard"}
     st.setdefault("attempts", {})[component] = (st.get("attempts", {}) or {}).get(component, 0) + 1
     stub = _stub_path(component)
 
@@ -376,7 +483,13 @@ def _do_fallback(component: str) -> dict:
             except OSError:
                 pass
             _unmark_fallback(component)
-            return {"fallback": False, "regraduated": True, "component": component, "restored_from": label, "cascade": cascade}
+            return {
+                "fallback": False,
+                "regraduated": True,
+                "component": component,
+                "restored_from": label,
+                "cascade": cascade,
+            }
         cascade.append(f"{label} re-test did not pass")
     try:
         _cli._rewrite_components_to_stable_fallback(_DEMO_DIR, [component])
@@ -422,8 +535,11 @@ def mark_harness_skipped(component: str, verdict: str = "manual", reason: str = 
         if diag_path.is_file():
             doc = json.loads(diag_path.read_text())
         doc.setdefault("diagnoses", []).append(
-            {"component": component, "verdict": (verdict or "manual"),
-             "summary": (reason or (st.get("harness_skip_reason", {}) or {}).get(component, ""))[:1000]}
+            {
+                "component": component,
+                "verdict": (verdict or "manual"),
+                "summary": (reason or (st.get("harness_skip_reason", {}) or {}).get(component, ""))[:1000],
+            }
         )
         diag_path.write_text(json.dumps(doc, indent=2))
     except Exception:
@@ -481,6 +597,25 @@ def decompose_component(component: str) -> dict:
 
 
 @mcp.tool()
+def resolve_reference_loader(component: str = "") -> dict:
+    """Resolve a model whose weights won't load via `AutoModel.from_pretrained` (non-transformers
+    checkpoint — Mistral/vLLM-native consolidated, GGUF, trust_remote_code). Writes a shared
+    `tests/pcc/_reference_loader.py` (`load_reference_model(model_id)`) that every per-component test
+    picks up as a fallback. OFF unless TT_HW_PLANNER_LOADER_RESOLVER=1. Only the gate should route you
+    here (rung 'resolve_loader'), when a component failed to build its torch reference."""
+    st = _load_state()
+    text = (st.get("last_failure_text", {}) or {}).get(component, "") or "Could not load via AutoModel"
+    res = _rlr.resolve(
+        model_id=_MODEL_ID,
+        demo_dir=_DEMO_DIR,
+        failure_text=text,
+        agent_bin=os.environ.get("BRINGUP_MCP_AGENT_BIN", "claude"),
+        cwd=_REPO,
+    )
+    return res
+
+
+@mcp.tool()
 def termination_check() -> dict:
     """THE deterministic stop gate for bring-up. can_stop is true ONLY when every material component is
     graduated OR fallen back to CPU. Otherwise returns next_target = the next component + rung. Rung
@@ -493,7 +628,9 @@ def termination_check() -> dict:
         return {"can_stop": True, "halt": False, "next_target": None, "reason": "no components to bring up"}
     decomposed = set(st.get("decomposed") or [])
     last_class_map = st.get("last_failure_class", {}) or {}
+    last_text_map = st.get("last_failure_text", {}) or {}
     harness_skip_reasons = st.get("harness_skip_reason", {}) or {}
+    loader_resolvable = _rlr.is_enabled() and not _rlr.has_loader(_DEMO_DIR)
     terminal = set(st.get("fallback") or []) | set(st.get("harness_skipped") or [])
     work, needs_cap = [], []
     for c in comps:
@@ -521,7 +658,16 @@ def termination_check() -> dict:
         c = work[0]
         attempts = (st.get("attempts", {}) or {}).get(c, 0)
         last_class = last_class_map.get(c, "")
-        if c in harness_skip_reasons:
+        if loader_resolvable and _rlr.is_load_failure(last_text_map.get(c, "")):
+            nxt = {
+                "unit": c,
+                "rung": "resolve_loader",
+                "reason": f"component '{c}' failed to build its torch reference because "
+                f"'{_MODEL_ID}' won't load via AutoModel.from_pretrained (non-transformers checkpoint). "
+                f"call resolve_reference_loader('{c}') to write a shared tests/pcc/_reference_loader.py "
+                f"that all per-component tests use; then run_component again.",
+            }
+        elif c in harness_skip_reasons:
             nxt = {
                 "unit": c,
                 "rung": "fix_harness",
@@ -568,11 +714,30 @@ def termination_check() -> dict:
                 "reason": f"component '{c}' exhausted its attempt cap — call fall_back_to_cpu('{c}') to "
                 f"retire it to CPU (mixed execution) so the pipeline still works.",
             }
+    if can_stop and _shard_enabled():
+        sc = _pending_shard_component(comps)
+        if sc is not None:
+            can_stop = False
+            nxt = {
+                "unit": sc,
+                "rung": "shard",
+                "reason": f"component '{sc}' is single-device graduated and shard-eligible; make it "
+                f"tensor-parallel for TP={_SHARD_TP}. Call get_shard_plan('{sc}') for the TP principles "
+                f"+ reference implementations, then REASON OUT the scheme for this component (there is "
+                f"no prescribed per-weight plan — study the references and apply the principles). Edit "
+                f"_stubs/{sc}.py to shard weights via ShardTensorToMesh(dim=...) and place the collective "
+                f"(all_gather after column-parallel, all_reduce after row-parallel; expert-parallel + "
+                f"gather for MoE; shard heads/channels for Mamba). The math must be unchanged: gathered "
+                f"output == golden. Then run_component('{sc}', mode='shard') and record_result(mode="
+                f"'shard') — a gathered-PCC>={_PCC} pass writes .py.last_good_sharded. NEVER edit the "
+                f"single-device .last_good_native.",
+            }
     return {
         "can_stop": can_stop,
         "halt": False,
         "halt_reason": None,
         "graduated": sorted([c for c in comps if _is_graduated(c)]),
+        "shard_graduated": sorted([c for c in comps if _is_shard_graduated(c)]) if _shard_enabled() else [],
         "fallen_back": sorted(st.get("fallback") or []),
         "harness_skipped": sorted(st.get("harness_skipped") or []),
         "next_target": nxt,

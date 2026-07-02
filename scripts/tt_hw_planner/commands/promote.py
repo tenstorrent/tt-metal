@@ -93,6 +93,7 @@ def cmd_promote(args) -> int:
             model_id=MODEL,
             demo_dir=demo_dir,
             agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
+            mesh=getattr(args, "mesh", None),
         )
 
     mem_fit_rc = _enforce_memory_fit_or_abort(

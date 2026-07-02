@@ -32,6 +32,10 @@ def _bringup_cc_prompt(model_id: str, demo_dir: Path, pcc: float) -> str:
         "record_result(component, ok, pcc, failure_class) — ok=True graduates it (writes "
         ".last_good_native). If your new PCC is LOWER than a previous attempt, call "
         "restore_best(component) before trying a different fix so you don't lose ground.\n"
+        " - resolve_loader: the PCC test couldn't build its torch reference because the model won't "
+        "load via AutoModel.from_pretrained (non-transformers checkpoint). Call "
+        "resolve_reference_loader(component) to write a shared tests/pcc/_reference_loader.py, then "
+        "run_component again — do NOT hand-edit each test's loader.\n"
         " - fix_harness: the PCC test SKIPPED because the harness can't build valid inputs — the bug "
         "is in the TEST, not the stub. Fix tests/pcc/test_<component>.py (the submodule path "
         "_CANDIDATE_SUBMODULE_PATHS — e.g. add [0] for a ModuleList — and/or the synthetic-input "
@@ -45,9 +49,54 @@ def _bringup_cc_prompt(model_id: str, demo_dir: Path, pcc: float) -> str:
         " - mark_manual: call mark_harness_skipped(component, 'manual') only when a harness-skip is "
         "truly unfixable and can't be decomposed — so the run completes honestly without counting the "
         "skip as graduated.\n"
+        " - shard: the component is single-device graduated and the tool wants it tensor-parallel. This "
+        "is a REASONING task, not a lookup — the tool gives you principles + references, you derive the "
+        "scheme. (1) call get_shard_plan(component) for the general TP principles + the tt_transformers "
+        "reference implementations to study; (2) READ the nearest reference and REASON OUT this "
+        "component's scheme — which weights split on which axis, which collective, expert-parallel for "
+        "MoE, shard-heads-not-scan for Mamba (there is NO prescribed per-weight plan); (3) edit "
+        "_stubs/<component>.py so build() shards weights with ttnn.ShardTensorToMesh(mesh_device, "
+        "dim=...) (norms/biases/embeddings stay replicated) and forward() places the collective "
+        "(all_gather after column-parallel, all_reduce after row-parallel); the MATH MUST NOT CHANGE — "
+        "gathered output must still match the golden. (4) run_component(component, mode='shard') to "
+        "validate on the mesh; if PCC fails, revise the axis/collective and retry. (5) "
+        "record_result(component, ok, pcc, mode='shard') — ok writes .last_good_sharded. NEVER edit the "
+        "single-device .last_good_native, and NEVER weaken the PCC assertion.\n"
         "NEVER weaken, skip, or edit the assertion in the PCC test. Re-run termination_check after each "
         "action. STOP only when can_stop=true."
     )
+
+
+def _mesh_chips(mesh) -> int:
+    if not mesh:
+        return 1
+    try:
+        prod = 1
+        for tok in str(mesh).lower().replace(",", "x").split("x"):
+            if tok.strip():
+                prod *= int(tok.strip())
+        return max(prod, 1)
+    except Exception:
+        return 1
+
+
+def _derive_shard_tp(model_id: str, mesh) -> int:
+    """TP degree the mesh implies for this model, via select_parallelism (kernel viability). 1 = no
+    sharding needed (single chip, or the selector fell to TP=1) → Phase 2 stays off."""
+    chips = _mesh_chips(mesh)
+    if chips <= 1:
+        return 1
+    try:
+        from ..cli import evaluate_kernels, probe_model
+        from ..parallelism import select_parallelism
+
+        probe = probe_model(model_id)
+        if not getattr(probe, "raw_config", None):
+            return 1
+        kr = evaluate_kernels(probe.raw_config, tp_grid=None)
+        return max(int(select_parallelism(chips, kr).tp), 1)
+    except Exception:
+        return 1
 
 
 def run_bringup_cc(
@@ -59,6 +108,7 @@ def run_bringup_cc(
     timeout_s: int = 1800,
     max_rounds: int = 1000,
     agent_bin: str = "claude",
+    mesh=None,
 ) -> int:
     """Run bring-up via the cc engine. Returns 0 iff the gate reports can_stop (all material components
     graduated or capped-to-fallback). Graduation is persisted via the shared .last_good_native snapshot
@@ -74,6 +124,10 @@ def run_bringup_cc(
 
         pybin = _sys.executable
     state_path = Path(demo_dir) / ".bringup_cc_state.json"
+    import shutil as _shutil
+
+    _agent_abs = _shutil.which(agent_bin) or agent_bin
+    _agent_dir = str(Path(_agent_abs).parent) if os.path.sep in _agent_abs else str(Path.home() / ".local" / "bin")
     mcp_env = {
         "BRINGUP_MCP_DEMO_DIR": str(demo_dir),
         "BRINGUP_MCP_MODEL_ID": model_id,
@@ -81,10 +135,23 @@ def run_bringup_cc(
         "BRINGUP_MCP_MAX_ATTEMPTS": str(max_attempts),
         "BRINGUP_MCP_PCC": str(pcc),
         "BRINGUP_MCP_TIMEOUT": str(timeout_s),
+        "BRINGUP_MCP_AGENT_BIN": _agent_abs,
+        "TT_HW_PLANNER_LOADER_RESOLVER": os.environ.get("TT_HW_PLANNER_LOADER_RESOLVER", ""),
         "TT_METAL_HOME": str(repo_root),
         "PYTHONPATH": str(repo_root),
-        "PATH": f"{repo_root / 'python_env' / 'bin'}{os.pathsep}/usr/bin:/bin",
+        "PATH": f"{repo_root / 'python_env' / 'bin'}{os.pathsep}{_agent_dir}{os.pathsep}/usr/bin:/bin",
     }
+    _shard_flag = os.environ.get("TT_HW_PLANNER_SHARD", "")
+    _shard_tp = os.environ.get("TT_HW_PLANNER_SHARD_TP", "")
+    if not _shard_flag:
+        _tp = _derive_shard_tp(model_id, mesh)
+        if _tp > 1:
+            _shard_flag, _shard_tp = "1", str(_tp)
+            print(f"  [shard] mesh implies TP={_tp} → Phase 2 (shard-aware bring-up) enabled at TP={_tp}")
+    if _shard_flag:
+        mcp_env["TT_HW_PLANNER_SHARD"] = _shard_flag
+        if _shard_tp:
+            mcp_env["TT_HW_PLANNER_SHARD_TP"] = _shard_tp
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "bringup-mcp")
     import re as _re
 
@@ -106,6 +173,8 @@ def run_bringup_cc(
         "mcp__bringup-mcp__decompose_component",
         "mcp__bringup-mcp__fall_back_to_cpu",
         "mcp__bringup-mcp__mark_harness_skipped",
+        "mcp__bringup-mcp__resolve_reference_loader",
+        "mcp__bringup-mcp__get_shard_plan",
         "Read",
         "Edit",
         "Write",
@@ -113,6 +182,35 @@ def run_bringup_cc(
         "Grep",
         "Glob",
     ]
+    try:
+        from .. import reference_loader_resolver as _rlr
+
+        if _rlr.is_enabled() and not _rlr.has_loader(Path(demo_dir)):
+            _files = _rlr._repo_files(model_id)
+            _hf_native = any(
+                f
+                in (
+                    "model.safetensors",
+                    "model.safetensors.index.json",
+                    "pytorch_model.bin",
+                    "pytorch_model.bin.index.json",
+                )
+                for f in _files
+            )
+            if _files and not _hf_native:
+                print(
+                    "\n  [loader-resolver] pre-flight: non-transformers checkpoint — resolving reference loader once before the agent loop ..."
+                )
+                _pf = _rlr.resolve(
+                    model_id=model_id,
+                    demo_dir=Path(demo_dir),
+                    failure_text="pre-flight: repo ships no HF-format weights (non-transformers checkpoint)",
+                    agent_bin=_agent_abs,
+                    cwd=repo_root,
+                )
+                print(f"  [loader-resolver] pre-flight result: {_pf.get('resolved')} ({_pf.get('reason')})")
+    except Exception as _pf_exc:
+        print(f"  [loader-resolver] pre-flight skipped: {type(_pf_exc).__name__}: {_pf_exc}")
     prompt = _bringup_cc_prompt(model_id, Path(demo_dir), pcc)
     print("\n  ===== BRING-UP (cc engine): harness loop on the per-component gate =====\n")
     res = cc_harness.run_cc_loop(
