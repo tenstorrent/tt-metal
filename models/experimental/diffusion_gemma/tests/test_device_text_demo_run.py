@@ -26,7 +26,9 @@ Override the checkpoint / mesh with ``DG_CKPT`` / ``MESH_DEVICE``; set
 The long-prompt smoke defaults to one layer; set
 ``DG_TEXT_DEMO_LONG_PROMPT_NUM_LAYERS=full`` to run all layers.
 The 256K-allocation smoke also defaults to one layer; set
-``DG_TEXT_DEMO_256K_NUM_LAYERS=full`` to run all layers.
+``DG_TEXT_DEMO_256K_NUM_LAYERS=full`` to run all layers. The full-depth
+256K variant uses ``--argmax-sampling`` because the default full-vocab device
+Gumbel allocation is a known DRAM-fragmentation OOM at that size.
 """
 
 import os
@@ -121,6 +123,8 @@ def test_short_prompt_256k_context_allocation_exits_clean(monkeypatch):
     num_layers = os.environ.get("DG_TEXT_DEMO_256K_NUM_LAYERS", "1")
     if num_layers.lower() != "full":
         argv += ["--num-layers", num_layers]
+    else:
+        argv += ["--argmax-sampling"]
 
     assert text_demo.main(argv) == 0
     success_lines = [line for line in info_lines if line.startswith("DG_TEXT_DEMO_SUCCESS ")]

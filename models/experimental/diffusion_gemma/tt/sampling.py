@@ -83,9 +83,15 @@ def gumbel_max(logits, temperature: float, noise):
     ``logits`` / ``noise``: ``[..., vocab]`` (TILE_LAYOUT). ``noise`` is the torch
     run's exact injected Gumbel(0,1) noise (issue #47468 determinism). Returns
     argmax indices ``[..., 1]``. ``noise`` all-zeros reduces to plain
-    ``argmax(logits)`` (temperature scaling preserves the argmax).
+    ``argmax(logits)`` (temperature scaling preserves the argmax). ``noise=None``
+    is an explicit RUN-first shortcut for argmax sampling without allocating the
+    full-vocab Gumbel buffer.
     """
     z = temperature_scale(logits, temperature)
+    if noise is None:
+        sampled = ttnn.argmax(z, dim=-1, keepdim=True)
+        _deallocate_scaled_if_temporary(z, logits)
+        return sampled
     perturbed = ttnn.add(z, noise)
     sampled = ttnn.argmax(perturbed, dim=-1, keepdim=True)
     perturbed.deallocate(True)

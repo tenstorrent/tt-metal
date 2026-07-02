@@ -238,6 +238,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not stop generation or trim decoded output at tokenizer EOS (useful for fixed-block smoke tests)",
     )
+    parser.add_argument(
+        "--argmax-sampling",
+        action="store_true",
+        help="Use clean argmax instead of Gumbel-max sampling to avoid full-vocab Gumbel allocation in fit smokes",
+    )
     return parser
 
 
@@ -309,6 +314,8 @@ def _run(args) -> int:
         generate_kwargs = {}
         if args.disable_eos_stop:
             generate_kwargs.update(eos_token_id=None, stop_token_ids=[], decode_kwargs={"skip_special_tokens": True})
+        if args.argmax_sampling:
+            generate_kwargs["gumbel_noise_fn"] = lambda block_idx: (lambda step: None)
         generation = generate_text_from_checkpoint_model_inputs(
             checkpoint_model_inputs,
             args.prompt,
