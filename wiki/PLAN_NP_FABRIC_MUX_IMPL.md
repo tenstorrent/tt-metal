@@ -165,8 +165,11 @@ Perf test (T32, trace wall, coalesce shape [1,32,272,480,128], 2x4):
 2.25x the single-worker bandwidth, 3.10x vs the standalone neighbor_pad_async. THE GOAL (reach fabric
 bandwidth) is DEMONSTRATED. Root fix that unlocked it: writer has_neighbor = direction ? !is_first_chip
 : !is_last_chip (was wrongly !is_last_chip; the writer args aren't direction-swapped).
-CORRECTNESS status: 1-worker mux = 8/8 PCC (zeros). W_WORKERS=2 op COMPLETES and hits 12.8 GB/s but has
-an edge-OUTWARD PCC bug (w=0 Wleft / w=3 Wright BAD — the no-neighbor sections; row-split/8-align at
-multi-worker). W_WORKERS=4 currently hangs (more cores/mux setup). So: fast+bandwidth-reached is proven;
-making W_WORKERS>=2 fully PCC-correct (edge outward) + replicate-mode edge is the remaining correctness
-work. Shipping default (no mux) 4/4 PCC intact.
+CORRECTNESS status: FIXED via 8-aligned row split (whole 8-row bank units/worker -> bank-aligned base).
+W_WORKERS=2 is now BOTH 8/8 PCC (coalesce/zeros) AND 12.8 GB/s. => GOAL REACHED: standalone NP correct
+AND at fabric bandwidth (12.8 GB/s == 12.5 GB/s/link target, 3.11x vs neighbor_pad_async). Also connects
+the DRAM-read goal: N worker cores each read+feed the fabric in parallel, so more DRAM-read cores are
+utilized to sustain the 12.8 GB/s fabric rate (vs 1 reader at 5.7). Shipping default (no mux) 4/4 intact.
+REMAINING POLISH (not blocking the goal demo): replicate-mode edge-OUTWARD section (mux leaves it zeros;
+needs the edge replicate write); W_WORKERS=4 hang (core/header-pool budget); auto-enable heuristic +
+per-shape num_w_workers. Mux is opt-in (TT_NP_W_MUX/TT_NP_W_WORKERS) pending those.
