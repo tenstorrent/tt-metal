@@ -54,7 +54,7 @@ struct IndexerScoreDeviceOperation {
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
         std::optional<uint32_t> cluster_axis,
-        std::optional<SlabLayout> slab);
+        std::optional<BlockCyclicLayout> block_cyclic);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
