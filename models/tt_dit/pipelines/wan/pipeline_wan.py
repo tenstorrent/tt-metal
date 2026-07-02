@@ -557,7 +557,10 @@ class WanPipeline(PipelineAPIMixin):
             raise ValueError(msg)
 
         if effective_boundary_ratio is None and guidance_scale_2 is not None:
-            msg = "`guidance_scale_2` is only supported when the pipeline's `boundary_ratio` is not None."
+            msg = (
+                "`guidance_scale_2` is only supported when `boundary_ratio` is not None. "
+                "Set it per-request (pass `boundary_ratio=...` to this call) or at construction time."
+            )
             raise ValueError(msg)
 
         if num_frames % self.vae_scale_factor_temporal != 1:
