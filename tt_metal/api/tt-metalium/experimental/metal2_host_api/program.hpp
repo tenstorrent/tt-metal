@@ -39,6 +39,15 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
     const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
     bool skip_validation = false);
 
+// Create a MeshWorkload object from single ProgramSpec,
+// to be applied mesh-wide (SPMD)
+// (This will become a constructor for the MeshWorkload class)
+//
+// INVARIANT: A successfully constructed MeshWorkload is always valid.
+//
+distributed::MeshWorkload MakeMeshWorkloadFromSpec(
+    const distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation = false);
+
 // Configure the arguments (mutable parameters) of an existing Program
 // (This will become a member function for the Program class)
 // This performs a copy from the ProgramRunArgs to the Program's internal data structures.
