@@ -380,7 +380,7 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
 
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
-        const auto& data = get_test_data<Type>();
+        const auto& data = get_test_data<Type>(n_elements);
         tt::stl::Span<const Type> input(data.data(), n_elements);
 
         auto output = convert_layout(
@@ -421,7 +421,7 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
 
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
-        const auto& data = get_test_data<Type>();
+        const auto& data = get_test_data<Type>(n_elements);
         tt::stl::Span<const Type> input(data.data(), n_elements);
 
         auto converted = convert_layout(
@@ -546,7 +546,7 @@ TEST_P(NonSquareTilesTestFixture, ConvertLayout) {
 
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
-        const auto& data = get_test_data<Type>();
+        const auto& data = get_test_data<Type>(n_elements);
         tt::stl::Span<const Type> input(data.data(), n_elements);
 
         auto output =
