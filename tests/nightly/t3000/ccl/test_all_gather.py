@@ -85,6 +85,12 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     return ccl_semaphore_handles
 
 
+def create_fabric_router_config(max_payload_size: int):
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 def run_all_gather_impl(
     mesh_device,
     ag_output_shape,
@@ -404,8 +410,16 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(6144),
+            "trace_region_size": 90112,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(6144),
+            "trace_region_size": 90112,
+        },
     ],
     indirect=True,
     ids=["fabric_ring", "fabric_linear"],
