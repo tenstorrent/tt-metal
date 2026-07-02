@@ -400,6 +400,12 @@ class TtnnDiffusionDriveModel:
             self._forward_ttnn(features)
             self._forward_ttnn(features)
             bb.capture_backbone_trace(features["camera_feature"], features["lidar_feature"])
+            # Stage 8: also capture the perception forward as a second trace. Feed it
+            # a real sample from the (now captured) backbone trace so its fixed-address
+            # inputs are sized correctly. Its own double warm-up JITs any remaining
+            # kernel before begin_trace_capture.
+            bev_upscale, bev_feature, _ = bb.run_backbone_trace(features["camera_feature"], features["lidar_feature"])
+            self._perception.capture_trace(bev_upscale, bev_feature, features["status_feature"])
         self._compiled = True
 
     def execute_compiled(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -418,7 +424,9 @@ class TtnnDiffusionDriveModel:
             bev_upscale, bev_feature, _ = m._backbone._ttnn.run_backbone_trace(camera, lidar)
             bev_spatial_shape = bev_upscale.shape[2:]
 
-            traj_query, agents_query, cross_bev_feature, status_enc = self._perception(bev_upscale, bev_feature, status)
+            traj_query, agents_query, cross_bev_feature, status_enc = self._perception.run_trace(
+                bev_upscale, bev_feature, status
+            )
 
             output = m._trajectory_head(traj_query, agents_query, cross_bev_feature, bev_spatial_shape, status_enc)
             agents = m._agent_head(agents_query)
@@ -426,7 +434,9 @@ class TtnnDiffusionDriveModel:
             return output
 
     def release_compiled(self) -> None:
-        """Release the captured backbone trace (frees the trace region)."""
+        """Release the captured backbone + perception traces (frees the trace region)."""
         if self._compiled and hasattr(self._model._backbone, "_ttnn"):
             self._model._backbone._ttnn.release_backbone_trace()
+            if self._perception is not None:
+                self._perception.release_trace()
         self._compiled = False
