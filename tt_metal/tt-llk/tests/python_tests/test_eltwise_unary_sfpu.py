@@ -6,6 +6,7 @@ from itertools import chain, product
 
 import pytest
 import torch
+from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -42,8 +43,6 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test
-
-from conftest import skip_for_coverage
 
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Log1p,
