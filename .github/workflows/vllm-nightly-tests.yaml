@@ -3,10 +3,10 @@ name: "vLLM nightly tests"
 on:
   workflow_dispatch:
     inputs:
-      vllm-commit:
-        description: "vLLM branch or sha"
+      vllm-tt-plugin-ref:
+        description: "vLLM TT plugin branch or sha"
         required: false
-        default: dev
+        default: main
       model:
         description: "Model to test"
         required: false
@@ -80,6 +80,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
+      vllm-tt-plugin-ref: ${{ inputs.vllm-tt-plugin-ref || 'main' }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
