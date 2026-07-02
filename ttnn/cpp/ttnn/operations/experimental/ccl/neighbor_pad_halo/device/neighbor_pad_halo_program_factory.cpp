@@ -154,6 +154,21 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // (the W-reader waits the H-writers' Phase-2 barrier signal — see np_phase2_w_reader).
     const uint32_t progress_t_batch_size = 0;
 
+    // H-send bank-major coalescing. The halo-only op's upfront H->W barrier makes the corner-first L1
+    // path unnecessary, so an eligible H exchange uses the simpler straight-to-DRAM path
+    // (use_l1_intermediate=0, whole H-halo row -> neighbor H-section DRAM; corners land in DRAM where the
+    // W-reader reads them) AND ships each row bank-major coalesced (h_coalesce_n same-bank sticks per 4KB
+    // packet). Eligible when padding_h==1 and W_dev (num_sticks_per_halo_dim) is 8-aligned so every row
+    // base is 8-aligned. BH: 8 interleaved DRAM banks.
+    uint32_t h_coalesce_n = 0;
+    if (op.np_padding_h == 1 && (num_sticks_per_halo_dim % 8u == 0)) {
+        h_coalesce_n = std::min(16u, 4096u / page_size);
+        if (h_coalesce_n < 2) {
+            h_coalesce_n = 0;
+        }
+    }
+    const uint32_t h_use_l1 = (h_coalesce_n > 0) ? 0u : 1u;  // straight-to-DRAM when coalescing
+
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;
     uint32_t total_fabric_cores = (num_links * 2) + (pad2_num_links * 2);
     // Fabric cores live in the first column (y-axis), so bound against compute_grid_size.y.
@@ -344,9 +359,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
     TensorAccessorArgs(*input_buffer).append_to(h_reader_kernel_config.compile_args);
-    h_reader_kernel_config.compile_args.push_back(1);               // use_l1_intermediate (always 2D)
+    h_reader_kernel_config.compile_args.push_back(h_use_l1);        // use_l1_intermediate (0 when H-coalescing)
     h_reader_kernel_config.compile_args.push_back(recv_cb_index);   // recv_cb_id
     h_reader_kernel_config.compile_args.push_back(hsend_cb_index);  // send_cb_id (batched H send)
+    h_reader_kernel_config.compile_args.push_back(h_coalesce_n);    // H-send bank-major coalesce factor (0=off)
     auto h_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"
@@ -367,9 +383,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
     TensorAccessorArgs(*halo_buffer).append_to(h_writer_kernel_config.compile_args);
-    h_writer_kernel_config.compile_args.push_back(1);                // use_l1_intermediate (always 2D)
+    h_writer_kernel_config.compile_args.push_back(h_use_l1);         // use_l1_intermediate (0 when H-coalescing)
     h_writer_kernel_config.compile_args.push_back(recv_cb_index);    // recv_cb_id
-    h_writer_kernel_config.compile_args.push_back(1);                // handle_incoming_writes (always 2D)
+    h_writer_kernel_config.compile_args.push_back(h_use_l1);         // handle_incoming_writes (0 when H-coalescing)
     h_writer_kernel_config.compile_args.push_back(0);                // is_w_fabric_writer (false for H)
     h_writer_kernel_config.compile_args.push_back(op.np_ring_size);  // ring_size
     // Per-batch progress-sem granularity is always passed; 0 disables the per-batch path.
@@ -377,7 +393,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     h_writer_kernel_config.compile_args.push_back(hsend_cb_index);    // send_cb_id (batched H send)
     h_writer_kernel_config.compile_args.push_back(use_w_two_pass);    // unused on H writer; keeps arg layout aligned
     h_writer_kernel_config.compile_args.push_back(use_corner_first);  // H-writer corner-first gate
-    h_writer_kernel_config.compile_args.push_back(0);  // W_COALESCE: unused on H writer; keeps arg layout aligned
+    h_writer_kernel_config.compile_args.push_back(h_coalesce_n);      // coalesce factor (H-writer uses the H branch)
     auto h_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"

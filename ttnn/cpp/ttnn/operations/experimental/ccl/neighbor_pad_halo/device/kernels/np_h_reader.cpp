@@ -21,6 +21,10 @@ constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
 // Dedicated send CB for the batched H-halo send (separate ring from cb_output_id so the
 // per-stick recv/is_first pushes don't desync the row reserves).
 constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_src + 2);
+// H-send bank-major coalesce factor (0 = row-contiguous). When > 0, gather the H-halo row into send_cb
+// in dst-bank-major order (w=0,8,..; 1,9,..) so the writer ships same-bank sticks as one 4KB packet.
+constexpr uint32_t H_COALESCE = get_compile_time_arg_val(ct_after_src + 3);
+constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -105,9 +109,24 @@ void kernel_main() {
                 src_stick_id += outer_dim_offset;
                 cb_reserve_back(send_cb_id, num_sticks_to_read);
                 uint32_t row_base_l1_addr = get_write_ptr(send_cb_id);
-                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id + iter, src_accessor);
-                    noc_async_read(src_noc_addr, row_base_l1_addr + iter * stick_size, read_size);
+                if constexpr (H_COALESCE > 0) {
+                    // Bank-major gather: send_cb[m] = column w in dst-bank order (0,8,..; 1,9,..) so the
+                    // writer coalesces same-bank sticks. src is scattered; the batch shares one barrier.
+                    uint32_t m = 0;
+                    for (uint32_t j = 0; j < NP_NUM_DRAM_BANKS; j++) {
+                        for (uint32_t w = j; w < num_sticks_to_read; w += NP_NUM_DRAM_BANKS) {
+                            noc_async_read(
+                                get_noc_addr(src_stick_id + w, src_accessor),
+                                row_base_l1_addr + m * stick_size,
+                                read_size);
+                            m++;
+                        }
+                    }
+                } else {
+                    for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                        uint64_t src_noc_addr = get_noc_addr(src_stick_id + iter, src_accessor);
+                        noc_async_read(src_noc_addr, row_base_l1_addr + iter * stick_size, read_size);
+                    }
                 }
                 noc_async_read_barrier();
                 cb_push_back(send_cb_id, num_sticks_to_read);

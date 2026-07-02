@@ -502,6 +502,40 @@ void kernel_main() {
                         dst_stick_id = pad_id * num_sticks_per_halo_dim + stick_start_id;
                     }
                     dst_stick_id += eff_offset;
+                    // H-writer bank-major coalesced send (use_l1=0). np_h_reader gathered the row into
+                    // send_cb in bank-major order (w=0,8,..; 1,9,..); ship each bank's sticks as
+                    // W_COALESCE-sized packets to base_row+w (contiguous on bank (base_row+w)%8, 8-aligned
+                    // base_row). W_COALESCE here holds h_coalesce_n (the H writer's factory arg slot).
+                    if constexpr (!is_w_fabric_writer && W_COALESCE > 0) {
+                        const uint32_t base_row = dst_stick_id;
+                        cb_wait_front(send_cb_id, num_sticks_to_read);
+                        const uint32_t row_l1 = get_read_ptr(send_cb_id);
+                        auto& conn = direction ? fabric_connection.get_backward_connection()
+                                               : fabric_connection.get_forward_connection();
+                        uint32_t m = 0;
+                        for (uint32_t j = 0; j < NP_NUM_DRAM_BANKS; j++) {
+                            for (uint32_t w = j; w < num_sticks_to_read;) {
+                                uint32_t g = 0;
+                                for (uint32_t ww = w; g < W_COALESCE && ww < num_sticks_to_read;
+                                     ww += NP_NUM_DRAM_BANKS) {
+                                    g++;
+                                }
+                                const uint64_t dst_noc = get_noc_addr(base_row + w, dst_accessor);
+                                pkt_hdr->to_noc_unicast_write(
+                                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc}, g * stick_size);
+                                conn.wait_for_empty_write_slot();
+                                conn.send_payload_without_header_non_blocking_from_address(
+                                    row_l1 + m * stick_size, g * stick_size);
+                                conn.send_payload_flush_non_blocking_from_address(
+                                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                                noc_async_writes_flushed();
+                                m += g;
+                                w += g * NP_NUM_DRAM_BANKS;
+                            }
+                        }
+                        cb_pop_front(send_cb_id, num_sticks_to_read);
+                        continue;  // next pad_id; skip the per-stick loop
+                    }
                     for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                         cb_wait_front(send_cb_id, 1);
                         if constexpr (is_w_fabric_writer) {
