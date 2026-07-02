@@ -1643,3 +1643,166 @@ def test_sampling1d_trace_capture(ttnn_mesh_device, mode):
         f"[{mode} mesh={cluster_shape}] traced tokens diverged from eager:\n"
         f"  eager:  {eager_host[:8]}\n  replay: {replay_host[:8]}"
     )
+
+
+# ==============================================================================
+# Op-level A/B — prim ttnn.all_gather vs all_gather_async on the candidate gather,
+# INSIDE a captured trace, at batch-32 (#48222 / #48469).
+# ==============================================================================
+#
+# The eager topk+all_gather isolation above is clean. The qwen2.5-VL batch-32 garbage
+# (#48037/#48222) only appeared in the *traced* decode. This test captures the exact
+# candidate-gather pipeline (topk -> all_gather(values) -> all_gather(indices) -> global
+# indices) in a trace and replays it, A/B-ing the two gather ops against a bf16 reference:
+#   - gather_op="prim":  ttnn.all_gather                 (the pre-#48404 path)
+#   - gather_op="async": ttnn.experimental.all_gather_async + barrier (the #48404 fix)
+# Hypothesis: prim corrupts under trace at 1x8/batch-32; async does not. If prim is ALSO
+# clean here, the defect needs more model context than topk+gather alone -> narrows further.
+
+_AB_TRACE_REGION_SIZE = 32 << 20
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        {"mesh_shape": (1, 2), "trace_region_size": _AB_TRACE_REGION_SIZE},
+        {"mesh_shape": (1, 8), "trace_region_size": _AB_TRACE_REGION_SIZE},
+    ],
+    ids=["1x2", "1x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize("gather_op", ["prim", "async"])
+@pytest.mark.parametrize("vocab_size", [pytest.param(152064, id="v152064")])
+def test_topk_allgather_trace_ab(ttnn_mesh_device, gather_op, vocab_size):
+    from models.common.modules.tt_ccl import get_tt_ccl
+
+    mesh_device = ttnn_mesh_device
+    cluster_shape = tuple(mesh_device.shape)
+    num_devices = max(cluster_shape)
+    per_device_vocab = vocab_size // num_devices
+    B = 32
+    K = 32
+    NUM_REPLAYS = 10
+
+    torch.manual_seed(42)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+
+    shard_dims = (None, -1) if cluster_shape[-1] >= cluster_shape[-2] else (-1, None)
+    logits_tt = ttnn.from_torch(
+        logits_host,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+    )
+
+    replicate_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=cluster_shape)
+    local_indices_host = torch.zeros(1, 1, B, per_device_vocab, dtype=torch.int32)
+    for i in range(per_device_vocab):
+        local_indices_host[:, :, :, i] = i
+    local_indices_tt = ttnn.from_torch(
+        local_indices_host,
+        device=mesh_device,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=replicate_mapper,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    offsets_host = torch.zeros(1, 1, B, K * num_devices, dtype=torch.int64)
+    for d in range(num_devices):
+        offsets_host[:, :, :, d * K : (d + 1) * K] = d * per_device_vocab
+    index_offsets_tt = ttnn.from_torch(
+        offsets_host,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=replicate_mapper,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    cluster_axis = None if 1 in cluster_shape else 0
+    ccl = get_tt_ccl(mesh_device) if gather_op == "async" else None
+
+    def _gather(t):
+        if gather_op == "prim":
+            return ttnn.all_gather(
+                t, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=cluster_axis, topology=ttnn.Topology.Linear,
+            )
+        return ttnn.experimental.all_gather_async(
+            t,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Linear,
+            barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10,
+            num_workers_per_link=1,
+            num_buffers_per_channel=2,
+        )
+
+    def _pipeline():
+        topk_values, topk_indices = ttnn.topk(logits_tt, k=K, dim=-1, indices_tensor=local_indices_tt)
+        gathered_values = _gather(topk_values)
+        gathered_indices = _gather(topk_indices)
+        gathered_indices_int32 = ttnn.typecast(gathered_indices, dtype=ttnn.int32)
+        global_indices = ttnn.add(index_offsets_tt, gathered_indices_int32, dtype=ttnn.int32)
+        return gathered_values, global_indices
+
+    # bf16-sharded torch reference (global top-1 per user)
+    logits_bf16 = logits_host.squeeze().bfloat16()  # [B, V]
+    bf16_expected = torch.zeros(B, dtype=torch.long)
+    for b in range(B):
+        best_val, best_idx = float("-inf"), 0
+        for s in range(num_devices):
+            shard = logits_bf16[b, s * per_device_vocab : (s + 1) * per_device_vocab]
+            li = shard.float().argmax().item()
+            lv = shard[li].float().item()
+            if lv > best_val:
+                best_val, best_idx = lv, s * per_device_vocab + li
+        bf16_expected[b] = best_idx
+
+    def _device_top1(gathered_values, global_indices):
+        values_host = to_torch_auto_compose(gathered_values).squeeze()[:B]
+        indices_host = to_torch_auto_compose(global_indices).squeeze()[:B]
+        top1_pos = values_host.float().argmax(dim=-1)
+        return torch.tensor([indices_host[b, top1_pos[b]].item() for b in range(B)], dtype=torch.long)
+
+    # --- warmup/compile OUTSIDE capture ---
+    gv, gi = _pipeline()
+    ttnn.synchronize_device(mesh_device)
+
+    # --- capture ---
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    try:
+        gv, gi = _pipeline()
+    finally:
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    # --- replay NUM_REPLAYS times; assert every replay matches the bf16 reference ---
+    mismatch_counts = []
+    for r in range(NUM_REPLAYS):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        device_top1 = _device_top1(gv, gi)
+        # count TRUE mismatches (ignore bf16 ties): device value must be < the expected value
+        true_mm = 0
+        for b in range(B):
+            if device_top1[b].item() != bf16_expected[b].item():
+                dv = logits_bf16[b, device_top1[b].item()].float().item()
+                ev = logits_bf16[b, bf16_expected[b].item()].float().item()
+                if dv < ev:  # not a tie -> genuinely wrong token
+                    true_mm += 1
+        mismatch_counts.append(true_mm)
+    ttnn.release_trace(mesh_device, trace_id)
+
+    print(f"[trace-AB gather_op={gather_op} mesh={cluster_shape}] true-mismatch counts per replay: {mismatch_counts}")
+    assert all(mm == 0 for mm in mismatch_counts), (
+        f"gather_op={gather_op} mesh={cluster_shape}: traced candidate gather produced wrong "
+        f"top-1 tokens on {sum(1 for m in mismatch_counts if m)} / {NUM_REPLAYS} replays "
+        f"(true-mismatch counts {mismatch_counts})."
+    )
