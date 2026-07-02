@@ -35,9 +35,11 @@ Usage:
 """
 
 import sys
+import os
 from pathlib import Path
 import torch
 import numpy as np
+import pytest
 from scipy.stats import pearsonr
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -103,6 +105,82 @@ class LayerPCCHistory:
     postnet_residual: List[float] = field(default_factory=list)
     mel_before: List[float] = field(default_factory=list)
     mel_after: List[float] = field(default_factory=list)
+
+
+def _get_env_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return int(raw_value)
+
+
+def _get_env_float(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return float(raw_value)
+
+
+def _assert_layer_history(
+    history: LayerPCCHistory,
+    expected_steps: int,
+    decoder_threshold: float,
+    conv_threshold: float,
+    mel_after_threshold: float,
+    mode_name: str,
+):
+    assert (
+        len(history.decoder_final) == expected_steps
+    ), f"{mode_name}: expected {expected_steps} decoder PCC entries, got {len(history.decoder_final)}"
+    assert (
+        len(history.mel_before) == expected_steps
+    ), f"{mode_name}: expected {expected_steps} mel-before PCC entries, got {len(history.mel_before)}"
+    assert (
+        len(history.mel_after) == expected_steps
+    ), f"{mode_name}: expected {expected_steps} mel-after PCC entries, got {len(history.mel_after)}"
+
+    for conv_idx in range(5):
+        assert len(history.postnet_convs[conv_idx]) == expected_steps, (
+            f"{mode_name}: expected {expected_steps} conv{conv_idx} PCC entries, "
+            f"got {len(history.postnet_convs[conv_idx])}"
+        )
+        assert np.all(
+            np.isfinite(history.postnet_convs[conv_idx])
+        ), f"{mode_name}: non-finite values detected in conv{conv_idx} PCC history"
+
+    assert np.all(np.isfinite(history.decoder_final)), f"{mode_name}: non-finite decoder PCC values detected"
+    assert np.all(np.isfinite(history.mel_before)), f"{mode_name}: non-finite mel-before PCC values detected"
+    assert np.all(np.isfinite(history.mel_after)), f"{mode_name}: non-finite mel-after PCC values detected"
+
+    min_decoder = float(np.min(history.decoder_final))
+    min_conv = float(min(np.min(history.postnet_convs[idx]) for idx in range(5)))
+    min_mel_after = float(np.min(history.mel_after))
+
+    assert (
+        min_decoder >= decoder_threshold
+    ), f"{mode_name}: decoder min PCC {min_decoder:.6f} is below threshold {decoder_threshold:.6f}"
+    assert (
+        min_conv >= conv_threshold
+    ), f"{mode_name}: minimum postnet conv PCC {min_conv:.6f} is below threshold {conv_threshold:.6f}"
+    assert (
+        min_mel_after >= mel_after_threshold
+    ), f"{mode_name}: mel-after min PCC {min_mel_after:.6f} is below threshold {mel_after_threshold:.6f}"
+
+
+def _is_ttnn_device_unavailable_error(error: RuntimeError) -> bool:
+    message = str(error)
+    return (
+        "Failed to allocate TLB window" in message
+        or "tt_tlb_alloc failed" in message
+        or "NOC address of a hugepage does not match the expected address" in message
+    )
+
+
+def _skip_device_unavailable() -> None:
+    pytest.skip(
+        "Skipping: TT device unavailable/busy (TLB allocation failed). "
+        "Check /proc/driver/tenstorrent/*/pids for active processes."
+    )
 
 
 def run_layer_by_layer_autoregressive(
@@ -406,6 +484,64 @@ def run_layer_by_layer_autoregressive(
     ttnn.close_device(device)
 
     return history
+
+
+def test_layer_by_layer_multistep_pcc():
+    text = os.getenv("SPEECHT5_LAYER_PCC_TEXT", "Hello world")
+    num_steps = _get_env_int("SPEECHT5_LAYER_PCC_MULTI_STEPS", 5)
+    decoder_threshold = _get_env_float("SPEECHT5_LAYER_PCC_MULTI_DECODER_MIN", 0.0)
+    conv_threshold = _get_env_float("SPEECHT5_LAYER_PCC_MULTI_CONV_MIN", 0.0)
+    mel_after_threshold = _get_env_float("SPEECHT5_LAYER_PCC_MULTI_MEL_AFTER_MIN", 0.0)
+
+    try:
+        history = run_layer_by_layer_autoregressive(
+            text=text,
+            num_steps=num_steps,
+            true_autoregressive=False,
+            verbose=False,
+        )
+    except RuntimeError as error:
+        if _is_ttnn_device_unavailable_error(error):
+            _skip_device_unavailable()
+        raise
+
+    _assert_layer_history(
+        history=history,
+        expected_steps=num_steps,
+        decoder_threshold=decoder_threshold,
+        conv_threshold=conv_threshold,
+        mel_after_threshold=mel_after_threshold,
+        mode_name="multi-step",
+    )
+
+
+def test_layer_by_layer_true_autoregressive_pcc():
+    text = os.getenv("SPEECHT5_LAYER_PCC_TEXT", "Hello world")
+    num_steps = _get_env_int("SPEECHT5_LAYER_PCC_TRUE_AR_STEPS", 5)
+    decoder_threshold = _get_env_float("SPEECHT5_LAYER_PCC_TRUE_AR_DECODER_MIN", 0.0)
+    conv_threshold = _get_env_float("SPEECHT5_LAYER_PCC_TRUE_AR_CONV_MIN", 0.0)
+    mel_after_threshold = _get_env_float("SPEECHT5_LAYER_PCC_TRUE_AR_MEL_AFTER_MIN", 0.0)
+
+    try:
+        history = run_layer_by_layer_autoregressive(
+            text=text,
+            num_steps=num_steps,
+            true_autoregressive=True,
+            verbose=False,
+        )
+    except RuntimeError as error:
+        if _is_ttnn_device_unavailable_error(error):
+            _skip_device_unavailable()
+        raise
+
+    _assert_layer_history(
+        history=history,
+        expected_steps=num_steps,
+        decoder_threshold=decoder_threshold,
+        conv_threshold=conv_threshold,
+        mel_after_threshold=mel_after_threshold,
+        mode_name="true-autoregressive",
+    )
 
 
 def main():
