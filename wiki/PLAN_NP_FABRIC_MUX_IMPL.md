@@ -50,7 +50,22 @@ Data regime here (~1MB/link) wants 4 workers/link (all_gather default_workers he
       rows,sem xy,dir,route,mux conn 10 RT,termination). W reader (np_phase2_w_reader) on same worker cores,
       sub-range. Gate: num_w_workers>1 uses mux path; else current direct path.
 - [x] Resolve obstacle 3: termination handshake in np_w_mux_writer (master waits num_mux_clients-1, terminates)
-- [ ] BUILD (wire factory) -> PCC (W_WORKERS=2) -> debug hangs (timeout+tt-smi -r) -> perf
+- [x] Factory wiring written + BUILDS clean (FabricMuxConfig, tt_fabric_mux kernel, worker loop, per-worker
+      row split, ccl::fabric_mux_connection_{ct,rt}_args). Gated opt-in (TT_NP_W_WORKERS); safe default.
+- [x] First device bring-up (TT_NP_W_WORKERS=2, coalesce PCC): HANGS (timeout). Device reset OK.
+- [ ] **BLOCKER — multi-worker sem coordination.** barrier_sem + w_neighbor_sem are per-DEVICE singletons
+      (op.barrier_semaphore / op.w_neighbor_semaphore). With N workers per (link,dir) they inc/reset the
+      SAME sem concurrently => races/deadlock:
+        - barrier: N workers each send a 1-hop inc AND each wait+reset the shared local barrier_sem (concurrent
+          reset race). Need: one designated worker does the barrier, or per-worker barrier sems, or count N.
+        - recv: neighbor's N workers each inc the shared w_neighbor_sem by their wk_count; each local reader
+          waits its own wk_count on the shared sem => clears before the right data lands. Need per-worker recv
+          sems (partition the sem array by worker) or aggregate the wait to the device total.
+      FIX PLAN: allocate per-(region,worker) sems (manager already has 4*num_links region sems; extend to
+      4*num_links*num_w_workers), route each worker's barrier/recv to its own slot. Then re-test.
+- [ ] After sems fixed: PCC (W_WORKERS=2) -> perf sweep W_WORKERS 2/4 -> enable auto-heuristic -> extend to edges/H
+Note: Watcher is UNUSABLE on 2x4 BH fabric (overflows active-eth cfg buffer), so hang-debug is by reasoning +
+DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
 - [ ] np_writer: gated mux-connection send path for W (build_connection + fabric_async_write)
 - [ ] np_phase2_w_reader: N reader cores (already range-parameterized)
