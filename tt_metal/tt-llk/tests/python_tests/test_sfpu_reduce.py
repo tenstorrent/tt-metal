@@ -458,3 +458,146 @@ def test_sfpu_reduce(
     assert passed_test(
         golden_slice, res_slice, formats.output_format, custom_atol=reduce_atol
     )
+
+
+def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 1000)):
+    """Build a single 32x32 Int32 tile, inject `injected_value` at a few scattered
+    positions, run the SFPU reduce on device, and return (golden_slice, device_slice).
+    """
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
+    input_dimensions = [TILE_DIM, TILE_DIM]
+    torch_format = format_dict[formats.input_format]
+
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    stimuli_size = (tile_cnt * ELEMENTS_PER_TILE,)
+    torch.manual_seed(0)
+    src_A = torch.randint(
+        low=base_range[0], high=base_range[1], size=stimuli_size, dtype=torch_format
+    )
+
+    # Inject the extreme value at a handful of scattered positions so every reduced column (for column
+    # reduce) / row (for row reduce) has a chance to hit it. Positions taken on the 32x32 grid.
+    grid = src_A.view(TILE_DIM, TILE_DIM)
+    inject_positions = [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]
+    for r, c in inject_positions:
+        grid[r, c] = injected_value
+    src_A = grid.flatten()
+
+    dst_dim = (
+        [32, tile_cnt * 32]
+        if mathop == MathOperation.ReduceColumn
+        else input_dimensions
+    )
+
+    src_A = tilize_block(src_A, dst_dim, stimuli_format=formats.input_format).flatten()
+    src_A_untilized = untilize_block(src_A, formats.input_format, dst_dim)
+
+    golden_tensor = get_golden_generator(UnarySFPUGolden)(
+        mathop,
+        src_A_untilized,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        dst_dim,
+        reduce_pool=reduce_pool,
+    )
+
+    src_B = torch.zeros_like(src_A)
+
+    configuration = TestConfig(
+        "sources/sfpu_reduce_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        ],
+        runtimes=[
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            TILE_COUNT(tile_cnt),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+            # Int32 MAX/MIN operands sit in DEST as two's-complement.
+            twos_complement=True,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
+
+    if mathop == MathOperation.ReduceColumn:
+        return golden_tensor[0], res_tensor[0]
+    return golden_tensor[:, 0], res_tensor[:, 0]
+
+
+@pytest.mark.parametrize(
+    "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
+)
+@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
+@pytest.mark.parametrize(
+    "injected_value", [INT32_MIN, INT32_MAX], ids=["INT32_MIN", "INT32_MAX"]
+)
+@pytest.mark.parametrize(
+    "base_range",
+    [(-1000, 1000), (-1000, -1), (1, 1000)],
+    ids=["mixed", "all_negative", "all_positive"],
+)
+def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
+    """Repro/guard for tenstorrent/tt-metal#44750: INT32 SFPU reduce (min/max) must stay correct when
+    the input contains INT32_MIN or INT32_MAX.
+
+    The sign-magnitude SFPSWAP comparator cannot represent INT32_MIN (0x80000000 loads as sign-magnitude
+    "negative zero", ranked as 0), so the earlier INT32_2S_COMP path dropped it. This injects the extreme
+    values into an otherwise moderate Int32 tile and checks the device reduction against a torch golden.
+    """
+    golden_slice, res_slice = _run_int32_reduce(
+        mathop, reduce_pool, injected_value, base_range=base_range
+    )
+
+    golden = golden_slice.to(torch.int64)
+    res = res_slice.to(torch.int64)
+
+    mismatch = golden != res
+    num_mismatch = int(mismatch.sum().item())
+
+    if num_mismatch:
+        idxs = torch.nonzero(mismatch).flatten().tolist()
+        lines = [
+            f"  idx={i}: golden={int(golden[i])} device={int(res[i])}"
+            for i in idxs[:12]
+        ]
+        detail = "\n".join(lines)
+        print(
+            f"\n{reduce_pool} {mathop} injected={int(injected_value)}: "
+            f"{num_mismatch} mismatched lanes\n{detail}"
+        )
+
+    assert num_mismatch == 0, (
+        f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
+        f"injected={int(injected_value)} (see stdout)"
+    )
