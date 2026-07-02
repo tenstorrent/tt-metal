@@ -124,6 +124,22 @@ separate "data lands, sem doesn't" from "nothing lands". Then compare the exact 
 working (backward) vs failing (forward) directions use through the mux. This is fabric-mux routing
 internals; it exceeded a reasonable single-session debug budget. Everything else is device-validated.
 STATE: 14 commits, shipping 1-worker op PCC-intact, mux opt-in. Fabric BW NOT yet reached/measured.
+
+## BREAKTHROUGH (2026-07-02): mux DATA path validated — op COMPLETES, 6/8 devices CORRECT.
+Diagnostic: skipped the recv-sem wait in the mux reader (W_MUX_MODE) + fixed spin, so the op no longer
+hangs on the sem bug and I can PCC the DATA the mux actually delivered. Result: op COMPLETES; 6/8 devices
+PASS (byte-exact): (0,0)(0,1)(0,3)(1,0)(1,1)(1,3). Only the W=2 column FAILS with PCC ~0.69 (partial),
+IDENTICAL across a 40x-larger spin => SYSTEMATIC data error, NOT timing. => the mux data delivery is
+fundamentally CORRECT across most of the mesh; two precise bugs remain:
+ 1. RECV-SEM DELIVERY: the completion sem still isn't delivered through the mux (op only completes with
+    the sem skipped). Not the atomic-inc API (tried mux-interface + linear). Deeper mux routing.
+ 2. LAST-DEVICE (w=3) BACKWARD send / W=2 forward-recv: w=2 gets ~half its halo wrong (the half from its
+    forward neighbor w=3, the LAST device). w=3's OWN buffer is correct; w=1 (middle) backward send is
+    correct. So specifically the last-device edge backward coalesce send (or w=2's forward-recv placement)
+    is wrong. w=0 (first edge) forward send is CORRECT (w=1 passes).
+This is a huge de-risk: the mux transfers real data correctly for 6/8 devices. Remaining = fix (1) sem
+delivery + (2) last-edge send, then all-8 PCC, then per-worker sems + num_w_workers=2/4 for the perf win.
+DIAGNOSTIC (recv-skip spin) reverted; tree clean. Total mux bugs fixed: 10; data path proven for 6/8.
 Note: Watcher is UNUSABLE on 2x4 BH fabric (overflows active-eth cfg buffer), so hang-debug is by reasoning +
 DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
