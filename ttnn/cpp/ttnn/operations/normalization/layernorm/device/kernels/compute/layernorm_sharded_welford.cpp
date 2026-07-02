@@ -233,6 +233,8 @@ void kernel_main() {
     // width is not tile-aligned, a final partial tile. The reduce must stop there rather than at the
     // physical shard end, which carries padding tiles. This is the only per-core quantity that differs
     // for the partial final shard.
+    // On all-to-all workers indices 1 through 3 hold the two-stage-reduce args, so this value is appended
+    // at index 4, whereas on other workers it immediately follows the reduce-tile count at index 1.
     const uint32_t welford_reduce_w = get_arg_val<uint32_t>(is_allgather_worker ? 4 : 1);
     const uint32_t partial_reduce_W = welford_reduce_w;
 
