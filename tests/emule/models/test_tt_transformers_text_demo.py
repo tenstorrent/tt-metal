@@ -311,7 +311,9 @@ def prepare_generator_args(
         )
         model_args.append(model_args_i)
         model.append(model_i)
-        model_i._supports_on_device_sampling = False  # emule: host sampling (on-device sampling hits unported manual_seed)
+        model_i._supports_on_device_sampling = (
+            False  # emule: host sampling (on-device sampling hits unported manual_seed)
+        )
         tt_kv_cache.append(tt_kv_cache_i)
 
     local_data_parallel = len(submesh_devices)
