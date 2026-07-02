@@ -132,8 +132,13 @@ def _get_out_subblock_w(per_core_n, out_subblock_h):
     return 1
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None):
-    """2D matmul program config for prefill (compute-bound, DRAM-interleaved)."""
+def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
+    """2D matmul program config for prefill (compute-bound, DRAM-interleaved).
+
+    fused_activation (e.g. ttnn.UnaryOpType.SILU) is applied in the matmul output packer —
+    the sharded/2D matmul kernel requires the activation here, not via ttnn.linear(activation=...)
+    (that path TT_FATALs when a program_config is supplied).
+    """
     if grid_size is None:
         grid_size = prefill_grid_default()
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
@@ -153,7 +158,7 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None):
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
         fuse_batch=False,
     )
 
@@ -284,6 +289,31 @@ def prepare_attn_qkv(q_w, k_w, v_w, qg_per, kv_per, tp):
     parts = []
     for d in range(tp):
         parts.append(q_w[d * qg_per : (d + 1) * qg_per, :])
+        parts.append(k_w[d * kv_per : (d + 1) * kv_per, :])
+        parts.append(v_w[d * kv_per : (d + 1) * kv_per, :])
+    return torch.cat(parts, dim=0)
+
+
+def prepare_attn_qkv_deint(q_w, k_w, v_w, nh_local, hd, kv_per, tp):
+    """Like prepare_attn_qkv, but DE-INTERLEAVES the per-head [Q,gate] pack so each device's
+    fused output is contiguous [all_q_d | all_gate_d | k_d | v_d] instead of [q0,g0,q1,g1,...].
+
+    q_proj packs [q_head(hd) | gate_head(hd)] per head; the default interleaved layout forces
+    attention _make_heads to reshape+chunk the whole [q;gate] block (the 5.3ms prefill relayout).
+    De-interleaving lets q and gate be extracted as plain contiguous slices instead.
+    Numerically identical (a column permutation) — only the extraction layout changes.
+
+    q_w: [nh_total*hd*2, in] ([q,g] per head); k_w/v_w: [nkv_total*hd, in]. nh_local = per-device
+    q heads; kv_per = nkv_local*hd (per-device k/v out block).
+    """
+    hd2 = hd * 2
+    parts = []
+    for d in range(tp):
+        base = d * nh_local * hd2
+        q_rows = [q_w[base + h * hd2 : base + h * hd2 + hd, :] for h in range(nh_local)]
+        g_rows = [q_w[base + h * hd2 + hd : base + h * hd2 + hd2, :] for h in range(nh_local)]
+        parts.append(torch.cat(q_rows, dim=0))  # all_q_d
+        parts.append(torch.cat(g_rows, dim=0))  # all_gate_d
         parts.append(k_w[d * kv_per : (d + 1) * kv_per, :])
         parts.append(v_w[d * kv_per : (d + 1) * kv_per, :])
     return torch.cat(parts, dim=0)
