@@ -169,10 +169,25 @@
       timeout: 15
     wh_n300_civ2:
       timeout: 15
-    wh_llmbox:
-      timeout: 15
     bh_p150b_civ2:
       timeout: 8
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# wh_llmbox runs the same distributed suite but excludes the multi-CQ mesh-event tests
+# (MeshEventsTestSuite.* and MeshEventsTest2x4.*). They deadlock on the 8-device LLMBox mesh
+# (2 CQs + FABRIC_1D multi-device event sync) and hang the job to a 15-min timeout. Confirmed on
+# MultiCQNonBlockingReads and AsyncWorkloadAndIO; the whole family shares the deadlock-prone
+# GenericMultiCQMeshDeviceFixture (num_cqs=2, auto-sized to the full system mesh). This is a hang,
+# not slowness (ReplicatedAsyncIO completes in <1s), so a larger timeout does not help.
+# Kept as a separate entry rather than an in-cmd branch because the container only exposes ARCH_NAME,
+# which cannot distinguish wh_llmbox from other wormhole_b0 boards. Re-enable once the deadlock is fixed.
+# TODO(tracking-issue): re-enable the mesh-event suites on wh_llmbox once the LLMBox multi-CQ event-sync deadlock is resolved.
+- name: runtime_distributed
+  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='-MeshEventsTestSuite.*:MeshEventsTest2x4.*'
+  skus:
+    wh_llmbox:
+      timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 

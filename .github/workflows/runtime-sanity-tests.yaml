@@ -7,16 +7,26 @@ on:
     - cron: "0 3 * * *" # 03:00 UTC daily
   workflow_dispatch:
     inputs:
-      sku:
-        description: "Select machine/SKU to test (jobs with no coverage for the SKU are skipped)"
+      wormhole:
+        description: "All Wormhole SKUs (wh_n150_civ2)"
         required: false
-        default: all
-        type: choice
-        options:
-          - all
-          - "wh_n150_civ2 (N150)"
-          - "bh_p150b_civ2 (P150b)"
-          - "bh_loudbox (BH LoudBox)"
+        type: boolean
+        default: false
+      blackhole:
+        description: "All Blackhole SKUs (bh_p150b_civ2, bh_loudbox)"
+        required: false
+        type: boolean
+        default: false
+      multichip:
+        description: "Multichip SKUs only (bh_loudbox)"
+        required: false
+        type: boolean
+        default: false
+      skus:
+        description: "Specific SKUs (comma-separated), added to any boxes ticked above. e.g. 'bh_loudbox'. Leave everything empty to run ALL."
+        required: false
+        type: string
+        default: ""
       platform:
         required: false
         type: choice
@@ -53,18 +63,63 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150_civ2,bh_p150b_civ2,bh_loudbox"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            SKU_INPUT="${{ inputs.sku || 'all' }}"
-            if [[ "$SKU_INPUT" == "all" ]]; then
-              echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
-            else
-              SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
-              echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
-            fi
+          WH_SKUS="wh_n150_civ2"
+          BH_SKUS="bh_p150b_civ2,bh_loudbox"
+          MULTICHIP_SKUS="bh_loudbox"
+          ALL_SKUS="$WH_SKUS,$BH_SKUS"
+          VALID_SKUS="wh_n150_civ2 bh_p150b_civ2 bh_loudbox wh_all bh_all multichip all"
+
+          # Scheduled (non-dispatch) runs always cover everything.
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+            echo "Selected SKUs (scheduled): $ALL_SKUS"
             exit 0
           fi
-          echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+
+          # Group checkboxes.
+          SELECTED=""
+          [[ "${{ inputs.wormhole }}" == "true" ]] && SELECTED="${SELECTED:+$SELECTED,}$WH_SKUS"
+          [[ "${{ inputs.blackhole }}" == "true" ]] && SELECTED="${SELECTED:+$SELECTED,}$BH_SKUS"
+          [[ "${{ inputs.multichip }}" == "true" ]] && SELECTED="${SELECTED:+$SELECTED,}$MULTICHIP_SKUS"
+
+          # Specific SKUs / group keywords from the text box, added to the ticked boxes.
+          SKU_INPUT=$(echo "${{ inputs.skus }}" | xargs)
+          if [[ -n "$SKU_INPUT" ]]; then
+            IFS=',' read -ra ITEMS <<< "$SKU_INPUT"
+            for item in "${ITEMS[@]}"; do
+              item=$(echo "$item" | xargs)
+              [[ -z "$item" ]] && continue
+              if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
+                echo "::error::Invalid SKU '$item'. Valid: [all, wh_all, bh_all, multichip] or one of: $WH_SKUS,$BH_SKUS"
+                exit 1
+              fi
+              case "$item" in
+                all) SELECTED="${SELECTED:+$SELECTED,}$ALL_SKUS" ;;
+                wh_all) SELECTED="${SELECTED:+$SELECTED,}$WH_SKUS" ;;
+                bh_all) SELECTED="${SELECTED:+$SELECTED,}$BH_SKUS" ;;
+                multichip) SELECTED="${SELECTED:+$SELECTED,}$MULTICHIP_SKUS" ;;
+                *) SELECTED="${SELECTED:+$SELECTED,}$item" ;;
+              esac
+            done
+          fi
+
+          # Nothing ticked and nothing typed -> run everything.
+          [[ -z "$SELECTED" ]] && SELECTED="$ALL_SKUS"
+
+          # Deduplicate, preserving first-seen order.
+          declare -A seen
+          SKUS=""
+          IFS=',' read -ra EXPANDED <<< "$SELECTED"
+          for sku in "${EXPANDED[@]}"; do
+            [[ -z "$sku" ]] && continue
+            if [[ -z "${seen[$sku]}" ]]; then
+              seen[$sku]=1
+              SKUS="${SKUS:+$SKUS,}$sku"
+            fi
+          done
+
+          echo "enabled-skus=$SKUS" >> $GITHUB_OUTPUT
+          echo "Selected SKUs: $SKUS"
   build-artifact:
     needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
