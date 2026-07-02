@@ -255,6 +255,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     uint32_t w_extra_rows = 0;
     uint32_t w_section_wleft_base = 0;
     uint32_t w_section_wright_base = 0;
+    uint32_t w_coalesce_n = 0;  // W-send bank-major coalesce factor (0 = per-stick); set in the is_2d block
 
     if (is_2d) {
         w_forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -289,10 +290,31 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         w_section_wleft_base = h_section_sticks;
         w_section_wright_base = w_section_wleft_base + outer_dim_size * op.np_pad2_left * h_total;
 
-        CreateCircularBuffer(program, w_fabric_core_range, cb_sender_config);
-
         w_rows_per_link = w_outer_dim_size / pad2_num_links;
         w_extra_rows = w_outer_dim_size % pad2_num_links;
+
+        // W-send bank-major coalescing (BH: 8 interleaved DRAM banks). Sticks base+r, base+r+8, ...,
+        // base+r+8*(N-1) are contiguous on bank (base+r)%8, so N of them ship as ONE N*page fabric
+        // write straight to the neighbor's interleaved DRAM (no L1-recv, no receiver changes). Eligible
+        // only when every W-core's base stick-id is 8-aligned (so rel%8 == bank) and pw==1, on the
+        // halo-only (progress==0) path. Middle devices only (edge devices keep the per-stick path).
+        constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+        const bool w_coalesce_ok = (progress_t_batch_size == 0) && (op.np_pad2_left == 1) && (op.np_pad2_right == 1) &&
+                                   (w_section_wleft_base % NP_NUM_DRAM_BANKS == 0) &&
+                                   (w_section_wright_base % NP_NUM_DRAM_BANKS == 0) &&
+                                   (w_rows_per_link % NP_NUM_DRAM_BANKS == 0) && (w_extra_rows == 0);
+        if (w_coalesce_ok) {
+            w_coalesce_n = std::min(16u, 4096u / page_size);  // sticks per <=4KB packet
+            if (w_coalesce_n < 2) {
+                w_coalesce_n = 0;
+            }
+        }
+        // W send CB (c_in0 on W cores): deep enough to double-buffer a coalesce group (per-stick uses 2).
+        uint32_t w_cb_num_pages = (w_coalesce_n > 0) ? (2 * w_coalesce_n) : np_cb_num_pages;
+        CircularBufferConfig cb_w_sender_config =
+            CircularBufferConfig(w_cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}})
+                .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
+        CreateCircularBuffer(program, w_fabric_core_range, cb_w_sender_config);
     }
 
     // Compute H fabric unicast and multicast route configurations
@@ -355,6 +377,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     h_writer_kernel_config.compile_args.push_back(hsend_cb_index);    // send_cb_id (batched H send)
     h_writer_kernel_config.compile_args.push_back(use_w_two_pass);    // unused on H writer; keeps arg layout aligned
     h_writer_kernel_config.compile_args.push_back(use_corner_first);  // H-writer corner-first gate
+    h_writer_kernel_config.compile_args.push_back(0);  // W_COALESCE: unused on H writer; keeps arg layout aligned
     auto h_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"
@@ -525,6 +548,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         // Per-batch signal granularity (matches conv3d reader's progress_t_batch_size CT arg).
         w_reader_kernel_config.compile_args.push_back(progress_t_batch_size);
         w_reader_kernel_config.compile_args.push_back(use_w_two_pass);  // global two-pass gate (lockstep w/ writer)
+        w_reader_kernel_config.compile_args.push_back(w_coalesce_n);    // W-send bank-major coalesce factor (0=off)
         w_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"
@@ -559,6 +583,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         w_writer_kernel_config.compile_args.push_back(use_w_two_pass);   // global two-pass gate (lockstep w/ reader)
         w_writer_kernel_config.compile_args.push_back(
             use_corner_first);  // unused on W writer; keeps arg layout aligned
+        w_writer_kernel_config.compile_args.push_back(w_coalesce_n);  // W-send bank-major coalesce factor (0=off)
         w_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"

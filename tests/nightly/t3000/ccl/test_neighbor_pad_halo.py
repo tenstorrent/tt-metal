@@ -170,11 +170,19 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-def test_neighbor_pad_halo_2d(mesh_device, device_params, padding_mode):
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 2, 8, 16, 16],  # per-stick W path (wright_base not 8-aligned -> W_COALESCE off)
+        [1, 4, 16, 32, 16],  # coalesce-eligible (bases 8-aligned -> W_COALESCE on, middle W devices)
+    ],
+    ids=["perstick", "coalesce"],
+)
+def test_neighbor_pad_halo_2d(mesh_device, device_params, padding_mode, input_shape):
     # [B, T, H, W, C]; H sharded over axis 0 (2 dev), W over axis 1 (4 dev). k333 halo (pH=pW=1).
     run_neighbor_pad_halo_2d(
         mesh_device,
-        input_shape=[1, 2, 8, 16, 16],
+        input_shape=input_shape,
         h_dim=2,
         w_dim=3,
         h_axis=0,

@@ -65,6 +65,12 @@ constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_dst + 7);
 // per-shape by the program factory; unused on the W writer. Follows W_TWO_PASS in the arg layout.
 constexpr bool H_CORNER_FIRST = get_compile_time_arg_val(ct_after_dst + 8);
 
+// W-send bank-major coalesce factor (0 = per-stick). Lockstep with np_phase2_w_reader: a middle W
+// device ships N same-dst-bank sticks (base+r, base+r+8, ...) as one N*page fabric write to the
+// neighbor's interleaved DRAM. Follows H_CORNER_FIRST in the arg layout. BH: 8 DRAM banks.
+constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst + 9);
+constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -311,6 +317,54 @@ void kernel_main() {
         w_slice_frames = (w_h_total > 0) ? (outer_dim_size / w_h_total) : 0;
         // Lockstep with np_phase2_w_reader: progress==0 reorders interior-first when frames align.
         w_interior_first_p0 = (progress_t_batch_size == 0) && (outer_dim_size == w_slice_frames * w_h_total);
+    }
+
+    // Coalesced W-send (middle device): ship g (<= W_COALESCE) same-dst-bank sticks as one g*page fabric
+    // write, lockstep with np_phase2_w_reader's bank-major gather. base = outer_dim_offset_start_id =
+    // section_base + w_link_start (compact W base, 8-aligned by factory eligibility), so dst sticks
+    // base+r, base+r+8, ..., base+r+8*(g-1) are contiguous on bank (base+r)%8 in interleaved DRAM.
+    if constexpr (is_w_fabric_writer && W_COALESCE > 0) {
+        if (!is_first_chip && !is_last_chip) {
+            if (!fabric_opened) {
+                fabric_connection.open();
+                fabric_opened = true;
+            }
+            const uint32_t base = outer_dim_offset_start_id;
+            auto& conn =
+                direction ? fabric_connection.get_backward_connection() : fabric_connection.get_forward_connection();
+            for (uint32_t j = 0; j < NP_NUM_DRAM_BANKS; j++) {
+                uint32_t r = j;
+                while (r < outer_dim_size) {
+                    uint32_t g = 0;
+                    for (uint32_t rr = r; g < W_COALESCE && rr < outer_dim_size; rr += NP_NUM_DRAM_BANKS) {
+                        g++;
+                    }
+                    cb_wait_front(send_cb_id, g);
+                    const uint32_t l1_read_addr = get_read_ptr(send_cb_id);
+                    const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+                    pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, g * stick_size);
+                    conn.wait_for_empty_write_slot();
+                    conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, g * stick_size);
+                    conn.send_payload_flush_non_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                    noc_async_writes_flushed();
+                    cb_pop_front(send_cb_id, g);
+                    r += g * NP_NUM_DRAM_BANKS;
+                }
+            }
+            // Raise the neighbor's W recv sem by the full row count (receiver waits >= outer_dim_size).
+            {
+                uint64_t sem_noc_addr = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, neighbor_sem, 0);
+                pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, outer_dim_size});
+                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                noc_async_writes_flushed();
+            }
+            noc_async_write_barrier();
+            fabric_connection.close();
+            return;
+        }
     }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;

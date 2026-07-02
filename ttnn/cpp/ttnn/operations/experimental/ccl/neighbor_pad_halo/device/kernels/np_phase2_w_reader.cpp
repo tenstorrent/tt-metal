@@ -37,6 +37,12 @@ constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(ct_after_src
 // Follows progress_t_batch_size (ct_after_src) in the W-reader arg layout.
 constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_src + 1);
 
+// W-send bank-major coalesce factor (0 = per-stick). When > 0 (halo-only, pw==1, 8-aligned bases), a
+// middle device gathers same-dst-bank sticks (rel, rel+8, ...) into the CB so the writer ships N of them
+// as one N*page fabric packet. BH has 8 interleaved DRAM banks.
+constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_src + 2);
+constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+
 void kernel_main() {
     // Common runtime args (uniform across all cores, updated between dispatches)
     const address_t output_tensor_address = get_common_arg_val<address_t>(0);
@@ -116,12 +122,67 @@ void kernel_main() {
     //   Fallback (partial last frame): reorder can't cover a partial frame safely, so read linearly and
     //   take the H->W barrier upfront here.
     // (progress>0 fused path gates corners per-batch on HT/HB and ignores this barrier.)
-    const bool interior_first_p0 =
-        (progress_t_batch_size == 0) && (barrier_count > 0) && (outer_dim_size == slice_frames * h_total);
+    // Coalescing (middle device) uses the upfront barrier (bank-major mixes interior+corner), so it
+    // opts out of interior-first.
+    const bool w_coalesce_active = (W_COALESCE > 0) && !is_first_chip && !is_last_chip;
+    const bool interior_first_p0 = (progress_t_batch_size == 0) && (barrier_count > 0) &&
+                                   (outer_dim_size == slice_frames * h_total) && !w_coalesce_active;
     if constexpr (progress_t_batch_size == 0) {
         if (!interior_first_p0 && barrier_count > 0) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
+        }
+    }
+
+    // Coalesced bank-major gather (middle device): read the W-edge stick for rows in dst-bank order
+    // (rel, rel+8, ...) into the CB in groups of up to W_COALESCE, so the paired writer ships each group
+    // as one contiguous fabric packet. Corners (H-padded rows) are safe here — the upfront barrier above
+    // guaranteed the H exchange is complete.
+    if constexpr (W_COALESCE > 0) {
+        if (w_coalesce_active) {
+            const uint32_t w_col = direction ? 0u : (num_interior_sticks - 1u);
+            for (uint32_t j = 0; j < NP_NUM_DRAM_BANKS; j++) {
+                uint32_t r = j;
+                while (r < outer_dim_size) {
+                    uint32_t g = 0;
+                    for (uint32_t rr = r; g < W_COALESCE && rr < outer_dim_size; rr += NP_NUM_DRAM_BANKS) {
+                        g++;
+                    }
+                    cb_reserve_back(cb_output_id, g);
+                    const uint32_t base_l1 = get_write_ptr(cb_output_id);
+                    for (uint32_t m = 0; m < g; m++) {
+                        const uint32_t rel = r + m * NP_NUM_DRAM_BANKS;
+                        const uint32_t global_idx = outer_dim_start + rel;
+                        const uint32_t t_idx = global_idx / h_total;
+                        const uint32_t hp = global_idx % h_total;
+                        const uint32_t l1_addr = base_l1 + m * stick_size;
+                        if (hp >= padding_h && hp < padding_h + input_H_dev) {
+                            const uint32_t page = t_idx * input_H_dev * num_interior_sticks +
+                                                  (hp - padding_h) * num_interior_sticks + w_col;
+                            noc_async_read(get_noc_addr(page, input_accessor), l1_addr, stick_size);
+                        } else {
+                            uint32_t halo_page;
+                            if (hp < padding_h) {
+                                halo_page = t_idx * padding_h * num_interior_sticks + hp * num_interior_sticks + w_col;
+                            } else {
+                                const uint32_t pad_row = hp - padding_h - input_H_dev;
+                                halo_page = h_halo_hbot_base + t_idx * padding_h * num_interior_sticks +
+                                            pad_row * num_interior_sticks + w_col;
+                            }
+                            noc_async_read(get_noc_addr(halo_page, dst_accessor), l1_addr, stick_size);
+                        }
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_output_id, g);
+                    r += g * NP_NUM_DRAM_BANKS;  // next group start on this bank
+                }
+            }
+            // Receive-completion: wait for all incoming W-halo rows to land before the op returns.
+            if (!is_first_chip) {
+                noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim_size);
+                noc_semaphore_set(w_neighbor_sem_ptr, 0);
+            }
+            return;
         }
     }
 
