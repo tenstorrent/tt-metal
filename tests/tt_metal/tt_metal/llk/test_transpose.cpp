@@ -271,6 +271,7 @@ void run_single_core_transpose(
             experimental::ComputeHardwareConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
+                .unpack_to_dest_en = fp32_dest_acc_en,
                 .unpack_to_dest_mode =
                     fp32_dest_acc_en
                         ? experimental::ComputeHardwareConfig::

@@ -215,11 +215,6 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.alias_with;
 }
 
-// Helper: return a kernel's dfb-compute-self-loop-scopes map.
-const Table<DFBSpecName, DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
-    return kernel.advanced_options.dfb_self_loop_connectivities;
-}
-
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
 // They are used verbatim in the generated kernel source code.
 // TODO: Move this to ttsl in a follow up PR
@@ -405,8 +400,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 endpoint_info.producers.push_back({&kernel, &dfb_binding});
             } else if (dfb_binding.endpoint_type == DFBEndpointType::CONSUMER) {
                 endpoint_info.consumers.push_back({&kernel, &dfb_binding});
-            } else {
-                TT_FATAL(false, "RELAY endpoints are only used for cross-node DFB, which is not supported yet");
             }
         }
     }
@@ -1299,14 +1292,18 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
 
         if (self_loop_kernel != nullptr) {
-            // DFB supports self-loop for compute kernels, but NOT for DM kernels.
-            // Catch this here (and emit a clear error message), rather than let it slip through and cause
-            // a much more confusing downstream error in the DFB backend code.
+            // A data-movement kernel may self-loop a DFB (bind it as both PRODUCER and CONSUMER) only
+            // on Gen1 (WH/BH), where a DFB lowers to a plain circular buffer that a single DM RISC can
+            // both fill and drain. On Gen2 the DFB's tile-counter credit machinery requires disjoint
+            // producer/consumer RISCs, so a DM self-loop cannot be lowered. Catch it here (with a clear
+            // message) rather than let it fall through to a confusing "producer_risc_mask and
+            // consumer_risc_mask must not overlap" error in the DFB backend. (Compute self-loops are
+            // always legal: they lower to the intra-Tensix packer->unpacker flow.)
             TT_FATAL(
-                !self_loop_kernel->is_data_movement_kernel(),
+                !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel()),
                 "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
-                "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels. Consider using a "
-                "scratchpad or LocalTensorAccessor instead.",
+                "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels on Gen2 "
+                "architectures. Consider using a scratchpad or LocalTensorAccessor instead.",
                 dfb.unique_id,
                 self_loop_kernel->unique_id);
 
@@ -1314,7 +1311,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // as sets of KernelSpec*. This permits the natural pattern of multiple same-source
             // KernelSpecs each self-looping the DFB on their disjoint node ranges, while rejecting
             // the case where a self-looping kernel shares the DFB with an unrelated kernel (which
-            // would make per-instance tensix-scope semantics ambiguous).
+            // would make the producer/consumer mask and lowering semantics ambiguous).
             std::unordered_set<const KernelSpec*> producer_kernels;
             std::unordered_set<const KernelSpec*> consumer_kernels;
             for (const auto& p : endpoints.producers) {
@@ -1330,33 +1327,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "When a DFB is self-looped, every same-side binding must come from a self-loop "
                 "participant (i.e. a kernel that appears on both sides).",
                 dfb.unique_id);
-
-            // All self-loop participants must agree on the tensix-scope for this DFB —
-            // MakeDataflowBufferConfig writes a single tensix_scope into the DFB config, and the
-            // self-loop participants alternate per node, so a disagreement is unresolvable.
-            // Iterate endpoints.producers (a vector) rather than producer_kernels (an
-            // unordered_set), so iteration order — and any resulting error message — is
-            // deterministic across runs.
-            auto scope_for_kernel = [&](const KernelSpec* k) {
-                auto conn = kernel_self_loop_scopes(*k).get(dfb.unique_id);
-                return conn ? *conn : DFBSelfLoopConnectivity::INTRA;
-            };
-            const KernelSpec* first_kernel = endpoints.producers.front().kernel;
-            const auto first_scope = scope_for_kernel(first_kernel);
-            std::unordered_set<const KernelSpec*> seen;
-            for (const auto& rec : endpoints.producers) {
-                if (!seen.insert(rec.kernel).second) {
-                    continue;
-                }
-                TT_FATAL(
-                    scope_for_kernel(rec.kernel) == first_scope,
-                    "DFB '{}' is self-looped; all self-loop participants must agree on "
-                    "DFBSelfLoopConnectivity, but kernel '{}' specifies a different scope "
-                    "than kernel '{}'.",
-                    dfb.unique_id,
-                    rec.kernel->unique_id,
-                    first_kernel->unique_id);
-            }
         }
     }
 
@@ -1566,56 +1536,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dfb_spec->data_format_metadata.has_value(),
                 "DFB '{}' is used by a compute kernel, but no data_format_metadata is specified",
                 dfb_name);
-        }
-    }
-
-    // Validate KernelSpec::dfb_self_loop_connectivities entries.
-    // This is a niche advanced option that only applies to compute kernels that self-loop a DFB
-    // (bind it as both producer and consumer).
-    // All misapplications fail loudly here for the benefit of users (especially AI users).
-    for (const KernelSpec& kernel : spec.kernels) {
-        if (kernel_self_loop_scopes(kernel).empty()) {
-            continue;
-        }
-        TT_FATAL(
-            kernel.is_compute_kernel(),
-            "KernelSpec '{}' specifies dfb_self_loop_connectivities, but is not a compute kernel. "
-            "This option applies only to compute kernels.",
-            kernel.unique_id);
-
-        for (const auto& [dfb_spec_name, scope] : kernel_self_loop_scopes(kernel)) {
-            TT_FATAL(
-                collected.dfb_by_name.contains(dfb_spec_name),
-                "KernelSpec '{}' has a dfb_self_loop_connectivities entry referencing unknown DFB '{}'.",
-                kernel.unique_id,
-                dfb_spec_name);
-
-            bool has_producer_binding = false;
-            bool has_consumer_binding = false;
-            for (const auto& binding : kernel.dfb_bindings) {
-                if (binding.dfb_spec_name != dfb_spec_name) {
-                    continue;
-                }
-                if (binding.endpoint_type == DFBEndpointType::PRODUCER) {
-                    has_producer_binding = true;
-                } else if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
-                    has_consumer_binding = true;
-                }
-            }
-            TT_FATAL(
-                has_producer_binding && has_consumer_binding,
-                "KernelSpec '{}' has a dfb_self_loop_connectivities entry for DFB '{}', but the "
-                "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
-                "consumer). This option applies only to self-looped DFBs.",
-                kernel.unique_id,
-                dfb_spec_name);
-
-            TT_FATAL(
-                scope != DFBSelfLoopConnectivity::INTER,
-                "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
-                "not yet supported by the runtime.",
-                kernel.unique_id,
-                dfb_spec_name);
         }
     }
 
@@ -2495,17 +2415,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto producer_access_pattern = to_hw_access_pattern(producer_binding->access_pattern);
     auto consumer_access_pattern = to_hw_access_pattern(consumer_binding->access_pattern);
 
-    // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
-    // lower-layer DFB API requires an explicit scope. Self-loop is detected as any overlap
-    // between the producer and consumer kernel sets — under the multi-binding regime, the
-    // first-record pointers may differ even when the kernel sets are identical (the overlap is
-    // what matters, not vector ordering). Upstream validation guarantees producer set ==
-    // consumer set whenever any overlap exists, and that all self-loop participants agree on
-    // the tensix scope; reading from the first producer is therefore safe and representative.
-    // The user can declare scope via KernelSpec::dfb_self_loop_connectivities:
-    //  - absence of an entry means we infer INTRA (the common case)
-    //  - user-specified INTRA is also fine
-    //  - user-specified INTER is not currently supported. This will have already failed validation.
+    // A compute kernel that self-loops a DFB (binds it as both producer and consumer) lowers to the
+    // intra-Tensix packer->unpacker flow, so the lower-layer DFB API needs TensixScope::INTRA. The
+    // Metal 2.0 surface does not expose a scope option — INTRA is the only supported topology, applied
+    // automatically here. Self-loop is detected as any overlap between the producer and consumer kernel
+    // sets — under the multi-binding regime the first-record pointers may differ even when the kernel
+    // sets are identical (the overlap is what matters, not vector ordering). Upstream validation
+    // guarantees producer set == consumer set whenever any overlap exists, so reading from the first
+    // producer is safe and representative. A DM self-loop (Gen1-only) needs no tensix_scope.
     const bool is_self_loop = [&] {
         for (const auto& p : dfb_endpoint_info.producers) {
             for (const auto& c : dfb_endpoint_info.consumers) {
@@ -2518,11 +2435,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     }();
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
-        auto user_conn = kernel_self_loop_scopes(*producer).get(dfb_spec->unique_id);
-        const auto user_scope = user_conn ? *user_conn : DFBSelfLoopConnectivity::INTRA;
-        tensix_scope = (user_scope == DFBSelfLoopConnectivity::INTRA)
-                           ? experimental::dfb::TensixScope::INTRA
-                           : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
+        tensix_scope = experimental::dfb::TensixScope::INTRA;
     }
 
     // Compute the per-side implicit-sync value by polling the bound DM kernels' Gen2 votes.
@@ -2727,6 +2640,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
         .enable_2x_src_format = compute_config.enable_2x_src_format,
+        .unpack_to_dest_en = compute_config.unpack_to_dest_en,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),

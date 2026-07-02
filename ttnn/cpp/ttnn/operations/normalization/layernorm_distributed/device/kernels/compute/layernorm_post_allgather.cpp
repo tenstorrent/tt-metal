@@ -127,7 +127,7 @@ void kernel_main() {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
-        reconfig_data_format(cb_stats, cb_reduce);
+        reconfig_data_format(cb_reduce, cb_stats);
         pack_reconfig_data_format(cb_stats_reduced);
 
         /*
@@ -135,17 +135,17 @@ void kernel_main() {
          * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
          * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
          */
-        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
+        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
 
         tile_regs_acquire();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
+            reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_reduce, i, 0, 0);
         }
         // Reduce sum(x) next
         for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 1);
+            reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_reduce, i, 0, 1);
         }
         tile_regs_commit();
 
