@@ -124,6 +124,13 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--dump-per-op",
+        dest="dump_per_op",
+        action="store_true",
+        help="Dump collected device data to files and push after each TTNN operation",
+        default=False,
+    )
+    parser.add_option(
         "--disable-device-data-dump-to-files",
         dest="disable_device_data_dump_to_files",
         action="store_true",
@@ -231,6 +238,9 @@ def main():
 
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+
+    if options.dump_per_op:
+        os.environ["TTNN_PROFILER_PER_OP_DUMP"] = "1"
 
     if options.disable_device_data_dump_to_files:
         os.environ["TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES"] = "1"
