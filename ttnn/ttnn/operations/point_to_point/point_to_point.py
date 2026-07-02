@@ -117,11 +117,23 @@ def _compute_packet_dims(input_tensor) -> PacketDims:
     )
 
 
+def _datum_size(dtype) -> int:
+    """Bytes per datum, block-float-safe. ttnn.element_size (tt::datum_size) throws
+    for block-float formats (bfp8/bfp4/...) because they have no fixed per-element
+    byte width. The intermediate is a pure byte landing zone whose addressing is
+    driven by the packet_size override (not the datum), so a byte-level datum of 1
+    is correct for block-float: packet_page_dim = packet_size_bytes safely
+    over-allocates the (tile-padded) intermediate buffer."""
+    try:
+        return ttnn.element_size(dtype)
+    except (ValueError, RuntimeError):
+        return 1
+
+
 def _resolve_intermediate_spec(input_tensor, packet_dims: PacketDims):
     """Intermediate (fabric landing zone) shape/dtype/layout/memory match the input
     layout, but the shape is packet-framed: {total_packets, packet_page_dim}."""
-    datum_size = ttnn.element_size(input_tensor.dtype)
-    packet_page_dim = packet_dims.packet_size_bytes // datum_size
+    packet_page_dim = packet_dims.packet_size_bytes // _datum_size(input_tensor.dtype)
     return ttnn.Shape([packet_dims.total_packets, packet_page_dim])
 
 
