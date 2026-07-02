@@ -903,7 +903,13 @@ def test_tensor_prefetcher_streaming_matmul(
             (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
             for b in range(num_dram_banks)
         ]
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    # The recv-contig matmul factory validates the (program_config, weight, bank_to_receivers) triple
+    # and, because program_config.stream_in1 is set, relaxes its size floor from a full layer down to a
+    # double-buffer window -- so the shallow streaming GCB is accepted here instead of only via the raw
+    # create_global_circular_buffer_with_dram_senders path.
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+        device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=gcb_size
+    )
 
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, N // ring_size),
