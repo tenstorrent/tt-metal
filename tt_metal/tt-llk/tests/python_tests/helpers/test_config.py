@@ -141,9 +141,14 @@ class TestConfig:
     # Precompiled-header (PCH) scratch dir + checked-in source dir (Quasar only).
     # PCH_AVAILABLE flips to True once the per-run .gch files are built; if
     # generation fails for any reason it stays False and compiles run unchanged.
+    # PCH_ATTEMPTED gates generation to at most once per worker process: build_pch
+    # runs on the per-variant hot path, and a fail-open generation writes no
+    # success marker, so without this flag every variant would re-enter and
+    # re-serialize on the global PCH FileLock (see build_pch).
     PCH_DIR: ClassVar[Path]
     PCH_SOURCE_DIR: ClassVar[Path]
     PCH_AVAILABLE: ClassVar[bool] = False
+    PCH_ATTEMPTED: ClassVar[bool] = False
 
     # Sources directories
     LLK_ROOT: ClassVar[Path]
@@ -1008,7 +1013,7 @@ class TestConfig:
         `.gch` would be silently ignored by GCC (`-include` falls back to
         parsing the header from source), never miscompiled.
         """
-        if TestConfig.PCH_AVAILABLE:
+        if TestConfig.PCH_AVAILABLE or TestConfig.PCH_ATTEMPTED:
             return
         # Quasar-only: the checked-in PCH headers and role set are Quasar-specific.
         if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
@@ -1017,15 +1022,30 @@ class TestConfig:
             logger.debug("PCH disabled via TT_LLK_DISABLE_PCH=1")
             return
 
+        # Commit to at most one generation attempt per worker process. build_pch
+        # is on the per-variant hot path (build_elfs calls it before the variant's
+        # own done-marker fast-path), and generation is fail-open (below): on
+        # failure PCH_AVAILABLE stays False and no success marker is written. If we
+        # re-entered per variant we would re-acquire the global FileLock and re-run
+        # the doomed compiles on every one of the ~100k+ variants, serializing all
+        # xdist workers behind one lock and collapsing CPU utilisation. One shot.
+        TestConfig.PCH_ATTEMPTED = True
+
         done_marker = TestConfig.PCH_DIR / ".pch_complete"
+        failed_marker = TestConfig.PCH_DIR / ".pch_failed"
         if done_marker.exists():
             TestConfig.PCH_AVAILABLE = True
+            return
+        # A sibling worker already tried and failed this run; don't retry.
+        if failed_marker.exists():
             return
 
         lock = FileLock("/tmp/tt-llk-build-pch.lock")
         with lock:
             if done_marker.exists():
                 TestConfig.PCH_AVAILABLE = True
+                return
+            if failed_marker.exists():
                 return
 
             os.makedirs(TestConfig.PCH_DIR, exist_ok=True)
@@ -1072,7 +1092,13 @@ class TestConfig:
                 )
             except Exception as e:
                 # Fail open: disable PCH for this run, leave compiles unchanged.
+                # Record the failure under the lock so neither this process nor any
+                # sibling worker re-attempts generation for the rest of the run.
                 TestConfig.PCH_AVAILABLE = False
+                try:
+                    failed_marker.touch()
+                except OSError:
+                    pass
                 logger.warning(
                     "PCH generation failed ({}); continuing without precompiled headers.",
                     e,
