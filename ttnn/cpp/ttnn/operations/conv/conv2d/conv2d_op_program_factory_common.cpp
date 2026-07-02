@@ -295,20 +295,39 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = can_alias_partials_onto_out,
         .data_format = partial_df});
 
-    // UNTILIZE_STAGING CB: a DISTINCT one-block staging buffer for the fuse_bias + untilize_out path.
-    // Previously the kernel aliased the bias-add output onto matmul_partials_cb (untilize_mode_out_cb_id
-    // == matmul_partials_cb when untilize_out), so the TileRowMajor bias-add's reserve_back landed on the
-    // same one-block CB it was reading from BEFORE pop_front → reserve-before-pop circular wait. bf16's
-    // byte-slack absorbed it, but fp32's 2x-wider tiles removed the slack (the former fp32+bias+untilize
-    // exclusion). Un-aliasing onto this distinct buffer makes reserve_back land on a fresh CB → no
-    // circular wait for ANY dtype, so the fp32+bias+untilize exclusion is removed and that cell uses
-    // caller_owns like every other bias+untilize conv. Sized to ONE output block (the bias-add fills it
-    // one M-row-group at a time; the untilize phase drains it). Allocated ONLY for untilize_out + bias —
-    // every other path leaves it at 0 pages (no L1 cost). Same data format as partials (the bias-add
-    // packs the post-bias values here; the untilize phase reconfigs to the OUT format when it reads).
+    // UNTILIZE_STAGING CB: a DISTINCT one-block staging buffer for the SubblockMajor (!packer_l1_acc)
+    // fuse_bias + untilize_out path ONLY.
+    //
+    // History: the kernel used to alias the bias-add output onto matmul_partials_cb (untilize_mode_out_cb_id
+    // == matmul_partials_cb when untilize_out), so the bias-add's reserve_back landed on the same one-block
+    // CB it was reading from BEFORE pop_front → reserve-before-pop circular wait. bf16's byte-slack absorbed
+    // it, but fp32's 2x-wider tiles removed the slack (the former fp32+bias+untilize exclusion).
+    //
+    // For the packs_in_place class (TileRowMajor + packer_l1_acc — the deep-K caller_owns convs, incl.
+    // fp32+bias+untilize) the kernel now does the bias-add IN PLACE into matmul_partials_cb: the matmul did
+    // ONE reserve/push over the whole output block, so the block is fronted at the CB base and (one-block
+    // CB) fifo_wr_ptr wrapped back to that base — the bias-add read-modify-writes it with NO reserve/push/
+    // pop. There is no reserve at all in the bias phase, so the circular wait cannot occur for ANY dtype and
+    // NO staging CB is needed — its full output-block of L1 is recovered for these convs. The untilize phase
+    // reads the biased block from matmul_partials_cb and pops it (see conv_bmm_tilize.cpp bias_in_place).
+    //
+    // The one path that still needs the distinct staging buffer is SubblockMajor bias+untilize
+    // (!packer_l1_acc): there the matmul runs the normal per-subblock FIFO (not in-place) and the SBM
+    // bias-add + reblock_and_untilize consume/produce subblock-major, so the in-place read-modify-write
+    // model does not apply. Sized to ONE output block; 0 pages on every other path (incl. the packs_in_place
+    // bias+untilize convs, which is the L1 recovery). Same data format as partials.
+    //
+    // TileRowMajor (packs_in_place) for bias+untilize is emitted ONLY by the HEIGHT/BLOCK_SHARDED factory's
+    // pin_class_caller_owns gate (packer_l1_acc_en && (has_bias||untilize_out)) — the WIDTH_SHARDED factory
+    // never emits CONV_TILE_PACK_ROW_MAJOR, so its bias+untilize is ALWAYS SubblockMajor and always needs
+    // the staging CB. So the kernel's bias_in_place (which requires TileRowMajor) is true exactly for
+    // (HS||BS) && packer_l1_acc && has_bias && untilize_out; the staging CB is needed on the complement:
+    // untilize_out && enable_bias && (WIDTH_SHARDED || !packer_l1_acc). This MUST match conv_bmm_tilize.cpp's
+    // bias_in_place gate — a mismatch (staging=0 while the kernel expects it) would fault on WS bias+untilize.
+    const bool bias_in_place_recovers_staging = (sharding_scheme != TensorMemoryLayout::WIDTH_SHARDED) && packer_l1_acc;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::UNTILIZE_STAGING,
-        .num_pages = (untilize_out && enable_bias) ? out_block_num_tiles : 0,
+        .num_pages = (untilize_out && enable_bias && !bias_in_place_recovers_staging) ? out_block_num_tiles : 0,
         .page_size = partial_tile_size,
         .data_format = partial_df});
 

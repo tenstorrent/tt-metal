@@ -419,11 +419,20 @@ void kernel_main() {
     // is out_cb.) The fuse_bias case packs to matmul_partials_cb explicitly and never uses this.
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
-    // Bias-add output target. The bias-add always reads matmul_partials_cb and writes a DISTINCT buffer:
-    //   • untilize_out + fuse_bias → the dedicated UNTILIZE_STAGING CB (un-aliased off partials, so the
-    //     TileRowMajor reserve-before-pop has free slack for every dtype; the untilize phase then reads
-    //     this staging CB → out_cb). This is the fix that lets fp32+bias+untilize use caller_owns.
+    // Bias-add output target. The bias-add reads matmul_partials_cb and writes:
+    //   • untilize_out + fuse_bias, packs_in_place (TileRowMajor + packer_l1_acc, i.e. the deep-K
+    //     caller_owns class incl. fp32+bias+untilize) → matmul_partials_cb IN PLACE. The matmul already
+    //     did ONE reserve/push over the whole output block, so the block is fronted at the CB base and
+    //     (one-block CB) fifo_wr_ptr has wrapped back to that base — the bias-add read-modify-writes the
+    //     block at its original positions with NO reserve/push/pop. There is no reserve at all in the bias
+    //     phase, so the former reserve-before-pop circular wait cannot occur for ANY dtype, and the
+    //     dedicated UNTILIZE_STAGING CB is unnecessary (its output-block of L1 is recovered). The untilize
+    //     phase then reads the biased block from matmul_partials_cb and owns its pop.
+    //   • untilize_out + fuse_bias, SubblockMajor (!packer_l1_acc) → the dedicated UNTILIZE_STAGING CB
+    //     (un-aliased off partials so the SBM reserve-before-pop has free slack; the reblock_and_untilize
+    //     phase reads the staging CB → out_cb). This narrow path keeps the staging CB.
     //   • TILE output + fuse_bias → out_cb directly (no untilize phase).
+    // bias_in_place (defined once packs_in_place is known, below) selects the first bullet.
     constexpr uint32_t bias_out_cb_id = untilize_out ? untilize_staging_cb_id : out_cb_id;
 
     uint32_t bias_block_offset = 0;
@@ -499,6 +508,15 @@ void kernel_main() {
     // untilize_out — which are the ones that satisfy this).
     constexpr bool packs_in_place = (conv_output_layout == compute_kernel_lib::OutputCBLayout::TileRowMajor) &&
                                     packer_l1_acc && (last_block_target == compute_kernel_lib::LastBlockTarget::Interm);
+
+    // Bias-add writes its result back into matmul_partials_cb IN PLACE (no reserve/push/pop) whenever the
+    // matmul packed in place AND there is a downstream untilize phase to drain partials. This is the
+    // fuse_bias + untilize_out members of the packs_in_place class (TileRowMajor + packer_l1_acc), incl. the
+    // fp32+bias+untilize cell. The block is fronted at the CB base (matmul's single reserve/push) and the
+    // one-block CB wrapped fifo_wr_ptr to that base, so pack_tile<out_of_order> lands each tile in place.
+    // The staging CB is unused here (0 pages). The SubblockMajor (!packer_l1_acc) bias+untilize path keeps
+    // its distinct staging CB (packs_in_place is false there).
+    constexpr bool bias_in_place = packs_in_place && fuse_bias && untilize_out;
 
     using PreKBlockFn = ConvTilizePreKBlock<
         height_sharded,
@@ -663,36 +681,46 @@ void kernel_main() {
                     out_subblock_h,
                     out_subblock_w,
                     /*out_row_width=*/0);  // 0 => derive from out_subblock_w * in1_num_subblocks
-                // Bias-add reads matmul_partials_cb and writes cb_bias_out — a buffer DISTINCT from
-                // partials (out_cb for TILE output; the dedicated UNTILIZE_STAGING CB for untilize_out).
-                // Because the output buffer is distinct, the TileRowMajor reserve-before-pop and the SBM
-                // reserve both land on a fresh CB with free slack for every dtype — no reserve-before-pop
-                // circular wait. (Previously cb_untilize_mode_out aliased partials when untilize_out, which
-                // forced fp32+bias+untilize off caller_owns; un-aliasing removed that exclusion.)
+                // Bias-add reads matmul_partials_cb. The output target and CB lifecycle depend on
+                // bias_in_place:
+                //   • bias_in_place (packs_in_place + untilize_out): out_buf == matmul_partials_cb. The
+                //     helper's TileRowMajor in_place path read-modify-writes the fronted block at its
+                //     original positions with NO reserve_back / push_back / pop_front — so there is no
+                //     reserve at all, and the reserve-before-pop circular wait cannot occur for ANY dtype
+                //     (that is what removes the former fp32+bias+untilize exclusion, WITHOUT a staging CB).
+                //     The untilize phase below reads the biased block from matmul_partials_cb and pops it.
+                //   • otherwise: out_buf == cb_bias_out (out_cb for TILE output; the dedicated
+                //     UNTILIZE_STAGING CB for SBM untilize_out). Distinct buffer → the reserve lands on a
+                //     fresh CB with free slack; the bias-add pops the whole block from partials.
+                auto& bias_out_buf = bias_in_place ? cb_matmul_partials : cb_bias_out;
 #ifdef SFPU_OP_INIT_ACTIVATION
                 compute_kernel_lib::add_bias_bcast_rows<
                     compute_kernel_lib::BiasBroadcast::RowBroadcast,
                     conv_output_layout,
-                    ConvSFPUPostCompute>(
-                    cb_matmul_partials, cb_bias, cb_bias_out, bias_shape, ConvSFPUPostCompute{}, bias_block_offset);
+                    ConvSFPUPostCompute,
+                    compute_kernel_lib::NoneActivation,
+                    bias_in_place>(
+                    cb_matmul_partials, cb_bias, bias_out_buf, bias_shape, ConvSFPUPostCompute{}, bias_block_offset);
 #else
-                compute_kernel_lib::
-                    add_bias_bcast_rows<compute_kernel_lib::BiasBroadcast::RowBroadcast, conv_output_layout>(
-                        cb_matmul_partials, cb_bias, cb_bias_out, bias_shape, {}, bias_block_offset);
+                compute_kernel_lib::add_bias_bcast_rows<
+                    compute_kernel_lib::BiasBroadcast::RowBroadcast,
+                    conv_output_layout,
+                    compute_kernel_lib::bias_add_config::NoPostBias,
+                    compute_kernel_lib::NoneActivation,
+                    bias_in_place>(cb_matmul_partials, cb_bias, bias_out_buf, bias_shape, {}, bias_block_offset);
 #endif
-
-                // No partials rd/wr rewind: the bias-add now writes the DISTINCT staging CB, and it drains
-                // the whole output block from matmul_partials_cb via pop_front (balanced against the
-                // matmul's single push for the one-block region), so partials wraps to base naturally. The
-                // untilize phase below reads the staging CB, not partials. (The former rewind existed only
-                // because the bias output aliased partials and the untilize re-read it from base.)
             }
             if constexpr (untilize_out) {
-                // Untilize input buffer: when fuse_bias the bias-add wrote the (post-bias) block to the
-                // DISTINCT staging CB (bias_out_cb_id == untilize_staging_cb_id here), so untilize reads
-                // that; otherwise it reads matmul_partials_cb directly. Both hold the same data format
-                // (partial_df), so the format reconfigs below are unchanged.
-                constexpr uint32_t untilize_src_cb_id = fuse_bias ? bias_out_cb_id : matmul_partials_cb;
+                // Untilize input buffer:
+                //   • bias_in_place: the bias-add wrote the post-bias block back INTO matmul_partials_cb
+                //     (in place), so untilize reads matmul_partials_cb — the same buffer the no-bias path
+                //     reads. Untilize owns the pop that drains the fronted block.
+                //   • SubblockMajor fuse_bias (!bias_in_place): the bias-add wrote the DISTINCT staging CB
+                //     (bias_out_cb_id == untilize_staging_cb_id), so untilize reads that.
+                //   • !fuse_bias: matmul packed partials directly; untilize reads matmul_partials_cb.
+                // All hold the same data format (partial_df), so the format reconfigs below are unchanged.
+                constexpr uint32_t untilize_src_cb_id =
+                    (fuse_bias && !bias_in_place) ? bias_out_cb_id : matmul_partials_cb;
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
                     pack_reconfig_l1_acc(0);

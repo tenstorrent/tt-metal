@@ -118,6 +118,19 @@ struct NoPostBias {
  *                  slot — this is where activation belongs when a matmul fed into bias. Build
  *                  from the sfpu_activation_helpers.hpp aliases (or ActivationOp<...> for
  *                  host-driven kinds); ActivationInitHelper::init() is the caller's boot-time job.
+ *   in_place       TileRowMajor only (asserted): read-modify-write the bias result back into the
+ *                  SAME partials CB it read from (partials_buf and out_buf must be the same CB),
+ *                  instead of into a distinct out_buf. Mirrors the matmul_block in-place pack model:
+ *                  the caller has done ONE reserve/push over the whole output block (matmul_block's
+ *                  packs_in_place), so the fronted block already occupies its L1 region and the
+ *                  helper reuses it — NO reserve_back, NO push_back, NO pop_front. This removes the
+ *                  reserve-before-pop circular wait entirely (there is no reserve), so a dedicated
+ *                  staging CB is unnecessary; a downstream in-kernel consumer (e.g. untilize) reads
+ *                  the biased block from partials_buf and owns its pop.
+ *                  PRECONDITION: partials CB is a ONE-output-block region whose fifo_wr_ptr has
+ *                  wrapped back to the block base after the producer's push_back (guaranteed for a
+ *                  one-block CB — cb_push_back wraps fifo_wr_ptr to base when it hits fifo_limit),
+ *                  so pack_tile<out_of_order> lands each tile in place at base + tile_index.
  *
  * ── Runtime parameters ───────────────────────────────────────────────────────
  *
@@ -158,6 +171,7 @@ template <
     OutputCBLayout tile_order = OutputCBLayout::SubblockMajor,
     typename PostBiasFn = bias_add_config::NoPostBias,
     typename Activation = NoneActivation,
+    bool in_place = false,
     typename Buf = ::CircularBuffer>
 ALWI void add_bias_bcast_rows(
     Buf& partials_buf,
