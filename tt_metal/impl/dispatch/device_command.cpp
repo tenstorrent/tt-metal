@@ -496,12 +496,15 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
         initialize_write_cmd(write_cmd_dst);
     }
 
-    if constexpr (flush_prefetch && inline_data) {
-        TT_ASSERT(data != nullptr);
-        this->add_data(data, data_sizeB, data_sizeB);
-    }
-
-    if constexpr (!flush_prefetch) {
+    if constexpr (flush_prefetch) {
+        if constexpr (inline_data) {
+            TT_ASSERT(data != nullptr);
+            this->add_data(data, data_sizeB, data_sizeB);
+            // Align so the next command is written to a correctly aligned location. Mirrors
+            // DeviceCommandCalculator::add_dispatch_write_linear_h and add_dispatch_write_linear.
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    } else {
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 }
