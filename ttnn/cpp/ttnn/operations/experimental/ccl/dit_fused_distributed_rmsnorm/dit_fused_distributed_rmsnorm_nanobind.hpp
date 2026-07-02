@@ -10,6 +10,6 @@ namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::ccl {
 
-void bind_wan_fused_distributed_rmsnorm(nb::module_& mod);
+void bind_dit_fused_distributed_rmsnorm(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::ccl

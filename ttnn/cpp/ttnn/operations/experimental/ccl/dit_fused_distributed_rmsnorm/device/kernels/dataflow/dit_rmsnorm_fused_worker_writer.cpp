@@ -29,7 +29,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "wan_rmsnorm_scalar_setup.hpp"
+#include "dit_rmsnorm_scalar_setup.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
 constexpr uint32_t output_cb = get_compile_time_arg_val(0);
@@ -100,7 +100,7 @@ void kernel_main() {
     const uint32_t stat_tile_bytes = get_tile_size(stats_transposed_local_cb);
 
     // Populate compute's scalar/eps/trans_mat CBs before anything else.
-    wan_rmsnorm_generate_scalars_and_transmat<
+    dit_rmsnorm_generate_scalars_and_transmat<
         w_sum_cb,
         w_avg_cb,
         w_eps_cb,

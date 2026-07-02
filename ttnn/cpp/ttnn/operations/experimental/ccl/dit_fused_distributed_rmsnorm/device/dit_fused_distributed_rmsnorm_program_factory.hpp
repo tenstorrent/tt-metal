@@ -9,11 +9,11 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
-#include "wan_fused_distributed_rmsnorm_device_operation_types.hpp"
+#include "dit_fused_distributed_rmsnorm_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct WanFusedDistributedRmsnormSharedVariables {
+struct DitFusedDistributedRmsnormSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
@@ -30,29 +30,29 @@ struct WanFusedDistributedRmsnormSharedVariables {
     std::optional<size_t> stats_dram_addr_writer_arg_idx;
 };
 
-struct WanFusedDistributedRmsnormMeshWorkloadFactory {
-    using shared_variables_t = WanFusedDistributedRmsnormSharedVariables;
+struct DitFusedDistributedRmsnormMeshWorkloadFactory {
+    using shared_variables_t = DitFusedDistributedRmsnormSharedVariables;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const WanFusedDistributedRmsnormParams& operation_attributes,
+        const DitFusedDistributedRmsnormParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const WanFusedDistributedRmsnormInputs& tensor_args,
+        const DitFusedDistributedRmsnormInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const WanFusedDistributedRmsnormParams& operation_attributes,
-        const WanFusedDistributedRmsnormInputs& tensor_args,
+        const DitFusedDistributedRmsnormParams& operation_attributes,
+        const DitFusedDistributedRmsnormInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const WanFusedDistributedRmsnormParams& operation_attributes,
+        const DitFusedDistributedRmsnormParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const WanFusedDistributedRmsnormInputs& tensor_args,
+        const DitFusedDistributedRmsnormInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 };
 

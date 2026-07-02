@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "wan_fused_distributed_rmsnorm.hpp"
+#include "dit_fused_distributed_rmsnorm.hpp"
 
 #include <tt-metalium/constants.hpp>
 
-#include "device/wan_fused_distributed_rmsnorm_device_operation.hpp"
+#include "device/dit_fused_distributed_rmsnorm_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_post_all_gather.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_pre_all_gather.hpp"
@@ -19,7 +19,7 @@ namespace {
 
 // Shared implementation for both public ops. norm_type selects RMS vs Welford LayerNorm;
 // the fabric all-gather, weight/bias, RoPE and output plumbing are identical.
-ttnn::Tensor wan_fused_distributed_norm_impl(
+ttnn::Tensor dit_fused_distributed_norm_impl(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -40,10 +40,10 @@ ttnn::Tensor wan_fused_distributed_norm_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const bool use_device_op,
-    const WanFusedNormType norm_type,
+    const DitFusedNormType norm_type,
     const std::optional<const ttnn::Tensor>& reciprocals) {
     if (use_device_op) {
-        return ttnn::prim::wan_fused_distributed_rmsnorm(
+        return ttnn::prim::dit_fused_distributed_rmsnorm(
             input_tensor,
             cluster_axis,
             mesh_device,
@@ -69,7 +69,7 @@ ttnn::Tensor wan_fused_distributed_norm_impl(
 
     // LayerNorm is only implemented on the fused device-op path (it needs the
     // Welford pre/merge that the composite pre/post-allgather ops don't provide).
-    TT_FATAL(norm_type == WanFusedNormType::RMS, "LayerNorm is only supported with use_device_op=true");
+    TT_FATAL(norm_type == DitFusedNormType::RMS, "LayerNorm is only supported with use_device_op=true");
     TT_FATAL(!bias.has_value(), "bias is only supported with use_device_op=true");
     TT_FATAL(!per_head_norm, "per_head_norm is only supported with use_device_op=true");
 
@@ -115,7 +115,7 @@ ttnn::Tensor wan_fused_distributed_norm_impl(
         dtype);
 }
 
-std::optional<ttnn::Tensor> wan_fused_distributed_norm_create_stats_buffer_impl(
+std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -126,7 +126,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_norm_create_stats_buffer_impl(
     const std::optional<const ttnn::Tensor>& transformation_mat,
     const std::optional<const ttnn::Tensor>& rope_cos,
     const std::optional<const ttnn::Tensor>& rope_sin,
-    const WanFusedNormType norm_type) {
+    const DitFusedNormType norm_type) {
     const auto& mesh_view = mesh_device.get_view();
     const std::size_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
@@ -136,7 +136,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_norm_create_stats_buffer_impl(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, true, false);
 
-    auto params = ttnn::experimental::prim::WanFusedDistributedRmsnormParams(
+    auto params = ttnn::experimental::prim::DitFusedDistributedRmsnormParams(
         /*epsilon=*/0.0f,
         num_heads_per_device,
         per_head_norm,
@@ -153,7 +153,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_norm_create_stats_buffer_impl(
 
     // Forward weight/RoPE so compute_sizing's per-head-RoPE / streaming chunk clamp
     // matches the program (the buffer's window/pages follow chunk_size_rows).
-    ttnn::experimental::prim::WanFusedDistributedRmsnormInputs sizing_args{
+    ttnn::experimental::prim::DitFusedDistributedRmsnormInputs sizing_args{
         input_tensor, weight, /*bias=*/std::nullopt, transformation_mat, rope_cos, rope_sin, std::nullopt};
     const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor, sizing_args);
     if (!sizing.use_mux) {
@@ -170,7 +170,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_norm_create_stats_buffer_impl(
 
 }  // namespace
 
-ttnn::Tensor wan_fused_distributed_rmsnorm(
+ttnn::Tensor dit_fused_distributed_rmsnorm(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -191,7 +191,7 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const bool use_device_op) {
-    return wan_fused_distributed_norm_impl(
+    return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
         mesh_device,
@@ -212,11 +212,11 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
         memory_config,
         compute_kernel_config,
         use_device_op,
-        WanFusedNormType::RMS,
+        DitFusedNormType::RMS,
         /*reciprocals=*/std::nullopt);
 }
 
-ttnn::Tensor wan_fused_distributed_layernorm(
+ttnn::Tensor dit_fused_distributed_layernorm(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -236,7 +236,7 @@ ttnn::Tensor wan_fused_distributed_layernorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<const ttnn::Tensor>& reciprocals) {
-    return wan_fused_distributed_norm_impl(
+    return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
         mesh_device,
@@ -257,11 +257,11 @@ ttnn::Tensor wan_fused_distributed_layernorm(
         memory_config,
         compute_kernel_config,
         /*use_device_op=*/true,
-        WanFusedNormType::LAYERNORM,
+        DitFusedNormType::LAYERNORM,
         reciprocals);
 }
 
-std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
+std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -272,7 +272,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& transformation_mat,
     const std::optional<const ttnn::Tensor>& rope_cos,
     const std::optional<const ttnn::Tensor>& rope_sin) {
-    return wan_fused_distributed_norm_create_stats_buffer_impl(
+    return dit_fused_distributed_norm_create_stats_buffer_impl(
         input_tensor,
         cluster_axis,
         mesh_device,
@@ -283,10 +283,10 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
         transformation_mat,
         rope_cos,
         rope_sin,
-        WanFusedNormType::RMS);
+        DitFusedNormType::RMS);
 }
 
-std::optional<ttnn::Tensor> wan_fused_distributed_layernorm_create_stats_buffer(
+std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -296,7 +296,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_layernorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& transformation_mat,
     const std::optional<const ttnn::Tensor>& rope_cos,
     const std::optional<const ttnn::Tensor>& rope_sin) {
-    return wan_fused_distributed_norm_create_stats_buffer_impl(
+    return dit_fused_distributed_norm_create_stats_buffer_impl(
         input_tensor,
         cluster_axis,
         mesh_device,
@@ -307,7 +307,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_layernorm_create_stats_buffer(
         transformation_mat,
         rope_cos,
         rope_sin,
-        WanFusedNormType::LAYERNORM);
+        DitFusedNormType::LAYERNORM);
 }
 
 }  // namespace ttnn::experimental

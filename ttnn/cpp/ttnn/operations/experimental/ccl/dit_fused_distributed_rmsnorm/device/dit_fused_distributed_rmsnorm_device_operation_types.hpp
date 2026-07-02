@@ -13,18 +13,18 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/wan_fused_distributed_rmsnorm.hpp"
+#include "ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
 
-using ttnn::experimental::WanFusedNormType;
+using ttnn::experimental::DitFusedNormType;
 
 // Attributes for the fused Wan2.2 distributed RMSNorm device op.
 // Combines: per-row RMSNorm pre stats, ring all-gather of stats across the TP
 // cluster axis, post normalization, optional head-split, optional RoPE, and
 // optional output-dtype cast — all in a single program with L1-resident input.
-struct WanFusedDistributedRmsnormParams {
+struct DitFusedDistributedRmsnormParams {
     float epsilon;
     uint32_t num_heads_per_device;
     // Per-head normalization (FLUX.2 path): reduce over head_dim per
@@ -34,7 +34,7 @@ struct WanFusedDistributedRmsnormParams {
 
     // Selects RMSNorm (sum-of-squares) vs Welford LayerNorm (mean/variance).
     // Defaults to RMS so all existing call sites are unchanged.
-    WanFusedNormType norm_type;
+    DitFusedNormType norm_type;
 
     // Output dtype override (defaults to input dtype if unset).
     std::optional<DataType> dtype;
@@ -50,7 +50,7 @@ struct WanFusedDistributedRmsnormParams {
 
     DeviceComputeKernelConfig compute_kernel_config;
 
-    WanFusedDistributedRmsnormParams(
+    DitFusedDistributedRmsnormParams(
         float epsilon,
         uint32_t num_heads_per_device,
         bool per_head_norm,
@@ -63,7 +63,7 @@ struct WanFusedDistributedRmsnormParams {
         std::vector<GlobalSemaphore> multi_device_global_semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         DeviceComputeKernelConfig compute_kernel_config,
-        WanFusedNormType norm_type = WanFusedNormType::RMS) :
+        DitFusedNormType norm_type = DitFusedNormType::RMS) :
         epsilon(epsilon),
         num_heads_per_device(num_heads_per_device),
         per_head_norm(per_head_norm),
@@ -96,7 +96,7 @@ struct WanFusedDistributedRmsnormParams {
     }
 };
 
-struct WanFusedDistributedRmsnormInputs {
+struct DitFusedDistributedRmsnormInputs {
     Tensor input;
     std::optional<const Tensor> weight;
     std::optional<const Tensor> bias;
@@ -129,7 +129,7 @@ struct WanFusedDistributedRmsnormInputs {
 // The buffer's logical shape is independent of `num_workers` per design
 // constraint — workers cooperate by writing different chunk indices into
 // the same set of pages. Total pages per chip = num_devices * num_chunks_per_device.
-struct WanFusedDistributedRmsnormSizing {
+struct DitFusedDistributedRmsnormSizing {
     uint32_t num_tile_rows = 0;
     uint32_t num_workers = 0;
     bool is_tp_1 = false;                // ring_size==1 or per_head_norm: reduce locally, no all-gather
@@ -145,9 +145,9 @@ struct WanFusedDistributedRmsnormSizing {
     uint32_t stick_bytes = 128;  // stats_per_token * 128
 };
 
-WanFusedDistributedRmsnormSizing compute_sizing(
-    const WanFusedDistributedRmsnormParams& args,
+DitFusedDistributedRmsnormSizing compute_sizing(
+    const DitFusedDistributedRmsnormParams& args,
     const Tensor& input,
-    const WanFusedDistributedRmsnormInputs& tensor_args);
+    const DitFusedDistributedRmsnormInputs& tensor_args);
 
 }  // namespace ttnn::experimental::prim

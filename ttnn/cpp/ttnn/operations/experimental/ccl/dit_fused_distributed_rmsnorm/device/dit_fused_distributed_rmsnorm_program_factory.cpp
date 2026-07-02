@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "wan_fused_distributed_rmsnorm_program_factory.hpp"
+#include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -249,13 +249,13 @@ bool post_rotated_overflows_l1(
     uint32_t rope_tile_bytes,
     bool has_weight) {
     const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
-    uint64_t total = static_cast<uint64_t>(num_tile_cols) * input_tile_bytes;  // input_cb (chunk=1)
-    total += 2ull * padded * intermediate_tile_bytes;                          // intermediate + rotated (whole row)
-    total += 2ull * padded * output_tile_bytes;                                // output_cb (2 rows)
+    uint64_t total = static_cast<uint64_t>(num_tile_cols) * input_tile_bytes;     // input_cb (chunk=1)
+    total += 2ull * padded * intermediate_tile_bytes;                             // intermediate + rotated (whole row)
+    total += 2ull * padded * output_tile_bytes;                                   // output_cb (2 rows)
     total += has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;  // weight_cb
-    total += 2ull * rope_cb_tiles * rope_tile_bytes;                           // streamed cos + sin
-    constexpr uint64_t kPostFixedOverheadBytes = 491520ull;                    // stats/packed-AG/pre-interm/scalars/trans/headers
-    constexpr uint64_t kFuseTriggerBytes = 1400000ull;                         // margin below the ~1.43 MB L1 cap
+    total += 2ull * rope_cb_tiles * rope_tile_bytes;                              // streamed cos + sin
+    constexpr uint64_t kPostFixedOverheadBytes = 491520ull;  // stats/packed-AG/pre-interm/scalars/trans/headers
+    constexpr uint64_t kFuseTriggerBytes = 1400000ull;       // margin below the ~1.43 MB L1 cap
     return total + kPostFixedOverheadBytes > kFuseTriggerBytes;
 }
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
@@ -270,12 +270,12 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
 // Sizing derivation used in both spec computation (to size the stats scratch
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
-WanFusedDistributedRmsnormSizing compute_sizing(
-    const WanFusedDistributedRmsnormParams& args,
+DitFusedDistributedRmsnormSizing compute_sizing(
+    const DitFusedDistributedRmsnormParams& args,
     const Tensor& input,
-    const WanFusedDistributedRmsnormInputs& tensor_args) {
+    const DitFusedDistributedRmsnormInputs& tensor_args) {
     (void)tensor_args;  // page geometry does not depend on rope/streaming detection
-    WanFusedDistributedRmsnormSizing s;
+    DitFusedDistributedRmsnormSizing s;
     const auto& padded = input.padded_shape();
     const uint32_t W = padded[-1];
     const uint32_t folded_H = input.physical_volume() / W;
@@ -286,7 +286,7 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
     // LayerNorm transports 2 stats/token (mean, M2) -> 256 B sticks; RMS 1 (128 B).
     // Set before derive_worker_cap so its packet-capacity clamp uses the right width.
-    s.stats_per_token = (args.norm_type == WanFusedNormType::LAYERNORM) ? 2u : 1u;
+    s.stats_per_token = (args.norm_type == DitFusedNormType::LAYERNORM) ? 2u : 1u;
     s.stick_bytes = s.stats_per_token * 128u;
     // Worker cap = device compute grid − forwarder cores. Derived from the input's
     // device so create_stats_buffer / validate / compute_output_specs / create_at all
@@ -330,11 +330,11 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     return s;
 }
 
-WanFusedDistributedRmsnormMeshWorkloadFactory::cached_program_t
-WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
-    const WanFusedDistributedRmsnormParams& args,
+DitFusedDistributedRmsnormMeshWorkloadFactory::cached_program_t
+DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+    const DitFusedDistributedRmsnormParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const WanFusedDistributedRmsnormInputs& tensor_args,
+    const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     Tensor& output_tensor = tensor_return_value.at(0);
     // Stats DRAM scratch: only allocated for the all-gather path (TP>1, whole-row
@@ -438,7 +438,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     // LayerNorm gathers 2 stats/token (mean, M2) -> 256 B sticks; RMS 1 (128 B).
     // Must match compute_sizing so the stats-buffer geometry and the program agree.
-    const uint32_t stick_bytes = (args.norm_type == WanFusedNormType::LAYERNORM) ? 256u : 128u;
+    const uint32_t stick_bytes = (args.norm_type == DitFusedNormType::LAYERNORM) ? 256u : 128u;
     const uint32_t stats_per_token = stick_bytes / 128u;  // 1 RMS, 2 LayerNorm (mean, var)
 
     uint32_t num_workers;
@@ -462,7 +462,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t total_cores_needed = num_workers + num_forwarders;
     TT_FATAL(
         total_cores_needed <= max_cores,
-        "wan_fused_distributed_rmsnorm needs {} cores ({} workers + {} forwarders) but only {} available",
+        "dit_fused_distributed_rmsnorm needs {} cores ({} workers + {} forwarders) but only {} available",
         total_cores_needed,
         num_workers,
         num_forwarders,
@@ -543,7 +543,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // fallback. reduce_width == feat_local == num_tile_cols * 32; the LUT is one row-major
     // page of reduce_width * sizeof(float) bytes (== num_tile_cols * 128). Defined here
     // (before the streaming decision) so its resident CB cost is accounted for.
-    const bool is_layernorm = (args.norm_type == WanFusedNormType::LAYERNORM);
+    const bool is_layernorm = (args.norm_type == DitFusedNormType::LAYERNORM);
     const bool use_recip_lut = is_layernorm && reciprocals.has_value();
     const uint32_t recip_lut_bytes = num_tile_cols * 128u;
 
@@ -648,7 +648,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t num_chunks_per_device = use_mux ? (num_forwarders * max_rounds) : 0u;
     TT_FATAL(
         !streaming_low_l1 || (num_tile_cols % block_size == 0),
-        "wan_fused_distributed_rmsnorm streaming low-L1 path requires num_tile_cols ({}) divisible by block_size "
+        "dit_fused_distributed_rmsnorm streaming low-L1 path requires num_tile_cols ({}) divisible by block_size "
         "({})",
         num_tile_cols,
         block_size);
@@ -784,7 +784,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         unit_packet_bytes = sticks_per_packet * stick_bytes;
         TT_FATAL(
             sticks_per_packet >= workers_per_forwarder,
-            "wan_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
+            "dit_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
             sticks_per_packet,
             workers_per_forwarder);
         tt::tt_metal::CircularBufferConfig packet_cfg =
@@ -905,12 +905,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // resident sub-phase-major path (everything else) keeps the whole-row buffer.
     const uint32_t rotated_cb_tiles = fuse_mm_rope ? (2u * block_size) : intermediate_cb_tiles;
     create_cb(
-        rotated_input_cb_id,
-        program,
-        worker_core_set,
-        intermediate_tile_size,
-        rotated_cb_tiles,
-        intermediate_format);
+        rotated_input_cb_id, program, worker_core_set, intermediate_tile_size, rotated_cb_tiles, intermediate_format);
     // output_cb sized to 2 full padded rows so the writer can deep-drain a
     // whole row under ONE noc_async_writes_flushed() (instead of flushing every
     // block_size=2 tiles) while compute produces the next row. The shallow
@@ -1009,8 +1004,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
-        "wan_rmsnorm_fused_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+        "dit_rmsnorm_fused_reader.cpp",
         worker_core_set,
         ReaderDataMovementConfig(reader_compile_args));
 
@@ -1058,8 +1053,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
         writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
-            "wan_rmsnorm_fused_writer.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+            "dit_rmsnorm_fused_writer.cpp",
             worker_core_set,
             WriterDataMovementConfig(writer_compile_args));
     } else {
@@ -1100,8 +1095,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         }
         writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
-            "wan_rmsnorm_fused_worker_writer.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+            "dit_rmsnorm_fused_worker_writer.cpp",
             worker_core_set,
             WriterDataMovementConfig(writer_compile_args));
     }
@@ -1133,8 +1128,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
         forwarder_kernel_ids[f] = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
-            "wan_rmsnorm_fused_forwarder.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+            "dit_rmsnorm_fused_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
             WriterDataMovementConfig(fwd_ct));
     }
@@ -1213,12 +1208,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // is NOT lifted by fp32_dest_acc_en or UnpackToDestFp32.)
     TT_FATAL(
         fp32_dest_acc_en,
-        "wan_fused_distributed_rmsnorm requires fp32_dest_acc_en=true in the compute kernel config "
+        "dit_fused_distributed_rmsnorm requires fp32_dest_acc_en=true in the compute kernel config "
         "(internals are always fp32); got fp32_dest_acc_en=false.");
 
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/compute/" +
-        std::string(is_layernorm ? "wan_layernorm_fused_compute.cpp" : "wan_rmsnorm_fused_compute.cpp");
+        "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/" +
+        std::string(is_layernorm ? "dit_layernorm_fused_compute.cpp" : "dit_rmsnorm_fused_compute.cpp");
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         compute_kernel_path,
@@ -1344,7 +1339,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     return {
         std::move(program),
-        WanFusedDistributedRmsnormSharedVariables{
+        DitFusedDistributedRmsnormSharedVariables{
             .reader_kernel_ids = {reader_kernel_id},
             .writer_kernel_ids = {writer_kernel_id},
             .compute_kernel_ids = {compute_kernel_id},
@@ -1355,11 +1350,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         }};
 }
 
-WanFusedDistributedRmsnormMeshWorkloadFactory::cached_mesh_workload_t
-WanFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
-    const WanFusedDistributedRmsnormParams& operation_attributes,
+DitFusedDistributedRmsnormMeshWorkloadFactory::cached_mesh_workload_t
+DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
+    const DitFusedDistributedRmsnormParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const WanFusedDistributedRmsnormInputs& tensor_args,
+    const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -1375,10 +1370,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
-void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
+void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const WanFusedDistributedRmsnormParams& /*operation_attributes*/,
-    const WanFusedDistributedRmsnormInputs& tensor_args,
+    const DitFusedDistributedRmsnormParams& /*operation_attributes*/,
+    const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     const uint32_t input_addr = tensor_args.input.buffer()->address();
     const uint32_t output_addr = tensor_return_value.at(0).buffer()->address();

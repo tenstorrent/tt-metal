@@ -36,7 +36,7 @@ template <
     uint32_t reduce_factor,
     bool fuse_rope,
     typename TMatAccessor>
-FORCE_INLINE void wan_rmsnorm_generate_scalars_and_transmat(uint32_t eps_bits, const TMatAccessor& tmat_acc) {
+FORCE_INLINE void dit_rmsnorm_generate_scalars_and_transmat(uint32_t eps_bits, const TMatAccessor& tmat_acc) {
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<sum_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<

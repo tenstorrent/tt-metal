@@ -94,7 +94,7 @@ void kernel_main() {
     // use_recip_lut) so the discarded if-constexpr branch below still type-checks — this
     // kernel is a plain function, so both branches are semantically validated. It's only
     // dereferenced (and the CB only filled) when use_recip_lut. Welford reads it via the
-    // SFPU as the per-sample 1/(N+1) lookup; see wan_rmsnorm_fused_reader.cpp.
+    // SFPU as the per-sample 1/(N+1) lookup; see dit_rmsnorm_fused_reader.cpp.
     const std::array<uint32_t, reduce_width>* p_recip = nullptr;
     if constexpr (use_recip_lut != 0) {
         cb_wait_front(recip_lut_cb, 1);

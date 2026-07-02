@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "wan_fused_distributed_rmsnorm_device_operation_types.hpp"
-#include "wan_fused_distributed_rmsnorm_program_factory.hpp"
+#include "dit_fused_distributed_rmsnorm_device_operation_types.hpp"
+#include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -13,9 +13,9 @@ namespace ttnn::experimental::prim {
 //   pre RMSNorm stats  +  ring AG of stats  +  post RMSNorm with optional head-split,
 //   RoPE, and output dtype cast — all in one kernel program with the input
 //   tensor kept L1-resident across the pre and post stages.
-struct WanFusedDistributedRmsnormDeviceOperation {
-    using operation_attributes_t = WanFusedDistributedRmsnormParams;
-    using tensor_args_t = WanFusedDistributedRmsnormInputs;
+struct DitFusedDistributedRmsnormDeviceOperation {
+    using operation_attributes_t = DitFusedDistributedRmsnormParams;
+    using tensor_args_t = DitFusedDistributedRmsnormInputs;
     // [0] = user-visible output tensor.
     // [1] = persistent stats DRAM scratch (only when use_mux). Allocated by
     //       the framework via create_device_tensor, so the underlying
@@ -24,8 +24,8 @@ struct WanFusedDistributedRmsnormDeviceOperation {
     //       to land at a consistent remote-chip page.
     using spec_return_value_t = std::vector<TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<WanFusedDistributedRmsnormMeshWorkloadFactory>;
-    using shared_variables_t = WanFusedDistributedRmsnormMeshWorkloadFactory::shared_variables_t;
+    using program_factory_t = std::variant<DitFusedDistributedRmsnormMeshWorkloadFactory>;
+    using shared_variables_t = DitFusedDistributedRmsnormMeshWorkloadFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -42,7 +42,7 @@ namespace ttnn::prim {
 
 // Returns just the user-visible output (element 0 of the underlying
 // tensor_return_value_t vector — the stats DRAM scratch is internal).
-Tensor wan_fused_distributed_rmsnorm(
+Tensor dit_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -62,7 +62,7 @@ Tensor wan_fused_distributed_rmsnorm(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    ttnn::experimental::WanFusedNormType norm_type = ttnn::experimental::WanFusedNormType::RMS,
+    ttnn::experimental::DitFusedNormType norm_type = ttnn::experimental::DitFusedNormType::RMS,
     const std::optional<const Tensor>& reciprocals = std::nullopt);
 
 }  // namespace ttnn::prim

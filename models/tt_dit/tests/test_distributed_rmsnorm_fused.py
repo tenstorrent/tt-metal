@@ -5,7 +5,7 @@
 """Unified DistributedRMSNorm fused-op benchmarks + correctness/determinism.
 
 ONE file covering BOTH production models that drive
-``ttnn.experimental.wan_fused_distributed_rmsnorm`` (the single-program fused
+``ttnn.experimental.dit_fused_distributed_rmsnorm`` (the single-program fused
 device op): **Wan2.2 14B** and **LTX-2.3 AV**. The fused op is identical for
 both; the models differ only in (a) config shapes, (b) the RoPE convention, and
 (c) what the *baseline* decomposes into. Those three axes are factored into a
@@ -377,7 +377,7 @@ def _call_op(
     out_dtype = ttnn.float32 if cfg.out_dtype == "fp32" else None  # None => bf16 (current default)
     if cfg.norm == "layernorm":
         # LayerNorm is now its own op (no per_head_norm / use_device_op knob; always device op).
-        return ttnn.experimental.wan_fused_distributed_layernorm(
+        return ttnn.experimental.dit_fused_distributed_layernorm(
             inp["x"],
             tp_axis,
             submesh,
@@ -395,7 +395,7 @@ def _call_op(
             num_preferred_links=num_links,
             reciprocals=inp.get("recip"),
         )
-    return ttnn.experimental.wan_fused_distributed_rmsnorm(
+    return ttnn.experimental.dit_fused_distributed_rmsnorm(
         inp["x"],
         tp_axis,
         submesh,
@@ -485,7 +485,7 @@ def _make_pob(inp, submesh, cfg, num_links, tp_axis):
     # LayerNorm transports 2 stats/token (mean+var) vs RMS's 1, so it needs its own
     # (2x-wide) stats-buffer variant.
     if cfg.norm == "layernorm":
-        return ttnn.experimental.wan_fused_distributed_layernorm_create_stats_buffer(
+        return ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
             inp["x"],
             tp_axis,
             submesh,
@@ -496,7 +496,7 @@ def _make_pob(inp, submesh, cfg, num_links, tp_axis):
             rope_cos=inp.get("cos"),
             rope_sin=inp.get("sin"),
         )
-    return ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+    return ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
         inp["x"],
         tp_axis,
         submesh,

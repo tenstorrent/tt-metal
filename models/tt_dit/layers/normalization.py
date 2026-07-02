@@ -213,7 +213,7 @@ class DistributedRMSNorm(Module):
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
-        return ttnn.experimental.wan_fused_distributed_rmsnorm(
+        return ttnn.experimental.dit_fused_distributed_rmsnorm(
             x,
             self.mesh_axis,
             self.mesh_device,
@@ -221,7 +221,7 @@ class DistributedRMSNorm(Module):
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None),
-                lambda: ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
@@ -289,7 +289,7 @@ class DistributedLayerNorm(Module):
         assert embedding_dim % n == 0, "embedding_dim must be divisible by tile size times mesh width"
 
         # Static affine weight/bias are TILE [1, embedding_dim] sharded on the reduction axis —
-        # the broadcast layout the fused wan_fused_distributed_rmsnorm op consumes (per-device
+        # the broadcast layout the fused dit_fused_distributed_rmsnorm op consumes (per-device
         # [1, H/mesh_width]). adaLN passes dynamic weight/bias at forward instead.
         self.weight = (
             Parameter(
@@ -360,7 +360,7 @@ class DistributedLayerNorm(Module):
 
         # Fused Welford LayerNorm device op. weight/bias (static or adaLN, bf16 or fp32) are
         # consumed natively in-op — fp32 affine keeps the modulation precision adaLN needs.
-        return ttnn.experimental.wan_fused_distributed_layernorm(
+        return ttnn.experimental.dit_fused_distributed_layernorm(
             x,
             self.mesh_axis,
             self.mesh_device,
@@ -368,7 +368,7 @@ class DistributedLayerNorm(Module):
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 ("ln", tuple(x.shape)),
-                lambda: ttnn.experimental.wan_fused_distributed_layernorm_create_stats_buffer(
+                lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,

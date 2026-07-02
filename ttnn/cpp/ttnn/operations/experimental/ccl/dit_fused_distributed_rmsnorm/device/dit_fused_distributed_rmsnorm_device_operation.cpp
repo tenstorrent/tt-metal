@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "wan_fused_distributed_rmsnorm_device_operation.hpp"
+#include "dit_fused_distributed_rmsnorm_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,7 +18,7 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
-void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& weight = tensor_args.weight;
@@ -31,7 +31,7 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     // locally; TP>1 gathers per-shard Welford (mean, var) partials over the fabric
     // ring and merges them (parallel Welford). per_head_norm, fp32 input, and
     // RoPE-fused LayerNorm are later phases.
-    if (args.norm_type == ttnn::experimental::WanFusedNormType::LAYERNORM) {
+    if (args.norm_type == ttnn::experimental::DitFusedNormType::LAYERNORM) {
         TT_FATAL(!args.per_head_norm, "LayerNorm does not support per_head_norm yet");
         TT_FATAL(
             input.dtype() == DataType::BFLOAT16, "LayerNorm currently requires BFLOAT16 input; got {}", input.dtype());
@@ -209,8 +209,8 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-WanFusedDistributedRmsnormDeviceOperation::spec_return_value_t
-WanFusedDistributedRmsnormDeviceOperation::compute_output_specs(
+DitFusedDistributedRmsnormDeviceOperation::spec_return_value_t
+DitFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& logical = input.logical_shape();
@@ -248,8 +248,8 @@ WanFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     return specs;
 }
 
-WanFusedDistributedRmsnormDeviceOperation::tensor_return_value_t
-WanFusedDistributedRmsnormDeviceOperation::create_output_tensors(
+DitFusedDistributedRmsnormDeviceOperation::tensor_return_value_t
+DitFusedDistributedRmsnormDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(args, tensor_args);
     std::vector<Tensor> tensors;
@@ -272,13 +272,13 @@ WanFusedDistributedRmsnormDeviceOperation::create_output_tensors(
     return tensors;
 }
 
-ttsl::hash::hash_t WanFusedDistributedRmsnormDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "WanFusedDistributedRmsnormDeviceOperation::compute_program_hash");
+    log_trace(tt::LogOp, "DitFusedDistributedRmsnormDeviceOperation::compute_program_hash");
     auto* mesh_device = tensor_args.input.device();
     auto sd_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<WanFusedDistributedRmsnormDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<DitFusedDistributedRmsnormDeviceOperation>(
         args.epsilon,
         args.num_heads_per_device,
         args.dtype,
@@ -297,7 +297,7 @@ ttsl::hash::hash_t WanFusedDistributedRmsnormDeviceOperation::compute_program_ha
 
 namespace ttnn::prim {
 
-Tensor wan_fused_distributed_rmsnorm(
+Tensor dit_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -317,9 +317,9 @@ Tensor wan_fused_distributed_rmsnorm(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    ttnn::experimental::WanFusedNormType norm_type,
+    ttnn::experimental::DitFusedNormType norm_type,
     const std::optional<const Tensor>& reciprocals) {
-    using OperationType = ttnn::experimental::prim::WanFusedDistributedRmsnormDeviceOperation;
+    using OperationType = ttnn::experimental::prim::DitFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     // Match composite ops' fused_rmsnorm_{pre,post}_allgather defaults so

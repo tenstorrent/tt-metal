@@ -19,16 +19,16 @@ namespace ttnn::experimental {
 // stable Welford mean/variance and applies (x - mean) * rsqrt(var + eps), with bias.
 // The fabric all-gather, weight/bias, RoPE, and output plumbing are shared between
 // the two. This enum is an INTERNAL implementation detail — the public API exposes
-// two distinct ops (wan_fused_distributed_rmsnorm / wan_fused_distributed_layernorm)
+// two distinct ops (dit_fused_distributed_rmsnorm / dit_fused_distributed_layernorm)
 // rather than a norm_type flag, so it is intentionally NOT bound into Python.
-enum class WanFusedNormType : uint8_t { RMS = 0, LAYERNORM = 1 };
+enum class DitFusedNormType : uint8_t { RMS = 0, LAYERNORM = 1 };
 
 // Fused distributed RMSNorm for Wan2.2 attention: per-row sum-of-squares stats,
 // fabric all-gather of the partial stats across `cluster_axis`, then post-allgather
 // RMSNorm with optional head split / RoPE / dtype cast. use_device_op=true runs the
 // single fused device op; use_device_op=false chains the composite primitives (RMS-
 // only legacy baseline, kept for A/B comparison).
-ttnn::Tensor wan_fused_distributed_rmsnorm(
+ttnn::Tensor dit_fused_distributed_rmsnorm(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -54,7 +54,7 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
 // with optional weight/bias, over the same fabric-all-gather device op as RMSNorm.
 // LayerNorm is only implemented on the fused device op (the Welford pre/merge has no
 // composite equivalent), so there is no use_device_op / per_head_norm knob.
-ttnn::Tensor wan_fused_distributed_layernorm(
+ttnn::Tensor dit_fused_distributed_layernorm(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -88,7 +88,7 @@ ttnn::Tensor wan_fused_distributed_layernorm(
 // There are separate RMS / LayerNorm variants because LayerNorm transports 2 stats/token
 // (mean+var, 256 B sticks) vs RMS's 1 (128 B) -> the stats scratch page is 2x wider. Using
 // the wrong variant's buffer silently corrupts the gather.
-std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
+std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -102,7 +102,7 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& rope_cos = std::nullopt,
     const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt);
 
-std::optional<ttnn::Tensor> wan_fused_distributed_layernorm_create_stats_buffer(
+std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,

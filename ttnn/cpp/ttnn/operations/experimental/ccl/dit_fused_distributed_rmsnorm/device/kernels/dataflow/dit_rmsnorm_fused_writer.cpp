@@ -43,7 +43,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 // Writer always populates compute's reduce-scalar / epsilon / trans_mat CBs
 // (shared helper, used by both writers) so the reader starts input reads ASAP.
-#include "wan_rmsnorm_scalar_setup.hpp"
+#include "dit_rmsnorm_scalar_setup.hpp"
 
 void kernel_main() {
     // ---------- compile-time args ----------
@@ -99,7 +99,7 @@ void kernel_main() {
     // Populate compute's reduce-scalar / epsilon / trans_mat CBs before any AG
     // or output work — compute blocks on these at its very top. Independent of
     // fabric (uses this writer's own NoC), so it overlaps the fabric handshake.
-    wan_rmsnorm_generate_scalars_and_transmat<
+    dit_rmsnorm_generate_scalars_and_transmat<
         reduce_scalar_sum_cb,
         reduce_scalar_avg_cb,
         epsilon_cb,
