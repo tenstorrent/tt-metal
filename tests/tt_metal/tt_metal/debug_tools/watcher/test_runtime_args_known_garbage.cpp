@@ -261,13 +261,13 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     // Build a Metal 2.0 KernelSpec that works on both gen1 (single BRISC) and gen2 (all Quasar user DMs).
     // Provide both gen1 and gen2 configs so the runtime selects the one matching the current arch.
-    experimental::DataMovementHardwareConfig dm_cfg = [&] {
+    experimental::DataMovementHardwareConfig dm_cfg = std::invoke([&] {
         if (is_quasar) {
             return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
         }
         return experimental::DataMovementHardwareConfig{
             experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
-    }();
+    });
 
     experimental::KernelSpec dm_spec{
         .unique_id = DM_KERNEL_NAME,
