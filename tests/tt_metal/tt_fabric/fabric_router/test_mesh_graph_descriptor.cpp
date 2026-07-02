@@ -2010,7 +2010,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
     const auto& m0 = intra[0];
     ASSERT_EQ(m0.size(), 128u);  // 32x4 = 128 chips
 
-    // axis=ROW (32 rows, RING). chip = row*4 + col. Two patterns:
+    // dim 0 (32 rows, RING). chip = row*4 + col. Two patterns:
     //   start=2 step=4 -> 8 row pairs (last wraps)
     //   start=0 step=8 -> 4 row pairs
     const std::vector<std::pair<int, int>> row_blocks = {

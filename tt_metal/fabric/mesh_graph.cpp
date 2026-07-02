@@ -462,18 +462,21 @@ void MeshGraph::initialize_from_mgd(
         // Layer declared skip links on top of the fully-populated base grid. Each pattern expands to
         // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
         // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
-        // trimming). Wrap follows the axis's torus-ness in effective_fabric_type (TORUS_Y wraps
-        // ROW/dim-0, TORUS_X COLUMN/dim-1), matching get_valid_connections.
+        // trimming). Wrap follows the dimension's torus-ness in effective_fabric_type (TORUS_Y wraps
+        // dim 0, TORUS_X dim 1), matching get_valid_connections.
         for (const auto& skip : mesh_desc->skip_links()) {
-            const bool along_rows = (skip.axis() == proto::SkipLink::ROW);
-            const uint32_t axis_len = along_rows ? mesh_shape[0] : mesh_shape[1];
+            const uint32_t dim = skip.dim_idx();
+            TT_FATAL(dim < 2, "MeshGraph: SkipLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
+            const bool along_rows = (dim == 0);
+            const uint32_t dim_len = mesh_shape[dim];
             const uint32_t step = skip.pattern().step();
             TT_FATAL(step >= 2, "MeshGraph: SkipLink step must be >= 2 (mesh M{})", *mesh_id);
             TT_FATAL(
-                axis_len % step == 0,
-                "MeshGraph: SkipLink step {} must divide axis length {} for uniform tiling (mesh M{})",
+                dim_len % step == 0,
+                "MeshGraph: SkipLink step {} must divide dim {} length {} for uniform tiling (mesh M{})",
                 step,
-                axis_len,
+                dim,
+                dim_len,
                 *mesh_id);
             const bool ring_wrap = along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
                                               : has_flag(effective_fabric_type, FabricType::TORUS_X);
