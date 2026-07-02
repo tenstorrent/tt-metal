@@ -105,7 +105,16 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
 
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        # Async scheduling overlaps host scheduling/sampling with the next
+        # device step. Gemma4 satisfies the contract: ``decode_forward`` below
+        # routes the per-layer page tables and delegates to
+        # ``Generator.decode_forward`` (which honours ``read_from_device=False``,
+        # submitting decode without blocking), and Gemma4 inherits
+        # ``Generator.read_decode_output(..., async_read=True)`` for the deferred
+        # device->host read. On-device sampling (``supports_sample_on_device``)
+        # means decode already returns sampled tokens, so the async read carries
+        # the sampled ids directly.
+        "supports_async_decode": True,
         "supports_sample_on_device": True,
     }
 
