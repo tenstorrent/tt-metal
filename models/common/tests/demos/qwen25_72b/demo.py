@@ -55,16 +55,32 @@ from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.tt_transformers.tt.common import encode_prompt_hf
 
 # =============================================================================
-# Expected metrics — copied verbatim from models/tt_transformers/PERF.md
-# (Qwen2.5-72B rows in "Performance" and "Accuracy" tables; T3K only).
+# Expected metrics — measured on T3K, current-main build (submodules synced),
+# batch-1, 2026-07-02. Perf thresholds follow the maintainer rule: gate at the
+# BETTER of TTTv1 / TTTv2, never below TTTv1.
+#   - performance: TTTv1 perf b1 = 15.75 t/s/u / 181 ms is the better stack, so
+#     gate there. The ~14% decode gap the corrected build once exposed (TTTv2 13.5
+#     t/s/u) is CLOSED: it was the MLP decode DRAM-sharded matmuls running on 4 cores
+#     instead of 64 (the FF hidden per-device padded to 116 tiles = 2^2*29, so the
+#     grid could only share gcd(256,116)=4 cores). Padding FF hidden to a grid-friendly
+#     128 tiles/dev (see Qwen25_72B decoder-layer build in model.py) restores the
+#     64-core grid and TTTv2 device decode is now at TTTv1 parity (~63 ms/tok, 15.4
+#     t/s/u — passes this gate within tolerance). Keep the gate at TTTv1's 15.75; do
+#     NOT lower it.
+#   - accuracy: the TTTv1 accuracy profile DRAM-OOMs on 72B, so there is no TTTv1
+#     anchor — gate at TTTv2 (15.4 t/s/u / 183 ms). 72B perf and accuracy use the same
+#     BFP4-MLP + BFP8-attn recipe, so the FF-padding decode fix lands identically here
+#     (post-fix accuracy decode == performance; was 13.5 pre-fix).
+#   - top1/top5: teacher-forcing accuracy (99.2/99.8 measured), precision-driven
+#     and unchanged by the perf fix; kept at the 99/100 book reference.
 # =============================================================================
 
 EXPECTED_METRICS = {
     "performance": {
-        "T3K": {"top1": 99, "top5": 100, "tok_s_u": 15.2, "ttft_ms": 225},
+        "T3K": {"top1": 99, "top5": 100, "tok_s_u": 15.75, "ttft_ms": 181},
     },
     "accuracy": {
-        "T3K": {"top1": 99, "top5": 100, "tok_s_u": 15.1, "ttft_ms": 216},
+        "T3K": {"top1": 99, "top5": 100, "tok_s_u": 15.4, "ttft_ms": 183},
     },
 }
 

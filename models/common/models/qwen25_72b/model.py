@@ -252,8 +252,8 @@ def _all_gather_rmsnorm_tensor(
         topology=default_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=24,
-        num_workers_per_link=4,
+        chunks_per_sync=10,
+        num_workers_per_link=2,
         num_buffers_per_channel=2,
     )
 
@@ -372,6 +372,20 @@ def _build_decoder_layer(
     )
 
     w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
+    # Pad the FF hidden dim to a grid-friendly per-device size so the DRAM-sharded decode FF
+    # matmuls (W1/W3/W2) use a full 64-core grid instead of 4. The decode grid must divide both
+    # the K-tile and N-tile counts (in0 is K-width-sharded, weights are N-sharded); with the raw
+    # per-device hidden 29568/8 -> 3712 = 116 tiles (2^2*29), gcd(dim_tiles=256, 116)=4 -> only 4
+    # DRAM readers stream the FF weights, which dominate memory-bound decode. Padding per device to
+    # 128 tiles (4096, total 32768) gives gcd(256,128)=64 cores -- matching TTTv1's
+    # default_padded_cores=32 (nearest_multiple(29568, 32*32*8)=32768). The extra columns are zeros
+    # (silu(0)=0, mul->0, and W2 contracts the padded rows to 0), so decode output is unchanged.
+    _ff_align = TILE_SIZE * TILE_SIZE * num_dev  # 32*32*8 = 8192 on T3K
+    _ff_pad = math.ceil(w1.shape[-1] / _ff_align) * _ff_align
+    if _ff_pad != w1.shape[-1]:
+        w1 = torch.nn.functional.pad(w1, (0, _ff_pad - w1.shape[-1]))
+        w3 = torch.nn.functional.pad(w3, (0, _ff_pad - w3.shape[-1]))
+        w2 = torch.nn.functional.pad(w2, (0, 0, 0, _ff_pad - w2.shape[-2]))
     mlp = MLP1D.from_config(
         MLP1DConfig(
             w1=_lazy(
@@ -397,7 +411,9 @@ def _build_decoder_layer(
     post_attn_decode_program_config, post_attn_decode_memory_config = _post_attn_norm_decode_configs(
         mlp,
         dim=qcfg.dim,
-        hidden_dim=qcfg.hidden_dim,
+        # Use the padded FF hidden so the post-attn RMSNorm decode output is width-sharded on the
+        # SAME (64-core) grid as MLP1D's W1/W3 decode input; a mismatch silently corrupts decode.
+        hidden_dim=_ff_pad,
         num_devices=num_dev,
         max_batch_size=qcfg.max_batch_size,
     )
