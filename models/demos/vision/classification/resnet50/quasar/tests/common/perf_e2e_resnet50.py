@@ -150,8 +150,11 @@ def run_perf_resnet(
     model_location_generator,
 ):
     profiler.clear()
-    if device_batch_size <= 2:
-        pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+    # Batch 1-2 don't shard cleanly across a full compute grid, but they fit the tiny 2x3 emulator /
+    # craq-sim grid (<=2 cores). Only skip on larger grids (mirrors resnet50_test_infra).
+    _compute_grid = device.compute_with_storage_grid_size()
+    if device_batch_size <= 2 and _compute_grid.x * _compute_grid.y > 2:
+        pytest.skip("Batch size 1 and 2 are not supported with sharded data on grids larger than 2 cores")
 
     num_devices = device.get_num_devices()
     batch_size = device_batch_size * num_devices

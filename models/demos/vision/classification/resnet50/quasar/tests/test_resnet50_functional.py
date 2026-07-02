@@ -51,6 +51,9 @@ def run_resnet_50(
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
+        # batch 1 fits the 2x3 emulator / craq-sim grid (2 cores): the stem-conv per-core output is
+        # 392 tiles = 0.77MB, under the per-DFB uint16 ring cap (1MB); batch 2 (784 tiles) overflows it.
+        (1, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),
         (16, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
         (16, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),
         (32, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),
