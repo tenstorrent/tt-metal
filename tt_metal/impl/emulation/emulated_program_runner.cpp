@@ -473,6 +473,8 @@ struct DeferredCompile {
     std::string src_path;
     std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
+    NamedCTArgNamespaces named_ct_arg_namespaces;
+    NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
     std::map<std::string, std::string> defines;
     std::string extra_inc;
     Metal2BindingsSnapshot bindings;
@@ -931,6 +933,8 @@ static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
+    const NamedCTArgNamespaces& named_ct_arg_namespaces,
+    const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces,
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
     const Metal2BindingsSnapshot& bindings = {},
@@ -957,6 +961,64 @@ static std::function<void()> jit_compile_kernel(
     std::string patched_kernel_path = dir + "/patched_kernel.cpp";
     preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
 
+    // 2c. Emit named_args_generated.h with the kernel's ct_args:: namespaces
+    // (mirrors `write_named_args_generated_header` in jit_build/genfiles.cpp).
+    // Silicon's per-kernel build runs genfiles.cpp, which writes this header
+    // into the kernel out-dir; emule's JIT path bypasses genfiles entirely,
+    // so we replicate the emission here. The header is included from
+    // wrapper.cpp below when non-empty.
+    //
+    // Format matches genfiles.cpp byte-for-byte where practical so kernels
+    // see the same `ct_args::<prefix>` struct shape under emule as under
+    // silicon build.
+    bool has_named_args = false;
+    {
+        std::set<std::string> all_ns;
+        for (const auto& [ns, _] : named_ct_arg_namespaces) {
+            all_ns.insert(ns);
+        }
+        for (const auto& [ns, _] : named_runtime_arg_namespaces) {
+            if (!ns.empty()) {
+                all_ns.insert(ns);
+            }
+        }
+        std::ostringstream header_ct;
+        for (const auto& ns : all_ns) {
+            if (!ns.empty()) {
+                header_ct << "struct " << ns << " {\n";
+            }
+            if (auto it = named_ct_arg_namespaces.find(ns); it != named_ct_arg_namespaces.end()) {
+                for (const auto& [field, value] : it->second) {
+                    header_ct << "    static constexpr uint32_t " << field << " = " << value << ";\n";
+                }
+            }
+            if (auto it = named_runtime_arg_namespaces.find(ns); it != named_runtime_arg_namespaces.end()) {
+                for (const auto& entry : it->second) {
+                    const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
+                                                   ? "rt_args::Dispatch::COMMON"
+                                                   : "rt_args::Dispatch::PER_CORE";
+                    if (entry.length > 1) {
+                        header_ct << "    static constexpr rt_args::ArrayArg " << entry.field << " = {" << entry.index
+                                  << ", " << entry.length << ", " << dispatch_str << "};\n";
+                    } else {
+                        header_ct << "    static constexpr rt_args::Arg " << entry.field << " = {" << entry.index
+                                  << ", " << dispatch_str << "};\n";
+                    }
+                }
+            }
+            if (!ns.empty()) {
+                header_ct << "};\n";
+            }
+        }
+        auto ct_str = header_ct.str();
+        if (!ct_str.empty()) {
+            has_named_args = true;
+            std::ofstream f(dir + "/named_args_generated.h");
+            f << "#pragma once\n#include \"api/rt_arg.h\"\n\n";
+            f << "namespace ct_args {\n" << ct_str << "}\n";
+        }
+    }
+
     // 3. Write wrapper.cpp
     // Kernel defines are written as #define directives in the wrapper to avoid
     // shell quoting issues (values like SFPU_OP_CHAIN_0 contain parentheses).
@@ -975,7 +1037,11 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
+        // Metal-2.0 `namespace args` (base) + experimental `ct_args::` header (additive layer).
         emit_metal2_namespaces(f, bindings, named_compile_args);
+        if (has_named_args) {
+            f << "#include \"" << dir << "/named_args_generated.h\"\n";
+        }
         f << "#include \"" << patched_kernel_path << "\"\n";
         f << "extern \"C\" { void __emule_kernel_entry() { kernel_main(); } }\n";
     }
@@ -1597,6 +1663,19 @@ static void collect_kernels(
 
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
+            // Capture the namespace-structured CT + RT args so we can emit
+            // `named_args_generated.h` into the JIT temp dir. Silicon's build
+            // emits this header via jit_build/genfiles.cpp; emule's JIT path
+            // bypasses that, so we mirror the emission inside jit_compile_kernel.
+            NamedCTArgNamespaces named_ct_arg_namespaces;
+            kernel->process_named_ct_arg_namespaces([&named_ct_arg_namespaces](const NamedCTArgNamespaces& namespaces) {
+                named_ct_arg_namespaces = namespaces;
+            });
+            NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
+            kernel->process_named_runtime_args(
+                [&named_runtime_arg_namespaces](const NamedRuntimeArgNamespaces& namespaces) {
+                    named_runtime_arg_namespaces = namespaces;
+                });
             auto defines = build_kernel_defines(
                 *kernel, impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str, emule_sem_base);
 
@@ -1626,7 +1705,27 @@ static void collect_kernels(
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 
-            // Helper: compute cache key from a defines map.
+            // COMPILE_FOR_{TRISC,BRISC,NCRISC} defines — silicon's per-RISC
+            // kernel build sets exactly one of these. Kernel-author API
+            // headers use them to pick the right include chain and to define
+            // `is_brisc` / `is_ncrisc` / `is_trisc` constexpr bools; without
+            // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all
+            // RISCs in one unified thread, so we set the corresponding macro
+            // based on the kernel's processor class.
+            if (is_tensix) {
+                defines["COMPILE_FOR_TRISC"] = "1";
+            } else if (auto* dm_kernel = dynamic_cast<DataMovementKernel*>(kernel.get()); dm_kernel != nullptr) {
+                auto cfg_variant = dm_kernel->config();
+                const auto& cfg = std::get<DataMovementConfig>(cfg_variant);
+                switch (cfg.processor) {
+                    case DataMovementProcessor::RISCV_0: defines["COMPILE_FOR_BRISC"] = "1"; break;
+                    case DataMovementProcessor::RISCV_1: defines["COMPILE_FOR_NCRISC"] = "1"; break;
+                    default: break;
+                }
+            }
+
+            // Helper: compute cache key from a defines map (preserves upstream's sorted
+            // iteration of named_compile_args and defines for key stability).
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
                 std::string key;
                 if (ksrc.source_type_ == KernelSource::FILE_PATH) {
@@ -1671,8 +1770,15 @@ static void collect_kernels(
                         resolved_fns[key] = disk_fn;
                         g_jit_cache[key] = disk_fn;
                     } else {
-                        deferred_compiles[key] =
-                            DeferredCompile{src_path, compile_args, named_compile_args, defs, extra_inc, bindings};
+                        deferred_compiles[key] = DeferredCompile{
+                            src_path,
+                            compile_args,
+                            named_compile_args,
+                            named_ct_arg_namespaces,
+                            named_runtime_arg_namespaces,
+                            defs,
+                            extra_inc,
+                            bindings};
                     }
                 }
             };
@@ -1781,8 +1887,15 @@ static void jit_compile_pending(
             futures.emplace_back(
                 key, std::async(std::launch::async, [&dc, cache_path, tmp_path]() {
                     auto fn = jit_compile_kernel(
-                        dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc,
-                        dc.bindings, tmp_path);
+                        dc.src_path,
+                        dc.compile_args,
+                        dc.named_compile_args,
+                        dc.named_ct_arg_namespaces,
+                        dc.named_runtime_arg_namespaces,
+                        dc.defines,
+                        dc.extra_inc,
+                        dc.bindings,
+                        tmp_path);
                     std::filesystem::rename(tmp_path, cache_path);
                     return fn;
                 }));
