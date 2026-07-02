@@ -19,7 +19,6 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     const TilizeParams& /*operation_attributes*/, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
-
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
