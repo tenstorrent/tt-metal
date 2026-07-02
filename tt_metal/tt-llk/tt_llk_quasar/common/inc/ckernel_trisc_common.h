@@ -57,7 +57,7 @@ buffer_descriptor_u volatile* const bd_table = (buffer_descriptor_u volatile* co
 
 constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
 
-typedef struct
+struct tile_counter_t
 {
     std::uint32_t reserved0                    : 32;
     std::uint32_t reset                        : 32;
@@ -67,7 +67,7 @@ typedef struct
     std::uint32_t reserved1                    : 32;
     std::uint32_t tiles_avail_interrupt_thresh : 32;
     std::uint32_t space_avail_interrupt_thresh : 32;
-} tile_counter_t;
+};
 
 static_assert(sizeof(tile_counter_t) == NUM_WORDS_TILE_CNT * sizeof(std::uint32_t), "tile_counter_t must be 96b!");
 

@@ -28,7 +28,7 @@ constexpr static std::uint32_t TRISC_ID = 1;
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
 
-typedef struct
+struct alu_config_t
 {
     // word 0
     std::uint32_t ALU_FORMAT_SPEC_REG_SrcA_val        : 8;
@@ -53,7 +53,7 @@ typedef struct
     std::uint32_t ALU_ACC_CTRL_SFPU_Fp32_enabled : 1;
     std::uint32_t ALU_ACC_CTRL_INT8_math_enabled : 1;
     std::uint32_t UNUSED1                        : 21;
-} alu_config_t;
+};
 
 static_assert(sizeof(alu_config_t) == NUM_WORDS_ALU_FORMAT * sizeof(std::uint32_t));
 
