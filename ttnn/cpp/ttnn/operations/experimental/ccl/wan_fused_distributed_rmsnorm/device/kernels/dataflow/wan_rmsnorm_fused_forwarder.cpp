@@ -102,7 +102,12 @@ void kernel_main() {
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward)});
     pkt_hdr_bwd->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward)});
-    fabric_connection.open_finish();
+    // Guard open_finish on is_logically_connected(), matching the canonical CCL writers
+    // (all_reduce_async / all_to_all_async): a forwarder with no live fabric connection
+    // (e.g. a line-topology edge or a degenerate ring) must not run the open handshake.
+    if (fabric_connection.is_logically_connected()) {
+        fabric_connection.open_finish();
+    }
 
     const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
     const uint32_t packet_base = get_read_ptr(packet_cb);         // packet_cb is depth-2; we index by r%2 manually
@@ -179,6 +184,9 @@ void kernel_main() {
     // races (fast-but-wrong) or desyncs into a hang. (go/out_ready already reset.)
     noc_semaphore_set(out_ready_sem_ptr, 0);
     noc_semaphore_set(fwd_arrival_sem_ptr, 0);
-    fabric_connection.close_start();
-    fabric_connection.close_finish();
+    // Guard close on is_logically_connected(), matching the canonical CCL writers.
+    if (fabric_connection.is_logically_connected()) {
+        fabric_connection.close_start();
+        fabric_connection.close_finish();
+    }
 }

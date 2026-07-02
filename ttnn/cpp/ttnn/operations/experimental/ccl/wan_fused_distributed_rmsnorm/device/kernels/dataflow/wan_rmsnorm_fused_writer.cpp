@@ -142,7 +142,10 @@ void kernel_main() {
         pkt_hdr_backward->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward)});
 
-        fabric_connection.open_finish();
+        // Guard open_finish on is_logically_connected(), matching the canonical CCL writers.
+        if (fabric_connection.is_logically_connected()) {
+            fabric_connection.open_finish();
+        }
 
         // Reserve the worker's FULL gathered-stats region up front so the absolute
         // slot addresses base + (r*ring_size + device) are valid for every row
@@ -209,8 +212,11 @@ void kernel_main() {
         // Reset for any subsequent invocations of this op.
         noc_semaphore_set(out_ready_sem_ptr, 0);
 
-        fabric_connection.close_start();
-        fabric_connection.close_finish();
+        // Guard close on is_logically_connected(), matching the canonical CCL writers.
+        if (fabric_connection.is_logically_connected()) {
+            fabric_connection.close_start();
+            fabric_connection.close_finish();
+        }
     }
 
     // =================== Drain output_cb to DRAM ===================
