@@ -1708,10 +1708,13 @@ def moe_sparse_experts_forward_tt(
     if _pcm_env:
         prefill_pcm = int(_pcm_env or "1")
     else:
-        # Safe single-call token ceiling (bounds the E*T*inter intermediate). Above
-        # this, chunk. 512 tokens/call is comfortably L1/DRAM-safe for this model and
-        # covers the common short-context prefills in one shot.
-        _safe_tokens_per_call = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_SAFE_TOKENS", "512").strip() or "512")
+        # Safe single-call token ceiling (bounds the sparse_matmul per_core_M and thus
+        # its L1 circular buffers). MEASURED on WH 2x4: 256 tokens/call (per_core_M=8)
+        # fits L1 (~1.18 MB < 1.5 MB); 512/call (per_core_M=16) OOMs L1 (2.37 MB clash,
+        # program.cpp:1492). So default 256: ISL<=256 runs in 1 chunk, and larger ISLs
+        # still chunk in 256-token calls (e.g. ISL 512 -> 2 chunks instead of 16),
+        # keeping the win without OOM. Raise only if you have measured L1 headroom.
+        _safe_tokens_per_call = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_SAFE_TOKENS", "256").strip() or "256")
         _block = int(rt.sparsity_block_size)
         _blocks_needed = (int(total_tokens) + _block - 1) // _block
         _blocks_safe = max(1, _safe_tokens_per_call // _block)

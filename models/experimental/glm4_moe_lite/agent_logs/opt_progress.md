@@ -98,6 +98,24 @@ My first batch-8/16 attempt used `BATCHED_PREFILL=1` and crashed with an L1 circ
 being unsupported at batch>1, NOT the prefill_pcm change. batch 32 already used `=0`; using `=0` for
 8/16 makes them run cleanly (table above). Added to PLAN.md invariants.
 
+## Iteration 2c — across ISLs + SAFE_TOKENS ceiling correction
+A/B (batch 1) at more ISLs:
+- **ISL 256**: PCC=1.0, argmax match, prefill **650.7 → 396.6 ms = 1.64×**, 1 chunk (prefill_pcm=8).
+- **ISL 512**: the initial `SAFE_TOKENS=512` default put all 512 tokens in ONE sparse call
+  (per_core_M=16) → **L1 OOM** (`circular buffers grow to 2.37 MB > 1.5 MB`, program.cpp:1492).
+  MEASURED safe ceiling is **256 tokens/call (per_core_M=8 ≈ 1.18 MB)**.
+
+**Fix (committed): lower default `GLM4_MOE_LITE_MOE_SPARSE_SAFE_TOKENS` 512 → 256.** Now MoE
+sparse calls never exceed 256 tokens; ISL≤256 runs in 1 chunk, larger ISLs chunk in 256-token
+calls (e.g. ISL 512 → 2 chunks vs OLD 16) — win kept, no MoE OOM. This is the kind of bug the
+"across all ISLs" testing is meant to catch (the 512 default would have OOM'd real ISL 384–511).
+
+Separate note (NOT caused by prefill_pcm): running `runner.prefill` directly at **ISL 512** in the
+A/B harness OOMs on a non-MoE op *before* the MoE even runs (crash precedes any chunk-decision
+print, and reproduces on the OLD `pcm=1` path). The production sweep harness runs ISL 512 fine
+(see `experiments/t3k_isl_sweep_b1`), so this is harness/flag-specific. **Worklist item P2:**
+isolate the ISL≥512 direct-prefill OOM op (likely attention/dense-MLP CB at longer seq).
+
 ## Ground-truth PCC gate (TT vs HF) + cached HF reference
 Added `scripts/pcc_vs_hf.py` (+ `agent_logs/pcc_vs_hf.sh`): computes the HF last-token prefill
 logits ONCE on CPU (~59 GB model) and caches them to
