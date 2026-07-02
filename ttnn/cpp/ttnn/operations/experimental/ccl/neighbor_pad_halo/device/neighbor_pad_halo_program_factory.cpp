@@ -623,10 +623,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             const uint32_t l1_base =
                 mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
             const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            // num_buffers per channel = all_gather's default (1). The BH mux golden is flat across 1..8
+            // buffers at 4KB (15.3-15.5 B/c), and fewer buffers keeps the per-channel L1/credit footprint
+            // small so 4 full-size channels fit without deadlock.
             auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
                 /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
                 /*num_header_only_channels=*/0,
-                /*num_buffers_full_size_channel=*/8,
+                /*num_buffers_full_size_channel=*/1,
                 /*num_buffers_header_only_channel=*/0,
                 mux_buf_size,
                 l1_base);
