@@ -52,7 +52,7 @@ def _resolve_trace_dir(variant) -> Path:
     overrides the variant's prefill_trace_default. A vllm trace nests metadata.json + kv_cache under
     one run-hash subdir, so if the dir itself has no metadata.json, descend into the sole subdir that
     does."""
-    path = Path(os.environ.get("PREFILL_TRACE_DIR", variant.prefill_trace_default))
+    path = Path(os.environ.get("PREFILL_TRACE_DIR", variant.test_prefill_trace_default))
     if (path / "metadata.json").exists():
         return path
     subs = [d for d in sorted(path.iterdir()) if d.is_dir() and (d / "metadata.json").exists()]
@@ -308,7 +308,7 @@ def run_chunked_transformer_padded(
         _, _, layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
-            number_of_non_padded_tokens=isl,
+            actual_isl=isl,
             actual_start=kv_actual,
             actual_end=valid_end,
             cache_user_id=0,
@@ -489,7 +489,7 @@ def run_chunked_transformer(
         _, _, layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
-            number_of_non_padded_tokens=CHUNK,
+            actual_isl=CHUNK,
             actual_start=kv_actual,
             actual_end=kv_actual + CHUNK,
             cache_user_id=0,
@@ -648,7 +648,7 @@ def test_ds_prefill_transformer_chunked_padded(
 # Same chunked-prefill validation as the DeepSeek tests, with the kimi_k2_6 variant and the on-device
 # gate (GateComputeMode.DEVICE_FP32 — Kimi has a single expert group, so it uses the grouped-topk
 # fp32 device path) + KimiK26Config fabric payload. These skip until the Kimi golden trace lands (set
-# PREFILL_TRACE_DIR; see model_variants.py).
+# PREFILL_TRACE_DIR; see tt/runners/adapters/).
 
 
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])

@@ -4,7 +4,8 @@
 
 #include <cstdint>
 
-#include "api/compute/transpose_wh.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -17,7 +18,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
 
-    transpose_wh_init(cb_id_in, cb_id_out);
+    compute_kernel_hw_startup(cb_id_in, cb_id_out);
+    transpose_init(cb_id_in);
 
     CircularBuffer cb_in(cb_id_in);
     CircularBuffer cb_out(cb_id_out);
@@ -36,7 +38,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; ++w) {
             for (uint32_t h = 0; h < Ht; ++h) {
                 tile_regs_acquire();
-                transpose_wh_tile(cb_id_in, tile_idx, 0);
+                transpose_tile(cb_id_in, tile_idx, 0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, cb_id_out);

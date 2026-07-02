@@ -242,6 +242,7 @@ FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask)
 // This is a blocking wait, so it should only be used for debugging purposes
 // It is not recommended to use this in production code
 inline void spin(uint32_t cycles) {
+#if defined(RISCV_DEBUG_REG_WALL_CLOCK_L) && defined(RISCV_DEBUG_REG_WALL_CLOCK_H)
     volatile uint tt_reg_ptr* clock_lo = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     volatile uint tt_reg_ptr* clock_hi = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
     uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
@@ -249,6 +250,9 @@ inline void spin(uint32_t cycles) {
     do {
         wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
     } while (wall_clock < (wall_clock_timestamp + cycles));
+#else
+    (void)cycles;  // wall-clock debug register not on Quasar yet. Once present, need update. Issue #48543
+#endif
 }
 
 template <uint32_t Size, class Enable = void>

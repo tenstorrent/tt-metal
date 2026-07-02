@@ -44,6 +44,19 @@ namespace {
 // `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
 constexpr uint32_t k_x86_clflush_line_bytes = 64;
 
+void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
+    if (mesh_device == nullptr) {
+        return;
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
+        return;
+    }
+
+    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+}
+
 }  // namespace
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
@@ -400,9 +413,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     }
 }
 
-bool D2HSocket::has_data() {
+bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
-    uint32_t num_bytes = page_size_;
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }
@@ -419,6 +432,7 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
+        advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
             _mm_lfence();
@@ -467,19 +481,8 @@ uint32_t D2HSocket::discard_pending_pages() {
     if (pages == 0) {
         return 0;
     }
-    // Rebase: ack everything currently visible without touching the data region; advance
-    // read_ptr_ as a real read() would so subsequent reads stay consistent.
     uint32_t bytes_to_discard = pages * page_size_;
-    uint32_t cursor = read_ptr_ + bytes_to_discard;
-    if (fifo_curr_size_ > 0) {
-        cursor %= fifo_curr_size_;
-    }
-    read_ptr_ = cursor;
-    bytes_acked_ += bytes_to_discard;
-    if (connector_state_) {
-        connector_state_->bytes_acked = bytes_acked_;
-        connector_state_->read_ptr = read_ptr_;
-    }
+    this->pop_bytes(bytes_to_discard);
     notify_sender();
     return pages;
 }
@@ -541,15 +544,28 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
     this->wait_for_bytes(num_bytes);
-    uint32_t* src = using_hugepage_ ? hugepage_data_host_ptr_ + (read_ptr_ / sizeof(uint32_t))
-                                    : host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
+
+    uint32_t head_bytes = num_bytes;
+    if (read_ptr_ + num_bytes > fifo_curr_size_) {
+        head_bytes = fifo_curr_size_ - read_ptr_;
+    }
+    uint32_t tail_bytes = num_bytes - head_bytes;
+
+    uint32_t* base = using_hugepage_ ? hugepage_data_host_ptr_ : host_buffer_.get();
+    uint32_t* src = base + (read_ptr_ / sizeof(uint32_t));
     if (using_hugepage_) {
-        for (uint32_t i = 0; i < num_bytes; i += k_x86_clflush_line_bytes) {
+        for (uint32_t i = 0; i < head_bytes; i += k_x86_clflush_line_bytes) {
             _mm_clflush(reinterpret_cast<char*>(src) + i);
+        }
+        for (uint32_t i = 0; i < tail_bytes; i += k_x86_clflush_line_bytes) {
+            _mm_clflush(reinterpret_cast<char*>(base) + i);
         }
         _mm_lfence();
     }
-    std::memcpy(data, src, num_bytes);
+    std::memcpy(data, src, head_bytes);
+    if (tail_bytes > 0) {
+        std::memcpy(static_cast<char*>(data) + head_bytes, base, tail_bytes);
+    }
     this->pop_bytes(num_bytes);
 
     if (notify_sender) {

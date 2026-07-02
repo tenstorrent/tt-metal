@@ -4,9 +4,10 @@
 
 // LLK_SAN_ENABLE : Master switch. Enable/Disable sanitizer completely. Default DISABLED
 
-// If none of the below two are set, defaults to ASSERT. Mutually exclusive.
-// LLK_SAN_SETTING_ASSERT   : Once sanitizer is tripped, causes an LLK_ASSERT, stops execution
-// LLK_SAN_SETTING_PRINT    : Once sanitizer is tripped, causes a DEVICE_PRINT, continues execution
+// The report method is implicit and depends on which of the following are enabled:
+// ENABLE_LLK_ASSERT   : Once sanitizer is tripped, causes an LLK_ASSERT, stops execution
+// DEBUG_PRINT_ENABLED : Once sanitizer is tripped, causes a DEVICE_PRINT, continues execution
+// At least one of the two must be enabled whenever the sanitizer is enabled.
 
 // LLK_SAN_SETTING_PEDANTIC : Breaks LLK Contract, won't cause incorrect behavior, or check is redundant. Default FALSE.
 // LLK_SAN_SETTING_WARN     : Breaks LLK Contract, might cause incorrect behavior, or performance degradation. Default TRUE.
@@ -20,16 +21,6 @@
 #pragma once
 
 #ifndef LLK_SAN_ENABLE
-
-#if defined(LLK_SAN_SETTING_ASSERT)
-#error "llk::san | fault   | LLK_SAN_SETTING_ASSERT is set but LLK_SAN_ENABLE is not defined"
-#endif
-#define LLK_SAN_SETTING_ASSERT 0
-
-#if defined(LLK_SAN_SETTING_PRINT)
-#error "llk::san | fault   | LLK_SAN_SETTING_PRINT is set but LLK_SAN_ENABLE is not defined"
-#endif
-#define LLK_SAN_SETTING_PRINT 0
 
 #if defined(LLK_SAN_SETTING_PEDANTIC)
 #error "llk::san | fault   | LLK_SAN_SETTING_PEDANTIC is set but LLK_SAN_ENABLE is not defined"
@@ -62,14 +53,6 @@
 #define LLK_SAN_SETTING_INTERNAL 0
 
 #else
-
-#if defined(LLK_SAN_SETTING_ASSERT) && defined(LLK_SAN_SETTING_PRINT)
-#error "llk::san | fault   | LLK_SAN_SETTING_ASSERT and LLK_SAN_SETTING_PRINT cannot both be defined"
-#endif
-
-#if !defined(LLK_SAN_SETTING_ASSERT) && !defined(LLK_SAN_SETTING_PRINT)
-#define LLK_SAN_SETTING_ASSERT 1
-#endif
 
 #if !defined(LLK_SAN_SETTING_PEDANTIC)
 #define LLK_SAN_SETTING_PEDANTIC 0

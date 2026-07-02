@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 constexpr uint32_t compute_output_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
@@ -14,6 +18,10 @@ constexpr uint32_t num_output_tensors = get_compile_time_arg_val(5);
 constexpr uint32_t initial_ct_idx = 6;
 
 void kernel_main() {
+    Noc noc;
+
+    CircularBuffer cb_compute_output(compute_output_cb_id);
+
     uint32_t arg_idx = 0;
 
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
@@ -44,11 +52,12 @@ void kernel_main() {
         uint32_t normalized_page_id = slice_row_offset + intra_slice_offset;
         uint64_t noc_addr = output_slice_tensor_accessors[slice_id].get_noc_addr(normalized_page_id);
 
-        cb_wait_front(compute_output_cb_id, one_tile);
-        uint32_t l1_read_addr = get_read_ptr(compute_output_cb_id);
+        cb_compute_output.wait_front(one_tile);
+        uint32_t l1_read_addr = cb_compute_output.get_read_ptr();
+        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         noc_async_write(l1_read_addr, noc_addr, page_size);
-        noc_async_writes_flushed();
-        cb_pop_front(compute_output_cb_id, one_tile);
+        noc.async_writes_flushed();
+        cb_compute_output.pop_front(one_tile);
 
         tiles_read += num_cores_to_be_used;
 
@@ -67,5 +76,5 @@ void kernel_main() {
             slice_row_offset += slice_Wt;
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

@@ -19,6 +19,7 @@ from fuser.validator import (
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
     OperationSchemaBase,
+    PackSchema,
     UnarySfpuMathSchema,
     _has_transpose,
     _tile_dims,
@@ -190,6 +191,11 @@ _eltwise_bcast_32x16 = (
     "32x16 tiles are not supported for eltwise with column/row broadcast",
 )
 
+_only_32x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
+    "Only (32, 32) tiles are supported for this operation",
+)
+
 _datacopy_only_32x32 = (
     lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32)
     and (
@@ -278,14 +284,14 @@ FPU_MAP = {
     ),
     "ReduceBlockMax": (
         lambda s: ReduceBlockMaxFpu(),
-        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker"), _unsupported_tile],
+        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker"), _only_32x32_tile],
     ),
     "ReduceBlockMaxRuntime": (
         lambda s: ReduceBlockMaxRuntimeFpu(),
         [
             _no_reuse_dest,
             _forced_unpacker("ReduceBlockMaxRuntimeUnpacker"),
-            _unsupported_tile,
+            _only_32x32_tile,
         ],
     ),
     "SubBcastColCustom": (
@@ -293,7 +299,7 @@ FPU_MAP = {
         [
             _no_reuse_dest,
             _forced_unpacker("SubBcastColCustomUnpacker"),
-            _unsupported_tile,
+            _only_32x32_tile,
         ],
     ),
 }
@@ -387,6 +393,15 @@ MathSchema = Annotated[
 ]
 
 
-class OperationSchema(OperationSchemaBase):
+class WormholePackSchema(PackSchema):
     _packer_map: ClassVar = PACKER_MAP
+
+
+PackEntrySchema = Union[
+    WormholeUnarySfpuMathSchema, WormholeBinarySfpuMathSchema, WormholePackSchema
+]
+
+
+class OperationSchema(OperationSchemaBase):
     math: List[MathSchema] = Field(..., min_length=1)
+    pack: List[PackEntrySchema] = Field(..., min_length=1)

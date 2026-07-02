@@ -134,21 +134,19 @@ void kernel_main() {
             cb_scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-            /*compute_uses_reduce_tile=*/true>();
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
         if constexpr (partial_last_tile_cols > 0) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 cb_scaler,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-                /*compute_uses_reduce_tile=*/true>(partial_last_tile_cols);
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
         }
     }
 
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(cb_eps, eps);
+    generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;

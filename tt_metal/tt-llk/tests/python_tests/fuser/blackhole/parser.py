@@ -19,6 +19,7 @@ from fuser.validator import (
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
     OperationSchemaBase,
+    PackSchema,
     UnarySfpuMathSchema,
     _has_transpose,
     _tile_dims,
@@ -39,9 +40,11 @@ from pydantic import Field
 from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
+from .fpu.matmul_no_mop import MatmulNoMopFpu
 from .fpu.reduce import ReduceFpu
 from .fpu.reduce_block_max import ReduceBlockMaxFpu
 from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
+from .fpu.sub_bcast_col_custom import SubBcastColCustomFpu
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
@@ -49,6 +52,7 @@ from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
 from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
 from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
+from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
@@ -113,6 +117,10 @@ UNPACKER_MAP = {
     ),
     "ReduceBlockMaxRuntimeUnpacker": (
         lambda s: ReduceBlockMaxRuntimeUnpacker(),
+        None,
+    ),
+    "SubBcastColCustomUnpacker": (
+        lambda s: SubBcastColCustomUnpacker(),
         None,
     ),
 }
@@ -184,6 +192,11 @@ _eltwise_bcast_32x16 = (
     "32x16 tiles are not supported for eltwise with column/row broadcast",
 )
 
+_only_32x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
+    "Only (32, 32) tiles are supported for this operation",
+)
+
 _datacopy_only_32x32 = (
     lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32)
     and (
@@ -250,6 +263,17 @@ FPU_MAP = {
             _matmul_inner_dims,
         ],
     ),
+    "MatmulNoMop": (
+        lambda s: MatmulNoMopFpu(),
+        [
+            _no_reuse_dest,
+            _matmul_dim_check,
+            _forced_unpacker("MatmulUnpacker"),
+            _matmul_in0_16x16,
+            _matmul_in1_tile,
+            _matmul_inner_dims,
+        ],
+    ),
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
@@ -261,14 +285,22 @@ FPU_MAP = {
     ),
     "ReduceBlockMax": (
         lambda s: ReduceBlockMaxFpu(),
-        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker"), _unsupported_tile],
+        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker"), _only_32x32_tile],
     ),
     "ReduceBlockMaxRuntime": (
         lambda s: ReduceBlockMaxRuntimeFpu(),
         [
             _no_reuse_dest,
             _forced_unpacker("ReduceBlockMaxRuntimeUnpacker"),
-            _unsupported_tile,
+            _only_32x32_tile,
+        ],
+    ),
+    "SubBcastColCustom": (
+        lambda s: SubBcastColCustomFpu(),
+        [
+            _no_reuse_dest,
+            _forced_unpacker("SubBcastColCustomUnpacker"),
+            _only_32x32_tile,
         ],
     ),
 }
@@ -293,9 +325,11 @@ OUTPUT_DIMS = {
     "Elwsub": _eltwise_dims,
     "Datacopy": _src_a_dims,
     "Matmul": _matmul_dims,
+    "MatmulNoMop": _matmul_dims,
     "Reduce": _src_a_dims,
     "ReduceBlockMax": _src_a_dims,
     "ReduceBlockMaxRuntime": _src_a_dims,
+    "SubBcastColCustom": _src_a_dims,
 }
 
 UNARY_SFPU_OPS = {
@@ -360,9 +394,18 @@ MathSchema = Annotated[
 ]
 
 
-class OperationSchema(OperationSchemaBase):
+class BlackholePackSchema(PackSchema):
     _packer_map: ClassVar = PACKER_MAP
+
+
+PackEntrySchema = Union[
+    BlackholeUnarySfpuMathSchema, BlackholeBinarySfpuMathSchema, BlackholePackSchema
+]
+
+
+class OperationSchema(OperationSchemaBase):
     math: List[MathSchema] = Field(..., min_length=1)
+    pack: List[PackEntrySchema] = Field(..., min_length=1)
     bh_tilize: Tilize = Tilize.No
 
     def _arch_validate(self):

@@ -8,7 +8,7 @@ Exercises the device op directly against inlined PyTorch references, so the op c
 without running the full ``MoEGate`` module. Covers all three of its modes:
   - ungrouped global top-k, 256 experts (``test_generalized_moe_gate``, vs ``_generalized_golden``);
   - ungrouped global top-k, 512 experts via the 2-block combine (``test_generalized_moe_gate_512_global``);
-  - DeepSeek grouped gate via ``grouped=True`` (``test_generalized_moe_gate_grouped``, vs ``_grouped_golden``) —
+  - DeepSeek grouped gate via ``grouped=True`` (``test_generalized_moe_gate_grouped``, vs ``TTMoEGate.grouped_golden``) —
     the path the standalone ``deepseek_moe_gate`` op used to own.
 Modeled on ``models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py``.
 """
@@ -18,7 +18,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
+from models.common.modules.moe.tt_moe_gate import TTMoEGate
 
 
 def _generalized_golden(
@@ -43,31 +43,10 @@ def _generalized_golden(
     return weights / (torch.sum(weights, dim=-1, keepdim=True) + eps) * scaling_factor, topk_indices
 
 
-def _grouped_golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, enable_sigmoid=True):
-    """PyTorch reference for the DeepSeek *grouped* gate (the op's ``grouped=True`` path): 256 experts as
-    8 groups × 32; per group take the top-2 bias-corrected scores and sum them, pick the top-4 groups by
-    that sum, then the top-8 (by bias-corrected score) over those 4 groups (128 experts), gather the
-    UNBIASED score at the chosen experts, linearly renormalize and scale. ``input_tensor``/``bias_tensor``:
-    [batch, 8, 32]. Returns (scores[batch, 8], global_indices[batch, 8])."""
-    row_offsets = torch.arange(input_tensor.shape[-2]) * input_tensor.shape[-1]  # group g -> base id g*32
-    batch_idx = torch.arange(input_tensor.shape[0]).unsqueeze(-1)
-    scores = torch.sigmoid(input_tensor) if enable_sigmoid else input_tensor
-    bias_scores = scores + bias_tensor
-    sorted_bias, sorted_indices = torch.sort(bias_scores, dim=-1, descending=True)
-    sorted_scores = torch.gather(scores, dim=-1, index=sorted_indices)
-    sorted_indices = sorted_indices + row_offsets.view(1, -1, 1)  # local -> global expert id
-    top2_sum = sorted_bias[:, :, 0] + sorted_bias[:, :, 1]  # per-group top-2-sum
-    _, sorted_top2_indices = torch.sort(top2_sum, dim=-1, descending=True)  # rank groups by it
-    top4_values = sorted_bias[batch_idx, sorted_top2_indices[:, :4]].flatten(1)  # top-4 groups' bias scores
-    top4_scores = sorted_scores[batch_idx, sorted_top2_indices[:, :4]].flatten(1)
-    top4_indices = sorted_indices[batch_idx, sorted_top2_indices[:, :4]].flatten(1)
-    _, top8_pos = torch.topk(top4_values, 8, dim=-1, sorted=True)  # top-8 of the 128 by bias score
-    top8_scores = torch.gather(top4_scores, dim=-1, index=top8_pos)  # UNBIASED scores at the chosen experts
-    top8_indices = torch.gather(top4_indices, dim=-1, index=top8_pos)
-    return top8_scores / (torch.sum(top8_scores, dim=-1, keepdim=True) + eps) * scaling_factor, top8_indices
+# The DeepSeek *grouped* gate reference (8 groups × 32 → top-2-sum → top-4 groups → top-8) lives on the
+# shared module as ``TTMoEGate.grouped_golden`` — the SINGLE source of truth, reused by the grouped test below.
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
@@ -261,7 +240,6 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     ), "Normalized scores are not consistent with the device's own top-8 selection"
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
@@ -406,7 +384,6 @@ def test_generalized_moe_gate_512_global(device, batch_size, enable_sigmoid, see
     ), f"512 normalized scores not consistent with device selection.\n dev={dev_scores}\n expected={expected}"
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201])
@@ -431,7 +408,9 @@ def test_generalized_moe_gate_grouped(device, batch_size, enable_sigmoid, seed):
     torch_bias = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
 
     # Golden INDICES only — scores are validated against the device's OWN selection below (tie-robust).
-    _, gold_idx = _grouped_golden(torch_input, torch_bias, eps, scaling_factor, enable_sigmoid)
+    _, gold_idx = TTMoEGate.grouped_golden(
+        torch_input, torch_bias, eps=eps, scaling_factor=scaling_factor, enable_sigmoid=enable_sigmoid
+    )
 
     grid = device.compute_with_storage_grid_size()
     core_grid = ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)

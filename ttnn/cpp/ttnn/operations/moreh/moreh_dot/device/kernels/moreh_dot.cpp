@@ -15,6 +15,7 @@ void kernel_main() {
 
     CircularBuffer cb_c0(tt::CBIndex::c_0);
     CircularBuffer cb_c1(tt::CBIndex::c_1);
+    CircularBuffer cb_c2(tt::CBIndex::c_2);
     CircularBuffer cb_c24(tt::CBIndex::c_24);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
@@ -66,4 +67,7 @@ void kernel_main() {
                 compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
         }
     }
+    // The reduce helper waits on the scaler CB (c_2) each block but never pops it; the single
+    // scaler tile is reused across all blocks. Pop it once at the end to balance the CB.
+    cb_c2.pop_front(onetile);
 }

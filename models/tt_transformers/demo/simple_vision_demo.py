@@ -316,9 +316,7 @@ def prepare_generator_args(
         # 4,
     ],
 )
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 17400000, "num_command_queues": 2}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True, "num_command_queues": 2}], indirect=True)
 def test_multimodal_demo_text(
     mesh_device,
     warmup_iters,
@@ -665,7 +663,7 @@ def test_multimodal_demo_text(
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, perf_targets)
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_perf",
             ml_model_name=f"{base_model_name}-vision",
             ml_model_type="vlm",
             device_name=tt_device_name,
