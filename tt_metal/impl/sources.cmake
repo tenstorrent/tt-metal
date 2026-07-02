@@ -144,4 +144,16 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
 )
+
+if(TT_METAL_USE_EMULE)
+    list(
+        APPEND
+        IMPL_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
+    )
+endif()
