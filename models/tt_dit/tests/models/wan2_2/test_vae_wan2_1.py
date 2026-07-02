@@ -114,6 +114,8 @@ def defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, d
     for j in range(len(tt_feat_cache)):
         if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
             tt_feat_cache_host.append(tt_feat_cache[j])
+        elif tt_feat_cache[j] is None:
+            tt_feat_cache_host.append(None)
         else:
             tt_feat_cache_host.append(
                 ttnn.to_torch(
@@ -127,6 +129,8 @@ def defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, d
     for j in range(len(tt_feat_cache)):
         if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
             tt_feat_cache[j] = tt_feat_cache_host[j]
+        elif tt_feat_cache[j] is None:
+            pass
         else:
             tt_feat_cache[j] = typed_tensor_2dshard(
                 tt_feat_cache_host[j],
@@ -1125,8 +1129,13 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         logger.info(f"running test iteration {i}")
 
         torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
+        logger.info(f"Torch input shape {torch_input_tensor.shape}")
         tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
+        logger.info(f"Theoretical TT input shape {tt_input_tensor.shape}")
+
         tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
+        logger.info(f"Theoretical input shape after pad {tt_input_tensor.shape}")
+
         if logical_h != tt_input_tensor.shape[2]:
             logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
         tt_input_tensor = typed_tensor_2dshard(
@@ -1138,6 +1147,8 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         )
         tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
+        logger.info(f"Actual TT input shape {tt_input_tensor.shape}")
+
         logger.info(f"running torch model")
         with torch.no_grad():
             torch_output = torch_model(
@@ -1145,6 +1156,8 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
                 feat_cache=torch_feat_cache,
                 feat_idx=torch_feat_idx,
             )
+
+        logger.info(f"torch_output shape {torch_output.shape}")
 
         logger.info(f"running tt model")
         tt_output, new_logical_h, new_logical_w = tt_model(
@@ -1162,17 +1175,50 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
         )
+        logger.info(f"tt_output_torch shape {tt_output_torch.shape}")
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
+        logger.info(f"tt_output_torch shape after unpad {tt_output_torch.shape}")
+
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
+        logger.info(f"tt_output_torch shape after permute {tt_output_torch.shape}")
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=0.999_000, relative_rmse=0.02)
+
+        # Log feat_cache comparison
+        logger.info(f"feat_cache lengths: torch={len(torch_feat_cache)}, tt={len(tt_feat_cache)}")
+        for i in range(max(len(torch_feat_cache), len(tt_feat_cache))):
+            torch_entry = torch_feat_cache[i] if i < len(torch_feat_cache) else "<missing>"
+            tt_entry = tt_feat_cache[i] if i < len(tt_feat_cache) else "<missing>"
+
+            if torch_entry is None:
+                torch_desc = "None"
+            elif isinstance(torch_entry, str):
+                torch_desc = f'str("{torch_entry}")'
+            elif isinstance(torch_entry, torch.Tensor):
+                torch_desc = f"Tensor(shape={list(torch_entry.shape)}, dtype={torch_entry.dtype})"
+            else:
+                torch_desc = f"{type(torch_entry).__name__}"
+
+            if tt_entry is None:
+                tt_desc = "None"
+            elif isinstance(tt_entry, str):
+                tt_desc = f'str("{tt_entry}")'
+            elif hasattr(tt_entry, "shape"):
+                tt_desc = f"ttnn.Tensor(shape={list(tt_entry.shape)})"
+            else:
+                tt_desc = f"{type(tt_entry).__name__}"
+
+            logger.info(f"  feat_cache[{i}]: torch={torch_desc}, tt={tt_desc}")
 
         for i in range(len(tt_feat_cache)):
             logger.info(f"checking feat_cache {i}")
             if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
                 logger.info(f"feat_cache {i} is Rep")
                 assert torch_feat_cache[i] == "Rep"
+                continue
+            if tt_feat_cache[i] is None:
+                assert torch_feat_cache[i] is None
                 continue
             tt_feat_cache_back = ttnn.to_torch(
                 tt_feat_cache[i],
