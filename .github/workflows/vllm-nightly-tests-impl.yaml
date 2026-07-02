@@ -201,7 +201,7 @@ jobs:
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "default-chat-template-kwargs": "{\"enable_thinking\": false}",
               "multimodal": false,
-              "owner_id": "U08HL8X1ECD"
+              "owner_id": "U08HL8X1ECD" # Aniruddha Tupe
             },
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
@@ -532,13 +532,6 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
-          # Server-side default chat-template kwargs (e.g. reasoning models like
-          # Qwen3.6 default to thinking on; turn it off by default so the server
-          # answers directly). vLLM merges these with request-level
-          # chat_template_kwargs, with request values taking precedence — so a
-          # client can still opt back in with {"enable_thinking": true}. Kept in
-          # its own quoted arg (not additional-server-args) so the JSON survives
-          # the unquoted word-splitting expansion above.
           DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
           if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
             DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
