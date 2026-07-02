@@ -1,18 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Tensor-parallel (multi-device) helpers for Qwen3.5 on Blackhole.
+"""TP helpers for Qwen3.5 on Blackhole (9B single-device + 27B TP=4).
 
-TP helpers shared by the 9B (single device) and 27B (TP=4) configs.
-Inert on a 1-device mesh — ``model_config.py`` only invokes these when
-``num_devices > 1``.
-
-Contents:
-- Hardware constants + compute-kernel configs
-- DRAM-sharded weight memory / matmul program config builders
-- 2D prefill matmul program config builder
-- Mesh tensor helpers (shard / replicate)
-- FP8 block-wise dequantization
-- Weight-prep helpers that reorder HF weights for clean per-device sharding
+Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
+mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
 
@@ -21,13 +12,13 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-# ── Hardware constants ──────────────────────────────────────────────────────
+# Hardware constants
 TILE_SIZE = 32
 DRAM_CORES = 8
 DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
 
 
-# ── Compute kernel configs ──────────────────────────────────────────────────
+# Compute kernel configs
 COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
@@ -36,10 +27,9 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# ── Grid helpers ────────────────────────────────────────────────────────────
+# Grid helpers
 def prefill_grid_default():
-    """BH P150: (x=8, y=10) = 80 cores; WH: (8, 8). See 27B notes for why y is
-    capped at 10 and why grid_x=10 garbles the regular matmul kernel."""
+    """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
     return (8, 10) if is_blackhole() else (8, 8)
 
 
@@ -67,7 +57,7 @@ def _find_grid(n_tiles, target=32):
     raise ValueError(f"Cannot find grid for {n_tiles} tiles")
 
 
-# ── DRAM-sharded config builders ────────────────────────────────────────────
+# DRAM-sharded config builders
 def create_dram_sharded_mem_config(k, n):
     """WIDTH_SHARDED DRAM memory config for a weight matrix [k, n]."""
     padded_n = _roundup(n, TILE_SIZE * DRAM_CORES)
@@ -124,7 +114,7 @@ def create_activation_shard_config(k):
     )
 
 
-# ── 2D matmul config builder (prefill) ──────────────────────────────────────
+# 2D prefill matmul config
 def _get_out_subblock_w(per_core_n, out_subblock_h):
     for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
         if per_core_n % w == 0:
@@ -133,12 +123,9 @@ def _get_out_subblock_w(per_core_n, out_subblock_h):
 
 
 def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
-    """2D matmul program config for prefill (compute-bound, DRAM-interleaved).
+    """2D prefill matmul progcfg (DRAM-interleaved).
 
-    fused_activation (e.g. ttnn.UnaryOpType.SILU) is applied in the matmul output packer —
-    the sharded/2D matmul kernel requires the activation here, not via ttnn.linear(activation=...)
-    (that path TT_FATALs when a program_config is supplied).
-    """
+    fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
@@ -163,13 +150,9 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     )
 
 
-# ── Mesh tensor helpers ─────────────────────────────────────────────────────
+# Mesh tensor helpers
 def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloat8_b):
-    """Convert a torch weight [out, in] to a sharded mesh tensor.
-
-    Transposes to [in, out] (ttnn.linear convention) and shards along ``dim``
-    (after the transpose): dim=-1 = column-parallel, dim=0 = row-parallel.
-    """
+    """Torch weight [out,in] -> sharded mesh tensor. Transpose to [in,out]; dim=-1 column, dim=0 row."""
     w = torch_tensor.to(torch.bfloat16).T.contiguous()
     return ttnn.as_tensor(
         w,
@@ -183,25 +166,13 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
 
 
 def sharded_decode_matmul(x, weight, compute_cfg, decode_progcfg, act_shard_cfg, prefill_progcfg_fn, prefill_k):
-    """Matmul against a DRAM-WIDTH_SHARDED weight, branching on the M dim.
+    """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 
-    Decode (M <= one tile = TILE_SIZE rows, i.e. B<=32 users): width-shard the activation
-    into L1, run the DRAM-sharded matmul kernel (reads the M=1 weight at near-peak DRAM
-    bandwidth — the win for weight-read-bound decode), then convert the output back to
-    DRAM-interleaved. Prefill (M > one tile): a regular 2D matmul over the same sharded
-    weight (compute-bound, so DRAM-sharding gives nothing). Mirrors mlp.Qwen36MLP._forward_tp
-    exactly. Returns a DRAM-interleaved tensor — identical layout to a plain ttnn.linear —
-    so downstream reshape/slice is unchanged.
-
-    Gate on x.shape[-2] (the real M/seq dim: 32 in decode, seq_len in prefill), NOT x.shape[1]
-    (the Z dim, which is 1 in both modes).
-    """
+    Decode (M<=32): L1-sharded act + DRAM-sharded kernel. Prefill: 2D matmul.
+    Gate on x.shape[-2] (seq/M), not x.shape[1] (Z=1 in both modes). Returns DRAM-interleaved."""
     seq = x.shape[-2]
     if seq <= TILE_SIZE:
-        # Reshard the activation to L1 width-sharded for the DRAM-sharded matmul. If x is ALREADY
-        # in that layout (the decode hidden often is), to_memory_config returns x aliased — so only
-        # deallocate when we actually made a copy, else we'd free x out from under a later reuse
-        # (e.g. GDN's separate `ab` projection reads the same x after qkvz).
+        # Reshard act to L1 if needed; skip dealloc when x already sharded (GDN reuses x).
         already_sharded = x.memory_config() == act_shard_cfg
         x_sh = x if already_sharded else ttnn.to_memory_config(x, act_shard_cfg)
         out = ttnn.linear(
@@ -221,7 +192,7 @@ def sharded_decode_matmul(x, weight, compute_cfg, decode_progcfg, act_shard_cfg,
 
 
 def replicate(torch_tensor, mesh, cache_path, dtype=ttnn.bfloat16):
-    """Small tensor (norms, biases) -> replicated on every device."""
+    """Small tensor (norm/bias) -> replicated on every device."""
     if torch_tensor.dim() == 1:
         torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
     elif torch_tensor.dim() == 2:
@@ -238,7 +209,7 @@ def replicate(torch_tensor, mesh, cache_path, dtype=ttnn.bfloat16):
 
 
 def shard_small(torch_tensor, mesh, cache_path, dim=-1, dtype=ttnn.bfloat16):
-    """Small per-head tensor (conv taps, A_log, dt_bias) -> sharded across devices."""
+    """Small per-head tensor (conv taps, A_log, dt_bias) -> sharded."""
     if torch_tensor.dim() == 1:
         torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
     elif torch_tensor.dim() == 2:
@@ -255,9 +226,7 @@ def shard_small(torch_tensor, mesh, cache_path, dim=-1, dtype=ttnn.bfloat16):
 
 
 def replicate_kv_weight(weight, n_kv_heads, tp, head_dim):
-    """Replicate a KV weight [n_kv_heads*head_dim, hidden] so each of ``tp``
-    devices gets at least one KV head. No-op when tp <= n_kv_heads (the TP=4
-    Qwen3.5 case: 4 KV heads / 4 devices = 1 head/device)."""
+    """Replicate KV weight so each device gets >=1 head. No-op when tp <= n_kv_heads."""
     if tp <= n_kv_heads:
         return weight
     chunks = weight.reshape(n_kv_heads, head_dim, -1)
@@ -268,7 +237,7 @@ def replicate_kv_weight(weight, n_kv_heads, tp, head_dim):
     return torch.cat(parts, dim=0).reshape(tp * head_dim, -1)
 
 
-# ── FP8 dequantization ──────────────────────────────────────────────────────
+# FP8 dequantization
 def dequant_fp8_block(weight_fp8, scale_inv, block_size=128):
     """Dequantize a block-wise FP8 weight tensor to bfloat16."""
     out_f, in_f = weight_fp8.shape
@@ -277,15 +246,12 @@ def dequant_fp8_block(weight_fp8, scale_inv, block_size=128):
     return weight_bf16.reshape(out_f, in_f)
 
 
-# ── Weight-prep helpers (reorder HF weights for per-device sharding) ─────────
+# Weight-prep (reorder HF weights for per-device sharding)
 def prepare_attn_qkv(q_w, k_w, v_w, qg_per, kv_per, tp):
-    """Interleave the full-attention q+gate / k / v weights into one fused [out, in] tensor so
-    ShardTensorToMesh(dim=-1) on the transposed result gives each device a contiguous
-    [qg_d | k_d | v_d] slice (matching the separate column-parallel shards it replaces).
+    """Fuse attn q+gate/k/v for column-parallel shard: each device gets [qg_d|k_d|v_d].
 
-    q_w: [n_heads*head_dim*2, in] (q_proj packs [Q,gate] per head); k_w/v_w: [n_kv_heads*head_dim, in].
-    qg_per = n_local_heads*head_dim*2; kv_per = n_local_kv_heads*head_dim (the per-device out blocks).
-    """
+    q_w: [n_heads*head_dim*2, in]; k_w/v_w: [n_kv_heads*head_dim, in].
+    qg_per/kv_per: per-device out block sizes."""
     parts = []
     for d in range(tp):
         parts.append(q_w[d * qg_per : (d + 1) * qg_per, :])
@@ -295,37 +261,27 @@ def prepare_attn_qkv(q_w, k_w, v_w, qg_per, kv_per, tp):
 
 
 def prepare_attn_qkv_deint(q_w, k_w, v_w, nh_local, hd, kv_per, tp):
-    """Like prepare_attn_qkv, but DE-INTERLEAVES the per-head [Q,gate] pack so each device's
-    fused output is contiguous [all_q_d | all_gate_d | k_d | v_d] instead of [q0,g0,q1,g1,...].
+    """Like prepare_attn_qkv but de-interleaves [q,g] per head -> [all_q|all_gate|k|v] per device.
 
-    q_proj packs [q_head(hd) | gate_head(hd)] per head; the default interleaved layout forces
-    attention _make_heads to reshape+chunk the whole [q;gate] block (the 5.3ms prefill relayout).
-    De-interleaving lets q and gate be extracted as plain contiguous slices instead.
-    Numerically identical (a column permutation) — only the extraction layout changes.
-
-    q_w: [nh_total*hd*2, in] ([q,g] per head); k_w/v_w: [nkv_total*hd, in]. nh_local = per-device
-    q heads; kv_per = nkv_local*hd (per-device k/v out block).
-    """
+    Avoids prefill relayout in _make_heads (column perm only; numerically identical).
+    q_w: [nh_total*hd*2, in]; nh_local/kv_per: per-device block sizes."""
     hd2 = hd * 2
     parts = []
     for d in range(tp):
         base = d * nh_local * hd2
         q_rows = [q_w[base + h * hd2 : base + h * hd2 + hd, :] for h in range(nh_local)]
         g_rows = [q_w[base + h * hd2 + hd : base + h * hd2 + hd2, :] for h in range(nh_local)]
-        parts.append(torch.cat(q_rows, dim=0))  # all_q_d
-        parts.append(torch.cat(g_rows, dim=0))  # all_gate_d
+        parts.append(torch.cat(q_rows, dim=0))  # all_q
+        parts.append(torch.cat(g_rows, dim=0))  # all_gate
         parts.append(k_w[d * kv_per : (d + 1) * kv_per, :])
         parts.append(v_w[d * kv_per : (d + 1) * kv_per, :])
     return torch.cat(parts, dim=0)
 
 
 def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
-    """Interleave GDN Q/K/V heads so ShardTensorToMesh(dim=0) on the transposed
-    weight gives each device a contiguous block of (nk/tp) Q heads, (nk/tp) K
-    heads and (nv/tp) V heads.
+    """Interleave GDN Q/K/V heads for row-parallel shard (contiguous q/k/v block per device).
 
-    qkv_w: [key_dim + key_dim + value_dim, hidden] (fused in_proj_qkv).
-    """
+    qkv_w: [key_dim*2 + value_dim, hidden]."""
     q_part = qkv_w[:key_dim, :]
     k_part = qkv_w[key_dim : 2 * key_dim, :]
     v_part = qkv_w[2 * key_dim :, :]
@@ -342,8 +298,7 @@ def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
 
 
 def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):
-    """Split the fused conv1d weight [qkv_dim, 1, kernel] into ``kernel`` taps,
-    each reordered to match the per-device Q/K/V head grouping of prepare_gdn_qkv."""
+    """Split fused conv1d into kernel taps, reordered to match prepare_gdn_qkv grouping."""
     cw = conv_w.float()
     q_per = nk // tp
     v_per = nv // tp

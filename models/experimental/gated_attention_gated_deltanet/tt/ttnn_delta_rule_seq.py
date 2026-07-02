@@ -1,20 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-Chunk-parallel gated delta rule using the C++ `ttnn.transformer.gated_delta_attn_seq`
-kernel (Path A) — imported from the Qwen3.5-27B branch (gdn_chunk_ops_seq.py /
-gdn_chunk_ops.py) and adapted for the single-device Qwen3.5-9B model.
+Chunk-parallel gated delta rule via C++ `ttnn.transformer.gated_delta_attn_seq` (Path A).
 
-Python preprocessing computes (all float32):
-  - cheap elementwise ops + two matmuls (kk, intra_attn),
-  - L_inv: 4 diagonal block inverses of L_unit via `_solve_lower_triangular_ttnn`
-    (default: stable D^{-1} Horner-form Neumann series; legacy Neumann doubling +
-    Newton-Schulz behind QWEN_GDN_INV_DOUBLING=1 — see that function for why).
-The C++ kernel performs blocked forward substitution + the sequential inter-chunk
-state scan.
+Python (float32): elementwise ops + kk/intra_attn matmuls; L_inv from 4 diagonal blocks
+via `_solve_lower_triangular_ttnn` (default: Horner Neumann; legacy doubling behind
+QWEN_GDN_INV_DOUBLING=1). C++ kernel: blocked forward substitution + inter-chunk scan.
 
-Tensor layout convention (FLA style):
-  q, k: [BH, T, K]   beta: [BH, T, 1]   g: [BH, T]   v: [BH, T, V]   state: [BH, K, V]
+Layout (FLA): q,k [BH,T,K]; beta [BH,T,1]; g [BH,T]; v [BH,T,V]; state [BH,K,V].
 """
 
 import math as _math
@@ -40,8 +33,7 @@ def _ck(name, t):
         print(f"  [dbg] {name}: <err {e}>", flush=True)
 
 
-# Mask helpers are shared with the existing (bf16) chunk path. Relative import resolves
-# whether this package is reached via its fully-qualified path or as a top-level `tt`.
+# Mask helpers shared with bf16 chunk path; import works via fq path or top-level `tt`.
 from .ttnn_delta_rule_ops import (
     _create_triu_ones_ttnn as _create_triu_ones,
     _create_tril_ones_ttnn as _create_tril_ones,
@@ -65,59 +57,45 @@ def chunk_gated_delta_rule_seq_adapter(
     device=None,
     cached_masks=None,
     valid_len=None,
-    qkv_head_dims=None,  # (Hq, K, H, V): when set, q/k/v are FLAT [B,T,Hq*K]/[B,T,Hq*K]/[B,T,H*V]
-    return_o_bh=False,  # when True, return o RAW as [BH,T,V] (skip the head-major->token-major relayout)
+    qkv_head_dims=None,  # (Hq,K,H,V): flat q/k/v [B,T,Hq*K]/[B,T,H*V]
+    return_o_bh=False,  # True: return o as [BH,T,V], skip token-major relayout
 ):
-    """Drop-in replacement for chunk_gated_delta_rule_ttnn that runs the C++
-    chunk-parallel `gated_delta_attn_seq` kernel.
+    """Drop-in for chunk_gated_delta_rule_ttnn using `gated_delta_attn_seq`.
 
-    Same interface ([B,T,H,*] inputs, returns (o [B,T,H,V], new_state [B,H,K,V])).
-    Internally L2-norms q/k (matching the bf16 chunk path), converts to the seq
-    kernel's [BH,T,*] float32 layout, runs the kernel, and converts the output
-    and final state back. final_state is returned as bfloat16 to match the
-    decode recurrent_state dtype.
+    [B,T,H,*] in -> (o [B,T,H,V], new_state [B,H,K,V]). L2-norms q/k, converts to
+    [BH,T,*] float32, runs kernel, converts back. new_state is bf16 (decode dtype) unless
+    QWEN_GDN_FP32_STATE=1.
     """
     B = q.shape[0]
     T = q.shape[1]
     if qkv_head_dims is not None:
-        # FLAT inputs: q/k [B,T,Hq*K], v [B,T,H*V]. The caller skips its (expensive TILE) head-split
-        # reshape — _to_bhtd's post-untilize reshape splits heads for free, and l2_norm(q/k) is deferred
-        # into _to_bhtd (bf16 TILE [BH,T,K], per-head over K == the pre-split norm, bit-identical).
+        # FLAT q/k [B,T,Hq*K], v [B,T,H*V]: head-split in _to_bhtd; L2 norm deferred (bit-identical).
         Hq, K, H, V = qkv_head_dims
         _defer_l2 = True
     else:
-        H = v.shape[2]  # value-head count (Nv): beta/g/v/output/state all use this
-        Hq = q.shape[2]  # q/k head count — may be < H (GQA). When < H, q/k are L2-normed + transformed
-        # at Hq heads (3x less work for a 4:1 ratio) and expanded to H AFTER, via a cheap dim-0 block
-        # repeat (no untilize). No-op when Hq == H (the pre-expanded path / 9B) → fully backward-compatible.
+        H = v.shape[2]  # Nv: beta/g/v/output/state
+        Hq = q.shape[2]  # q/k heads; may be < H (GQA) — norm at Hq, expand to H after via repeat_interleave
         K = q.shape[3]
         V = v.shape[3]
         _defer_l2 = False
     BH = B * H
 
-    # L2-norm q/k (the seq kernel does NOT normalize; it only scales q internally). For flat inputs
-    # this is deferred into _to_bhtd (see _defer_l2) so it lands on the split [BH,T,K] tensor.
+    # L2-norm q/k (kernel doesn't); deferred for flat inputs via _defer_l2.
     if not _defer_l2:
         q = l2_norm_ttnn(q, dim=-1)
         k = l2_norm_ttnn(k, dim=-1)
 
-    # OPT (prefill): run the seq-major<->head-major relayout DATA MOVEMENT (untilize->permute) in L1
-    # so the actual head-shuffle is L1<->L1 and the untilize/tilize each get one side in L1. But LAND
-    # the final kernel-input tensor back in DRAM: gated_delta_attn_seq allocates ~1.36MB/core of static
-    # circular buffers, and all 5 relayout outputs (q/k/v/g/beta) are alive as its inputs — keeping them
-    # in L1 clashes with those CBs (OOM). The transient ROW_MAJOR intermediate is only alive DURING the
-    # relayout (no kernel running then), so L1 there is safe. Intermediate=_L1, kernel-input=_DRAM.
+    # Relayout untilize/permute in L1; land kernel inputs in DRAM (CBs ~1.36MB/core clash with L1).
     _L1 = ttnn.L1_MEMORY_CONFIG
 
     def _to_bhtd(t, D, Hh, l2=False):  # [B,T,Hh,D] (or flat [B,T,Hh*D]) -> [B*Hh,T,D] float32 TILE
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)  # untilize -> L1
-        t = ttnn.reshape(t, [B, T, Hh, D])  # head-split (free row-major reshape; a no-op if already 4D)
-        t = ttnn.permute(t, (0, 2, 1, 3))  # [B,Hh,T,D] shuffle in L1
+        t = ttnn.reshape(t, [B, T, Hh, D])  # head-split (no-op if already 4D)
+        t = ttnn.permute(t, (0, 2, 1, 3))
         t = ttnn.reshape(t, [B * Hh, T, D])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # land kernel input in DRAM (CB room)
+        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # kernel input in DRAM
         if l2:
-            # per-head L2-norm on the split [BH,T,D] bf16 tile — same elements/last-dim as the pre-split
-            # norm, so bit-identical; kept in bf16 before the fp32 cast to match the reference chunk path.
+            # Per-head L2 on [BH,T,D] bf16 — bit-identical to pre-split norm.
             t = l2_norm_ttnn(t, dim=-1)
         if t.dtype != ttnn.float32:
             t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
@@ -126,9 +104,9 @@ def chunk_gated_delta_rule_seq_adapter(
     def _to_bht(t):  # [B,T,H] -> [BH,T] float32 TILE
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)  # untilize -> L1
         t = ttnn.reshape(t, [B, T, H])
-        t = ttnn.permute(t, (0, 2, 1))  # [B,H,T] shuffle in L1
+        t = ttnn.permute(t, (0, 2, 1))
         t = ttnn.reshape(t, [BH, T])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # land kernel input in DRAM (CB room)
+        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # kernel input in DRAM
         if t.dtype != ttnn.float32:
             t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
         return t
@@ -137,17 +115,14 @@ def chunk_gated_delta_rule_seq_adapter(
     k_bh = _to_bhtd(k, K, Hq, l2=_defer_l2)
     v_bh = _to_bhtd(v, V, H)
     if Hq != H:
-        # GQA late expand: replicate each q/k head rf times along the BH (outer, non-tile) axis —
-        # a cheap tile-block copy. q_bh rows are b*Hq+h, so dim-0 repeat_interleave maps output row
-        # b*H + (h*rf+j) <- key-head h, i.e. value-head (h*rf+j) uses key-head h. Identical to a
-        # token-major pre-expand, but the L2-norm + permute above ran on Hq (not H) heads.
+        # GQA: repeat_interleave q/k along BH dim (Hq -> H heads); norm+permute ran on Hq only.
         rf = H // Hq
         q_bh = ttnn.repeat_interleave(q_bh, rf, dim=0)
         k_bh = ttnn.repeat_interleave(k_bh, rf, dim=0)
     g_bh = _to_bht(g)
     beta_bh = ttnn.reshape(_to_bht(beta), [BH, T, 1])
 
-    # initial_state [B,H,K,V] -> [BH,K,V] (leading-dim merge; seq typecasts to f32).
+    # initial_state [B,H,K,V] -> [BH,K,V]
     s0 = None
     if initial_state is not None:
         s0 = ttnn.reshape(initial_state, [BH, K, V])
@@ -166,9 +141,7 @@ def chunk_gated_delta_rule_seq_adapter(
         valid_len=valid_len,
     )
 
-    # o [BH,T,V] -> [B,T,H,V]  (shuffle in L1, land in DRAM — feeds the out-proj matmul's CBs downstream).
-    # return_o_bh: hand back the raw [BH,T,V] so the caller can fuse this relayout with its own per-head
-    # rms_norm + head-flatten (rms_norm over V commutes with the value-preserving shuffle) into one pass.
+    # o [BH,T,V] -> [B,T,H,V] (L1 shuffle, DRAM output). return_o_bh skips for caller-side fusion.
     if return_o_bh:
         o = o_bh
     else:
@@ -177,14 +150,7 @@ def chunk_gated_delta_rule_seq_adapter(
         o = ttnn.permute(o, (0, 2, 1, 3))  # [B,T,H,V]
         o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_DRAM)
 
-    # final_state [BH,K,V] -> [B,H,K,V]. DEFAULT casts to bf16 (the decode recurrent_state dtype).
-    # QWEN_GDN_FP32_STATE=1: keep the inter-chunk state at full fp32 precision. In chunk-outer prefill
-    # the kernel computes final_state in fp32 but this cast rounds it to bf16 EACH of the ~128 outer
-    # 2048-tok chunks of a 256k prompt, so the carried recurrent state is requantized ~128x. The HF/FLA
-    # reference instead keeps the state in fp32 across the WHOLE sequence in one chunked pass (it upcasts
-    # q/k/v/beta/g to float32 and never round-trips), which is why the reference runs the exact alpha=0
-    # delta rule on-task at 256k. rec_state is already an fp32 buffer by default (tp.py reset_state) and
-    # decode consumes fp32, so keeping fp32 here makes the device carry match the reference end-to-end.
+    # final_state [BH,K,V] -> [B,H,K,V]. Default bf16; QWEN_GDN_FP32_STATE=1 avoids ~128x requant in long prefill.
     new_state = ttnn.reshape(final_state, [B, H, K, V])
     _state_dtype = ttnn.float32 if _os.environ.get("QWEN_GDN_FP32_STATE", "0") != "0" else ttnn.bfloat16
     if new_state.dtype != _state_dtype:
@@ -194,20 +160,14 @@ def chunk_gated_delta_rule_seq_adapter(
 
 
 def create_chunk_masks_seq(chunk_size, device):
-    """Pre-create the float32 masks the seq chunk kernel reads from `cached_masks`.
+    """Pre-create float32 masks for seq kernel `cached_masks`.
 
-    Keys: triu_ones, tril_mask, eye ([1,C,C]), lower_causal, eye_32 ([1,32,32]).
-
-    IMPORTANT: built via from_torch (NOT ttnn.tril/triu). On this ttnn build,
-    ttnn.tril/ttnn.triu produce INCORRECT results at size 128 (wrong diagonal +
-    spurious off-diagonal entries), which corrupts the chunk computation
-    (D_diag gets zeros -> reciprocal -> inf). from_torch guarantees exact masks.
-    Pre-allocate once at model init (constant across layers) for trace safety.
+    Keys: triu_ones, tril_mask, eye, lower_causal, eye_32.
+    Use from_torch (not ttnn.tril/triu): at C=128 those ops produce wrong diagonals
+    (zeros on D_diag -> inf). Pre-allocate at init for trace safety.
     """
 
-    # Replicate across a multi-device mesh (TP). Single device leaves the mapper unset
-    # (the validated single-device behavior). Mirrors the kernel's uncached fallback, which
-    # builds these same masks with ReplicateTensorToMesh on a mesh, so the cached masks match.
+    # Replicate on TP mesh; single device leaves mapper unset (matches kernel fallback).
     _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
 
     def _from(m):
@@ -231,30 +191,14 @@ def create_chunk_masks_seq(chunk_size, device):
 
 
 def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
-    """Compute L^{-1} for a batch of lower triangular matrices.
+    """Batch L^{-1} for lower triangular L = D(I+N), N strictly lower, N^C=0.
 
-    Decomposes L = D (I + N) where D = diag(L), N = D^{-1}(L - D) strictly lower triangular.
-    Since N is nilpotent (N^C = 0), the Neumann series is exact: (I + N)^{-1} = sum_{k=0}^{C-1} (-N)^k.
+    DEFAULT: Horner Neumann R = I + (-N)R (forward-substitution; stable for large ||N||).
+    LEGACY (QWEN_GDN_INV_DOUBLING=1): Neumann doubling + Newton-Schulz — stable only with
+    caller's damped L_mat (small ||N||); unstable on undamped form (||N||~19 -> fp32 overflow).
 
-    DEFAULT: evaluate that series in stable HORNER form, R = I + (-N) R (C-1 iterations) — i.e.
-    forward-substitution: each step forms only (-N)@R (intermediates stay O(||N||)), so it is accurate
-    even for large ||N||. This is what the torch/FLA reference effectively does.
-
-    LEGACY (QWEN_GDN_INV_DOUBLING=1): Neumann DOUBLING (square N->N^2->...->N^16 in ceil(log2 C) steps)
-    + 2 Newton-Schulz. Faster (fewer matmuls). This is HALF of the original path: the caller pairs it with
-    the original diagonal-INCLUDED L_mat (damped, D=1+beta), which keeps ||N|| small enough (the 1/(1+beta)
-    damping) that the N^16 intermediate stays within fp32 -> stable, reproducing the ORIGINAL working
-    (coherent, non-torch-equivalent) behavior. Doubling is UNSTABLE only if fed the DEFAULT undamped
-    strictly-lower form (||N|| ~ 19 -> N^16 ~ 1e9-1e10 overflows fp32 -> garbage inverse -> long-context
-    '!!!!') — which is why both halves move together under the one flag, never mixed. A/B only.
-
-    Args:
-        L: [batch, C, C] float32 lower triangular, positive diagonal
-        eye_1cc: [1, C, C] float32 identity (pre-allocated, broadcast to batch)
-    Returns:
-        L_inv: [batch, C, C] float32
+    Args: L [batch,C,C], eye_1cc [1,C,C]. Returns L_inv [batch,C,C].
     """
-    # HiFi4 (full fp32 cross-terms) for the block-inverse matmuls — accurate and validated.
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
@@ -270,7 +214,7 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     D_diag = ttnn.sum(D_mat, dim=-1, memory_config=mc)  # [batch, C]
     D_inv = ttnn.reciprocal(D_diag, memory_config=mc)  # [batch, C] all in (0, 1]
     ttnn.deallocate(D_diag)
-    # Clone after reshape: ttnn.reshape returns a view sharing D_inv's buffer.
+    # Clone after reshape: reshape is a view sharing D_inv's buffer.
     D_inv_row = ttnn.clone(ttnn.reshape(D_inv, [batch, C, 1], memory_config=mc), memory_config=mc)
     D_inv_col = ttnn.clone(ttnn.reshape(D_inv, [batch, 1, C], memory_config=mc), memory_config=mc)
     ttnn.deallocate(D_inv)
@@ -281,28 +225,10 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     N = ttnn.multiply(D_inv_row, L_strict, memory_config=mc)
     ttnn.deallocate(L_strict)
 
-    # ====================================================================================
-    # Block inverse (I+N)^{-1}, N strictly-lower (nilpotent: N^C = 0).
-    # DEFAULT = stable Horner-form Neumann series; legacy doubling behind QWEN_GDN_INV_DOUBLING=1.
-    #
-    # WHY (root cause): the legacy Neumann DOUBLING (N->N^2->...->N^16) is the source of the alpha=0
-    # long-context "!!!!" collapse. For real GDN blocks with large strictly-lower norm (||N|| ~ 19 at
-    # e.g. layer 44), the intermediate power N^16 has entries ~1e9-1e10; summing those (alternating
-    # signs) down to the O(1) inverse loses everything in fp32 -> garbage inverse (measured residual
-    # ||L*Linv-I|| ~ 2-6 on 222/256 real blocks) -> garbage v_cor/k_cum -> the scan overflows fp32 ->
-    # degenerate logits. It is NOT a precision tier (HiFi4 doesn't help) and NOT the math: the exact
-    # reference is stable; the torch/FLA reference inverts by direct forward-substitution (no matrix
-    # powers). The legacy D=1+beta / alpha-damping only "worked" by shrinking ||N|| below the overflow
-    # threshold.
-    #
-    # FIX: Horner series  R_k = I + (-N) R_{k-1},  R_0 = I  =>  R_{C-1} = sum_{j=0}^{C-1} (-N)^j = (I+N)^{-1}
-    # (exact since N^C = 0). Each step forms only (-N)@R (bounded ~O(||N||)), never the huge N^16, so it is
-    # accurate even for large ||N|| (unit-test: 4.2e-3 @ ~bf16 on the ||N||=19 blocks where doubling = 4.3).
-    # This is forward-substitution in matmul form, matching the reference, and lets exact alpha=0 run stably.
-    # ====================================================================================
+    # Block inverse (I+N)^{-1}. DEFAULT=Horner; legacy doubling behind QWEN_GDN_INV_DOUBLING=1.
+    # Doubling overflows fp32 when ||N||~19 (N^16 ~1e9); Horner matches FLA forward-substitution.
     if _os.environ.get("QWEN_GDN_INV_DOUBLING", "0") != "0":
-        # ---- LEGACY: Neumann doubling + Newton-Schulz. Stable HERE because the caller also restores the
-        # original damped (diagonal-included) L_mat under this same flag, so ||N|| is small. A/B only. ----
+        # LEGACY: doubling + Newton-Schulz; paired with damped L_mat under same flag.
         P = ttnn.neg(N, memory_config=mc)  # P = -N
         ttnn.deallocate(N)
         R = ttnn.add(eye_1cc, P, memory_config=mc)  # R = I - N = f(2)
@@ -329,7 +255,7 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
         ttnn.deallocate(D_inv_row)
         ttnn.deallocate(D_inv_col)
 
-        # Newton-Schulz refinement: X <- X(2I - LX). One step squares the residual.
+        # Newton-Schulz: X <- X(2I - LX)
         for _ in range(2):
             LX = ttnn.matmul(L, L_inv, memory_config=mc, compute_kernel_config=_hifi_cfg)
             two_I_minus_LX = ttnn.subtract(ttnn.add(eye_1cc, eye_1cc, memory_config=mc), LX, memory_config=mc)
@@ -341,18 +267,15 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
 
         return L_inv
 
-    # ---- DEFAULT: stable Horner-form Neumann series  R = I + (-N) @ R  (forward-substitution) ----
+    # DEFAULT: Horner R = I + (-N)@R
     neg_N = ttnn.neg(N, memory_config=mc)  # -N (strictly lower)
     ttnn.deallocate(N)
-    # Pre-broadcast the identity to [batch,C,C] so the per-iteration Horner add is a plain elementwise
-    # op instead of a [1,C,C]->[batch,C,C] broadcast (measured -4% prefill ttft, numerically identical —
-    # the add dominates the inverse loop and the broadcast was ~5x its compute). batch==1 callers keep
-    # the original tensor (the add is already non-broadcast, and repeat would just add an op).
+    # Pre-broadcast eye to [batch,C,C] when batch>1 (~-4% prefill; batch==1 unchanged).
     _eye = eye_1cc
     if batch > 1:
         _eye = ttnn.repeat(eye_1cc, ttnn.Shape([batch, 1, 1]))
     R = ttnn.add(_eye, neg_N, memory_config=mc)  # R_1 = I - N  ([batch,C,C])
-    for _ in range(C - 2):  # R_1 -> R_{C-1} = sum_{j=0}^{C-1} (-N)^j  (exact: N^C = 0)
+    for _ in range(C - 2):  # R_1 -> R_{C-1} = sum (-N)^j (exact: N^C=0)
         NR = ttnn.matmul(neg_N, R, memory_config=mc, compute_kernel_config=_hifi_cfg)  # (-N) @ R
         R_new = ttnn.add(_eye, NR, memory_config=mc)  # I + (-N) @ R
         ttnn.deallocate(NR)
@@ -371,14 +294,12 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
 
 
 def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None):
-    """Compute diagonal block inverses of L_mat using _solve_lower_triangular_ttnn.
+    """Diagonal block inverses of L_mat via _solve_lower_triangular_ttnn.
 
-    L_mat_4d: [BH, NC, C, C] float32 unit-diagonal lower-triangular
-    eye_32:   [1, 32, 32] float32 identity (pre-allocated; required for trace compat)
-    Returns:  [BH, NC, C, 32] float32 — Ct=C/32 diagonal block inverses stacked as [C, 32]
+    L_mat_4d [BH,NC,C,C]; eye_32 [1,32,32]. Returns [BH,NC,C,32] (Ct=C/32 blocks as [C,32]).
     """
     if eye_32 is None:
-        # Fallback for tests that don't pass cached_masks — not trace-compatible.
+        # Test fallback without cached_masks — not trace-compatible.
         eye_32 = ttnn.from_torch(
             torch.eye(32, dtype=torch.float32).unsqueeze(0),
             dtype=ttnn.float32,
@@ -402,12 +323,12 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
         ttnn.deallocate(block)
         inv_blocks.append(block_inv)  # [batch, 32, 32]
 
-    # Do NOT deallocate L_flat: it is a reshape (view) of L_mat_4d (== L_unit_4d kernel input).
+    # L_flat is a view of L_mat_4d — do not deallocate.
     L_inv_flat = ttnn.concat(inv_blocks, dim=1, memory_config=_cmc)
     for blk in inv_blocks:
         ttnn.deallocate(blk)
 
-    # Do NOT deallocate L_inv_flat — ttnn.reshape returns a view sharing the buffer.
+    # L_inv_flat is a view — do not deallocate.
     L_inv_4d = ttnn.reshape(L_inv_flat, [BH, NC, C, 32], memory_config=_cmc)
     return L_inv_4d
 
@@ -425,19 +346,12 @@ def chunk_gated_delta_rule_seq(
     cached_masks=None,
     valid_len=None,
 ):
-    """Chunked gated delta rule using the C++ sequential scan kernel (Path A).
+    """Chunked gated delta rule via C++ sequential scan (Path A).
 
-    Returns (output [BH, T, V], final_state [BH, K, V]), both float32.
-
-    valid_len: when set (< T), positions [valid_len, T) are treated as right-padding
-    and zeroed in q/k/v/beta/g BEFORE the scan — exactly mirroring the function's own
-    internal zero-pad (pad_len). Those positions then produce identity state updates
-    (beta=0 -> no write, g=0 -> exp(0)=1 -> no decay), so final_state reflects only the
-    first valid_len tokens. This lets a fixed bucket length T serve any real length
-    valid_len<=T (one compiled program per bucket) without corrupting the recurrent state.
+    Returns (output [BH,T,V], final_state [BH,K,V]) float32.
+    valid_len: zero q/k/v/beta/g past valid_len (padding); identity state updates preserve recurrent state.
     """
-    # kk / decay / intra_attn preprocessing matmuls (feed L_unit and the block inverse): HiFi4,
-    # matching the block-inverse fidelity in _solve_lower_triangular_ttnn.
+    # Preprocessing matmuls: HiFi4 (matches block-inverse fidelity).
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
@@ -453,12 +367,7 @@ def chunk_gated_delta_rule_seq(
     if scale is None:
         scale = K**-0.5
 
-    # Right-padding mask: zero every state-affecting input past valid_len. The mask
-    # SHAPE is fixed by the bucket length T (only its values depend on valid_len), so a
-    # single program serves all real lengths. Mirrors the zeros concatenated below for
-    # pad_len; here it covers the [valid_len, T) region the caller padded.
-    # valid_len may be a scalar (one length for all BH rows) or a per-row list/tuple of length B
-    # (batched prefill): BH rows are ordered b*H + h, so user b owns rows [b*H, (b+1)*H).
+    # Zero inputs past valid_len (fixed T bucket, variable real length). Per-row valid_len: BH rows b*H..(b+1)*H.
     _is_per_row = isinstance(valid_len, (list, tuple))
     if _is_per_row or (valid_len is not None and valid_len < T):
         _m = torch.zeros(BH, T, 1, dtype=torch.float32)
@@ -585,48 +494,25 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
-    # ---- L_mat: intra-chunk matrix with a tunable diagonal regularization (QWEN_GDN_DIAG_ALPHA) ----
-    #
-    # The intra-chunk system is (I + tril(kk*L_mask))^{-1}. How much of (kk*L_mask)'s DIAGONAL we keep
-    # controls a damping that is load-bearing at long context. With alpha in [0,1]:
-    #       diag(L_mat) = 1 + alpha * diag(kk*L_mask)   (diag(kk*L_mask) = beta_i*|k_i|^2 ~= beta_i)
-    # and the downstream unit-diagonal normalization (L_unit = D^{-1} L_mat, v_beta_sc = D^{-1} v_beta)
-    # folds D^{-1} = 1/(1+alpha*beta) onto BOTH the off-diagonals (-> ||N||) and the value term.
-    #
-    #   alpha = 0  -> EXACT strictly-lower unit-diagonal form == HF/FLA reference (token i reads the
-    #                 recurrent state BEFORE its own write, so the diagonal is masked out). Torch-equivalent
-    #                 / correct <think>+tool dialect, but UNDAMPED (||N|| ~ 19 on real blocks).
-    #   alpha = 1  -> full 1/(1+beta) damping == the ORIGINAL kernel's diagonal-included form.
-    #   0<alpha<1  -> partial damping (regularized).
-    #
-    # WHY a nonzero DEFAULT (0.25): with alpha=0 the undamped per-chunk corrections accumulate into the
-    # finite-capacity GDN recurrent state and saturate it over the ~128 chunks of a full 262144-token
-    # prompt, diluting the most recent tokens (the seeded <think> + instruction) so the model rides the
-    # document's narrative momentum instead of reasoning. CONFIRMED on hw at ISL=256k: alpha=0 continues
-    # the source novel; the damped form enters the <think> reasoning process and identifies the task. The
-    # damping shrinks the corrections enough to preserve the recent-suffix signal. alpha=0.25 keeps the
-    # dialect (validated argmax 'The'->'Thinking', coherent 4k..128k) while restoring long-context behavior.
-    #
-    # The Horner / forward-substitution block inverse (_solve_lower_triangular_ttnn, default) is stable for
-    # ANY alpha, so this is a pure Python lever — no rebuild. (QWEN_GDN_INV_DOUBLING=1 is a separate A/B
-    # that forces the exact original {full-damping diagonal form + Neumann-doubling inverse}; the doubling
-    # inverse only stays within fp32 BECAUSE of that full damping, so it ignores alpha and uses the form
-    # below's alpha=1 limit directly.)
+    # L_mat diagonal regularization (QWEN_GDN_DIAG_ALPHA): diag = 1 + alpha*diag(kk*L_mask).
+    # alpha=0: exact HF/FLA (unit diag, undamped ||N||~19). alpha=1: full 1/(1+beta) damping.
+    # Default 0.25: partial damping prevents GDN state saturation at 256k (alpha=0 rides doc narrative).
+    # Horner inverse stable at any alpha; QWEN_GDN_INV_DOUBLING=1 forces alpha=1 + doubling (A/B pair).
     if _os.environ.get("QWEN_GDN_INV_DOUBLING", "0") != "0":
-        # ORIGINAL exact-reproduction A/B: full diagonal-included form (alpha=1) + doubling inverse.
+        # A/B: full diagonal-included L_mat + doubling inverse.
         L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
         ttnn.deallocate(kk)
     else:
-        # DEFAULT (Horner inverse): regularized diagonal  L_mat = I + kk*L_mask - (1-alpha)*diag(kk*L_mask).
+        # L_mat = I + kk*L_mask - (1-alpha)*diag(kk*L_mask)
         alpha = float(_os.environ.get("QWEN_GDN_DIAG_ALPHA", "0.25"))
         kk_lmask = ttnn.multiply(kk, L_mask, memory_config=_cmc)
         ttnn.deallocate(kk)
         kk_diag = ttnn.multiply(kk_lmask, _eye_1cc, memory_config=_cmc)  # diag(kk*L_mask)
         if alpha == 0.0:
-            # exact: strip the whole diagonal -> unit diagonal (torch/FLA-equivalent)
+            # alpha=0: strip diagonal -> unit diag (torch/FLA-equivalent)
             kk_reg = ttnn.subtract(kk_lmask, kk_diag, memory_config=_cmc)
         else:
-            # keep alpha*diagonal: drop (1-alpha)*diag so diag(L_mat) = 1 + alpha*beta
+            # keep alpha*diag; drop (1-alpha)*diag
             kk_drop = ttnn.multiply(kk_diag, 1.0 - alpha, memory_config=_cmc)
             kk_reg = ttnn.subtract(kk_lmask, kk_drop, memory_config=_cmc)
             ttnn.deallocate(kk_drop)
@@ -753,8 +639,7 @@ def chunk_gated_delta_rule_seq(
     _ck("k_decay_t", k_decay_t_4d)
     _ck("dl_exp", dl_exp_4d)
 
-    # Diagonal block inverses of L_unit via the stable Horner / forward-substitution solve
-    # (default; legacy Neumann doubling behind QWEN_GDN_INV_DOUBLING — see _solve_lower_triangular_ttnn).
+    # L_inv via Horner solve (default); legacy doubling behind QWEN_GDN_INV_DOUBLING.
     L_inv_4d = _compute_L_inv_ttnn(L_unit_4d, BH, num_chunks, chunk_size, mesh_device, _cmc, eye_32=_eye_32)
     _ck("L_inv", L_inv_4d)
 
