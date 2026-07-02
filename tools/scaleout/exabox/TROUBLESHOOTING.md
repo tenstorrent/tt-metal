@@ -310,14 +310,15 @@ Node: bh-glx-d01u08
 while attempting to start process rank 0.
 ```
 
-**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
+**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker), so a local tt-metal build has to exist. This error means you ran from a checkout that hasn't been built. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
 
-**Solution**:
+**Solution** (simplest first):
 
-- **Build tt-metal first** - See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions
-- **Or use Docker-based validation** - Run `./run_validation.sh --hosts <hosts> --image <docker-image>` which doesn't require a build
+- **On Exabox, run from the vetted pre-built path** - `cd /data/local-syseng-manual/tt-metal-recover` and run `recover.sh` from there. It's already built, so there's nothing to compile. This is the recommended path for a quick health check.
+- **Build tt-metal yourself** - only needed if you're running from your own checkout or on a site without the vetted path. See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions.
+- **Or use Docker-based validation** - run `./run_validation.sh --hosts <hosts> --image <docker-image>`, which doesn't require a build.
 
-**Common confusion**: People often confuse the `recover_*.sh` scripts (developer tools, require build) with the `run_validation.sh` script (operator tool, uses Docker). For hardware qualification, use the Docker-based scripts.
+**Common confusion**: People often confuse the `recover_*.sh` scripts (run a local build directly on the host) with the `run_validation.sh` script (operator tool, uses Docker). For hardware qualification, use the Docker-based scripts.
 
 ---
 

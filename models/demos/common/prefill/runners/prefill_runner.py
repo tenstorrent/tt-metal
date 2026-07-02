@@ -404,22 +404,27 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
 
 def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
     """Run one chunk: prefill into the engine-owned kv_cache, forward the output downstream (non-last
-    rank) and grant the outbound sender so it ships over fabric, log CHUNK_START. Returns the
-    compute-start epoch (NTP-comparable)."""
+    rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
+    (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
+    slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
+    compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
     t_start = time.time()
+    logger.info(
+        f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
+        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+    )
     out = runtime.prefill_chunk(
         inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
     if SYNC_PER_CHUNK:
-        # Block on device completion before the send so the delta is this rank's forward alone, not the
-        # downstream-start proxy. Serializes dispatch (no overlap) — measurement runs only.
+        # Block on device completion so the delta is this rank's forward alone, not the downstream-start
+        # proxy. Serializes dispatch (no overlap) — measurement runs only.
         ttnn.synchronize_device(runtime.mesh_device)
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
         _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
     if d2d_out is not None:
         d2d_out.release_fabric_links()
-    logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f}")
     return t_start
 
 
