@@ -16,7 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>  // FabricMuxConfig, get_tt_fabric_channel_buffer_size_bytes
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
