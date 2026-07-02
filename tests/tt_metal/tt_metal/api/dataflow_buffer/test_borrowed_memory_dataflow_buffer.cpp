@@ -167,11 +167,11 @@ void run_borrowed_memory_dfb_program(
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        std::get<DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
+        std::get<DataMovementHardwareConfig>(producer_spec.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
+            true;
         if (!cfg.tensix_consumer) {
             std::get<DataMovementHardwareConfig>(consumer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
+                .gen2_config->disable_dfb_implicit_sync_for_all = true;
         }
     }
 
@@ -341,10 +341,10 @@ void run_update_address_test(
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        std::get<DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
-        std::get<DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
+        std::get<DataMovementHardwareConfig>(producer_spec.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
+            true;
+        std::get<DataMovementHardwareConfig>(consumer_spec.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
+            true;
     }
 
     DataflowBufferSpec dfb_spec{
