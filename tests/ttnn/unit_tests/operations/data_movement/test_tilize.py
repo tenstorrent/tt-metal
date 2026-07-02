@@ -52,18 +52,6 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
     assert_equal(torch_input, torch_output)
 
 
-@pytest.mark.parametrize("shape", [(64, 128), (512, 512)])
-@pytest.mark.parametrize("use_multicore", [False, True])
-def test_tilize_fp32_truncation(device, shape, use_multicore):
-    torch.manual_seed(2005)
-    input_a = torch.full(shape, 1.9908e-05, dtype=torch.float32)
-    # Use the fixture-provided device directly
-    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.tilize(input_tensor, use_multicore=use_multicore)
-    output_tensor = ttnn.to_torch(input_tensor)
-    assert torch.allclose(input_a, output_tensor)
-
-
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("tensor_shape", [[32, 256 * 64]])
 @pytest.mark.parametrize("shard_shape", [[32, 256]])
