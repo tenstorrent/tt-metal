@@ -212,7 +212,35 @@ def run_bringup_cc(
     except Exception as _pf_exc:
         print(f"  [loader-resolver] pre-flight skipped: {type(_pf_exc).__name__}: {_pf_exc}")
     prompt = _bringup_cc_prompt(model_id, Path(demo_dir), pcc)
-    print("\n  ===== BRING-UP (cc engine): harness loop on the per-component gate =====\n")
+    sep = "=" * 78
+    _seen = {"grad": set(), "shard": set()}
+
+    def _banner(title):
+        print()
+        print(sep)
+        print(f"  {title}")
+        print(sep)
+
+    def _announce_graduations(st):
+        cur_g = set(st.get("graduated") or [])
+        cur_s = set(st.get("shard_graduated") or [])
+        for c in sorted(cur_g - _seen["grad"]):
+            print(f"  ✓ `{c}` GRADUATED to native TTNN (PCC-verified)")
+        for c in sorted(cur_s - _seen["shard"]):
+            print(f"  ✓ `{c}` SHARD-GRADUATED on the mesh (gathered-PCC)")
+        _seen["grad"], _seen["shard"] = cur_g, cur_s
+
+    def _pre_round(round_no, st):
+        _announce_graduations(st)
+        cur_g = st.get("graduated") or []
+        cur_s = st.get("shard_graduated") or []
+        _extra = f", sharded {len(cur_s)}" if cur_s else ""
+        _banner(
+            f"BRING-UP (cc) round {round_no} for {model_id}: target=`{st.get('next_op') or '?'}` "
+            f"rung={st.get('next_rung') or '?'} (graduated {len(cur_g)}{_extra}) → invoke claude → gate"
+        )
+
+    _banner(f"Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for {model_id}")
     res = cc_harness.run_cc_loop(
         prompt=prompt,
         mcp_config_path=cfg_path,
@@ -222,10 +250,24 @@ def run_bringup_cc(
         gate_fn=gate_fn,
         max_rounds=max_rounds,
         claude_bin=agent_bin,
+        pre_round=_pre_round,
     )
     final = gate_fn()
-    sep = "=" * 78
-    print("\n" + sep)
-    print(f"  bring-up cc: rounds={res['rounds']} can_stop={final.get('can_stop')} graduated={final.get('graduated')}")
+    _announce_graduations(final)
+    _grad = sorted(final.get("graduated") or [])
+    _shard = sorted(final.get("shard_graduated") or [])
+    _banner(f"BRING-UP (cc) {'DONE' if final.get('can_stop') else 'INCOMPLETE'} for {model_id}")
+    print(f"  rounds={res['rounds']}  graduated={len(_grad)}: {', '.join(_grad) or '-'}")
+    if _shard:
+        print(f"  shard-graduated={len(_shard)}: {', '.join(_shard)}")
+    try:
+        from ..cli import _format_compute_split, _format_op_split
+
+        for ln in _format_compute_split(model_id, label="compute split (TT device vs CPU)"):
+            print(ln)
+        for ln in _format_op_split(model_id, label="operations"):
+            print(ln)
+    except Exception:
+        pass
     print(sep)
     return 0 if final.get("can_stop") else 1
