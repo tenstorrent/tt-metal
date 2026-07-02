@@ -364,7 +364,11 @@ _STATUS_GLYPH = {
 
 
 def render_compat_table(
-    report: CompatReport, kernel_report: Optional[KernelReport] = None, *, verbose: bool = False
+    report: CompatReport,
+    kernel_report: Optional[KernelReport] = None,
+    *,
+    verbose: bool = False,
+    chips: Optional[int] = None,
 ) -> str:
     """Human-readable compatibility table."""
     out = []
@@ -434,7 +438,7 @@ def render_compat_table(
         p("")
         p("SECTION 2 -- Kernel-level constraints (do the model's shapes/dtypes satisfy TTNN ops?)")
         p("-" * 92)
-        _render_kernel_section(kernel_report, p, verbose=verbose)
+        _render_kernel_section(kernel_report, p, verbose=verbose, chips=chips)
 
     if missing or partial:
         p("")
@@ -450,7 +454,7 @@ def render_compat_table(
     return "\n".join(out)
 
 
-def _render_kernel_section(kr: KernelReport, p, *, verbose: bool) -> None:
+def _render_kernel_section(kr: KernelReport, p, *, verbose: bool, chips: Optional[int] = None) -> None:
     """Render the kernel constraints table inside a compat report."""
     shape = kr.shape_findings
     blockers_shape = [f for f in shape if not f.passes and f.severity == Severity.BLOCKER]
@@ -486,6 +490,15 @@ def _render_kernel_section(kr: KernelReport, p, *, verbose: bool) -> None:
         p("")
         p("  Note: TP failures rule out that mesh shape, not the model overall.")
         p("        Pick a TP from the rows marked [ ok ] above.")
+    if chips and chips > 1:
+        from .parallelism import select_parallelism
+
+        _pc = select_parallelism(chips, kr)
+        p("")
+        p(
+            f"  Selected split on {chips} chips: TP={_pc.tp} x DP={_pc.dp}  "
+            f"(largest kernel-viable TP that divides {chips}; DP fills the rest)"
+        )
 
 
 def _wrap_notes(notes: str, indent: int = 8) -> list:
