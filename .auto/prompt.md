@@ -20,7 +20,10 @@ The full compute graph (reference is genuine HF checkpoints in `/local/ttuser/gt
         ▼  SongEval scorer       ✅ harness works (MuQ SSL + Generator -> 5 aesthetic scores)
     Coherence / Musicality / Memorability / Clarity / Naturalness
 
-Pipeline components on disk (`/local/ttuser/gtobar/acestep_pipeline`, ALL gitignored — never commit weights):
+Pipeline resolution is portable (see reference/weight_utils._resolve_pipeline_dir):
+  1. `ACESTEP_PIPELINE_DIR` env var (explicit local dir), else
+  2. HF cache snapshot of `ACE-Step/Ace-Step1.5` (works for anyone who ran snapshot_download).
+Pipeline components on disk (ALL gitignored — never commit weights):
 - `acestep-5Hz-lm-1.7B/`  LM planner (prompt -> song blueprint), 3.7 GB — standard Qwen3 causal LM
 - `Qwen3-Embedding-0.6B/` text encoder, 1.2 GB
 - `acestep-v15-turbo/`    turbo DiT (distilled, few-step), 4.8 GB

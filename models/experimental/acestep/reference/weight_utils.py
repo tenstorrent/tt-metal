@@ -20,34 +20,63 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
-_HF_HUB = Path.home() / ".cache/huggingface/hub/models--ACE-Step--acestep-v15-base/snapshots"
-
-# Full generation pipeline (LM planner + text enc + turbo DiT + VAE), downloaded outside the repo.
-# Never committed — weights live on-disk only. Overridable via ACESTEP_PIPELINE_DIR.
 import os as _os
 
-_PIPELINE_DIR = Path(_os.environ.get("ACESTEP_PIPELINE_DIR", "/local/ttuser/gtobar/acestep_pipeline"))
+_HF_HUB = Path.home() / ".cache/huggingface/hub/models--ACE-Step--acestep-v15-base/snapshots"
+
+# Full generation pipeline (LM planner + text enc + turbo DiT + VAE). Weights live on-disk only
+# (never committed). The pipeline is the HF repo `ACE-Step/Ace-Step1.5`, which bundles a `vae/`.
+PIPELINE_REPO_ID = "ACE-Step/Ace-Step1.5"
+
+
+def _resolve_pipeline_dir() -> Path | None:
+    """Resolve the pipeline checkpoint root generically, in priority order:
+
+    1. ``ACESTEP_PIPELINE_DIR`` env var (explicit local path — for custom/offline layouts).
+    2. The HuggingFace cache snapshot for ``ACE-Step/Ace-Step1.5`` (the portable default:
+       works for anyone who ran ``huggingface_hub.snapshot_download('ACE-Step/Ace-Step1.5')``).
+
+    Returns None if neither is available (tests skip rather than hard-fail).
+    """
+    env = _os.environ.get("ACESTEP_PIPELINE_DIR")
+    if env and Path(env).is_dir():
+        return Path(env)
+    try:
+        from huggingface_hub import snapshot_download
+
+        # local_files_only: resolve from cache without hitting the network during tests.
+        return Path(snapshot_download(PIPELINE_REPO_ID, local_files_only=True))
+    except Exception:
+        return None
 
 
 def pipeline_dir() -> Path:
-    """Root of the downloaded full-pipeline checkpoints. Assert present with a clear message."""
-    assert _PIPELINE_DIR.is_dir(), (
-        f"pipeline dir {_PIPELINE_DIR} not found. Download ACE-Step/Ace-Step1.5 + the VAE there, "
-        "or set ACESTEP_PIPELINE_DIR."
+    """Root of the full-pipeline checkpoints. Assert present with an actionable message."""
+    p = _resolve_pipeline_dir()
+    assert p is not None and p.is_dir(), (
+        "ACE-Step pipeline checkpoints not found. Either set ACESTEP_PIPELINE_DIR to a local dir, "
+        f'or download the bundle:\n  python -c "from huggingface_hub import snapshot_download; '
+        f"snapshot_download('{PIPELINE_REPO_ID}')\""
     )
-    return _PIPELINE_DIR
+    return p
 
 
 def vae_dir() -> str:
-    """Path to the diffusers AutoencoderOobleck VAE (latents -> 48kHz waveform)."""
+    """Path to the diffusers AutoencoderOobleck VAE (latents -> 48kHz waveform).
+
+    The VAE ships inside the pipeline bundle as ``vae/``. Fall back to the standalone repo
+    ``ACE-Step/ace-step-v1.5-1d-vae-stable-audio-format`` cache if the bundle lacks it.
+    """
     p = pipeline_dir() / "vae"
-    assert (p / "config.json").is_file(), f"VAE config not found under {p}"
-    return str(p)
+    if (p / "config.json").is_file():
+        return str(p)
+    raise AssertionError(f"VAE config not found under {p}; ensure the pipeline bundle includes vae/")
 
 
 def have_pipeline() -> bool:
-    """True iff the full pipeline (incl. VAE) is on disk — for test skip guards."""
-    return _PIPELINE_DIR.is_dir() and (_PIPELINE_DIR / "vae" / "config.json").is_file()
+    """True iff the full pipeline (incl. VAE) is resolvable on disk — for test skip guards."""
+    p = _resolve_pipeline_dir()
+    return p is not None and p.is_dir() and (p / "vae" / "config.json").is_file()
 
 
 def checkpoint_path() -> str:
