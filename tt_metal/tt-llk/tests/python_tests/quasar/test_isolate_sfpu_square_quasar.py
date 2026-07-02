@@ -19,7 +19,6 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
-    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -59,20 +58,17 @@ SFPU_SQUARE_COMBINATIONS = [
     for input_dimensions in [[32, 32], [64, 64]]
 ]
 
-_COMPILE, _RUNTIME = split_combinations(SFPU_SQUARE_COMBINATIONS)
-
 
 @pytest.mark.quasar
-@parametrize(
-    compile_params=_COMPILE,
-    input_dimensions=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
-)
-def test_isolate_sfpu_square_quasar(compile_params, input_dimensions):
+@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_SQUARE_COMBINATIONS)
+def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
     """
     Test isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only).
     """
-    (formats, dest_acc, implied_math_format) = compile_params
+    (formats, dest_acc, implied_math_format, input_dimensions) = (
+        formats_dest_acc_implied_math_input_dims[0]
+    )
 
     torch.manual_seed(42)
 

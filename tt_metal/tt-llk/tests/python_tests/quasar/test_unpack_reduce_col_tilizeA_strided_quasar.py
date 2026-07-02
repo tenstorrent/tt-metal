@@ -30,7 +30,6 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
-    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -144,22 +143,19 @@ ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
         UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
     )
 )
-_COMPILE, _RUNTIME = split_combinations(
-    ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS
-)
 
 
 @pytest.mark.quasar
 @parametrize(
-    compile_params=_COMPILE,
-    input_dimensions=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
-    compile_params,
-    input_dimensions,
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
     boot_mode=BootMode.DEFAULT,
 ):
-    (formats, dest_acc, dest_sync_mode, pool_type) = compile_params
+    (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
+        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
+    )
 
     num_faces = 4
     reduce_dim = ReduceDimension.Column

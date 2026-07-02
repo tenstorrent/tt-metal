@@ -33,7 +33,6 @@ from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
     parametrize,
     runtime,
-    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -114,22 +113,22 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
     SFPU_UNARY_FORMATS
 )
-_COMPILE, _RUNTIME = split_combinations(PARALLEL_MATMUL_EXP_COMBINATIONS)
 
 
 @pytest.mark.quasar
 @parametrize(
-    compile_params=_COMPILE,
-    runtime_dims=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
+    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
 )
-def test_sfpu_exp_parallel_matmul_quasar(compile_params, runtime_dims):
+def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     (
         formats,
         dest_acc,
         dest_sync,
         implied_math_format,
-    ) = compile_params
-    exp_input_dimensions, input_A_dimensions, input_B_dimensions = runtime_dims
+        exp_input_dimensions,
+        input_A_dimensions,
+        input_B_dimensions,
+    ) = format_dest_acc_sync_implied_math[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(

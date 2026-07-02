@@ -33,23 +33,6 @@ def runtime(value):
     return _RuntimeMarker(value)
 
 
-def split_combinations(combos):
-    runtime_indices = {
-        i for i, v in enumerate(combos[0]) if isinstance(v, _RuntimeMarker)
-    }
-    compile_keys = []
-    runtime_lookup = {}
-    for combo in combos:
-        key = tuple(v for i, v in enumerate(combo) if i not in runtime_indices)
-        rt = tuple(v.value for i, v in enumerate(combo) if i in runtime_indices)
-        key_repr = repr(key)
-        if key_repr not in runtime_lookup:
-            compile_keys.append(key)
-            runtime_lookup[key_repr] = []
-        runtime_lookup[key_repr].append(rt[0] if len(rt) == 1 else rt)
-    return compile_keys, runtime_lookup
-
-
 checked_formats_and_dest_acc = {}
 
 DEST_SYNC_TILE_LIMITS = {
@@ -322,14 +305,47 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
 
 
 def parametrize(**kwargs: any):
+    compile_key_fn = None
     runtime_axes = []
+    runtime_indices = None
     unwrapped = {}
     for name, value in kwargs.items():
         if isinstance(value, _RuntimeMarker):
             runtime_axes.append(name)
             unwrapped[name] = value.value
+        elif (
+            isinstance(value, list)
+            and value
+            and isinstance(value[0], tuple)
+            and any(isinstance(v, _RuntimeMarker) for v in value[0])
+        ):
+            runtime_indices = frozenset(
+                i for i, v in enumerate(value[0]) if isinstance(v, _RuntimeMarker)
+            )
+            runtime_axes.append(name)
+            unwrapped[name] = [
+                tuple(v.value if isinstance(v, _RuntimeMarker) else v for v in combo)
+                for combo in value
+            ]
         else:
             unwrapped[name] = value
+
+    if runtime_axes:
+        if runtime_indices is not None:
+            _name = runtime_axes[0]
+            _ri = runtime_indices
+
+            def compile_key_fn(params):
+                combo = params[_name]
+                if len(combo) == 1 and isinstance(combo[0], tuple):
+                    combo = combo[0]
+                return tuple(v for i, v in enumerate(combo) if i not in _ri)
+
+        else:
+            _rt = frozenset(runtime_axes)
+
+            def compile_key_fn(params):
+                return tuple(sorted((k, v) for k, v in params.items() if k not in _rt))
 
     parameters = tuple(unwrapped.keys())
     parameters_string = ",".join(parameters)
@@ -353,8 +369,10 @@ def parametrize(**kwargs: any):
     ids = [generate_id(values) for values in parameter_values]
 
     def decorator(test_function):
-        if runtime_axes:
-            test_function = pytest.mark.runtime_axes(*runtime_axes)(test_function)
+        if compile_key_fn is not None:
+            test_function = pytest.mark.runtime_axes(compile_key_fn=compile_key_fn)(
+                test_function
+            )
         return pytest.mark.parametrize(parameters_string, parameter_values, ids=ids)(
             test_function
         )

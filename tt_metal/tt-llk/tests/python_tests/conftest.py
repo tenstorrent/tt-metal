@@ -432,11 +432,8 @@ def _collapse_runtime_only_variants(items):
         if marker is None:
             keep.append(item)
             continue
-        runtime_names = set(marker.args)
-        compile_params = {
-            k: v for k, v in item.callspec.params.items() if k not in runtime_names
-        }
-        key = (item.nodeid.split("[")[0], repr(sorted(compile_params.items())))
+        compile_key_fn = marker.kwargs["compile_key_fn"]
+        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
         if key not in seen:
             seen.add(key)
             keep.append(item)

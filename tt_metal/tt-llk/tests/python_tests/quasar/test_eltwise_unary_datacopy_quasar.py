@@ -24,7 +24,6 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
-    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -123,27 +122,33 @@ DATACOPY_FORMATS = input_output_formats(
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS
 )
-_COMPILE, _RUNTIME = split_combinations(ALL_DATACOPY_COMBINATIONS)
 
 
 @pytest.mark.quasar
 @parametrize(
-    compile_params=_COMPILE,
-    runtime_params=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
-    # don't generate the No variant for them. compile_params[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda compile_params: (
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
+    # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
+    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
         [ImpliedMathFormat.Yes]
-        if compile_params[0].input_format.is_mx_format()
+        if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[
+            0
+        ].input_format.is_mx_format()
         else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
     ),
 )
 def test_eltwise_unary_datacopy_quasar(
-    compile_params,
-    runtime_params,
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
     implied_math_format,
 ):
-    (formats, dest_acc, data_copy_type, dest_sync_mode) = compile_params
-    input_dimensions, dest_index, tile_dimensions = runtime_params
+    (
+        formats,
+        dest_acc,
+        data_copy_type,
+        input_dimensions,
+        dest_sync_mode,
+        dest_index,
+        tile_dimensions,
+    ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
 
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
     if (

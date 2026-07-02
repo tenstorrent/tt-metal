@@ -26,7 +26,6 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
-    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -142,23 +141,21 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
     ],
 )
 
-_COMPILE, _RUNTIME = split_combinations(
-    generate_qsr_transpose_dest_combinations(TRANSPOSE_DEST_FORMATS)
-)
-
 
 @pytest.mark.quasar
 @parametrize(
-    compile_params=_COMPILE,
-    input_dimensions=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
+    formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
+        TRANSPOSE_DEST_FORMATS
+    ),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
 def test_transpose_dest_quasar(
-    compile_params,
-    input_dimensions,
+    formats_dest_acc_sync_transpose_dims,
     implied_math_format,
 ):
-    (formats, dest_acc, dest_sync, math_transpose_faces) = compile_params
+    (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
+        formats_dest_acc_sync_transpose_dims
+    )
 
     data_copy_type = DataCopyType.A2D
     num_faces = 4

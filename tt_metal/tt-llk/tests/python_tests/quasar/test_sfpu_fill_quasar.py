@@ -19,12 +19,7 @@ from helpers.llk_params import (
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import (
-    input_output_formats,
-    parametrize,
-    runtime,
-    split_combinations,
-)
+from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -125,17 +120,13 @@ SFPU_FILL_INT_FORMATS = input_output_formats(
 )
 
 
-_COMPILE, _RUNTIME = split_combinations(
-    generate_sfpu_fill_combinations(SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS)
-)
-
-
 @pytest.mark.quasar
 @parametrize(
-    compile_params=_COMPILE,
-    input_dimensions=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
+    formats_dest_acc_implied_math_input_dims=generate_sfpu_fill_combinations(
+        SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
+    ),
 )
-def test_sfpu_fill_quasar(compile_params, input_dimensions):
+def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
     """
     Test fill operation on Quasar architecture.
 
@@ -154,7 +145,9 @@ def test_sfpu_fill_quasar(compile_params, input_dimensions):
     Since fill ignores input values, the input stimuli are arbitrary —
     typed stimuli are still generated so the unpack path sees a valid buffer.
     """
-    (formats, dest_acc, implied_math_format) = compile_params
+    (formats, dest_acc, implied_math_format, input_dimensions) = (
+        formats_dest_acc_implied_math_input_dims[0]
+    )
 
     is_int_fill = formats.input_format.is_integer()
 
