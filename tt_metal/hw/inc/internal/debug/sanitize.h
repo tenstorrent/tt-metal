@@ -468,7 +468,7 @@ uint32_t debug_sanitize_noc_addr(
     // Reg-space targets (on DRAM/ETH/TENSIX overlay) bypass the type specific addr validator and
     // use reg alignment instead
     if ((core_type == AddressableCoreType::DRAM || core_type == AddressableCoreType::ETH ||
-         core_type == AddressableCoreType::TENSIX) &&
+         core_type == AddressableCoreType::TENSIX || core_type == AddressableCoreType::DISPATCH) &&
         debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
         alignment_mask = NOC_REG_ALIGNMENT_BYTES - 1;
     } else if (core_type == AddressableCoreType::PCIE) {
@@ -505,7 +505,7 @@ uint32_t debug_sanitize_noc_addr(
             dir,
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-    } else if (core_type == AddressableCoreType::TENSIX) {
+    } else if (core_type == AddressableCoreType::TENSIX || core_type == AddressableCoreType::DISPATCH) {
         debug_sanitize_post_addr_and_hang(
             noc_id,
             noc_addr,

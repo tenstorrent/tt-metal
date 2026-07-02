@@ -39,6 +39,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
+#include <internal/dispatch/dispatch_engine_cores.hpp>
 
 using namespace tt::tt_metal;
 
@@ -527,6 +528,14 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         const auto& soc_desc = cluster.get_soc_desc(device_id);
         for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             write_watcher_init_val_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+        }
+    }
+
+    // Initialize dispatch-engine cores debug values (Quasar only)
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& logical_dispatch_core : internal::get_quasar_soc_dispatch_engine_logical_cores(soc_desc)) {
+            write_watcher_init_val_logical(logical_dispatch_core, HalProgrammableCoreType::DISPATCH);
         }
     }
 

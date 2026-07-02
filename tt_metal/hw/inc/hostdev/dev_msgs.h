@@ -352,8 +352,9 @@ enum class AddressableCoreType : uint8_t {
     PCIE = 2,
     DRAM = 3,
     HARVESTED = 4,
-    UNKNOWN = 5,
-    COUNT = 6,
+    DISPATCH = 5,
+    UNKNOWN = 6,
+    COUNT = 7,
 };
 
 struct addressable_core_t {

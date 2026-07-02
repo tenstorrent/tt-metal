@@ -845,6 +845,7 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {core.x, core.y},
             addr,
             sz_in_bytes);
@@ -874,6 +875,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {core.x, core.y},
             addr,
             size_in_bytes);
@@ -899,6 +901,7 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {core.x, core.y},
             addr,
             sz_in_bytes);
@@ -930,6 +933,7 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {target.x, target.y},
             addr,
             size_in_bytes);
@@ -954,6 +958,7 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
             this->virtual_pcie_cores_.at(chip_id),
             this->virtual_dram_cores_.at(chip_id),
             this->virtual_dram_hw_cores_.at(chip_id),
+            this->virtual_dispatch_cores_.at(chip_id),
             {target.x, target.y},
             addr,
             size_in_bytes);

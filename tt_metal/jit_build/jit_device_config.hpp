@@ -35,6 +35,8 @@ struct JitDeviceConfig {
 
     uint32_t harvesting_mask = 0;
     DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
+    // Effective dispatch placement (Quasar: DISPATCH vs WORKER from soc/env, not DispatchCoreConfig alone).
+    tt::CoreType resolved_dispatch_core_type = tt::CoreType::WORKER;
     DispatchCoreAxis dispatch_core_axis = DispatchCoreAxis::ROW;
     bool coordinate_virtualization_enabled = false;
 
