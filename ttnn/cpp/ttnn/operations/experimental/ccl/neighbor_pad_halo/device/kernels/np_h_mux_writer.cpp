@@ -38,9 +38,10 @@ constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_va
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(ct_after_dst + 5);
 
 void kernel_main() {
-    // ---- Common runtime args ---- (index 2 = h_neighbor_sem, matches np_h_reader/np_writer CRTA)
+    // ---- Common runtime args ---- (index 2 = h_neighbor_sem, index 3 = barrier_sem; matches np_writer CRTA)
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
+    const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
 
     // ---- Per-core runtime args ----
     uint32_t arg_idx = 0;
@@ -79,6 +80,17 @@ void kernel_main() {
     const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    // H->W barrier targets: after H completes, inc barrier_sem (intra-device NOC) on each W-reader core so
+    // the W reader clears its H->W barrier wait. barrier_count on the W side = total H mux workers.
+    constexpr uint32_t MAX_W_BARRIER_TARGETS = 16;
+    const uint32_t num_w_barrier_targets = get_arg_val<uint32_t>(arg_idx++);
+    uint8_t w_bar_x[MAX_W_BARRIER_TARGETS];
+    uint8_t w_bar_y[MAX_W_BARRIER_TARGETS];
+    for (uint32_t t = 0; t < MAX_W_BARRIER_TARGETS; t++) {
+        w_bar_x[t] = get_arg_val<uint32_t>(arg_idx++);
+        w_bar_y[t] = get_arg_val<uint32_t>(arg_idx++);
+    }
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
     const bool has_neighbor = direction ? !is_first_chip : !is_last_chip;
