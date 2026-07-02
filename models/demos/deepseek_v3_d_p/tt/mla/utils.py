@@ -3,8 +3,6 @@
 
 import torch
 
-import ttnn
-
 
 def create_balanced_chunk_order(sp_factor: int) -> list[int]:
     """Create balanced chunk order for sequence reordering.
