@@ -212,6 +212,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
     cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/matmul_decode/matmul_decode_nanobind.cpp
     cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
