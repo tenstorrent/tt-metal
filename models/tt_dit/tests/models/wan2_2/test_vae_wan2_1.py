@@ -29,7 +29,11 @@ from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
+from ....utils.golden import load_golden, save_golden
 from ....utils.tensor import bf16_tensor_2dshard, typed_tensor_2dshard
+
+VAE_MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+VAE_COMMIT_HASH_PLACEHOLDER = "local"
 
 
 def setup_hooks(model):
@@ -112,10 +116,10 @@ def defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, d
     """Move feature cache tensors to host and back to device to defragment device memory."""
     tt_feat_cache_host = []
     for j in range(len(tt_feat_cache)):
-        if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-            tt_feat_cache_host.append(tt_feat_cache[j])
-        elif tt_feat_cache[j] is None:
+        if tt_feat_cache[j] is None:
             tt_feat_cache_host.append(None)
+        elif isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+            tt_feat_cache_host.append(tt_feat_cache[j])
         else:
             tt_feat_cache_host.append(
                 ttnn.to_torch(
@@ -127,10 +131,10 @@ def defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, d
             )
             ttnn.deallocate(tt_feat_cache[j])
     for j in range(len(tt_feat_cache)):
-        if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+        if tt_feat_cache_host[j] is None:
+            continue
+        elif isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
             tt_feat_cache[j] = tt_feat_cache_host[j]
-        elif tt_feat_cache[j] is None:
-            pass
         else:
             tt_feat_cache[j] = typed_tensor_2dshard(
                 tt_feat_cache_host[j],
@@ -144,6 +148,10 @@ def defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, d
 def compare_tt_torch_feat_cache(tt_feat_cache, torch_feat_cache, mesh_device, concat_dims, MIN_PCC, MAX_RMSE):
     for cache_idx in range(len(tt_feat_cache)):
         logger.info(f"checking feat_cache {cache_idx}")
+        if tt_feat_cache[cache_idx] is None:
+            logger.info(f"feat_cache {cache_idx} is None, skipping")
+            assert torch_feat_cache[cache_idx] is None
+            continue
         if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
             logger.info(f"feat_cache {cache_idx} is Rep")
             assert torch_feat_cache[cache_idx] == "Rep"
@@ -180,9 +188,10 @@ def trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new
     if new_logical_w != tt_output_torch.shape[4]:
         tt_output_torch = tt_output_torch[:, :, :, :, :new_logical_w]
         logger.warning(f"Trimmed tt_output_torch width to {tt_output_torch.shape}")
+    return tt_output_torch
 
 
-def pad_tensor_with_warning(torch_input_tensor, parallel_config):
+def pad_tensor_with_warning(tt_input_tensor, torch_input_tensor, parallel_config):
     tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
     if logical_h != tt_input_tensor.shape[2]:
@@ -281,7 +290,7 @@ def test_autoencoder_kl_wan():
 @pytest.mark.parametrize(
     "fused_activation", [None, (ttnn.UnaryOpType.SILU, torch.nn.functional.silu)], ids=["none", "silu"]
 )
-def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation):
+def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanRMS_norm
 
     torch_activation = None
@@ -289,8 +298,12 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation)
     if fused_activation is not None:
         (ttnn_activation, torch_activation) = fused_activation
 
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_rmsnorm", param_id)
+
     torch_dtype = torch.float32
     bias = False
+    torch.manual_seed(0)
     torch_model = WanRMS_norm(dim=C, images=images, bias=bias)
     torch_model.eval()
 
@@ -307,7 +320,14 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation)
     del state_dict["gamma"]
     tt_model.load_torch_state_dict(state_dict)
 
-    torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+    if golden is not None:
+        raw_input = golden["raw_input"]
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch (wan_rmsnorm).")
+        raw_input = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+
+    torch_input_tensor = raw_input.clone()
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     if images:
         torch_input_tensor = torch_input_tensor.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
@@ -315,10 +335,17 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation)
 
     tt_input_tensor = ttnn.from_torch(tt_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    with torch.no_grad():
-        torch_output = torch_model(torch_input_tensor)
-        if torch_activation is not None:
-            torch_output = torch_activation(torch_output)
+    if golden is None:
+        with torch.no_grad():
+            torch_output = torch_model(torch_input_tensor)
+            if torch_activation is not None:
+                torch_output = torch_activation(torch_output)
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_rmsnorm",
+            param_id,
+            {"raw_input": raw_input, "torch_output": torch_output},
+        )
 
     tt_output = tt_model(tt_input_tensor)
 
@@ -362,12 +389,12 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation)
         ((4, 8), 0, 1),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
+        "1x1h0w1",
+        "2x4h0w1",
+        "2x4h1w0",
+        "1x8h0w1",
+        "1x4h1w0",
+        "4x8h0w1",
     ],
     indirect=["mesh_device"],
 )
@@ -376,9 +403,12 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation)
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dtype, reset_seeds):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dtype, reset_seeds, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanAttentionBlock as TorchWanAttentionBlock
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_attention", param_id)
 
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
@@ -400,7 +430,13 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch (wan_attention).")
+        torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
     if logical_h != tt_input_tensor.shape[2]:
@@ -415,8 +451,16 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
     )
     tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
-    with torch.no_grad():
-        torch_output = torch_model(torch_input_tensor)
+    if golden is None:
+        with torch.no_grad():
+            torch_output = torch_model(torch_input_tensor)
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_attention",
+            param_id,
+            {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
+        )
+
     tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
 
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
@@ -473,12 +517,12 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
         ((4, 8), 0, 1),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
+        "1x1h0w1",
+        "2x4h0w1",
+        "2x4h1w0",
+        "1x8h0w1",
+        "1x4h1w0",
+        "4x8h0w1",
     ],
     indirect=["mesh_device"],
 )
@@ -487,14 +531,34 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_conv3d(
-    mesh_device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, cache_len, mean, std, h_axis, w_axis, dtype
+    mesh_device,
+    B,
+    C_in,
+    C_out,
+    T,
+    H,
+    W,
+    kernel_size,
+    stride,
+    padding,
+    cache_len,
+    mean,
+    std,
+    h_axis,
+    w_axis,
+    dtype,
+    request,
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d as TorchWanCausalConv3d
 
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_conv3d", param_id)
+
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
+    torch.manual_seed(0)
     torch_model = TorchWanCausalConv3d(
         in_channels=C_in, out_channels=C_out, kernel_size=kernel_size, stride=stride, padding=padding
     )
@@ -518,7 +582,18 @@ def test_wan_conv3d(
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(B, C_in, T, H, W, dtype=torch_dtype) * std + mean
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_cache_tensor = golden.get("torch_cache_tensor")
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch (wan_conv3d).")
+        torch_input_tensor = torch.randn(B, C_in, T, H, W, dtype=torch_dtype) * std + mean
+        if cache_len is not None:
+            torch_cache_tensor = torch.randn(B, C_in, cache_len, H, W, dtype=torch_dtype) * std + mean
+        else:
+            torch_cache_tensor = None
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
@@ -534,8 +609,7 @@ def test_wan_conv3d(
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
 
-    if cache_len is not None:
-        torch_cache_tensor = torch.randn(B, C_in, cache_len, H, W, dtype=torch_dtype) * std + mean
+    if torch_cache_tensor is not None:
         tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
         tt_cache_tensor = conv_pad_in_channels(tt_cache_tensor)
         tt_cache_tensor, logical_h = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
@@ -547,10 +621,16 @@ def test_wan_conv3d(
             dtype=tt_input_dtype,
         )
     else:
-        torch_cache_tensor = tt_cache_tensor = None
+        tt_cache_tensor = None
 
-    with torch.no_grad():
-        torch_output = torch_model(torch_input_tensor, cache_x=torch_cache_tensor)
+    if golden is None:
+        with torch.no_grad():
+            torch_output = torch_model(torch_input_tensor, cache_x=torch_cache_tensor)
+        golden_data = {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output}
+        if torch_cache_tensor is not None:
+            golden_data["torch_cache_tensor"] = torch_cache_tensor
+        save_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_conv3d", param_id, golden_data)
+
     tt_output = tt_model(tt_input_tensor, cache_x_BTHWC=tt_cache_tensor, logical_h=logical_h)
 
     concat_dims = [None, None]
@@ -608,12 +688,12 @@ def test_wan_conv3d(
         ((4, 8), 0, 1),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
+        "1x1h0w1",
+        "2x4h0w1",
+        "2x4h1w0",
+        "1x8h0w1",
+        "1x4h1w0",
+        "4x8h0w1",
     ],
     indirect=["mesh_device"],
 )
@@ -622,12 +702,18 @@ def test_wan_conv3d(
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_residual_block(
+    mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype, request
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResidualBlock as TorchWanResidualBlock
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_residual_block", param_id)
 
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
+    torch.manual_seed(0)
     torch_model = TorchWanResidualBlock(
         in_dim=in_dim,
         out_dim=out_dim,
@@ -649,7 +735,22 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_cache_tensor_1 = golden.get("torch_cache_tensor_1")
+        torch_cache_tensor_2 = golden.get("torch_cache_tensor_2")
+        torch_output = golden["torch_output"]
+        torch_feat_cache_out = golden.get("torch_feat_cache")
+    else:
+        logger.warning("Computing reference results from scratch (wan_residual_block).")
+        torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
+        if cache_len is not None:
+            torch_cache_tensor_1 = torch.randn(B, in_dim, cache_len, H, W, dtype=torch_dtype) * std + mean
+            torch_cache_tensor_2 = torch.randn(B, out_dim, cache_len, H, W, dtype=torch_dtype) * std + mean
+        else:
+            torch_cache_tensor_1 = None
+            torch_cache_tensor_2 = None
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
     if logical_h != tt_input_tensor.shape[2]:
@@ -665,9 +766,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
 
-    if cache_len is not None:
-        torch_cache_tensor_1 = torch.randn(B, in_dim, cache_len, H, W, dtype=torch_dtype) * std + mean
-        torch_cache_tensor_2 = torch.randn(B, out_dim, cache_len, H, W, dtype=torch_dtype) * std + mean
+    if torch_cache_tensor_1 is not None:
         torch_feat_cache = [torch_cache_tensor_1, torch_cache_tensor_2]
         torch_feat_idx = [0]
 
@@ -697,12 +796,25 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         tt_feat_cache = [None, None]
         tt_feat_idx = [0]
 
-    with torch.no_grad():
-        torch_output = torch_model(
-            torch_input_tensor,
-            feat_cache=torch_feat_cache,
-            feat_idx=torch_feat_idx,
-        )
+    if golden is None:
+        with torch.no_grad():
+            torch_output = torch_model(
+                torch_input_tensor,
+                feat_cache=torch_feat_cache,
+                feat_idx=torch_feat_idx,
+            )
+        golden_data = {
+            "torch_input_tensor": torch_input_tensor,
+            "torch_output": torch_output,
+            "torch_feat_cache": torch_feat_cache,
+        }
+        if torch_cache_tensor_1 is not None:
+            golden_data["torch_cache_tensor_1"] = torch_cache_tensor_1
+            golden_data["torch_cache_tensor_2"] = torch_cache_tensor_2
+        save_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_residual_block", param_id, golden_data)
+        torch_feat_cache_out = torch_feat_cache
+    else:
+        torch_feat_cache = torch_feat_cache_out
 
     tt_output = tt_model(
         tt_input_tensor,
@@ -767,13 +879,13 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         ((4, 8), 0, 1),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
+        "1x1h0w1",
+        "2x1h0w1",
+        "2x4h0w1",
+        "2x4h1w0",
+        "1x8h0w1",
+        "1x4h1w0",
+        "4x8h0w1",
     ],
     indirect=["mesh_device"],
 )
@@ -782,9 +894,14 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype, MIN_PCC, MAX_RMSE):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_mid_block(
+    mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype, MIN_PCC, MAX_RMSE, request
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanMidBlock as TorchWanMidBlock
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_mid_block", param_id)
 
     torch.manual_seed(0)
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
@@ -810,7 +927,22 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
 
     num_convs = count_convs(tt_model)
 
-    torch_input_tensor = torch.randn(B, dim, T, H, W, dtype=torch_dtype) * std + mean
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_output = golden["torch_output"]
+        torch_feat_cache_golden = golden["torch_feat_cache"]
+        torch_cache_tensors = golden.get("torch_cache_tensors")
+    else:
+        logger.warning("Computing reference results from scratch (wan_mid_block).")
+        torch_input_tensor = torch.randn(B, dim, T, H, W, dtype=torch_dtype) * std + mean
+        torch_cache_tensors = []
+        for i in range(num_convs):
+            torch.manual_seed(0)
+            if cache_len is not None:
+                torch_cache_tensors.append(torch.randn(B, dim, cache_len, H, W, dtype=torch_dtype) * std + mean)
+            else:
+                torch_cache_tensors.append(None)
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
     if logical_h != tt_input_tensor.shape[2]:
@@ -829,12 +961,9 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     torch_feat_idx = [0]
     tt_feat_idx = [0]
     for i in range(num_convs):
-        torch.manual_seed(0)
-        if cache_len is not None:
-            torch_cache_tensor = torch.randn(B, dim, cache_len, H, W, dtype=torch_dtype) * std + mean
-            torch_feat_cache.append(torch_cache_tensor)
-
-            tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
+        if torch_cache_tensors[i] is not None:
+            torch_feat_cache.append(torch_cache_tensors[i])
+            tt_cache_tensor = torch_cache_tensors[i].permute(0, 2, 3, 4, 1)
             tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
             tt_cache_tensor = typed_tensor_2dshard(
                 tt_cache_tensor,
@@ -844,17 +973,31 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
                 dtype=tt_input_dtype,
             )
             tt_feat_cache.append(tt_cache_tensor)
-
         else:
             torch_feat_cache.append(None)
             tt_feat_cache.append(None)
 
-    with torch.no_grad():
-        torch_output = torch_model(
-            torch_input_tensor,
-            feat_cache=torch_feat_cache,
-            feat_idx=torch_feat_idx,
+    if golden is None:
+        with torch.no_grad():
+            torch_output = torch_model(
+                torch_input_tensor,
+                feat_cache=torch_feat_cache,
+                feat_idx=torch_feat_idx,
+            )
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_mid_block",
+            param_id,
+            {
+                "torch_input_tensor": torch_input_tensor,
+                "torch_output": torch_output,
+                "torch_feat_cache": torch_feat_cache,
+                "torch_cache_tensors": torch_cache_tensors,
+            },
         )
+        torch_feat_cache_golden = torch_feat_cache
+    else:
+        torch_feat_cache = torch_feat_cache_golden
 
     tt_output = tt_model(
         tt_input_tensor,
@@ -926,20 +1069,26 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         ((4, 8), 0, 1),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
+        "1x1h0w1",
+        "2x4h0w1",
+        "2x4h1w0",
+        "1x8h0w1",
+        "1x4h1w0",
+        "4x8h0w1",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cache_len, mean, std, h_axis, w_axis):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_resample(
+    mesh_device, B, dim, T, H, W, mode, resample_out_dim, cache_len, mean, std, h_axis, w_axis, request
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample as TorchWanResample
 
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_resample", param_id)
+
     torch_dtype = torch.float32
+    torch.manual_seed(0)
     torch_model = TorchWanResample(
         dim=dim,
         mode=mode,
@@ -963,13 +1112,30 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     num_convs = count_convs(tt_model)
-
-    torch_input_tensor = torch.randn(B, dim, T, H, W, dtype=torch_dtype) * std + mean
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     pad_factor_multiplier = (
         2 if "downsample" in mode else 1
     )  # We have to ensure each device have multiple of 2 after shadding and downsampling per downsample layer (2 * 2^num_layers).
     cache_divisor = 2 if "downsample" in mode else 1  # Divisor for cache w,h dimensions.
+
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_output = golden["torch_output"]
+        torch_feat_cache_golden = golden["torch_feat_cache"]
+        torch_cache_tensors = golden.get("torch_cache_tensors")
+    else:
+        logger.warning("Computing reference results from scratch (wan_resample).")
+        torch_input_tensor = torch.randn(B, dim, T, H, W, dtype=torch_dtype) * std + mean
+        torch_cache_tensors = []
+        for i in range(num_convs):
+            if cache_len is not None:
+                torch_cache_tensors.append(
+                    torch.randn(B, dim, cache_len, H // cache_divisor, W // cache_divisor, dtype=torch_dtype) * std
+                    + mean
+                )
+            else:
+                torch_cache_tensors.append(None)
+
+    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor, logical_h = conv_pad_height(
         tt_input_tensor, parallel_config.height_parallel.factor * pad_factor_multiplier
     )
@@ -984,29 +1150,39 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     torch_feat_idx = [0]
     tt_feat_idx = [0]
     for i in range(num_convs):
-        if cache_len is not None:
-            torch_cache_tensor = (
-                torch.randn(B, dim, cache_len, H // cache_divisor, W // cache_divisor, dtype=torch_dtype) * std + mean
-            )
-            torch_feat_cache.append(torch_cache_tensor)
-
-            tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
+        if torch_cache_tensors[i] is not None:
+            torch_feat_cache.append(torch_cache_tensors[i])
+            tt_cache_tensor = torch_cache_tensors[i].permute(0, 2, 3, 4, 1)
             tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
             tt_cache_tensor = bf16_tensor_2dshard(
                 tt_cache_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
             )
             tt_feat_cache.append(tt_cache_tensor)
-
         else:
             torch_feat_cache.append(None)
             tt_feat_cache.append(None)
 
-    with torch.no_grad():
-        torch_output = torch_model(
-            torch_input_tensor,
-            feat_cache=torch_feat_cache,
-            feat_idx=torch_feat_idx,
+    if golden is None:
+        with torch.no_grad():
+            torch_output = torch_model(
+                torch_input_tensor,
+                feat_cache=torch_feat_cache,
+                feat_idx=torch_feat_idx,
+            )
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_resample",
+            param_id,
+            {
+                "torch_input_tensor": torch_input_tensor,
+                "torch_output": torch_output,
+                "torch_feat_cache": torch_feat_cache,
+                "torch_cache_tensors": torch_cache_tensors,
+            },
         )
+        torch_feat_cache_golden = torch_feat_cache
+    else:
+        torch_feat_cache = torch_feat_cache_golden
 
     tt_output, new_logical_h, new_logical_w = tt_model(
         tt_input_tensor,
@@ -1071,12 +1247,12 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
         ((4, 8), 0, 1),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
+        "1x1h0w1",
+        "2x4h0w1",
+        "2x4h1w0",
+        "1x8h0w1",
+        "1x4h1w0",
+        "4x8h0w1",
     ],
     indirect=["mesh_device"],
 )
@@ -1085,9 +1261,14 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, dtype):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_upblock(
+    mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, dtype, request
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanUpBlock as TorchWanUpBlock
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_upblock", param_id)
 
     torch.manual_seed(0)
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
@@ -1122,14 +1303,26 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     torch_feat_cache = [None for _ in range(num_convs)]
     tt_feat_cache = [None for _ in range(num_convs)]
 
+    if golden is None:
+        logger.warning("Computing reference results from scratch (wan_upblock).")
+        golden_iterations = []
+
     # Run 4 times to get models to create their own caches
-    for i in range(4):
+    for iter_idx in range(4):
         torch_feat_idx = [0]
         tt_feat_idx = [0]
-        logger.info(f"running test iteration {i}")
+        logger.info(f"running test iteration {iter_idx}")
+
+        if golden is not None:
+            torch_input_tensor = golden["iterations"][iter_idx]["torch_input_tensor"]
+            torch_output = golden["iterations"][iter_idx]["torch_output"]
+            torch_feat_cache = golden["iterations"][iter_idx]["torch_feat_cache"]
+        else:
+            torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
 
         torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
         logger.info(f"Torch input shape {torch_input_tensor.shape}")
+
         tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
         logger.info(f"Theoretical TT input shape {tt_input_tensor.shape}")
 
@@ -1149,12 +1342,20 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 
         logger.info(f"Actual TT input shape {tt_input_tensor.shape}")
 
-        logger.info(f"running torch model")
-        with torch.no_grad():
-            torch_output = torch_model(
-                torch_input_tensor,
-                feat_cache=torch_feat_cache,
-                feat_idx=torch_feat_idx,
+        if golden is None:
+            logger.info(f"running torch model")
+            with torch.no_grad():
+                torch_output = torch_model(
+                    torch_input_tensor,
+                    feat_cache=torch_feat_cache,
+                    feat_idx=torch_feat_idx,
+                )
+            golden_iterations.append(
+                {
+                    "torch_input_tensor": torch_input_tensor,
+                    "torch_output": torch_output,
+                    "torch_feat_cache": [t.clone() if isinstance(t, torch.Tensor) else t for t in torch_feat_cache],
+                }
             )
 
         logger.info(f"torch_output shape {torch_output.shape}")
@@ -1232,6 +1433,14 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 
         defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, dtype=tt_input_dtype)
 
+    if golden is None:
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_upblock",
+            param_id,
+            {"iterations": golden_iterations},
+        )
+
 
 @pytest.mark.parametrize(
     ("B, C, T, H, W"),
@@ -1264,18 +1473,23 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         ((4, 32), 0, 1, 2),
     ],
     ids=[
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
-        "bh_quad_4x32_h0_w1",
+        "2x4h0w1nl1",
+        "2x4h1w0nl1",
+        "1x8h0w1nl1",
+        "1x4h1w0nl1",
+        "4x8h0w1nl4",
+        "4x32h0w1nl2",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, dtype, MIN_PCC, MAX_RMSE):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_decoder3d(
+    mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, dtype, MIN_PCC, MAX_RMSE, request
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_decoder3d", param_id)
 
     torch.manual_seed(0)
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
@@ -1332,15 +1546,25 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     torch_feat_cache = [None for _ in range(num_convs)]
     tt_feat_cache = [None for _ in range(num_convs)]
 
+    if golden is None:
+        logger.warning("Computing reference results from scratch (wan_decoder3d).")
+        golden_iterations = []
+
     # Run 4 times to get models to create their own caches
-    for i in range(3):
+    for iter_idx in range(3):
         torch.manual_seed(0)
 
         torch_feat_idx = [0]
         tt_feat_idx = [0]
-        logger.info(f"running test iteration {i}")
+        logger.info(f"running test iteration {iter_idx}")
 
-        torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+        if golden is not None:
+            torch_input_tensor = golden["iterations"][iter_idx]["torch_input_tensor"]
+            torch_output = golden["iterations"][iter_idx]["torch_output"]
+            torch_feat_cache = golden["iterations"][iter_idx]["torch_feat_cache"]
+        else:
+            torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+
         tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
         tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
         tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
@@ -1352,14 +1576,22 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
             dtype=tt_input_dtype,
         )
 
-        logger.info(f"running torch model")
-        with torch.no_grad():
-            torch_output = torch_model(
-                torch_input_tensor,
-                feat_cache=torch_feat_cache,
-                feat_idx=torch_feat_idx,
+        if golden is None:
+            logger.info(f"running torch model")
+            with torch.no_grad():
+                torch_output = torch_model(
+                    torch_input_tensor,
+                    feat_cache=torch_feat_cache,
+                    feat_idx=torch_feat_idx,
+                )
+            logger.info(f"torch output shape: {torch_output.shape}")
+            golden_iterations.append(
+                {
+                    "torch_input_tensor": torch_input_tensor,
+                    "torch_output": torch_output,
+                    "torch_feat_cache": [t.clone() if isinstance(t, torch.Tensor) else t for t in torch_feat_cache],
+                }
             )
-        logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
         tt_output, new_logical_h, new_logical_w = tt_model(
@@ -1383,6 +1615,14 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
         compare_tt_torch_feat_cache(tt_feat_cache, torch_feat_cache, mesh_device, concat_dims, MIN_PCC, MAX_RMSE)
         defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, dtype=tt_input_dtype)
+
+    if golden is None:
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_decoder3d",
+            param_id,
+            {"iterations": golden_iterations},
+        )
 
 
 @pytest.mark.parametrize(
@@ -1422,17 +1662,17 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         ((4, 8), 0, 1, 2),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "wh_4x8_h0_w1",
-        "bh_4x8_h0_w1",
+        "1x1h0w1nl1",
+        "2x4h0w1nl1",
+        "2x4h1w0nl1",
+        "1x8h0w1nl1",
+        "1x4h1w0nl1",
+        "4x8h0w1nl4",
+        "4x8h0w1nl2",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_decoder(
     mesh_device,
     B,
@@ -1449,14 +1689,20 @@ def test_wan_decoder(
     dtype,
     MIN_PCC,
     MAX_RMSE,
+    request,
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch.manual_seed(0)
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
 
+    _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_MODEL_NAME, subfolder="vae", return_commit_hash=True)
+    logger.info(f"Loaded {VAE_MODEL_NAME} (subfolder=vae) at commit: {commit_hash}")
+    param_id = request.node.name
+    golden = load_golden(commit_hash, "wan_decoder", param_id)
+
     torch_dtype = torch.float32
-    torch_model = TorchAutoencoderKLWan.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae")
+    torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_MODEL_NAME, subfolder="vae")
     torch_model.eval()
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
@@ -1480,10 +1726,18 @@ def test_wan_decoder(
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch (wan_decoder).")
+        torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
 
-    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(torch_input_tensor, parallel_config)
+    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(
+        tt_input_tensor, torch_input_tensor, parallel_config
+    )
     tt_input_tensor = typed_tensor_2dshard(
         tt_input_tensor,
         mesh_device,
@@ -1508,15 +1762,22 @@ def test_wan_decoder(
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
-    logger.info(f"running torch model")
-    start = time.time()
-    with torch.no_grad():
-        torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
-    logger.info(f"torch time taken: {time.time() - start}")
-    logger.info(f"torch output shape: {torch_output.shape}")
+    if golden is None:
+        logger.info(f"running torch model")
+        start = time.time()
+        with torch.no_grad():
+            torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
+        logger.info(f"torch time taken: {time.time() - start}")
+        logger.info(f"torch output shape: {torch_output.shape}")
+        save_golden(
+            commit_hash,
+            "wan_decoder",
+            param_id,
+            {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
+        )
 
     logger.info(f"checking output")
-    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
+    tt_output_torch = trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1534,10 +1795,10 @@ def test_wan_decoder(
         ((2, 4), 0, 1, 1),
         ((4, 8), 0, 1, 2),
     ],
-    ids=["2x4_h0_w1", "bh_4x8_h0_w1"],
+    ids=["2x4h0w1nl1", "4x8h0w1nl2"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_decoder_production_blocking(
     mesh_device,
     B,
@@ -1552,6 +1813,7 @@ def test_wan_decoder_production_blocking(
     h_axis,
     w_axis,
     num_links,
+    request,
 ):
     """Verify that the VAE decoder runs end-to-end with production blocking configs.
 
@@ -1560,6 +1822,9 @@ def test_wan_decoder_production_blocking(
     exercises the optimized per-layer blocking table rather than the fallback.
     """
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_decoder_production_blocking", param_id)
 
     torch.manual_seed(0)
     dtype = ttnn.DataType.BFLOAT16
@@ -1614,9 +1879,17 @@ def test_wan_decoder_production_blocking(
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype)
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch (wan_decoder_production_blocking).")
+        torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype)
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(torch_input_tensor, parallel_config)
+    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(
+        tt_input_tensor, torch_input_tensor, parallel_config
+    )
     tt_input_tensor = typed_tensor_2dshard(
         tt_input_tensor,
         mesh_device,
@@ -1641,15 +1914,22 @@ def test_wan_decoder_production_blocking(
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
-    logger.info("running torch model")
-    start = time.time()
-    with torch.no_grad():
-        torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
-    logger.info(f"torch time taken: {time.time() - start}")
-    logger.info(f"torch output shape: {torch_output.shape}")
+    if golden is None:
+        logger.info("running torch model")
+        start = time.time()
+        with torch.no_grad():
+            torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
+        logger.info(f"torch time taken: {time.time() - start}")
+        logger.info(f"torch output shape: {torch_output.shape}")
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_decoder_production_blocking",
+            param_id,
+            {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
+        )
 
     logger.info("checking output")
-    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
+    tt_output_torch = trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1666,10 +1946,10 @@ def test_wan_decoder_production_blocking(
     [
         ((4, 8), 0, 1, 2),
     ],
-    ids=["bh_4x8_h0_w1"],
+    ids=["4x8h0w1nl2"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_encoder_production_blocking(
     mesh_device,
     B,
@@ -1681,6 +1961,7 @@ def test_wan_encoder_production_blocking(
     h_axis,
     w_axis,
     num_links,
+    request,
 ):
     """Verify that the VAE encoder runs end-to-end with production blocking configs.
 
@@ -1689,6 +1970,9 @@ def test_wan_encoder_production_blocking(
     the optimized per-layer blocking table rather than the fallback.
     """
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_encoder_production_blocking", param_id)
 
     torch.manual_seed(0)
     MIN_PCC = 0.993
@@ -1747,7 +2031,13 @@ def test_wan_encoder_production_blocking(
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(B, C, T, height, width, dtype=torch_dtype)
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch (wan_encoder_production_blocking).")
+        torch_input_tensor = torch.randn(B, C, T, height, width, dtype=torch_dtype)
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 8)
@@ -1776,15 +2066,22 @@ def test_wan_encoder_production_blocking(
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
-    logger.info("running torch model")
-    start = time.time()
-    with torch.no_grad():
-        torch_output = torch_model.encode(torch_input_tensor, return_dict=False)[0].mode()
-    logger.info(f"torch time taken: {time.time() - start}")
-    logger.info(f"torch output shape: {torch_output.shape}")
+    if golden is None:
+        logger.info("running torch model")
+        start = time.time()
+        with torch.no_grad():
+            torch_output = torch_model.encode(torch_input_tensor, return_dict=False)[0].mode()
+        logger.info(f"torch time taken: {time.time() - start}")
+        logger.info(f"torch output shape: {torch_output.shape}")
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_encoder_production_blocking",
+            param_id,
+            {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
+        )
 
     logger.info("checking output")
-    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
+    tt_output_torch = trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -1809,12 +2106,12 @@ def test_wan_encoder_production_blocking(
         ((4, 8), 0, 1, 2),
     ],
     ids=[
-        "2x4_h0_w1",
-        "bh_4x8_h0_w1",
+        "2x4h0w1nl1",
+        "4x8h0w1nl2",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_decoder_chunked_consistency(
     mesh_device,
     B,
@@ -1958,16 +2255,19 @@ def test_wan_decoder_chunked_consistency(
         ((4, 8), 0, 1, 4),
     ],
     ids=[
-        "2x4_h0_w1",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "4x8_h0_w1",
+        "2x4h0w1nl1",
+        "1x8h0w1nl1",
+        "1x4h1w0nl1",
+        "4x8h0w1nl4",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanEncoder3d as TorchWanEncoder3D
+
+    param_id = request.node.name
+    golden = load_golden(VAE_COMMIT_HASH_PLACEHOLDER, "wan_encoder3d", param_id)
 
     in_channels = C
     torch_dtype = torch.float32
@@ -1983,6 +2283,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     MIN_PCC = 0.99 if tuple(mesh_device.shape)[h_axis] == 4 else 0.997
     MAX_RMSE = 0.12 if tuple(mesh_device.shape)[h_axis] == 4 else 0.08
 
+    torch.manual_seed(0)
     torch_model = TorchWanEncoder3D(
         in_channels=in_channels,
         dim=base_dim,
@@ -2022,13 +2323,23 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     torch_feat_cache = [None for _ in range(num_convs)]
     tt_feat_cache = [None for _ in range(num_convs)]
 
+    if golden is None:
+        logger.warning("Computing reference results from scratch (wan_encoder3d).")
+        golden_iterations = []
+
     # Run 4 times to get models to create their own caches
-    for i in range(3):
+    for iter_idx in range(3):
         torch_feat_idx = [0]
         tt_feat_idx = [0]
-        logger.info(f"running test iteration {i}")
+        logger.info(f"running test iteration {iter_idx}")
 
-        torch_input_tensor = torch.randn(B, C, (1 if i == 0 else T), H, W, dtype=torch_dtype) * std + mean
+        if golden is not None:
+            torch_input_tensor = golden["iterations"][iter_idx]["torch_input_tensor"]
+            torch_output = golden["iterations"][iter_idx]["torch_output"]
+            torch_feat_cache = golden["iterations"][iter_idx]["torch_feat_cache"]
+        else:
+            torch_input_tensor = torch.randn(B, C, (1 if iter_idx == 0 else T), H, W, dtype=torch_dtype) * std + mean
+
         tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
         tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
         tt_input_tensor, logical_h = conv_pad_height(
@@ -2038,14 +2349,22 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
             tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
         )
 
-        logger.info(f"running torch model")
-        with torch.no_grad():
-            torch_output = torch_model(
-                torch_input_tensor,
-                feat_cache=torch_feat_cache,
-                feat_idx=torch_feat_idx,
+        if golden is None:
+            logger.info(f"running torch model")
+            with torch.no_grad():
+                torch_output = torch_model(
+                    torch_input_tensor,
+                    feat_cache=torch_feat_cache,
+                    feat_idx=torch_feat_idx,
+                )
+            logger.info(f"torch output shape: {torch_output.shape}")
+            golden_iterations.append(
+                {
+                    "torch_input_tensor": torch_input_tensor,
+                    "torch_output": torch_output,
+                    "torch_feat_cache": [t.clone() if isinstance(t, torch.Tensor) else t for t in torch_feat_cache],
+                }
             )
-        logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
         tt_output, new_logical_h, new_logical_w = tt_model(
@@ -2069,6 +2388,14 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
         compare_tt_torch_feat_cache(tt_feat_cache, torch_feat_cache, mesh_device, concat_dims, MIN_PCC, MAX_RMSE)
         defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis)
+
+    if golden is None:
+        save_golden(
+            VAE_COMMIT_HASH_PLACEHOLDER,
+            "wan_encoder3d",
+            param_id,
+            {"iterations": golden_iterations},
+        )
 
 
 @pytest.mark.parametrize(
@@ -2099,22 +2426,28 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         ((4, 8), 0, 1, 2),
     ],
     ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "1x8_h0_w1",
-        "1x4_h1_w0",
-        "wh_4x8_h0_w1",
-        "bh_4x8_h0_w1",
+        "1x1h0w1nl1",
+        "2x4h0w1nl1",
+        "2x4h1w0nl1",
+        "1x8h0w1nl1",
+        "1x4h1w0nl1",
+        "4x8h0w1nl4",
+        "4x8h0w1nl2",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
+    torch.manual_seed(0)
+    _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_MODEL_NAME, subfolder="vae", return_commit_hash=True)
+    logger.info(f"Loaded {VAE_MODEL_NAME} (subfolder=vae) at commit: {commit_hash}")
+    param_id = request.node.name
+    golden = load_golden(commit_hash, "wan_encoder", param_id)
+
     torch_dtype = torch.float32
-    torch_model = TorchAutoencoderKLWan.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae")
+    torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_MODEL_NAME, subfolder="vae")
     torch_model.eval()
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
@@ -2138,7 +2471,13 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+    if golden is not None:
+        torch_input_tensor = golden["torch_input_tensor"]
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch (wan_encoder).")
+        torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
     tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 8)
@@ -2169,16 +2508,23 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
-    logger.info(f"running torch model")
-    start = time.time()
-    with torch.no_grad():
-        torch_output = torch_model.encode(
-            torch_input_tensor,
-            return_dict=False,
-        )[0].mode()
-    logger.info(f"torch time taken: {time.time() - start}")
-    logger.info(f"torch output shape: {torch_output.shape}")
+    if golden is None:
+        logger.info(f"running torch model")
+        start = time.time()
+        with torch.no_grad():
+            torch_output = torch_model.encode(
+                torch_input_tensor,
+                return_dict=False,
+            )[0].mode()
+        logger.info(f"torch time taken: {time.time() - start}")
+        logger.info(f"torch output shape: {torch_output.shape}")
+        save_golden(
+            commit_hash,
+            "wan_encoder",
+            param_id,
+            {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
+        )
 
     logger.info(f"checking output")
-    trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
+    tt_output_torch = trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new_logical_w)
     assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
