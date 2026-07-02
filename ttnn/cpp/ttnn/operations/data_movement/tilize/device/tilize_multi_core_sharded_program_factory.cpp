@@ -56,11 +56,13 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     }
 
     // Output CB:
-    //   Sharded output  → aliased to the output shard buffer (zero-copy write).
-    //   Interleaved output → local CB; writer scatters tiles via TensorAccessor.
+    //   Sharded output  → aliased to the output shard buffer (zero-copy write); full shard size.
+    //   Interleaved output → local CB sized to one tile-row; writer drains it row-by-row via
+    //     TensorAccessor, so the full shard does not need to fit in L1 at once.
     {
         CBDescriptor cb_output;
-        cb_output.total_size = num_tiles_per_shard * output_single_tile_size;
+        const uint32_t cb_output_tiles = output_is_interleaved ? num_tiles_per_row : num_tiles_per_shard;
+        cb_output.total_size = cb_output_tiles * output_single_tile_size;
         cb_output.core_ranges = all_cores;
         cb_output.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),

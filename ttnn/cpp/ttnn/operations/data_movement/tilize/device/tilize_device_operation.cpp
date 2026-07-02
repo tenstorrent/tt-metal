@@ -53,13 +53,19 @@ bool can_use_sharded_optimized_factories(
     // The INTERLEAVED output path uses a contiguous tile-start-id assignment, which is only
     // correct for ROW_MAJOR shard orientation (shards are ordered row-wise matching the output).
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        const auto& shard = input_tensor.shard_spec().value();
+        if (shard.shape[0] % tt::constants::TILE_HEIGHT != 0 || shard.shape[1] % tt::constants::TILE_WIDTH != 0) {
+            return false;  // Non-tile-aligned shard: num_tiles_per_shard would silently truncate.
+        }
         const auto out_layout = operation_attributes.output_mem_config.memory_layout();
         if (out_layout == TensorMemoryLayout::INTERLEAVED) {
-            if (input_tensor.shard_spec().value().orientation != ShardOrientation::ROW_MAJOR) {
+            if (shard.orientation != ShardOrientation::ROW_MAJOR) {
                 return false;
             }
             if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-                return false;  // DRAM output cannot be zero-copy; fall back to default factory.
+                // DRAM interleaved output always requires NoC writes regardless of the factory used,
+                // so there is no performance benefit from the optimized path. Fall back to the default factory.
+                return false;
             }
         } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
