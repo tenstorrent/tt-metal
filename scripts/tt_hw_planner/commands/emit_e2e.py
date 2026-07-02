@@ -317,6 +317,18 @@ def cmd_emit_e2e(args) -> int:
     if _pc is not None and _pc.chips > 1:
         print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
         print("  builder will open the mesh at this split and map tensors accordingly.")
+        if not os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+            try:
+                from ..parallelism import mesh_graph_descriptor_path
+
+                _mgd = mesh_graph_descriptor_path(_pc.chips, Path(__file__).resolve().parents[2])
+                if _mgd:
+                    os.environ["TT_MESH_GRAPH_DESC_PATH"] = _mgd
+                    print(
+                        f"  TT_MESH_GRAPH_DESC_PATH={Path(_mgd).name} (Blackhole fabric mesh graph for {_pc.chips} chips)"
+                    )
+            except Exception:
+                pass
         print(sep)
 
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
