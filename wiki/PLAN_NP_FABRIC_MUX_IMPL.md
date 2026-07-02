@@ -96,6 +96,19 @@ PERF NOTE: a measured WIN needs num_w_workers>1 (1-worker-mux adds mux overhead 
 ALSO needs per-worker recv sems (shared w_neighbor_sem races across N workers). So the path to a perf win:
 edge fix + per-worker recv sems, then num_w_workers=2/4 sweep. The hard part (mux connect/send/recv/term)
 is DONE and proven.
+
+## PINPOINTED: remaining bug is MUX RECV-SEM DELIVERY (2026-07-02)
+Uniform mux + same-direction recv-sem targeting (matches standard w_virtual_core). DPRINT bring-up
+markers now prove the SEND path is fully correct: writers COMPLETE and RAISE their recv-sems for all
+directions (UWR_semraised dir=0 n=40 x6, dir=1 n=40 x4). BUT the atomic-incs don't land at the reader
+cores (readers stay have=0; only ~2/10 arrive). => the remaining bug is NOT send/writer/targeting —
+it's that a standalone `fabric_atomic_inc(mux_connection, pkt_hdr_sem)` through the mux is not reliably
+delivered to arbitrary reader core coords. FIX DIRECTION: replicate all_gather's recv-completion signal
+mechanism through the mux — likely a FUSED write+atomic-inc (NocUnicastAtomicIncFusedCommandHeader) on
+the final data packet, or routing the sem through the mux's own credit path — instead of a separate
+atomic inc. Everything else (connect, coalesced data send, termination, barrier, uniform edge handling,
+per-worker alignment) is device-validated. This is the last bug between here and a completing op + perf
+sweep. Total mux bugs fixed this session: 10.
 Note: Watcher is UNUSABLE on 2x4 BH fabric (overflows active-eth cfg buffer), so hang-debug is by reasoning +
 DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
