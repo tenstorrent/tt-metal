@@ -350,9 +350,7 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 
 inline void set_packer_strides(const std::uint32_t pack_src_format)
 {
-    std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                             : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                             : 1;
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_R_DIM * x_stride;
     std::uint32_t z_stride = FACE_C_DIM * y_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * z_stride;

@@ -68,6 +68,18 @@ set(UNIT_TESTS_API_SOURCES
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
     test_zero_memory_api.cpp
+    test_alignment_writes.cpp
+    test_cb_leak.cpp
+    test_cb_pages.cpp
+    test_host_alignment.cpp
+    test_metadata_size.cpp
+    test_noc_without_barrier.cpp
+    test_padded_write.cpp
+    test_semaphore_write.cpp
+    test_tensor_bad_access.cpp
+    test_valid_mem_wrong_alloc.cpp
+    test_write_beyond_res_pages.cpp
+    test_write_outside_tensor.cpp
     disaggregation/test_kv_chunk_address_table.cpp
 )
 
@@ -77,6 +89,7 @@ set(UNIT_TESTS_API_TENSOR_SOURCES
     tensor/common_tensor_test_utils.cpp
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
+    tensor/test_host_tensor_to_layout.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_tensor_types.cpp
     tensor/test_tensor_layout.cpp

@@ -37,7 +37,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     // Accuracy is sufficient because we apply an integer correction later.
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
     // One NR step: inv_b = inv_b * (2 - b * inv_b)
-    sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
+    sfpi::vFloat e = -inv_b_f * b_f + 1.0f;
     inv_b_f = e * inv_b_f + inv_b_f;
 
     // Initial quotient approximation: q = a * (1/b)
