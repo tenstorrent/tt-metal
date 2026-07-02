@@ -8,6 +8,7 @@ runtime while exercising the entire wiring (both attention types, cross-attentio
 timestep, patch/de-patch). Threshold 0.95 (deepest composition in the suite).
 """
 
+import pytest
 import torch
 
 import ttnn
@@ -34,7 +35,6 @@ from models.experimental.acestep.tests.test_utils import (
     to_ttnn_tensor,
 )
 
-N_LAYERS = 2
 SEQ_LEN = 128  # divisible by patch_size=2
 ENC_LEN = 96
 IN_CHANNELS = 192
@@ -136,14 +136,21 @@ def _init(dit):
             rl.scale_shift_table.copy_(0.05 * torch.randn_like(rl.scale_shift_table))
 
 
-def test_dit_model_vs_hf(device):
+# (num_layers, pcc_threshold): 2-layer fast smoke + full 24-layer real model.
+# Full 24-layer e2e measured >=0.999 (gated AdaLN residuals keep bf16 error from accumulating);
+# we assert the required 0.95 e2e minimum with comfortable margin.
+LAYER_CASES = [(2, 0.95), (24, 0.95)]
+
+
+@pytest.mark.parametrize("n_layers,pcc", LAYER_CASES, ids=[f"L{n}" for n, _ in LAYER_CASES])
+def test_dit_model_vs_hf(device, n_layers, pcc):
     require_single_device(device)
     torch.manual_seed(0)
 
     m = load_modeling_module()
     cfg = load_config()
     cfg._attn_implementation = "eager"
-    cfg.num_hidden_layers = N_LAYERS
+    cfg.num_hidden_layers = n_layers
     dit = m.AceStepDiTModel(cfg).eval()
     _init(dit)
 
@@ -231,4 +238,4 @@ def test_dit_model_vs_hf(device):
     out_tt = model.forward(hidden_tt, context_tt, t, t_r, cos_tt, sin_tt, encoder_tt, sliding_mask=sliding_tt)
     out = to_torch(out_tt, expected_shape=(1, 1, SEQ_LEN, OUT_CHANNELS)).reshape(1, SEQ_LEN, OUT_CHANNELS)
 
-    assert_pcc(ref_out, out, 0.95)
+    assert_pcc(ref_out, out, pcc)
