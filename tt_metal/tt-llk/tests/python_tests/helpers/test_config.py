@@ -463,8 +463,17 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
+        # Quasar's compile-producer job never runs or perf-tests the ELF it
+        # builds (it only checks that it compiles), so -O3 buys nothing there
+        # while its template-heavy codegen drives peak per-compile memory —
+        # the actual ceiling on how many workers can run concurrently. -Os
+        # lowers that ceiling. WH/BH keep -O3 since their builds are exercised
+        # on real hardware and/or perf-measured.
+        opt_flag = (
+            "-Os" if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else "-O3"
+        )
         TestConfig.OPTIONS_ALL = (
-            f"{debug_flag}-O3 "
+            f"{debug_flag}{opt_flag} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
