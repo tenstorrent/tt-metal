@@ -83,7 +83,7 @@
   name: DiffusionGemma RUN-first text demo smoke
   tags: [model, diffusion_gemma]
   model-name: diffusion_gemma
-  cmd: DG_RUN_DEVICE=1 DG_TEXT_DEMO_NUM_LAYERS=1 pytest models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py -q --timeout=240
+  cmd: TT_LOGGER_LEVEL=ERROR DG_RUN_DEVICE=1 DG_TEXT_DEMO_NUM_LAYERS=1 pytest models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py -q --timeout=240
   skus:
     bh_quietbox_2:
       timeout: 10
