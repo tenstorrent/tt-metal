@@ -29,13 +29,15 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_dit.parallel.manager import CCLManager
-from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS
+from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS, load_decoder
 from models.experimental.hunyuan_image_3_0.tt.pipeline import decode_latent
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder import VAEDecoderTTNN
 
 SCALING_FACTOR = 0.562679178327931  # config.json vae.scaling_factor
+PCC_THRESHOLD = 0.99  # matches tests/vae/test_decode_latent_spatial.py
 
 use_signpost = True
 try:
@@ -84,20 +86,31 @@ def test_vae_decode_device_ops(mesh_device):
     logger.info(f"VAE decode output shape={tuple(img.shape)}")
     assert tuple(img.shape) == (1, 3, 1024, 1024), f"unexpected output shape {tuple(img.shape)}"
 
+    # Functional validation: the profiled decode must also be numerically correct,
+    # so a perf "win" from a broken kernel can't pass the gate. Torch fp32 reference
+    # (CPU) for the same latent — computed outside the signposts so it isn't profiled.
+    z_bcthw = (latent_bchw / SCALING_FACTOR).unsqueeze(2)
+    with torch.no_grad():
+        pt_out = load_decoder()(z_bcthw)
+    pt_img = (pt_out[:, :, 0] / 2 + 0.5).clamp(0, 1)  # [1, 3, 1024, 1024]
+    passing, pcc = comp_pcc(pt_img, img, PCC_THRESHOLD)
+    logger.info(f"VAE decode vs reference PCC: {pcc:.6f}")
+    assert passing, f"PCC {pcc:.6f} < {PCC_THRESHOLD} — profiled decode is numerically wrong"
+
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.timeout(1800)  # 3 profiled subprocess runs of a full-res decode; overrides the 300s default
 @pytest.mark.parametrize(
-    # Placeholder budget — update after the first profiling run on target hardware.
-    # This is the summed DEVICE KERNEL DURATION [ns] between the signposts.
+    # Summed DEVICE KERNEL DURATION [ns] between the signposts, on Blackhole (2x2 mesh).
+    # Baseline: avg of 3 profiled iterations, 2026-07-02 (AVG 3.587s; MAX 3.587s, run-to-run spread <0.1%).
     "expected_device_kernel_duration_ns",
-    [750_000_000],
+    [3_586_969_765],
 )
 def test_vae_decode_perf_device(expected_device_kernel_duration_ns):
     batch_size = 1  # one image per decode
     subdir = "hunyuan_vae_decode"
     num_iterations = 3
-    margin = 0.10
+    margin = 0.05
     cols = ["DEVICE KERNEL"]
 
     command = (
@@ -118,12 +131,13 @@ def test_vae_decode_perf_device(expected_device_kernel_duration_ns):
         post_processed_results,
         margin=margin,
         expected_perf_cols={duration_key: expected_device_kernel_duration_ns},
-        assert_on_fail=False,  # report-only until a measured baseline is set
+        assert_on_fail=True,  # baseline is set; regressions beyond the margin fail the test
     )
     prep_device_perf_report(
         model_name="hunyuan_vae_decode",
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
-        comments="1024x1024 H/W-spatial 2x2 decode",
+        # Underscore-joined, filename-safe: `comments` flows into the CSV name (no '/', no spaces).
+        comments="1024x1024_HxW_spatial_2x2",
     )
