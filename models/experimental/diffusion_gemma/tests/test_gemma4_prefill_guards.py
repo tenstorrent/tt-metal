@@ -314,3 +314,29 @@ def test_sdpa_q_chunked_falls_back_to_manual_gqa_on_l1_clash(monkeypatch):
         ("softmax", "matmul(q[h0:2,s0:32],permute(concat1))", -1, True),
         ("softmax", "matmul(q[h2:4,s0:32],permute(concat1))", -1, True),
     ]
+
+
+def test_sdpa_q_chunked_warns_about_gqa_fallback_once(monkeypatch):
+    warnings = []
+
+    monkeypatch.setattr(DA, "_FALLBACK_WARNED", False)
+    monkeypatch.setattr(DA.logger, "warning", lambda msg: warnings.append(msg))
+    monkeypatch.setattr(DA, "_manual_gqa_attention", lambda q, k, v: "staged")
+
+    def raising_sdpa(q, k, v, **kwargs):
+        raise RuntimeError("Statically allocated circular buffers in program clash with L1 buffers")
+
+    monkeypatch.setattr(DA.ttnn.transformer, "scaled_dot_product_attention", raising_sdpa)
+    monkeypatch.setattr(DA, "_denoise_sdpa_program_config", lambda *args, **kwargs: "program")
+
+    tt_q = SimpleNamespace(shape=[1, 4, 32, 256])
+    tt_k = SimpleNamespace(shape=[1, 2, 288, 256])
+    tt_v = SimpleNamespace(shape=[1, 2, 288, 256])
+
+    first = _sdpa_q_chunked(tt_q, tt_k, tt_v, head_dim=256)
+    second = _sdpa_q_chunked(tt_q, tt_k, tt_v, head_dim=256)
+
+    assert first == "staged"
+    assert second == "staged"
+    assert len(warnings) == 1
+    assert "staged GQA fallback" in warnings[0]

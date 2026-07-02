@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 
+from loguru import logger
 import ttnn
 
 from models.demos.gemma4.tt.attention.operations import (
@@ -37,6 +38,12 @@ from models.demos.gemma4.tt.attention.operations import (
 )
 
 TILE_SIZE = 32
+
+# The staged-GQA fallback is expected on QB2 (the ttnn SDPA kernel misses L1 by
+# less than one tile on the first real adapter layer). The C++ side still emits a
+# caught ``TT_THROW`` before the Python fallback engages, so we log once per
+# process to label that noise as benign rather than a real failure.
+_FALLBACK_WARNED = False
 
 
 def validate_q_rope_offset(q_rope_offset: int) -> None:
@@ -180,6 +187,7 @@ def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: i
             return ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)
         except RuntimeError as exc:
             if attn_mask is None and _is_sdpa_l1_cb_clash(exc):
+                _warn_sdpa_fallback_once()
                 return _manual_gqa_attention(tt_q, tt_k, tt_v)
             raise
 
@@ -215,6 +223,17 @@ def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: i
 def _is_sdpa_l1_cb_clash(exc: RuntimeError) -> bool:
     message = str(exc)
     return "Statically allocated circular buffers" in message and "clash with L1 buffers" in message
+
+
+def _warn_sdpa_fallback_once() -> None:
+    global _FALLBACK_WARNED
+    if _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED = True
+    logger.warning(
+        "denoise SDPA hit the known L1 CB clash; using the staged GQA fallback. "
+        "The preceding TT_THROW is caught and expected on QB2 (logged once)."
+    )
 
 
 def _manual_gqa_attention(tt_q, tt_k, tt_v):
