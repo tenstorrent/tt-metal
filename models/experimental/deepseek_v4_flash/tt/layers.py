@@ -2,24 +2,9 @@ from typing import Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _HIFI4
+from .common import DeepSeekV4Module, _HIFI4, rectangular_core_range_set
 from .weight_cache import _load_weight, _materialize
 import torch
-
-
-def _num_cores_to_rectangle_core_range_set(num_cores: int, grid) -> ttnn.CoreRangeSet:
-    """A single rectangular ``CoreRangeSet`` of exactly ``num_cores`` cores.
-
-    Finds the widest ``x`` that divides ``num_cores`` and fits ``grid.x``, giving a
-    ``(x, num_cores // x)`` rectangle. Raises if no such rectangle fits the device grid.
-    """
-    x = grid.x
-    while x > 0 and num_cores % x != 0:
-        x -= 1
-    y = num_cores // x if x > 0 else 0
-    if x == 0 or y > grid.y:
-        raise ValueError(f"cannot form a rectangular grid of {num_cores} cores within a {grid.x}x{grid.y} device grid")
-    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x - 1, y - 1))})
 
 
 def to_ttnn_device(
@@ -92,7 +77,7 @@ class LinearDecode(DeepSeekV4Module):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
         self.dtype = dtype
-        self._grid = device.compute_with_storage_grid_size()
+        self.device = device
 
         self.N = N
         if partial_width_sharded:
@@ -134,7 +119,7 @@ class LinearDecode(DeepSeekV4Module):
             num_inputB_cores = n // 64
             shard_shape = (k, n // num_inputB_cores)
 
-        b_core_range_set = _num_cores_to_rectangle_core_range_set(num_inputB_cores, self._grid)
+        b_core_range_set = rectangular_core_range_set(num_inputB_cores, self.device)
         b_memory_config = ttnn.create_sharded_memory_config(
             shard_shape,
             core_grid=b_core_range_set,
@@ -153,7 +138,7 @@ class LinearDecode(DeepSeekV4Module):
         )
 
     def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
-        a_core_range_set = _num_cores_to_rectangle_core_range_set(self.num_inputA_cores, self._grid)
+        a_core_range_set = rectangular_core_range_set(self.num_inputA_cores, self.device)
         a_memory_config = ttnn.create_sharded_memory_config(
             (32, k // self.num_inputA_cores),
             core_grid=a_core_range_set,
@@ -170,7 +155,7 @@ class LinearDecode(DeepSeekV4Module):
             # [padded_m, N / n_blocks]).
             m = x.shape[-2]
             m_padded = ((m + 31) // 32) * 32
-            output_core_range_set = _num_cores_to_rectangle_core_range_set(self.n_blocks, self._grid)
+            output_core_range_set = rectangular_core_range_set(self.n_blocks, self.device)
             output_memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
