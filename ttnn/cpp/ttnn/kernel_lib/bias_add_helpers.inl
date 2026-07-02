@@ -17,6 +17,7 @@ template <
     OutputCBLayout tile_order,
     typename PostBiasFn,
     typename Activation,
+    bool in_place,
     typename Buf>
 ALWI void add_bias_bcast_rows(
     Buf& partials_buf,
@@ -25,6 +26,10 @@ ALWI void add_bias_bcast_rows(
     BiasAddShape shape,
     PostBiasFn post_bias,
     uint32_t bias_offset) {
+
+    static_assert(
+        !in_place || tile_order == OutputCBLayout::TileRowMajor,
+        "add_bias_bcast_rows in_place is supported only for TileRowMajor layout.");
 
     const uint32_t partials_cb_id = buf_id(partials_buf);
     const uint32_t bias_cb_id = buf_id(bias_buf);
@@ -69,12 +74,29 @@ ALWI void add_bias_bcast_rows(
         const uint32_t row_group_tiles = out_subblock_h * out_row_width;
 
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-            partials_buf.wait_front(row_group_tiles);
-            out_buf.reserve_back(row_group_tiles);
+            // in_place: partials_buf == out_buf. The producer (matmul_block packs_in_place) already did
+            // ONE reserve/push over the whole output block, so the block is fronted at the CB base and
+            // fifo_wr_ptr has wrapped back to that base (one-block CB). We read-modify-write each row
+            // group in place — NO reserve_back / pop_front / push_back — so there is no reserve-before-pop
+            // circular wait, and a downstream consumer (untilize) drains partials. Wait the whole fronted
+            // block once (the matmul pushed it) rather than per row group, since we never pop it here.
+            if constexpr (in_place) {
+                if (in0_subblock == 0) {
+                    partials_buf.wait_front(in0_num_subblocks * row_group_tiles);
+                }
+            } else {
+                partials_buf.wait_front(row_group_tiles);
+                out_buf.reserve_back(row_group_tiles);
+            }
+
+            // in_place: fold the M-row-group base into the absolute pack/read offset (the whole block is
+            // fronted from a single base, so each row group lands at in0_subblock*row_group_tiles).
+            // Non-in_place: each row group has its own per-group reserve/front, so the base is 0.
+            const uint32_t group_base = in_place ? in0_subblock * row_group_tiles : 0;
 
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                const uint32_t col_base = in1_subblock * out_subblock_w;
-                const uint32_t bias_col_base = bias_offset + col_base;
+                const uint32_t col_base = group_base + in1_subblock * out_subblock_w;
+                const uint32_t bias_col_base = bias_offset + in1_subblock * out_subblock_w;
 
                 tile_regs_acquire();
                 {
@@ -124,8 +146,32 @@ ALWI void add_bias_bcast_rows(
                 tile_regs_release();
             }
 
-            partials_buf.pop_front(row_group_tiles);
-            out_buf.push_back(row_group_tiles);
+            // in_place: no PER-ROW-GROUP pop/push — the fronted block stays in partials for the
+            // downstream consumer (untilize) to drain; the in-place pack already overwrote it with
+            // the biased values at their original absolute positions.
+            if constexpr (!in_place) {
+                partials_buf.pop_front(row_group_tiles);
+                out_buf.push_back(row_group_tiles);
+            }
+        }
+
+        // in_place: ONE pop_front + push_back over the WHOLE block after every row group is packed.
+        // This is a data-movement no-op (the block is a fixed one-CB-cycle region, so pop+push wraps
+        // fifo_rd_ptr/fifo_wr_ptr back to the identical base) — but it is NOT a synchronization no-op.
+        // PACK (this bias-add) and UNPACK (the downstream untilize) are DIFFERENT physical TRISCs;
+        // cb_push_back/cb_wait_front's tiles_received/tiles_acked counters are the ONLY cross-thread
+        // handshake for CB visibility. Skipping push/pop entirely (as the in-place model otherwise
+        // does) leaves the matmul's ORIGINAL push_back as the only credit the downstream wait_front
+        // ever observes: since that credit already satisfies wait_front's count check BEFORE this
+        // bias-add's packer has written anything, the untilize's UNPACK thread can (and does, on this
+        // HW) start reading the PRE-bias values — a race the bias-add silently loses every time,
+        // observed as "bias never gets applied" (out matches out-of-place-bias-add's OWN partials
+        // minus bias) even though the addressing math is correct. The pop_front here drops the
+        // available credit to 0 so a concurrently-issued downstream wait_front is forced to actually
+        // block until this push_back re-arms it with a credit tied to the POST-bias write.
+        if constexpr (in_place) {
+            partials_buf.pop_front(in0_num_subblocks * row_group_tiles);
+            partials_buf.push_back(in0_num_subblocks * row_group_tiles);
         }
     } else {
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {

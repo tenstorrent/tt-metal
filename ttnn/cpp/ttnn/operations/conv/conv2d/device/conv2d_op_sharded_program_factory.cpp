@@ -926,16 +926,20 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // row-major read agree), proven correct by the step-(a) bias convs (SD per_core_N=10, in1=2) and the
     // d7b9fb1ad1c absolute-offset fix for in0_num_subblocks > 1. So NO in1-subblock guard.
     //
-    // fp32+bias+untilize is NO LONGER excluded (the LAST matrix exclusion — removed). The former
-    // exclusion existed because the kernel aliased the bias-add output onto matmul_partials_cb when
-    // untilize_out (untilize_mode_out_cb_id == matmul_partials_cb). The TileRowMajor bias-add issues
-    // reserve_back BEFORE pop_front, so with fp32_dest_acc_en the fp32-sized partials CB (4B/elem) had no
-    // slack — the full out_block filled it and reserve_back deadlocked. The kernel now un-aliases: the
-    // bias-add writes a DISTINCT UNTILIZE_STAGING CB (see conv2d_op_program_factory_common.cpp) and the
-    // untilize phase reads it, so the reserve-before-pop lands on a fresh CB with free slack for EVERY
-    // dtype. fp32+bias+untilize therefore takes caller_owns + TileRowMajor like every other bias+untilize
-    // conv (bf16 included — test_sd_conv_wh). The staging CB costs one extra output block of L1 for all
-    // bias+untilize convs (untilize_out && enable_bias only; 0 pages elsewhere).
+    // fp32+bias+untilize is NOT excluded. The former exclusion existed because the kernel aliased the
+    // bias-add output onto matmul_partials_cb when untilize_out (untilize_mode_out_cb_id ==
+    // matmul_partials_cb). The TileRowMajor bias-add issues reserve_back BEFORE pop_front, so with
+    // fp32_dest_acc_en the fp32-sized partials CB (4B/elem) had no slack — the full out_block filled it and
+    // reserve_back deadlocked. The kernel now does the bias-add IN PLACE for this class (bias_in_place in
+    // conv_bmm_tilize.cpp): the matmul packed the whole block into matmul_partials_cb with a single
+    // reserve/push, and the bias-add read-modify-writes that fronted block at its original positions with
+    // NO reserve_back / push_back / pop_front. With no reserve at all the reserve-before-pop circular wait
+    // cannot occur for ANY dtype, so fp32+bias+untilize takes caller_owns + TileRowMajor like every other
+    // bias+untilize conv (bf16 included — test_sd_conv_wh), and NO staging CB is needed — the untilize phase
+    // reads the biased block straight out of matmul_partials_cb and pops it. The dedicated UNTILIZE_STAGING
+    // CB (see conv2d_op_program_factory_common.cpp) is now 0 pages for this class (its full output-block of
+    // L1 is recovered); it is retained only for the SubblockMajor (!packer_l1_acc) bias+untilize path, whose
+    // per-subblock FIFO does not fit the in-place read-modify-write model.
     const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out);
     if (!conv_tile_pack_row_major && pin_class_caller_owns) {
         conv_tile_pack_row_major = true;
