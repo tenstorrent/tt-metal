@@ -377,8 +377,8 @@ inline void calculate_gelu_tanh() {
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            sfpi::vFloat half_x = 0.5f * x;
             sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(scaled);
+            sfpi::vFloat half_x = 0.5f * sfpi::dst_reg[0];
             result = half_x * t + half_x;
         }
         v_endif;

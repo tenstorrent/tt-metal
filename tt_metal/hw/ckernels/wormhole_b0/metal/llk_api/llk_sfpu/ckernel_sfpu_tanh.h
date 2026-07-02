@@ -60,21 +60,21 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
 
     // computes x0/x1 via reciprocal and residual correction
     magic_seed = 0xfef30000;
-    rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
+    rcp = sfpi::as<sfpi::vFloat>(magic_seed - sfpi::as<sfpi::vInt>(x1));
     t = x1 * rcp + 1.0f;
 
-    v_block {
-        // i < 61, without wasting a register
-        i = __builtin_rvtt_sfpiadd_i(i.get(), -61, sfpi::SFPIADD_MOD1_CC_LT0);
+    v_if(i < 61) {
         t = t * t + t;
-        y = x;
+        y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) + 1);
         rcp = rcp * t + rcp;
-        i = __builtin_rvtt_sfpiadd_i(i.get(), -115, sfpi::SFPIADD_MOD1_CC_GTE0);
-        y = x0 * rcp;
-        t = x1 * y + x0;
-        y = t * rcp + y;
+        v_if(i >= -115) {
+            y = x0 * rcp;
+            t = x1 * y + x0;
+            y = t * rcp + y;
+        }
+        v_endif;
     }
-    v_endblock;
+    v_endif;
 
     return sfpi::copysgn(y, a);
 }
