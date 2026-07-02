@@ -502,17 +502,23 @@ config-CB / pad-CB / untilize-temp deltas the §9 proxy ignores; start conservat
 tighten once real peak-L1 is measured.
 
 **Build order (vertical slice first):**
-1. `should_halo_be_in_place(...)` shared pure fn (+ unit test extending the §9e probe).
-2. In-place config generation in `sliding_window.cpp` (local forward-then-reverse ordering,
-   remote transfers kept together + `max_ref_size`, pad) — host, unit-testable.
-3. Aliasing in `create_output_tensors` + overlap assert.
-4. `halo_gather_in_place.cpp` (port archived; reconcile with current `experimental::CB` +
+1. ✅ DONE (commit fd939515345) `should_halo_be_in_place(...)` + `compute_max_outbound_halo_sticks(...)`
+   shared pure fns; validated by gtest (4 SAVE activate / 9 LOSE don't).
+2. ✅ DONE (commit 284cd6a7603) `generate_inplace_halo_kernel_config_tensors(...)` in
+   `sliding_window.cpp` (local forward-then-reverse ordering, remote transfers kept together
+   + `max_ref_size`, pad); max_ref_size cross-checked vs the gate (200k fuzz, 0 mismatch).
+3. 🔜 Aliasing in `create_output_tensors` + overlap assert.
+4. 🔜 `halo_gather_in_place.cpp` (port archived; reconcile with current `experimental::CB` +
    split-reader model). Ordering: stage-remote→temp, local (memmove-direction), global
    semaphore/multicast barrier, padding, distribute-from-temp, atomic barrier at exit.
-5. Factory in-place path (ProgramDescriptor): dst-bound CBs, remote-temp CB (post-untilize
+5. 🔜 Factory in-place path (ProgramDescriptor): dst-bound CBs, remote-temp CB (post-untilize
    dtype), rectangular grid + noop + semaphore, two DM kernels; `num_cores_x` from bbox.
-6. Caller adaptation in `generic_pools` (skip dealloc/move when gate true).
-7. Rigorous tests (§11), WH; then BH.
+6. 🔜 Caller adaptation in `generic_pools` (skip dealloc/move when gate true).
+7. 🔜 Rigorous tests (§11), WH; then BH.
+
+**Note:** steps 3–6 form the integrated device-side slice — nothing is testable until the
+factory can build a complete in-place program and JIT-compile the kernel, so they land
+together and get verified on-device as a unit (not committed piecemeal as green).
 
 **Deferred (tracked, non-blocking):** DRAM-slicing L1 estimation. Lowering L1 can make the
 estimator *over*-estimate → unnecessary DRAM slicing (already happens today) → no
