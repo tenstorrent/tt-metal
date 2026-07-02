@@ -155,6 +155,23 @@ DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - Core budget: 4H + (N workers + 1 mux)*2 dir * pad2_links W cores; clamp vs grid.y
 - Mux hangs are hard to debug; add Watcher-OFF (2x4 fabric) + timeout + tt-smi reset on fail
 
+## H-MUX + SHAPE GENERALITY (next workstream, user-directed 2026-07-02)
+Data justification (devfw profile, mux on): H BRISC max 167us vs W-worker 195us => H (single-worker) is
+a comparable serial fraction, NOT hidden. Muxing H should ~halve the remaining 660us wall (H and W are
+different cluster axes -> independent eth links, so H-mux adds N workers on the H links).
+W=4 DEFERRED: golden says +2% over W=2 (plateau), and it hangs on the num_links=2 shape (mux resource at
+4 concurrent channels; not L1/num_buffers — persists at num_buffers=1). Auto-cap stays at 2.
+H-MUX STEPS (mirror the proven W-mux; reuse mux machinery):
+  [x] np_h_mux_writer.cpp — H per-row bank-major send via stateful API + mux lifecycle (committed, JIT-only)
+  [ ] Factory: place H mux+worker cores in free columns (W-mux uses cols 1..1+num_w_workers; H-mux goes
+      after). Fork np_h_reader onto H worker cores with frames split 8-aligned. Wire mux cfg + CT/RT.
+  [ ] H recv: per-worker h_neighbor_sem (neighbor's N H-readers each wait their frame count) + same-dir
+      target (learned from W: writer args NOT direction-swapped -> has_neighbor = dir?!first:!last).
+  [ ] PCC (1 worker H-mux) -> multi-worker -> perf. Expect ~660 -> ~350-400us.
+SHAPE GENERALITY (after H-mux): current mux gate needs pW==1 + 8-aligned W. k=5 (pW=2) and non-aligned
+shapes fall to direct 5.7 GB/s. Need a coalescing that still forms 4KB packets for those (per-stick is
+BW-death per golden). Audit each deployed NP-bound layer against the gate; non-eligible get no mux today.
+
 ## CONFORMANCE to all_gather_matmul mux usage (2026-07-02)
 all_gather_matmul_async reuses build_all_gather_async_minimal_default_program_artifacts, so the
 reference mux impl IS all_gather_async_default_program_factory + minimal_default_writer.cpp.
