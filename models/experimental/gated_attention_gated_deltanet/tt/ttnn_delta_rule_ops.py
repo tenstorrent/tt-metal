@@ -2,17 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-TTNN implementations of the gated delta rule.
-Contains both the recurrent (token-by-token) and chunked (parallel prefill)
-implementations of the gated delta rule attention mechanism.
+"""TTNN gated delta rule: recurrent (decode) and chunked (prefill) paths.
 
-Tensor layout convention (FLA style):
-  q, k: [B, T, H, K]   (batch, time, heads, key_dim)
-  v:    [B, T, H, V]   (batch, time, heads, value_dim)
-  beta: [B, T, H]      (batch, time, heads)
-  g:    [B, T, H]      (batch, time, heads) -- log-space decay
-  state:[B, H, K, V]   (batch, heads, key_dim, value_dim)
+FLA layout: q,k [B,T,H,K]; v [B,T,H,V]; beta,g [B,T,H]; state [B,H,K,V].
 """
 
 import math
@@ -20,11 +12,11 @@ import math
 import torch
 import ttnn
 
-# Tile size used by TTNN matmul (wormhole)
+# Wormhole tile size
 _TILE_H = 32
 _TILE_W = 32
 
-# Cached identity matrices for forward substitution (avoids per-call allocation)
+# Cached identity matrices for forward substitution
 _EYE_CACHE = {}
 
 
@@ -36,13 +28,7 @@ def _chunk_eye(size):
 
 
 def _recurrent_read_query_program_config(device, K, V):
-    """
-    Build MatmulMultiCoreReuseProgramConfig for read/query matmuls:
-
-        row [B*H, 1, K] @ h [B*H, K, V]  ->  [B*H, 1, V]
-
-    M_tiles=1, K_tiles=ceil(K/32), N_tiles=ceil(V/32). Constraint N == per_core_N.
-    """
+    """Progcfg for read/query matmul: [B*H,1,K] @ [B*H,K,V] -> [B*H,1,V]. N == per_core_N."""
     grid = device.compute_with_storage_grid_size()
     N_tiles = (V + _TILE_W - 1) // _TILE_W
     K_tiles = (K + _TILE_W - 1) // _TILE_W
@@ -64,17 +50,7 @@ def _recurrent_read_query_program_config(device, K, V):
 
 
 def _create_eye_matrix_ttnn(size, device, dtype=ttnn.float32, memory_config=None):
-    """Create identity matrix directly on device using TTNN operations.
-
-    Args:
-        size: Size of the square identity matrix
-        device: TTNN device
-        dtype: Data type (default: ttnn.float32)
-        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
-
-    Returns:
-        TTNN tensor of shape [size, size] with identity matrix
-    """
+    """Create [size,size] identity on device via triu/tril."""
     ones = ttnn.ones(
         shape=(size, size),
         dtype=dtype,
@@ -87,17 +63,7 @@ def _create_eye_matrix_ttnn(size, device, dtype=ttnn.float32, memory_config=None
 
 
 def _create_triu_ones_ttnn(size, device, dtype=ttnn.float32, memory_config=None):
-    """Create upper triangular ones matrix directly on device using TTNN operations.
-
-    Args:
-        size: Size of the square matrix
-        device: TTNN device
-        dtype: Data type (default: ttnn.float32)
-        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
-
-    Returns:
-        TTNN tensor of shape [size, size] with upper triangular ones
-    """
+    """Create [size,size] upper-triangular ones on device."""
     ones = ttnn.ones(
         shape=(size, size),
         dtype=dtype,
@@ -110,17 +76,7 @@ def _create_triu_ones_ttnn(size, device, dtype=ttnn.float32, memory_config=None)
 
 
 def _create_tril_ones_ttnn(size, device, dtype=ttnn.float32, memory_config=None):
-    """Create lower triangular ones matrix directly on device using TTNN operations.
-
-    Args:
-        size: Size of the square matrix
-        device: TTNN device
-        dtype: Data type (default: ttnn.float32)
-        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
-
-    Returns:
-        TTNN tensor of shape [size, size] with lower triangular ones
-    """
+    """Create [size,size] lower-triangular ones on device."""
     ones = ttnn.ones(
         shape=(size, size),
         dtype=dtype,
@@ -133,17 +89,7 @@ def _create_tril_ones_ttnn(size, device, dtype=ttnn.float32, memory_config=None)
 
 
 def _create_strict_lower_tril_ttnn(size, device, dtype=ttnn.float32, memory_config=None):
-    """Create strict lower triangular ones matrix (diagonal=-1) directly on device.
-
-    Args:
-        size: Size of the square matrix
-        device: TTNN device
-        dtype: Data type (default: ttnn.float32)
-        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
-
-    Returns:
-        TTNN tensor of shape [size, size] with strict lower triangular ones (diagonal excluded)
-    """
+    """Create [size,size] strict lower-tri ones (diagonal=-1) on device."""
     ones = ttnn.ones(
         shape=(size, size),
         dtype=dtype,
@@ -156,23 +102,9 @@ def _create_strict_lower_tril_ttnn(size, device, dtype=ttnn.float32, memory_conf
 
 
 def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
-    """Create optimized program config for matmul operations.
-
-    Args:
-        m: M dimension (rows of first matrix)
-        k: K dimension (shared dimension)
-        n: N dimension (cols of second matrix)
-        grid_size: Optional (cores_x, cores_y) tuple. If None, auto-selects based on shape.
-        in0_block_w: Optional block width. If None, auto-selects.
-
-    Returns:
-        MatmulProgramConfig or None if auto-config is better
-    """
+    """Matmul progcfg for (m,k,n). Returns None when auto-config is better."""
     TILE_SIZE = 32
-    # Cap per-core M tiles to avoid L1 circular buffer overflow on Blackhole.
-    # Float32 tiles are 4KB each. Double-buffered in0 + in1 + out + partials ≈ 18KB per M-tile.
-    # At 2 M-tiles per core: ~40KB total, fits safely in per-core L1.
-    # At 4 M-tiles: ~72KB, overflows (observed clash at 155648 vs 168448).
+    # Cap per_core_M to avoid L1 CB overflow on BH (~40KB safe at 2 M-tiles/core).
     MAX_PER_CORE_M = 2
 
     if m < 32 or n < 32 or k < 32:
@@ -182,8 +114,7 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
     n_tiles = math.ceil(n / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
 
-    # Large inner dimension (k > 256) overflows L1 circular buffers during
-    # accumulation even with in0_block_w=1. Let TTNN auto-select.
+    # Large k (k_tiles>8) overflows L1 CB; let TTNN auto-select.
     if k_tiles > 8:
         return None
 
@@ -234,16 +165,15 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
     per_core_M = max(1, per_core_M)
     per_core_N = max(1, per_core_N)
 
-    # If per_core_M exceeds the L1 safety limit, increase cores_y to reduce it
-    # and force in0_block_w=1 to keep double-buffered circular buffers within L1.
+    # Increase cores_y if per_core_M too large; force in0_block_w=1 for L1 safety.
     if per_core_M > MAX_PER_CORE_M:
         cores_y = math.ceil(m_tiles / MAX_PER_CORE_M)
         cores_y = min(cores_y, 8)  # max 8 cores along Y
         per_core_M = math.ceil(m_tiles / cores_y)
         if per_core_M > MAX_PER_CORE_M:
-            return None  # Can't reduce below limit with 8 cores; let TTNN auto-select
+            return None  # Can't fit with 8 cores; auto-select
         grid_size = (cores_x, cores_y)
-        in0_block_w = 1  # prevent in0 buffer from scaling with k_tiles
+        in0_block_w = 1  # keep in0 buffer from scaling with k_tiles
 
     if in0_block_w is None:
         k_per_core = math.ceil(k_tiles / cores_x) if cores_x > 1 else k_tiles
@@ -296,16 +226,8 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
 
 
 def l2_norm_ttnn(x, dim=-1, eps=1e-6):
-    """L2 normalization along a given dimension: x / sqrt(sum(x^2) + eps).
-
-    For dim == last axis (all GDN callers): use the single fused ttnn.rms_norm kernel instead of
-    the 5-op multiply/sum/add/rsqrt/multiply chain (the sum's FillPad+Reduce are the expensive ops).
-    rms_norm computes x/sqrt(mean(x^2)+eps'); with no weight and eps'=eps/K that equals
-    l2_norm(x)*sqrt(K), so l2_norm(x) = rms_norm(x, eps/K) * K**-0.5 — PCC-equivalent (the eps
-    difference is negligible at eps=1e-6) but ~3 fewer kernels per call. Helps decode + prefill + 9B.
-    Falls back to the manual chain for the (unused) dim != last case.
-    """
-    # Use DRAM for large tensors (T>512 produces tensors that don't fit in L1)
+    """L2 norm along dim. Last dim: fused rms_norm path (~3 fewer kernels)."""
+    # L1 for T<=512; DRAM otherwise
     T = x.shape[1] if len(x.shape) >= 3 else x.shape[0]
     mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
     if dim in (-1, len(x.shape) - 1):
@@ -327,37 +249,21 @@ def fused_decay_and_write_ttnn(
     device=None,
     apply_decay=True,
 ):
-    """
-    Logical fusion for the recurrent delta rule state update:
-
-        h = decay * h + beta_t * (k_t ⊗ delta)
-
-    Implemented using existing TTNN ops so call sites are stable.
-    Can be replaced by a true fused kernel later.
-
-    apply_decay=False: the caller has ALREADY decayed h (canonical gated-delta-rule
-    order is decay -> read -> write, so the decay must happen before the read and must
-    NOT be re-applied here). In that case this only adds the outer product: h = h + outer.
-    """
+    """State update: h = decay*h + beta*(k⊗delta). apply_decay=False if caller already decayed h."""
     B = h.shape[0]
     H = h.shape[1]
     K = h.shape[2]
     V = h.shape[3]
 
-    # decay: [B, H] -> [B, H, 1, 1]
-    # decay_t is already exp(g_t) in BF16; no typecast needed.
+    # decay_t: [B,H] -> [B,H,1,1] (already exp(g) in BF16)
     decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # beta: [B, H] -> [B, H, 1, 1]
+    # beta: [B,H] -> [B,H,1,1]
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # OPT (decode): keep the state-write operands + intermediates in L1 (were None->DRAM and an
-    # explicit to_memory_config(DRAM) below). Tiny at B=1: k_col [B,H,K,1], d_row [B,H,1,V].
+    # Decode opt: keep state-write operands in L1 (tiny at B=1).
     _L1 = ttnn.L1_MEMORY_CONFIG
-    # k_t: [B, H, K] -> [B, H, K, 1]
     k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=_L1)
-
-    # delta: [B, H, V] -> [B, H, 1, V]
     d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=_L1)
 
     k_col = ttnn.to_memory_config(k_col, _L1)
@@ -385,9 +291,7 @@ def fused_decay_and_write_ttnn(
         memory_config=_L1,
     )
 
-    # fused-style update: decay * h + outer.
-    # When apply_decay is False, h has already been decayed by the caller (canonical
-    # decay -> read -> write order), so only the outer product is added here.
+    # apply_decay=False: h already decayed (decay->read->write order).
     if apply_decay:
         h = ttnn.multiply(h, decay, memory_config=_L1)
     h = ttnn.add(h, outer, memory_config=_L1)
@@ -405,13 +309,7 @@ def recurrent_delta_rule_step_ttnn(
     seq_len=None,
     device=None,
 ):
-    """
-    Recurrent delta rule step using TTNN ops, with a logically fused
-    state update implemented via `fused_decay_and_write_ttnn`.
-
-    This keeps the call site ready for a future single-kernel
-    implementation without changing model code.
-    """
+    """Single recurrent delta-rule step via fused_decay_and_write_ttnn."""
     B = q_t.shape[0]
     H = q_t.shape[1]
     K = q_t.shape[2]
@@ -437,9 +335,7 @@ def recurrent_delta_rule_step_ttnn(
         except Exception:
             pass
 
-    # Canonical gated-delta-rule order: DECAY the state BEFORE reading from it (matches the
-    # FLA reference + chunked prefill). Reading the un-decayed state uses the wrong state in
-    # the delta correction (v - k·h).
+    # Decay state before read (matches FLA + chunked prefill).
     decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.multiply(h, decay_bhkv)
 
@@ -457,7 +353,7 @@ def recurrent_delta_rule_step_ttnn(
 
     delta = ttnn.subtract(v_t, v_read, memory_config=None)
 
-    # Write the outer product WITHOUT re-decaying (h already decayed above).
+    # Outer product only (h already decayed).
     h = fused_decay_and_write_ttnn(
         h=h,
         k_t=k_t,
@@ -495,42 +391,13 @@ def recurrent_gated_delta_rule_decode_ttnn(
     device=None,
     high_precision=False,
 ):
-    """
-    Optimized single-token (T=1) decode path for gated delta rule.
-
-    Eliminates overhead from the general recurrent path:
-    - No loop (T is always 1)
-    - No slicing/concat for timesteps
-    - Reduced transpose/typecast operations
-    - Keeps state in current memory config
-
-    Args:
-        q: [B, 1, H, K]
-        k: [B, 1, H, K]
-        v: [B, 1, H, V]
-        beta: [B, 1, H]
-        g: [B, 1, H]
-        scale: float
-        initial_state: [B, H, K, V]
-        device: ttnn device
-
-    Returns:
-        output: [B, 1, H, V]
-        final_state: [B, H, K, V]
-    """
+    """T=1 decode path: no loop/slice overhead. Returns o [B,1,H,V], state [B,H,K,V]."""
     B = q.shape[0]
     H = q.shape[2]
     K = q.shape[3]
     V = v.shape[3]
 
-    # high_precision=True: run the entire single-token recurrent step in fp32. The state update
-    # h = decay * h + beta * (k ⊗ delta) compounds every decode step, and `decay = exp(g)` sits
-    # near 1.0 where bf16 resolution is ~0.008 — so a bf16 decay quantizes the per-step forgetting
-    # coarsely and the error accumulates over hundreds of steps (the long-decode "state saturation"
-    # / repetition collapse). Casting q/k/v/beta/g (and the state below) to fp32 here keeps decay
-    # and the accumulation exact; the read/write matmuls already accumulate in fp32
-    # (fp32_dest_acc_en). Tensors are tiny at decode (T=1) so the cost is negligible. Default off
-    # → all other callers/tests of this shared op are byte-unchanged.
+    # high_precision: fp32 step avoids bf16 decay quantization error over long decode.
     if high_precision:
         q = ttnn.typecast(q, ttnn.float32)
         k = ttnn.typecast(k, ttnn.float32)
@@ -546,13 +413,8 @@ def recurrent_gated_delta_rule_decode_ttnn(
         scale = K**-0.5
     q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Reshape directly to shapes needed by matmul (skip intermediate 3D form)
-    # q and k need [B, H, 1, K] for matmul against h [B, H, K, V]
-    # v needs [B, H, V] for subtract with v_read
-    # Inputs are already TILE_LAYOUT from the caller, so skip redundant to_layout.
-    # OPT (decode): q_row/k_row are the two operands of the recurrence matmuls (k·h, q·h). With the
-    # state h now in L1, keep these in L1 too so both matmuls have all-L1 inputs. Tiny at B=1
-    # ([B,H,1,K]). Were DRAM_MEMORY_CONFIG.
+    # Reshape to matmul shapes; caller already TILE_LAYOUT.
+    # Decode opt: q_row/k_row in L1 with L1-resident state h.
     q_row = ttnn.reshape(q, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     k_row = ttnn.reshape(k, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     v_t = ttnn.reshape(v, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -569,16 +431,9 @@ def recurrent_gated_delta_rule_decode_ttnn(
             [B, H, K, V], device=device, dtype=ttnn.float32 if high_precision else ttnn.bfloat16, memory_config=None
         )
     elif high_precision and h.dtype != ttnn.float32:
-        # fp32-exact step needs an fp32 state; cast if the caller kept a bf16 rec_state.
         h = ttnn.typecast(h, ttnn.float32)
 
-    # Run single recurrent step
-    # h is always TILE_LAYOUT: either from fused_decay_and_write_ttnn, ttnn.zeros with TILE_LAYOUT,
-    # or _init_recurrent_state which uses ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT)
-    # OPT (decode): keep the [B,H,K,V] recurrent state in L1, not DRAM. It's re-read+written every
-    # decode step and feeds the h*decay multiply (a ~15us 128x128 binary when h is DRAM) and both
-    # recurrence matmuls (k·h, q·h). At B=1 the working state is tiny (H*K*V*4B ~= 0.8MB fp32) and
-    # fits L1 comfortably. Was DRAM_MEMORY_CONFIG.
+    # Decode opt: keep [B,H,K,V] state in L1 (~0.8MB fp32 at B=1).
     h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
 
     read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
@@ -595,29 +450,25 @@ def recurrent_gated_delta_rule_decode_ttnn(
         except Exception:
             pass
 
-    # Canonical gated-delta-rule order: DECAY the state BEFORE reading from it. The FLA
-    # reference and the chunked prefill path both decay-then-read; reading the un-decayed
-    # state makes the delta correction (v - k·h) use the wrong state.
-    # OPT (decode): keep the whole recurrence step L1-resident (was memory_config=None -> DRAM on
-    # every intermediate: the two matmul outputs, the reshapes, the delta subtract). B=1 so all are tiny.
+    # Decay before read; keep recurrence step L1-resident.
     _L1 = ttnn.L1_MEMORY_CONFIG
     decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=_L1)
     h = ttnn.multiply(h, decay_bhkv, memory_config=_L1)
 
-    # Read from the DECAYED state: v_read = k @ h  (k_row already [B,H,1,K] TILE_LAYOUT)
+    # v_read = k @ h (decayed state)
     v_read = ttnn.matmul(
         k_row, h, memory_config=_L1, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
     v_read = ttnn.reshape(v_read, [B, H, V], memory_config=_L1)
 
-    # Delta and state update — write the outer product WITHOUT re-decaying (h already decayed).
+    # Delta + state write (no re-decay).
     delta = ttnn.subtract(v_t, v_read, memory_config=_L1)
     k_t = ttnn.reshape(k_row, [B, H, K], memory_config=_L1)
     h = fused_decay_and_write_ttnn(
         h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device, apply_decay=False
     )
 
-    # Query state: o = q @ h  (q_row already [B,H,1,K] TILE_LAYOUT)
+    # o = q @ h
     o_t = ttnn.matmul(
         q_row, h, memory_config=_L1, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
@@ -639,12 +490,7 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
     device=None,
     high_precision=False,
 ):
-    """Like recurrent_gated_delta_rule_decode_ttnn but writes state back to pre-allocated buffer.
-
-    For trace capture: state_buffer is a pre-allocated [B, H, K, V] tensor.
-    After computing the new state, we copy it back to state_buffer so the
-    trace replay reads the correct address on the next iteration.
-    """
+    """Decode with in-place state copy to pre-allocated buffer (trace-safe addresses)."""
     o, new_h = recurrent_gated_delta_rule_decode_ttnn(
         q=q,
         k=k,
@@ -656,7 +502,7 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
         device=device,
         high_precision=high_precision,
     )
-    # Copy new state back to pre-allocated buffer for trace consistency
+    # Copy state back to pre-allocated buffer for trace replay.
     ttnn.copy(new_h, state_buffer)
     ttnn.deallocate(new_h)
     return o, state_buffer
@@ -672,30 +518,10 @@ def recurrent_gated_delta_rule_ttnn(
     initial_state=None,
     device=None,
 ):
-    """
-    Token-by-token recurrent gated delta rule using TTNN ops.
-    Used for decode (T=1).
+    """Token-by-token recurrent gated delta rule (decode, general T).
 
-    For each timestep t:
-      1. Decay the state:  h = h * exp(g_t)
-      2. Read from state:  v_read = sum_k(h * k_t)
-      3. Compute delta:    delta = (v_t - v_read) * beta_t
-      4. Write to state:   h = h + outer(k_t, delta)
-      5. Query state:      o_t = h @ q_t
-
-    Args:
-        q: [B, T, H, K]
-        k: [B, T, H, K]
-        v: [B, T, H, V]
-        beta: [B, T, H]
-        g: [B, T, H]
-        scale: float
-        initial_state: [B, H, K, V]
-        device: ttnn device
-
-    Returns:
-        output: [B, T, H, V]
-        final_state: [B, H, K, V]
+    Per step: decay h; v_read=k·h; delta=v-v_read; write outer; o=q·h.
+    Returns output [B,T,H,V], final_state [B,H,K,V].
     """
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
@@ -723,7 +549,7 @@ def recurrent_gated_delta_rule_ttnn(
     beta = ttnn.typecast(beta, ttnn.bfloat16, memory_config=None)
     g = ttnn.typecast(g, ttnn.bfloat16, memory_config=None)
 
-    # Precompute exp(g) once and slice per timestep in the loop.
+    # Precompute exp(g); slice per timestep in loop.
     g_exp = ttnn.exp(g)
 
     if initial_state is not None:
@@ -733,11 +559,11 @@ def recurrent_gated_delta_rule_ttnn(
 
     outputs = []
     for i in range(T):
-        q_t = q[:, :, i]  # [B, H, K]
-        k_t = k[:, :, i]  # [B, H, K]
-        v_t = v[:, :, i]  # [B, H, V]
-        beta_t = beta[:, :, i]  # [B, H]
-        decay_t = g_exp[:, :, i]  # [B, H]
+        q_t = q[:, :, i]  # [B,H,K]
+        k_t = k[:, :, i]
+        v_t = v[:, :, i]
+        beta_t = beta[:, :, i]
+        decay_t = g_exp[:, :, i]
 
         o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, decay_t, h, seq_len=T, device=device)
         outputs.append(o_t)

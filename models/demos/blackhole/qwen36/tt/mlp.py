@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""SwiGLU MLP for Qwen3.5: down(silu(gate(x)) * up(x)).
+"""SwiGLU MLP: down(silu(gate(x)) * up(x)).
 
-Single device (9B): full weights, dense matmuls (unchanged validated path).
-Tensor-parallel (27B on a (1,4) mesh): w1/w3 column-parallel, w2 row-parallel,
-followed by tt_all_reduce (which reduce-scatters on a mesh with a 1 in its shape,
-e.g. P150x4) so the output is fractured along the hidden dim.
+9B (single device): dense matmuls, full weights.
+27B TP (1,4 mesh): w1/w3 column-parallel, w2 row-parallel; tt_all_reduce
+reduce-scatters on meshes with a dim-1 shape (e.g. P150x4), fracturing hidden.
 """
 import os
 from dataclasses import dataclass
@@ -15,27 +14,23 @@ import ttnn
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj  [in, out], bfloat4_b
-    w2: ttnn.Tensor  # down_proj  [in, out], bfloat8_b
-    w3: ttnn.Tensor  # up_proj    [in, out], bfloat4_b
+    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b
+    w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
+    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
 
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None) -> MLPWeights:
-    """state_dict is the per-layer mlp substate: keys 'gate_proj.weight', 'down_proj.weight', 'up_proj.weight'."""
+    """Per-layer MLP state: gate_proj, down_proj, up_proj weights."""
     tp = getattr(args, "num_devices", 1) if args is not None else 1
 
     if tp > 1:
-        # Tensor-parallel: column-parallel w1/w3 (shard output dim), row-parallel
-        # w2 (shard input dim). DRAM-sharded weight memcfgs come from args.
+        # TP: w1/w3 column-parallel (shard out dim), w2 row-parallel (shard in dim).
+        # DRAM-sharded memcfgs from args.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        # Store w1/w3 (gate/up) DRAM-WIDTH_SHARDED so the decode matmul (M=1 tile)
-        # reads weights at near-peak DRAM bandwidth (~+10% decode tok/s). w2 (down)
-        # stays interleaved. The DRAM-sharded weight is layout-incompatible with an
-        # interleaved cache file, so its cache name is qualified with `.dramshard`
-        # (ttnn.as_tensor reloads a cache file as-is, ignoring the requested
-        # memory_config — see weight_cache_path note). Fall back to interleaved if
-        # the DRAM-sharded memcfgs are unavailable (e.g. single device).
+        # w1/w3 DRAM-WIDTH_SHARDED for decode (M=1 tile, ~+10% tok/s); w2 interleaved.
+        # Cache uses `.dramshard` suffix — layout incompatible with interleaved cache
+        # (as_tensor ignores requested memcfg on reload). Fallback if memcfgs absent.
         dram_sharded = args is not None and getattr(args, "mlp_w1_weight_memcfg", None) is not None
 
         def cache(name, tag=""):
@@ -69,8 +64,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 ),
             )
 
-        # Default: keep each device's shard INTERLEAVED in DRAM so a regular
-        # ttnn.linear serves both decode (M=1) and prefill (M=seq_len).
+        # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill.
         return MLPWeights(
             w1=tpc.shard_w(
                 state_dict["gate_proj.weight"],
@@ -109,8 +103,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # Gate and up projections use bfloat4_b (halves memory bandwidth for these large matmuls).
-    # Down projection stays at bfloat8_b (on the critical accuracy path).
+    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
     return MLPWeights(
         w1=load("gate_proj", ttnn.bfloat4_b),
         w2=load("down_proj", ttnn.bfloat8_b),
@@ -126,8 +119,7 @@ class Qwen36MLP:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
-        # Must mirror the `dram_sharded` condition in load_mlp_weights so the
-        # forward path matches the loaded weight layout.
+        # Match load_mlp_weights dram_sharded condition for layout consistency.
         self._dram_sharded = (
             self.num_devices > 1 and args is not None and getattr(args, "mlp_w1_weight_memcfg", None) is not None
         )
@@ -163,8 +155,7 @@ class Qwen36MLP:
         return output
 
     def _forward_tp(self, x):
-        """Tensor-parallel forward. Input x is replicated (full hidden dim) on
-        every device; output is fractured along the hidden dim (reduce-scatter)."""
+        """TP forward: replicated input; reduce-scatter output fractured on hidden dim."""
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
         from models.tt_transformers.tt.ccl import tt_all_reduce
 
@@ -176,13 +167,9 @@ class Qwen36MLP:
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
         if getattr(self, "_dram_sharded", False):
-            # w1/w3 weights are DRAM-WIDTH_SHARDED. The DRAM-sharded matmul kernel
-            # only supports a single input tile-row (M == 1 tile = 32 rows), which
-            # is exactly the decode shape (B<=32 users padded to one tile). Gate on
-            # the real sequence/M dim x.shape[-2] (32 in decode, 2048 in prefill) —
-            # NOT x.shape[1], which is the Z dim and is 1 in BOTH modes. Prefill
-            # (M>1 tile) uses the 2D program config. Outputs are converted back to
-            # DRAM-interleaved so silu/mul/w2/reduce-scatter are unchanged.
+            # DRAM-WIDTH_SHARDED w1/w3. Sharded kernel needs M=1 tile (32 rows, decode).
+            # Use x.shape[-2] for seq/M (not x.shape[1], Z=1 in both modes). Prefill
+            # (M>1 tile) uses 2D progcfg. Convert outputs to DRAM-interleaved for rest of path.
             seq = x.shape[-2]
             if seq <= ttnn.TILE_SIZE:
                 x_sh = ttnn.to_memory_config(x, args.act_shard_hidden)
@@ -204,8 +191,7 @@ class Qwen36MLP:
                 w1_out = ttnn.to_memory_config(w1_out, mc)
                 w3_out = ttnn.to_memory_config(w3_out, mc)
             else:
-                # SILU in the program config's fused_activation (the sharded/2D matmul kernel
-                # rejects the ttnn.linear(activation=...) kwarg when a progcfg is supplied).
+                # Fused SILU in progcfg; sharded/2D kernel rejects activation= kwarg with progcfg.
                 pc_gate = tpc.create_prefill_matmul_program_config(
                     seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU
                 )
@@ -214,14 +200,12 @@ class Qwen36MLP:
                 w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=mc)
                 _silu_fused = True
         else:
-            # Interleaved weights → let ttnn auto-select the matmul program (serves
-            # both decode and prefill).
+            # Interleaved weights: auto matmul program for decode and prefill.
             w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
             _silu_fused = True
 
-        # gate * up. SILU is fused into the w1 matmul above except on the DRAM-sharded
-        # decode path, which still needs the standalone silu.
+        # gate * up. Standalone silu only on DRAM-sharded decode path (SILU not fused there).
         if _silu_fused:
             hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
             ttnn.deallocate(w1_out)
@@ -234,8 +218,7 @@ class Qwen36MLP:
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc)
         ttnn.deallocate(hidden)
 
-        # Reduce across devices. On a (1,4) mesh tt_all_reduce reduce-scatters,
-        # leaving the output fractured along the hidden dim (dim=3).
+        # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
         out = tt_all_reduce(
             partial,
             self.device,

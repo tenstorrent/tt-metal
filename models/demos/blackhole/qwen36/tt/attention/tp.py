@@ -1,21 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Tensor-parallel (TP>1) full-attention path for Qwen3.5.
+"""Tensor-parallel full-attention for Qwen3.5 (validated 64k+ on 27B).
 
-Long-context (64k+) correctness choices, validated at 64k on Qwen3.6-27B:
-  - HYBRID q/k-norm scaling: PREFILL uses the HF-correct (1+weight) scale (sharp attention,
-    required for retrieval — without it long-context attention is uniform and retrieval is zero);
-    DECODE uses the raw weights (flat attention, robust to the small per-step decode noise that
-    sharp attention amplifies into loops). See load_attention_weights_tp / forward_decode.
-  - Q stays bf16 into the chunked SDPA (forward_prefill), NOT bf8. Casting Q to bf8 was
-    the real long-context degeneration cause (bf16-Q → coherent 64k/256k summary; bf8-Q →
-    loops/gibberish), matching the 9B's deliberately-bf16 path (ttnn_gated_attention.py:277).
-    env QWEN_SDPA_BF8_Q=1 restores the old bf8 cast for comparison.
-  - weights are kept INTERLEAVED per device (no DRAM-width-sharding) and matmuls
-    use ttnn's auto program config — same robust pattern validated for the MLP.
-
-Decode input/output use the framework layout: x [1,1,B,dim] replicated in; output
-fractured along dim=3 (reduce-scatter). Column-parallel q/k/v, row-parallel wo.
+Hybrid Q/K-norm: prefill uses (1+weight) for retrieval; decode uses raw weights for robustness.
+Keep Q bf16 into SDPA (bf8-Q causes long-context degeneration; QWEN_SDPA_BF8_Q=1 restores it).
+Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
 import os
 
@@ -28,11 +17,7 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
-    """Shard one full-attention layer's weights across the mesh.
-
-    state_dict keys (from the FP8 loader / 9B substate): q_proj/k_proj/v_proj/
-    o_proj/q_norm/k_norm. q_proj is the fused per-head [Q,gate] projection.
-    """
+    """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -40,16 +25,10 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         return str(cache_dir / n) if cache_dir is not None else None
 
     tw = {}
-    # Column-parallel q/k/v in-projections (P4). Default for TP: one fused [q+gate|k|v] weight,
-    # per-device interleaved so the shard still gives each device [qg_d|k_d|v_d] — prefill does a
-    # single matmul reading the activation once. Falls back to three separate DRAM-WIDTH_SHARDED
-    # weights when the fused memcfg is unavailable. Distinct `.dramshard` cache names: ttnn.as_tensor
-    # reloads a cache as-is, ignoring the requested memory_config, so layouts must not share a file.
+    # Column-parallel q/k/v: fused [q+gate|k|v] per device, or separate DRAM-sharded weights.
+    # Distinct cache names — as_tensor reload ignores requested memcfg.
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
-    # De-interleave the per-head [q,gate] pack so _make_heads/decode extract q and gate as contiguous
-    # slices instead of the ~5.3ms reshape+chunk relayout (measured -2.6% prefill ttft, coherence-
-    # neutral — it's a column permutation). Default for the fused path. Distinct cache name (layout
-    # differs from the interleaved weight; as_tensor reloads a cache file as-is).
+    # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
     if fused_qkv:
         if qg_deint:
@@ -109,7 +88,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             cache_path=c("wv" + tag),
             dtype=ttnn.bfloat8_b,
         )
-    # Row-parallel: shard input dim → reduce-scatter after
+    # Row-parallel wo (reduce-scatter after)
     tw["wo"] = tpc.shard_w(
         state_dict["o_proj.weight"],
         mesh,
@@ -118,14 +97,10 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo"),
         dtype=ttnn.bfloat8_b,
     )
-    # Per-head QK norms, replicated. HF Qwen3_5RMSNorm computes output*(1+weight) and the ckpts
-    # store raw zero-centered weights (means ~0.32-0.58), so +1 is the correct scale. Without it
-    # Q·K logits are ~14x too small and long-context attention is UNIFORM -> zero retrieval at
-    # 64k. Don't cache (tiny tensors, read-only ckpt dir).
+    # QK norms: HF-correct (1+weight) for sharp prefill attention / retrieval
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
-    # Flat (raw, no +1) twins — the decode scale (hybrid): flat decode attention averages over
-    # keys so per-step decode noise can't flip retrieval (loops/junk). Negligible cost.
+    # Raw-weight twins for flat decode attention (hybrid scaling)
     tw["q_norm_flat"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
     tw["k_norm_flat"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32), mesh, None)
     return tw
@@ -146,19 +121,13 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
-        # Mirror the weight-load gate: q/k/v stored DRAM-WIDTH_SHARDED → use the DRAM-sharded
-        # decode matmul (see _col_proj). Must match qkv_sharded in load_attention_weights_tp.
+        # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
-        # P4: one fused [q+gate|k|v] matmul (default for TP). Must match fused_qkv in the loader.
         self._fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
-        # q+gate stored de-interleaved ([all_q|all_gate] per device) so q/gate are contiguous slices
-        # (kills the ~5.3ms per-head reshape relayout). Must match qg_deint in load_attention_weights_tp.
         self._qg_deint = self._fused_qkv
         self.k_caches = None
         self.v_caches = None
-        # Paged KV cache (vLLM / model-contract path). Bound via set_paged_kv_cache;
-        # when use_paged, decode/prefill read+write this external paged cache through
-        # page_table instead of the internal concat caches above (which stay for the demo).
+        # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
         self.paged_k = None
         self.paged_v = None
         self.use_paged = False
@@ -170,9 +139,7 @@ class TPAttention:
         self.use_paged = True
 
     def _qkv(self, x):
-        """Q+gate / K / V projections, returning (qg, kp, vp) in DRAM-interleaved layout. Default:
-        three separate column-parallel matmuls (fallback). Fused (default for TP): one matmul over
-        the concatenated [q+gate|k|v] weight, then slice — reads the activation once."""
+        """Q+gate/K/V projections → (qg, kp, vp). Fused path: one matmul, then slice."""
         tw = self.tw
         if not self._fused_qkv:
             return (
@@ -191,10 +158,7 @@ class TPAttention:
         return qg, kp, vp
 
     def _col_proj(self, x, weight, decode_progcfg):
-        """Column-parallel input projection (q / k / v). When DRAM-sharding is enabled the
-        decode (M<=32) matmul reads the weight at near-peak DRAM bandwidth; otherwise this is
-        the validated plain interleaved ttnn.linear. Output is DRAM-interleaved either way, so
-        the head reshape/slice downstream is unchanged."""
+        """Column-parallel projection; DRAM-sharded decode matmul when enabled."""
         if not self._dram_sharded:
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -208,21 +172,14 @@ class TPAttention:
         )
 
     def _make_heads(self, qg, kp, vp, S):
-        """Prefill create-heads. Returns (q, gate, k, v): q/gate [1,NH,S,HD], k/v [1,NKV,S,HD].
-
-        Split the gate out of qg by hand (no analog in the fused op — q_proj packs [Q,gate] per
-        head), then one fused nlp_create_qkv_heads for q + (k,v) (Q-only `input` plus a
-        concatenated `input_kv`) — replacing 5 reshape/slice/transpose ops with one purpose-built
-        kernel. The gate keeps its own transpose."""
+        """Split qg into heads; returns (q, gate, k, v). Uses fused nlp_create_qkv_heads."""
         NH, NKV, HD = self.NH, self.NKV, self.HD
         if self._qg_deint:
-            # qg = [all_q | all_gate] (de-interleaved): extract q and gate as contiguous slices
-            # instead of the reshape+chunk relayout. q goes straight into the fused create-heads;
-            # only the gate keeps a (half-width) reshape+transpose.
+            # De-interleaved qg: contiguous q/gate slices (gate still needs transpose)
             q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD))
             gate_flat = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, S, 2 * NH * HD))
             ttnn.deallocate(qg)
-            gate = ttnn.transpose(ttnn.reshape(gate_flat, (1, S, NH, HD)), 1, 2)  # [1,NH,S,HD]
+            gate = ttnn.transpose(ttnn.reshape(gate_flat, (1, S, NH, HD)), 1, 2)
             ttnn.deallocate(gate_flat)
             kv = ttnn.concat([kp, vp], dim=-1)
             ttnn.deallocate(kp)
@@ -238,15 +195,15 @@ class TPAttention:
             ttnn.deallocate(q_flat)
             ttnn.deallocate(kv)
             return q, gate, k, v
-        # split [q;gate] per head, keep the gate as [1,NH,S,HD] for the post-SDPA mul.
+        # Interleaved qg: split [q;gate] per head
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
-        q_part, gate_part = ttnn.chunk(qg, 2, dim=-1)  # each [1,S,NH,HD]
+        q_part, gate_part = ttnn.chunk(qg, 2, dim=-1)
         ttnn.deallocate(qg)
-        gate = ttnn.transpose(gate_part, 1, 2)  # [1,NH,S,HD]
+        gate = ttnn.transpose(gate_part, 1, 2)
         ttnn.deallocate(gate_part)
         q_flat = ttnn.reshape(q_part, (1, 1, S, NH * HD))
         ttnn.deallocate(q_part)
-        kv = ttnn.concat([kp, vp], dim=-1)  # [1,1,S,2*NKV*HD] = [k_heads, v_heads]
+        kv = ttnn.concat([kp, vp], dim=-1)
         ttnn.deallocate(kp)
         ttnn.deallocate(vp)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -262,8 +219,7 @@ class TPAttention:
         return q, gate, k, v
 
     def _concat_heads(self, gated):
-        """Prefill concat-heads: [1,NH,S,HD] -> [1,1,S,NH*HD] via the fused nlp_concat_heads
-        kernel (replaces the post-SDPA transpose+reshape; gate is already applied)."""
+        """Prefill concat-heads via nlp_concat_heads (post-gate)."""
         return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def reset_state(self):
@@ -280,8 +236,7 @@ class TPAttention:
         self.v_caches = [z() for _ in range(self.NKV)]
 
     def forward_prefill(self, x, cos_tt, sin_tt):
-        """Causal prefill over a full sequence. x: [1,1,S,dim] replicated;
-        cos/sin: [1,1,S,rope_dim]. Output fractured along dim=3 (reduce-scatter)."""
+        """Causal prefill. x [1,1,S,dim] replicated; output reduce-scattered on dim=3."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         S = x.shape[-2]
 
@@ -294,17 +249,14 @@ class TPAttention:
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # Fill the per-head KV cache with the prompt's (post-RoPE) K/V so decode
-        # continues from position S. Only when caches are allocated (stateful path).
+        # Fill per-head KV cache for decode (stateful path only)
         if self.k_caches is not None:
-            # Don't deallocate the slices — for NKV==1 they alias k/v, which are
-            # still needed for SDPA below.
+            # Don't deallocate slices — for NKV==1 they alias k/v used by SDPA
             for h in range(NKV):
                 ttnn.fill_cache(self.k_caches[h], ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
                 ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
 
-        # Keep Q/K/V bf16 into SDPA. The unconditional bf8 cast here was inconsistent with the documented bf16-Q fix and degraded
-        # the bespoke prefill_tp oracle vs the paged path. QWEN_SDPA_BF8_Q=1 restores the old bf8.
+        # Keep Q/K/V bf16 into SDPA (QWEN_SDPA_BF8_Q=1 restores bf8 cast)
         if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             k8 = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
@@ -326,7 +278,7 @@ class TPAttention:
         ttnn.deallocate(k8)
         ttnn.deallocate(v8)
 
-        gated = ttnn.multiply(attn, ttnn.sigmoid(gate))  # [1,NH,S,HD]
+        gated = ttnn.multiply(attn, ttnn.sigmoid(gate))
         ttnn.deallocate(attn)
         ttnn.deallocate(gate)
         gated = self._concat_heads(gated)
@@ -346,7 +298,7 @@ class TPAttention:
 
     def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
         tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
-        _L1 = ttnn.L1_MEMORY_CONFIG  # OPT (decode): keep head-prep + attn output L1-resident
+        _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
         if not use_paged and self.k_caches is None:
             self.reset_state()
@@ -354,7 +306,7 @@ class TPAttention:
         qg, kp, vp = self._qkv(x)
 
         if self._qg_deint:
-            # qg = [all_q | all_gate] (de-interleaved): slice contiguous halves, then split heads.
+            # De-interleaved qg: slice contiguous q/gate halves, then split heads
             q = ttnn.reshape(
                 ttnn.slice(qg, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1), (1, B, NH, HD), memory_config=_L1
             )
@@ -375,23 +327,19 @@ class TPAttention:
         v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
         ttnn.deallocate(vp)
 
-        # QK RMSNorm — raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill retrieves the
-        # long context; flat decode averages over keys so the per-step decode noise cannot flip
-        # retrieval (the loop/junk failure mode).
+        # Hybrid QK norm: raw weights at decode (flat attention, robust to per-step noise)
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm_flat"], memory_config=_L1)
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm_flat"], memory_config=_L1)
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        # Cap the SDPA-decode grid to 64 cores (tree-reduction limit); auto-grid
-        # grabs all 110 P150 cores for a single user (B=1) and overflows.
+        # Cap SDPA-decode grid to 64 cores (tree-reduction limit on P150)
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0
         )
         if use_paged:
-            # External paged KV cache (vLLM/contract path): update at cur_pos via the
-            # page_table, then paged SDPA-decode
+            # External paged KV: update at cur_pos, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
@@ -413,15 +361,12 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
-                # SDPA-decode output stays DRAM: it's the kernel's native path and it feeds the
-                # DRAM-weight wo matmul, so forcing L1 here only adds an L1<->DRAM boundary copy
-                # (attention decode is bound by the DRAM KV-cache read, not these tiny intermediates).
+                # SDPA-decode output stays DRAM (native path; feeds DRAM-weight wo)
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
         else:
-            # Internal per-head KV caches (demo/standalone). Pad NKV head dim to 32 for
-            # the tile-aligned sharded update.
+            # Internal per-head KV caches; pad NKV head dim to 32 for tile-aligned update
             for h in range(NKV):
                 k_h = ttnn.slice(k, (0, 0, h, 0), (1, B, h + 1, HD))
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
@@ -453,9 +398,7 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
-                # SDPA-decode output stays DRAM: it's the kernel's native path and it feeds the
-                # DRAM-weight wo matmul, so forcing L1 here only adds an L1<->DRAM boundary copy
-                # (attention decode is bound by the DRAM KV-cache read, not these tiny intermediates).
+                # SDPA-decode output stays DRAM (native path; feeds DRAM-weight wo)
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
@@ -492,21 +435,10 @@ class TPAttention:
         chunk_start_idx_tensor=None,
         user_id=0,
     ):
-        """Paged-KV prefill for one chunk of a sequence (vLLM / model-contract path).
+        """Paged-KV prefill for one chunk: fill cache + chunked SDPA over prior chunks.
 
-        Fills the external paged KV cache (self.paged_k/v) for this chunk via
-        paged_fill_cache, then runs chunked SDPA over the paged cache so the chunk
-        attends to all prior chunks. x: [1,1,S,dim] replicated; cos/sin sliced to this
-        chunk; chunk_start_idx is the chunk's absolute token offset. Output fractured
-        along dim=3. Mirrors qwen35_27b/tt/attention.py forward_prefill_paged, adapted
-        to the integrated interleaved-matmul / reshape conventions used by forward_prefill.
-
-        chunk_start_idx_tensor: optional device tensor [1] int32. When supplied, the
-        chunked SDPA uses the FLEXIBLE path (runtime device offset + a fixed q/k_chunk=64
-        program config), so a single captured trace / compiled program serves every chunk
-        position — the masked-bucket + chunk-outer-trace path (mirrors the single-device
-        gated_attention_forward_ttnn flexible branch). chunk_start_idx (int) is still used
-        host-side to size the page table; the op consumes the tensor.
+        chunk_start_idx_tensor: optional device offset for FLEXIBLE chunked SDPA (one program
+        per trace/bucket). chunk_start_idx (int) still sizes the page table host-side.
         """
         assert self.use_paged and self.paged_k is not None, "forward_prefill_paged requires a bound paged KV cache"
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
@@ -523,7 +455,7 @@ class TPAttention:
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # Fill only this chunk's positions into the paged cache.
+        # Fill this chunk into the paged cache
         k_paged, v_paged = self.paged_k, self.paged_v
         block_size = k_paged.shape[2]
         fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
@@ -541,29 +473,20 @@ class TPAttention:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Chunked SDPA over the paged cache (attends to prior chunks via page_table). Keep Q in bf16
-        # (see the module docstring: bf8-Q was the long-context degeneration cause). QWEN_SDPA_BF8_Q=1
-        # restores the old bf8 cast. When bf16, q IS q8 (freed once at deallocate(q8)).
+        # Chunked SDPA over paged cache; keep Q bf16 (QWEN_SDPA_BF8_Q=1 restores bf8)
         if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q)
         else:
             q8 = q
 
-        # chunked SDPA requires chunk_start_idx % q_chunk_size == 0. The FLEXIBLE path
-        # (device-tensor offset) fixes q/k_chunk=64 so ONE program serves every chunk
-        # position (64 divides any 2048-multiple chunk_start) — required for a single
-        # captured trace / pre-warmed bucket program. The int path picks the largest
-        # power-of-two chunk dividing chunk_start_idx (any size divides 0).
+        # chunk_start_idx % q_chunk_size == 0; FLEXIBLE path uses q/k_chunk=64 for one program per trace
         if chunk_start_idx_tensor is not None:
             qk_chunk = 64
         else:
             cap = 256 if S >= 2048 else 64
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
-        # Use the FULL Blackhole worker grid (13x10=130 on P150) to match the reference 27B and
-        # avoid the WH-era (8,8)=64-core cap (~49% SDPA utilization on BH). NOTE: this is a PERF
-        # alignment only — verified bit-identical to (8,8) at long context (flash attention is
-        # grid-invariant), so it does NOT affect correctness. See test_tp_chunked_prefill_pcc_sweep.
+        # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             exp_approx_mode=False,
@@ -571,11 +494,7 @@ class TPAttention:
             k_chunk_size=qk_chunk,
         )
 
-        # Pad the SDPA page table with zero blocks so (a) K covers a padded/short Q
-        # (K < Q + chunk_start_idx — padded slots are masked out / never filled), and
-        # (b) the stick size is a multiple of 32, which the (flexible) chunked SDPA kernel
-        # requires. The extra logical blocks map to physical block 0 but sit at K positions
-        # beyond the prompt, so causality masks them out of every real query.
+        # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)
         sdpa_page_table = page_table
         needed_blocks = (S + chunk_start_idx + block_size - 1) // block_size
         target_blocks = max(needed_blocks, page_table.shape[-1])
