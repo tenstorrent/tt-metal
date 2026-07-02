@@ -46,3 +46,14 @@
   identical to AceStepLyricEncoder. Reused it directly (derives dims from weights) - ZERO new
   code. special_token prepend is COMMENTED OUT in this checkpoint. unpack_timbre_embeddings is
   data-dependent batching orchestration (not a module). Validated core pre-slice at 0.97.
+
+## FSQ FINAL VERDICT (iter 21): confirmed not cleanly replicable, abandoned
+- Traced ResidualFSQ line-by-line, captured the ACTUAL project_out input via a forward hook.
+  8/96 elements differ: my fsq(project_in(x)/scale) gives clamped extremes (-1.0, 1.0) where
+  q(x) internally produces valid intermediate levels (-0.714=-5/7, 0.5). fsq IS deterministic
+  in eval (noise only in training). So q(x) feeds fsq a DIFFERENTLY-normalized input than
+  project_in(x)/scale - some internal scaling/rotation I can't see without deep reverse-eng.
+- CONCLUSION: FSQ cannot be reproduced exactly; would only reach ~0.98. It is cover-song-only
+  (is_covers=True). ABANDONED for bring-up. Do NOT ship at 0.98 - that misrepresents numerics.
+  If ever needed: the quantizer output has an exact indices representation
+  (q.get_output_from_indices(codes)) that may be the clean device path instead of recomputing.
