@@ -31,6 +31,8 @@ The 256K-allocation smoke also defaults to one layer; set
 Gumbel allocation is a known DRAM-fragmentation OOM at that size.
 The host-Gumbel smoke defaults to one layer; set
 ``DG_TEXT_DEMO_HOST_GUMBEL_NUM_LAYERS=full`` to run all layers.
+The chunked-Gumbel smoke defaults to one layer; set
+``DG_TEXT_DEMO_CHUNKED_GUMBEL_NUM_LAYERS=full`` to run all layers.
 """
 
 import os
@@ -176,6 +178,46 @@ def test_short_prompt_256k_host_gumbel_small_canvas_exits_clean(monkeypatch):
     assert summary["blocks"] == 1
     assert summary["prompt_len"] == 32
     assert summary["next_pos"] == 64
+
+
+def test_short_prompt_256k_chunked_gumbel_full_canvas_exits_clean(monkeypatch):
+    """Chunked Gumbel smoke for 256K context with the canonical 256-token canvas."""
+    checkpoint = _require_local_checkpoint()
+    info_lines: list[str] = []
+    monkeypatch.setattr(text_demo.logger, "info", lambda message: info_lines.append(str(message)))
+    argv = [
+        "--checkpoint",
+        checkpoint,
+        "--local-files-only",
+        "--mesh",
+        os.environ.get("MESH_DEVICE", "P150x4"),
+        "--max-seq-len",
+        "262144",
+        "--canvas-length",
+        "256",
+        "--max-denoising-steps",
+        "1",
+        "--max-new-tokens",
+        "256",
+        "--num-blocks",
+        "1",
+        "--seed",
+        "0",
+        "--disable-eos-stop",
+        "--chunked-gumbel-sampling",
+    ]
+    num_layers = os.environ.get("DG_TEXT_DEMO_CHUNKED_GUMBEL_NUM_LAYERS", "1")
+    if num_layers.lower() != "full":
+        argv += ["--num-layers", num_layers]
+
+    assert text_demo.main(argv) == 0
+    success_lines = [line for line in info_lines if line.startswith("DG_TEXT_DEMO_SUCCESS ")]
+    assert len(success_lines) == 1
+    summary = text_demo._parse_success_summary(success_lines[0])
+    assert summary["generated_tokens"] == 256
+    assert summary["blocks"] == 1
+    assert summary["prompt_len"] == 32
+    assert summary["next_pos"] == 288
 
 
 def test_long_prompt_two_block_maskless_run_exits_clean(monkeypatch):
