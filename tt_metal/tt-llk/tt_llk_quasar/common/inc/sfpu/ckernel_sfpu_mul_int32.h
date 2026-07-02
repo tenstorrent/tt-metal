@@ -21,11 +21,16 @@ namespace sfpu
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void _mul_int32_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t tile_row_stride = trisc::NUM_FACES * FACE_R_DIM;
+    const std::uint32_t base_in0            = dst_index_in0 * tile_row_stride;
+    const std::uint32_t base_in1            = dst_index_in1 * tile_row_stride;
+    const std::uint32_t base_out            = dst_index_out * tile_row_stride;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_in0 + (d << 1));
-        TT_SFPLOAD(p_sfpu::LREG2, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_in1 + (d << 1));
+        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, base_in0 + (d << 1));
+        TT_SFPLOAD(p_sfpu::LREG2, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, base_in1 + (d << 1));
 
         // Dest layout depends on how operands reached dest:
         //   UNP_DEST / Int32 L1 with 2's-comp tiles → 2's-comp Int32
@@ -54,7 +59,7 @@ inline void _mul_int32_(const std::uint32_t dst_index_in0, const std::uint32_t d
             TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
         }
 
-        TT_SFPSTORE(p_sfpu::LREG4, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_out + (d << 1));
+        TT_SFPSTORE(p_sfpu::LREG4, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, base_out + (d << 1));
     }
 }
 

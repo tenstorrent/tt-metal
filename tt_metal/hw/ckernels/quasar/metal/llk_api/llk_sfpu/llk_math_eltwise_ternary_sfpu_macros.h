@@ -11,21 +11,27 @@
 #include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_math_eltwise_ternary_sfpu_init.h"
 
-/*
- * Quasar keeps the same macro surface as BH/WH. DST_SYNC and DST_ACCUM are
- * unused until Quasar has an equivalent of get_dest_max_tiles<...>. Ternary
- * macro calls are limited to VectorMode::RC for now.
- */
-
 namespace ckernel {
 
-template <DstSync /*DST_SYNC*/, bool /*DST_ACCUM*/>
+template <DstSync DST_SYNC, bool DST_ACCUM>
 inline __attribute__((always_inline)) void _sfpu_ternary_check_(
-    [[maybe_unused]] std::uint32_t dst_index_in0,
-    [[maybe_unused]] std::uint32_t dst_index_in1,
-    [[maybe_unused]] std::uint32_t dst_index_in2,
-    [[maybe_unused]] std::uint32_t dst_index_out,
+    std::uint32_t dst_index_in0,
+    std::uint32_t dst_index_in1,
+    std::uint32_t dst_index_in2,
+    std::uint32_t dst_index_out,
     VectorMode vector_mode) {
+    LLK_ASSERT(
+        dst_index_in0 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
+        "dst_index_in0 exceeds max dest tiles");
+    LLK_ASSERT(
+        dst_index_in1 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
+        "dst_index_in1 exceeds max dest tiles");
+    LLK_ASSERT(
+        dst_index_in2 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
+        "dst_index_in2 exceeds max dest tiles");
+    LLK_ASSERT(
+        dst_index_out < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
+        "dst_index_out exceeds max dest tiles");
     LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
 }
 

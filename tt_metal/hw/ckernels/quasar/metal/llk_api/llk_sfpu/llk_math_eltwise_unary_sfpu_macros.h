@@ -7,17 +7,18 @@
 #include <cstdint>
 
 #include "llk_assert.h"
+#include "llk_defs.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 
-// Quasar keeps the same macro surface as BH/WH. DST_SYNC and DST_ACCUM are
-// unused until Quasar has an equivalent of get_dest_max_tiles<...>.
-
 namespace ckernel {
 
-template <DstSync /*DST_SYNC*/, bool /*DST_ACCUM*/>
+template <DstSync DST_SYNC, bool DST_ACCUM>
 inline __attribute__((always_inline)) void _sfpu_check_(
-    [[maybe_unused]] std::uint32_t dst_index, VectorMode vector_mode) {
+    std::uint32_t dst_index, VectorMode vector_mode) {
+    LLK_ASSERT(
+        dst_index < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
+        "dst_index exceeds max dest tiles");
     LLK_ASSERT(
         vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
             vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,

@@ -280,41 +280,79 @@ template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, ckernel::BinaryOp OP, bool
 void call_binary_sfpu_operation_quasar(
     [[maybe_unused]] std::uint32_t base_dst_index, int src0_tile, int src1_tile, int dst_tile, [[maybe_unused]] DataFormat math_format)
 {
-    // Integer ops address Dest by row offset (tile index * rows-per-tile).
-    constexpr int stride = NUM_FACES * FACE_R_DIM;
-    const int in0_off    = src0_tile * stride;
-    const int in1_off    = src1_tile * stride;
-    const int out_off    = dst_tile * stride;
-
     if constexpr (OP == BinaryOp::ADD)
     {
-        SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _add_int_, (false, ITERATIONS, DataFormat::Int32, 0, false), in0_off, in1_off, out_off, VectorMode::RC);
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _add_int_,
+            (false, ITERATIONS, DataFormat::Int32, 0, false),
+            static_cast<std::uint32_t>(src0_tile),
+            static_cast<std::uint32_t>(src1_tile),
+            static_cast<std::uint32_t>(dst_tile),
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::GT)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::gt), in0_off, in1_off, out_off, VectorMode::RC);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::gt),
+            static_cast<std::uint32_t>(src0_tile),
+            static_cast<std::uint32_t>(src1_tile),
+            static_cast<std::uint32_t>(dst_tile),
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::LT)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::lt), in0_off, in1_off, out_off, VectorMode::RC);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::lt),
+            static_cast<std::uint32_t>(src0_tile),
+            static_cast<std::uint32_t>(src1_tile),
+            static_cast<std::uint32_t>(dst_tile),
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::LE)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::le), in0_off, in1_off, out_off, VectorMode::RC);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::le),
+            static_cast<std::uint32_t>(src0_tile),
+            static_cast<std::uint32_t>(src1_tile),
+            static_cast<std::uint32_t>(dst_tile),
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::GE)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::ge), in0_off, in1_off, out_off, VectorMode::RC);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::ge),
+            static_cast<std::uint32_t>(src0_tile),
+            static_cast<std::uint32_t>(src1_tile),
+            static_cast<std::uint32_t>(dst_tile),
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::MUL)
     {
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _mul_int32_, (false, ITERATIONS), in0_off, in1_off, out_off, VectorMode::RC);
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _mul_int32_,
+                (false, ITERATIONS),
+                static_cast<std::uint32_t>(src0_tile),
+                static_cast<std::uint32_t>(src1_tile),
+                static_cast<std::uint32_t>(dst_tile),
+                VectorMode::RC);
         }
         else
         {
