@@ -63,7 +63,20 @@ Data regime here (~1MB/link) wants 4 workers/link (all_gather default_workers he
           sems (partition the sem array by worker) or aggregate the wait to the device total.
       FIX PLAN: allocate per-(region,worker) sems (manager already has 4*num_links region sems; extend to
       4*num_links*num_w_workers), route each worker's barrier/recv to its own slot. Then re-test.
-- [ ] After sems fixed: PCC (W_WORKERS=2) -> perf sweep W_WORKERS 2/4 -> enable auto-heuristic -> extend to edges/H
+- [x] Bring-up debugging (TT_NP_W_MUX=1, 1-worker to isolate). 5 bugs found+fixed by inspection:
+      (1) H->W barrier signalled column-0 W cores not relocated mux cores; (2) send CB not created on mux
+      worker cores; (3) recv-sem/barrier incs targeted the mux core not the neighbor reader core;
+      (4) W-writer startup barrier clobbered the reader's shared H->W barrier_sem; (5) writer RT-arg layout.
+- [ ] STILL HANGS after (1)-(5). Isolated to: NOT multi-worker sems (1-worker also hangs) => the MUX
+      CONNECTION/SETUP itself (worker blocks on wait_for_fabric_endpoint_ready / fabric_client_connect =>
+      the tt_fabric_mux kernel never reaches READY_FOR_TRAFFIC). Cannot isolate further without device
+      visibility: WATCHER IS UNUSABLE on 2x4 BH fabric (overflows active-eth cfg). Need DEVICE_PRINT on the
+      mux core + worker to see how far each gets, OR check whether NP's fabric mode (FabricConnectionManager
+      per-core) is compatible with the mux's persistent-fabric expectation (likely mismatch: NP opens direct
+      EDM connections on H + edge-W cores while the mux also wants sender-channel-0 on the W link EDM).
+      HYPOTHESIS TO TEST NEXT: the mux's EDM link (get_fabric_mux_run_time_args link_idx=w_link) may
+      conflict with / not be initialized the way the mux expects under NP's fabric setup.
+Shipping default (num_w_workers=1, no mux) VERIFIED PCC-intact (coalesce 2/2). All mux work gated.
 Note: Watcher is UNUSABLE on 2x4 BH fabric (overflows active-eth cfg buffer), so hang-debug is by reasoning +
 DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - [ ] Factory: allocate N W-worker + mux + termination cores; split W rows across workers
