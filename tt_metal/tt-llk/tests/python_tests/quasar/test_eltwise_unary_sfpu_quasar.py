@@ -22,6 +22,8 @@ from helpers.param_config import (
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
+    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -692,12 +694,18 @@ def generate_sfpu_unary_combinations():
     return combinations
 
 
+_ALL_SFPU_UNARY_COMBINATIONS = generate_sfpu_unary_combinations()
+_COMPILE, _RUNTIME = split_combinations(_ALL_SFPU_UNARY_COMBINATIONS, {5})
+
+
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    compile_params=_COMPILE,
+    input_dimensions=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    compile_params,
+    input_dimensions,
 ):
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
@@ -706,9 +714,7 @@ def test_eltwise_unary_sfpu_quasar(
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
-    mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions = (
-        mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-    )
+    mathop, formats, dest_acc, dest_sync, implied_math_format = compile_params
 
     is_typecast = mathop == MathOperation.Typecast
 

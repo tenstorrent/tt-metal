@@ -422,7 +422,36 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def _collapse_runtime_only_variants(items):
+    from helpers.param_config import RUNTIME_AXES_MARK
+
+    seen = set()
+    keep = []
+    for item in items:
+        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+        if marker is None:
+            keep.append(item)
+            continue
+        runtime_names = set(marker.args)
+        compile_params = {
+            k: v for k, v in item.callspec.params.items() if k not in runtime_names
+        }
+        key = (item.nodeid.split("[")[0], repr(sorted(compile_params.items())))
+        if key not in seen:
+            seen.add(key)
+            keep.append(item)
+    original = len(items)
+    items[:] = keep
+    logger.info(
+        f"Compile-producer deselection: {original} -> {len(items)} tests "
+        f"({original - len(items)} runtime-only duplicates removed)"
+    )
+
+
 def pytest_collection_modifyitems(config, items):
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        _collapse_runtime_only_variants(items)
+
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:

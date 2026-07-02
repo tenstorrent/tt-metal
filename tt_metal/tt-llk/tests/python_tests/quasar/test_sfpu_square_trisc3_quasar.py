@@ -22,6 +22,8 @@ from helpers.llk_params import (
 from helpers.param_config import (
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
+    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -84,23 +86,25 @@ def generate_sfpu_square_combinations(formats_list):
     return combinations
 
 
+_TRISC3_COMBINATIONS = generate_sfpu_square_combinations(SFPU_SQUARE_FORMATS)
+_COMPILE, _RUNTIME = split_combinations(_TRISC3_COMBINATIONS, {4})
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_implied_math_dims=generate_sfpu_square_combinations(
-        SFPU_SQUARE_FORMATS
-    ),
+    compile_params=_COMPILE,
+    input_dimensions=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
 )
 def test_sfpu_square_trisc3_quasar(
-    formats_dest_acc_sync_implied_math_dims,
+    compile_params,
+    input_dimensions,
 ):
     """
     Test square operation on Quasar with SFPU on TRISC3.
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    formats, dest_acc, dest_sync_mode, implied_math_format, input_dimensions = (
-        formats_dest_acc_sync_implied_math_dims[0]
-    )
+    (formats, dest_acc, dest_sync_mode, implied_math_format) = compile_params
 
     torch.manual_seed(42)
 

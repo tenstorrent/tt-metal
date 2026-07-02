@@ -23,6 +23,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -134,7 +135,7 @@ def generate_qsr_pack_l1_acc_combinations(
         else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
 )
 def test_pack_l1_acc_quasar(
     formats_dest_acc,

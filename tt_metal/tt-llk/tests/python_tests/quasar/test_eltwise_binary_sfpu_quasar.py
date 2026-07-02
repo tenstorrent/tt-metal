@@ -25,6 +25,7 @@ from helpers.param_config import (
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -316,7 +317,7 @@ _FLOAT_OPS = [
     implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
         formats_dest_acc[0]
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
     formats_dest_acc, implied_math_format, tile_indices, binary_op, mathop
@@ -571,7 +572,7 @@ def _run_max_min(
             else (DestAccumulation.No,)
         ),
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
@@ -601,7 +602,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
         dest_acc_for_format=lambda fmt: (DestAccumulation.Yes,),
         implied_math_formats=(ImpliedMathFormat.No,),
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,

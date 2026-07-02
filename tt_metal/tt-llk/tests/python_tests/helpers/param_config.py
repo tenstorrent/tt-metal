@@ -19,6 +19,34 @@ from .format_config import (
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import BlocksCalculationAlgorithm, DestAccumulation, DestSync
 
+RUNTIME_AXES_MARK = "runtime_axes"
+
+
+class _RuntimeMarker:
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+def runtime(value):
+    return _RuntimeMarker(value)
+
+
+def split_combinations(combos, runtime_indices):
+    compile_keys = []
+    runtime_lookup = {}
+    for combo in combos:
+        key = tuple(v for i, v in enumerate(combo) if i not in runtime_indices)
+        rt = tuple(v for i, v in enumerate(combo) if i in runtime_indices)
+        key_repr = repr(key)
+        if key_repr not in runtime_lookup:
+            compile_keys.append(key)
+            runtime_lookup[key_repr] = []
+        runtime_lookup[key_repr].append(rt[0] if len(rt) == 1 else rt)
+    return compile_keys, runtime_lookup
+
+
 checked_formats_and_dest_acc = {}
 
 DEST_SYNC_TILE_LIMITS = {
@@ -291,9 +319,18 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
 
 
 def parametrize(**kwargs: any):
-    parameters = tuple(kwargs.keys())
+    runtime_axes = []
+    unwrapped = {}
+    for name, value in kwargs.items():
+        if isinstance(value, _RuntimeMarker):
+            runtime_axes.append(name)
+            unwrapped[name] = value.value
+        else:
+            unwrapped[name] = value
+
+    parameters = tuple(unwrapped.keys())
     parameters_string = ",".join(parameters)
-    parameter_values = _params_solve_dependencies(**kwargs)
+    parameter_values = _params_solve_dependencies(**unwrapped)
 
     def generate_id(value_tuple):
         """Generate readable test IDs from parameter values."""
@@ -313,6 +350,8 @@ def parametrize(**kwargs: any):
     ids = [generate_id(values) for values in parameter_values]
 
     def decorator(test_function):
+        if runtime_axes:
+            test_function = pytest.mark.runtime_axes(*runtime_axes)(test_function)
         return pytest.mark.parametrize(parameters_string, parameter_values, ids=ids)(
             test_function
         )

@@ -24,6 +24,8 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
+    split_combinations,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
@@ -171,19 +173,18 @@ PACK_FORMATS = input_output_formats(
 )
 
 
+_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
+_COMPILE, _RUNTIME = split_combinations(_PACK_COMBINATIONS, {3, 4, 5})
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dims_relu=generate_qsr_pack_combinations(PACK_FORMATS),
+    compile_params=_COMPILE,
+    runtime_params=runtime(lambda compile_params: _RUNTIME[repr(compile_params)]),
 )
-def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        input_dimensions,
-        relu_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_dims_relu[0]
+def test_pack_quasar(compile_params, runtime_params, boot_mode=BootMode.DEFAULT):
+    (formats, dest_acc, dest_sync_mode) = compile_params
+    input_dimensions, relu_type, tile_dimensions = runtime_params
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

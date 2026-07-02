@@ -21,6 +21,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import BootMode, TestConfig
@@ -81,7 +82,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
         else [ImpliedMathFormat.Yes]
     ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
 )
 def test_unary_broadcast_quasar(
     formats,
