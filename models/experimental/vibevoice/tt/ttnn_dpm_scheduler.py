@@ -31,35 +31,18 @@ _COMPUTE_KERNEL = ttnn.WormholeComputeKernelConfig(
 
 
 def _ttnn_scalar_mul(x: ttnn.Tensor, scalar: float) -> ttnn.Tensor:
-    """Multiply TTNN tensor by a Python float scalar."""
-    return ttnn.mul(
-        x,
-        ttnn.full(
-            x.shape,
-            scalar,
-            dtype=ttnn.bfloat16,
-            device=x.device(),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    """Multiply TTNN tensor by a Python float scalar.
+
+    Uses the direct scalar-operand form (not ``ttnn.mul(x, ttnn.full(...))``): ttnn.full is a
+    host->device constant write, which is illegal inside a ttnn trace capture (the whole DPM
+    loop is captured for --trace).  The scalar path broadcasts device-side, no host write.
+    """
+    return ttnn.mul(x, scalar, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def _ttnn_scalar_add(x: ttnn.Tensor, scalar: float) -> ttnn.Tensor:
-    """Add a Python float scalar to a TTNN tensor."""
-    return ttnn.add(
-        x,
-        ttnn.full(
-            x.shape,
-            scalar,
-            dtype=ttnn.bfloat16,
-            device=x.device(),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    """Add a Python float scalar to a TTNN tensor (direct scalar form; see _ttnn_scalar_mul)."""
+    return ttnn.add(x, scalar, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 class TTDPMSolverMultistepScheduler:
@@ -296,6 +279,7 @@ def sample_speech_latents(
     cfg_scale: float = 1.3,
     num_steps: int = 10,
     head_runner=None,
+    t_tensors=None,
 ) -> ttnn.Tensor:
     """Run the DPM multistep loop using TT diffusion head.
 
@@ -332,15 +316,20 @@ def sample_speech_latents(
         # Expand sample to CFG batch: [2, 1, 1, latent]
         sample_expanded = ttnn.concat([sample, sample], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Build timestep tensor on device: [2, 1, 1, 1]
-        t_tensor = ttnn.full(
-            (2, 1, 1, 1),
-            float(t_val),
-            dtype=ttnn.bfloat16,
-            device=condition_tt.device(),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Timestep tensor [2, 1, 1, 1].  Prefer pre-built tensors (t_tensors) when provided:
+        # ttnn.full is a host->device write, illegal inside a trace capture, so the traced
+        # (--trace) path passes tensors built once before capture; eager builds them here.
+        if t_tensors is not None:
+            t_tensor = t_tensors[step_idx]
+        else:
+            t_tensor = ttnn.full(
+                (2, 1, 1, 1),
+                float(t_val),
+                dtype=ttnn.bfloat16,
+                device=condition_tt.device(),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Run diffusion head on CFG batch
         eps_combined = head_runner(sample_expanded, t_tensor, cond_combined)
