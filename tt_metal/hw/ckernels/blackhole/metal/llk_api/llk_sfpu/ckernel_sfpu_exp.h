@@ -426,7 +426,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
 
     // Run series in Horner form
     sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::sFloat16b(0.863281f);
-    val = val * tmp + sfpi::vConst1;
+    val = val * tmp + 1.0f;
 
     v_if(exp >= 0) {
         val = val * val;

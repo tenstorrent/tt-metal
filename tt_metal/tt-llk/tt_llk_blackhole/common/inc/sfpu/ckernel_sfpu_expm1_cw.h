@@ -42,17 +42,17 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 
     // expm1(r) = r * h(r), Horner evaluation of h
 #ifdef INP_FLOAT32
-    sfpi::vFloat h = PolynomialEvaluator::eval(r, sfpi::vConst1, 5.0000000000e-01f, 1.6666504741e-01f, 4.1666239500e-02f, 8.3691505715e-03f, 1.3948583510e-03f);
+    sfpi::vFloat h = PolynomialEvaluator::eval(r, 1.0f, 5.0000000000e-01f, 1.6666504741e-01f, 4.1666239500e-02f, 8.3691505715e-03f, 1.3948583510e-03f);
 #else
-    sfpi::vFloat h = PolynomialEvaluator::eval(r, sfpi::vConst1, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
+    sfpi::vFloat h = PolynomialEvaluator::eval(r, 1.0f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
 #endif
     h = r * h;
 
     // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
     // 0x4B3FFF81 = 0x4B400000 - 127: fuses k_int ISUB + bias IADD into a single ISUB
     constexpr int kC231Bias = 0x4B3FFF81;
-    sfpi::vFloat two_k      = sfpi::setexp(sfpi::vConst1, sfpi::as<sfpi::vInt>(tmp) - kC231Bias);
-    return (two_k - sfpi::vConst1) + two_k * h;
+    sfpi::vFloat two_k      = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tmp) - kC231Bias);
+    return (two_k - 1.0f) + two_k * h;
 }
 
 } // namespace ckernel::sfpu
