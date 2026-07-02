@@ -160,7 +160,13 @@ struct kernel_config_msg_t {
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2[3];  // CODEGEN:skip
+    // Number of CrossNodeDFB slots configured for this launch (0 = none). Firmware gates
+    // CrossNodeDFB setup on this field; remote_cross_node_dfb_offset is the byte offset and
+    // may legitimately be 0 when CrossNodeDFB is the first kernel-config region.
+    volatile uint8_t num_cross_node_dfbs;
+    // Byte offset into the kernel config region for CrossNodeDFB entries (2 words per slot:
+    // [config_page_addr, entry_size]).
+    volatile uint16_t remote_cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
     volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
@@ -195,6 +201,7 @@ static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_
 static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, remote_cross_node_dfb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);

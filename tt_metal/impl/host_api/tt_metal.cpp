@@ -54,6 +54,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal_profiler.hpp>
 #include <program.hpp>
+#include "program/dispatch.hpp"
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
@@ -1091,6 +1092,36 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         program.impl().get_program_config(index).dfb_offset,
                         dfb_config_vec.size());
                     MetalContext::instance().get_cluster().write_core(device_id, physical_core, dfb_config_vec, addr);
+                }
+
+                // CrossNodeDFB config: num_cross_node_dfbs dense slots * 2 words each.
+                // Written here for slow dispatch; fast dispatch uses CrossNodeDFBCommandGenerator instead.
+                const uint32_t cross_node_dfb_offset =
+                    program.impl().get_program_config(index).remote_cross_node_dfb_offset;
+                const auto& per_core_cross_node_dfbs = program.impl().get_per_core_cross_node_dfbs();
+                auto it = per_core_cross_node_dfbs.find(logical_core);
+                if (it != per_core_cross_node_dfbs.end() && !it->second.empty()) {
+                    const uint32_t num_cross_node_dfbs = static_cast<uint32_t>(it->second.size());
+                    const uint32_t payload_words =
+                        program_dispatch::cross_node_dfb_config_region_words(num_cross_node_dfbs);
+                    std::vector<uint32_t> cross_node_dfb_vec(payload_words, 0u);
+                    for (uint32_t slot = 0; slot < num_cross_node_dfbs; ++slot) {
+                        const auto& attachment = it->second[slot];
+                        TT_FATAL(
+                            attachment.remote_dfb_id == slot,
+                            "CrossNodeDFB slot {} expected dense remote_dfb_id {}, got {}",
+                            slot,
+                            slot,
+                            attachment.remote_dfb_id);
+                        const uint32_t base = slot * program_dispatch::CROSS_NODE_DFB_CONFIG_WORDS;
+                        cross_node_dfb_vec[base + 0] = attachment.config_page_addr;
+                        cross_node_dfb_vec[base + 1] =
+                            attachment.entry_size |
+                            (attachment.auto_commit ? program_dispatch::CROSS_NODE_DFB_AUTO_COMMIT_BIT : 0u);
+                    }
+                    uint64_t addr = kernel_config_base + cross_node_dfb_offset;
+                    MetalContext::instance().get_cluster().write_core(
+                        device_id, physical_core, cross_node_dfb_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);

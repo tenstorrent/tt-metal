@@ -106,6 +106,26 @@ void finalize_dfb_masks(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
 
+// Kernel-config layout constants for CrossNodeDFB.
+// Entries are densely packed: num_cross_node_dfbs slots, each 2 uint32_t words
+// [config_page_addr, entry_size|flags]. Slot index equals remote_dfb_id (0 .. num-1).
+// MAX_CROSS_NODE_DFB_SLOTS is the per-program attach limit (matches MAX_CROSS_NODE_DFBS).
+inline constexpr uint32_t MAX_CROSS_NODE_DFB_SLOTS      = 16u;
+inline constexpr uint32_t CROSS_NODE_DFB_CONFIG_WORDS   = 2u;
+inline constexpr uint32_t CROSS_NODE_DFB_AUTO_COMMIT_BIT = (1u << 31);
+
+inline uint32_t cross_node_dfb_config_region_words(uint32_t num_cross_node_dfbs) {
+    return num_cross_node_dfbs * CROSS_NODE_DFB_CONFIG_WORDS;
+}
+
+// Set num_cross_node_dfbs / remote_cross_node_dfb_offset in each kernel group's launch msg
+// and reserve space in the kernel config region for the dense CrossNodeDFB entries.
+// Returns the new base offset; if no CrossNodeDFBs are attached, returns base_offset unchanged.
+uint32_t finalize_cross_node_dfbs(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    tt::stl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
+
 uint32_t finalize_kernel_bins(
     IDevice* device,
     uint32_t programmable_core_type_index,

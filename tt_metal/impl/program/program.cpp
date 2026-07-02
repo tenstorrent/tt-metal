@@ -41,6 +41,7 @@
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "impl/buffers/circular_buffer.hpp"
+#include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "common/stable_hash.hpp"
@@ -1162,10 +1163,108 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     TT_FATAL(
         this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
+    TT_FATAL(
+        this->per_core_cross_node_dfbs_.empty(),
+        "Cannot add a GlobalCircularBuffer to a program that already has CrossNodeDFBs attached. "
+        "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
     return add_circular_buffer_(circular_buffer);
+}
+
+uint8_t detail::ProgramImpl::attach_cross_node_dfb(
+    const CoreRangeSet& cores,
+    const experimental::CrossNodeDFB& gdfb,
+    const std::vector<std::string>& relay_dfb_names,
+    bool auto_commit) {
+    TT_FATAL(this->compiled_.empty(), "Cannot attach CrossNodeDFB to an already compiled program {}", this->id);
+    // Check mutual exclusion: GlobalCircularBuffer and CrossNodeDFB cannot coexist in the same program.
+    for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
+        TT_FATAL(
+            !remote_bits.any(),
+            "Cannot attach a CrossNodeDFB to a program that already has GlobalCircularBuffers. "
+            "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
+    }
+
+    const size_t gdfb_key = std::hash<experimental::CrossNodeDFB>{}(gdfb);
+    uint8_t remote_dfb_id = 0;
+    auto slot_it = cross_node_dfb_slot_registry_.find(gdfb_key);
+    if (slot_it != cross_node_dfb_slot_registry_.end()) {
+        TT_FATAL(
+            slot_it->second.auto_commit == auto_commit,
+            "CrossNodeDFB auto_commit mismatch across AttachCrossNodeDFB calls for the same CrossNodeDFB");
+        TT_FATAL(
+            slot_it->second.relay_dfb_names == relay_dfb_names,
+            "CrossNodeDFB relay_dfb_names mismatch across AttachCrossNodeDFB calls for the same CrossNodeDFB");
+        remote_dfb_id = slot_it->second.remote_dfb_id;
+    } else {
+        constexpr uint8_t max_cross_node_dfbs = 16;
+        TT_FATAL(
+            next_cross_node_dfb_slot_ < max_cross_node_dfbs,
+            "Exceeded maximum number ({}) of CrossNodeDFBs per program",
+            max_cross_node_dfbs);
+        remote_dfb_id = next_cross_node_dfb_slot_++;
+        cross_node_dfb_slot_registry_[gdfb_key] = {remote_dfb_id, auto_commit, relay_dfb_names};
+    }
+
+    for (const auto& core_range : cores.ranges()) {
+        for (const auto& core : core_range) {
+            auto& attachments = per_core_cross_node_dfbs_[core];
+            // Check for duplicate slot on the same core.
+            for (const auto& a : attachments) {
+                TT_FATAL(
+                    a.remote_dfb_id != remote_dfb_id,
+                    "CrossNodeDFB slot {} already attached on core {}",
+                    remote_dfb_id,
+                    core.str());
+            }
+            attachments.push_back({
+                remote_dfb_id,
+                gdfb.config_address(),
+                gdfb.entry_size(),
+                auto_commit,
+                relay_dfb_names});
+            TT_FATAL(
+                remote_dfb_id == static_cast<uint8_t>(attachments.size() - 1),
+                "CrossNodeDFB remote_dfb_id {} must be dense (expected {}) on core {}",
+                remote_dfb_id,
+                attachments.size() - 1,
+                core.str());
+        }
+    }
+    return remote_dfb_id;
+}
+
+void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(
+    const experimental::CrossNodeDFB& gdfb) {
+    const size_t gdfb_key = std::hash<experimental::CrossNodeDFB>{}(gdfb);
+    auto slot_it = cross_node_dfb_slot_registry_.find(gdfb_key);
+    TT_FATAL(
+        slot_it != cross_node_dfb_slot_registry_.end(),
+        "UpdateDynamicCrossNodeDFBAddress: CrossNodeDFB is not attached to program {}",
+        this->id);
+    const uint8_t remote_dfb_id = slot_it->second.remote_dfb_id;
+
+    bool found = false;
+    for (auto& [core, attachments] : per_core_cross_node_dfbs_) {
+        for (auto& a : attachments) {
+            if (a.remote_dfb_id == remote_dfb_id) {
+                // Validate topology: the receiver / sender sets must be identical.
+                TT_FATAL(
+                    gdfb.all_cores().contains(CoreRangeSet(CoreRange(core))),
+                    "UpdateDynamicCrossNodeDFBAddress: core {} is not in the CrossNodeDFB's all_cores",
+                    core.str());
+                a.config_page_addr = gdfb.config_address();
+                a.entry_size       = gdfb.entry_size();
+                found = true;
+            }
+        }
+    }
+    TT_FATAL(found, "UpdateDynamicCrossNodeDFBAddress: no CrossNodeDFB attachments found in program {}", id);
+    // Invalidate cached command sequences so they are re-assembled with new addresses.
+    cached_program_command_sequences_.clear();
+    trace_cached_program_command_sequences_.clear();
 }
 
 std::shared_ptr<CircularBufferImpl> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
@@ -2368,6 +2467,7 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.local_cb_size = state.local_cb_size;
     program_config.dfb_offset = state.dfb_offset;
     program_config.dfb_size = state.dfb_size;
+    program_config.remote_cross_node_dfb_offset = state.cross_node_dfb_offset;
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
@@ -2457,6 +2557,17 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         if (!hal.has_tile_counter_registers() && !dataflow_buffers.empty()) {
             program_dispatch::finalize_dfb_masks(kernel_groups_getter(index), dataflow_buffers);
         }
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        // CrossNodeDFB kernel-config region: MAX_REMOTE_DFBS 2-word entries.
+        // remote_cross_node_dfb_offset stays 0 if no CrossNodeDFBs are attached.
+        uint32_t prev_offset_before_cross_node_dfb = state.offset;
+        state.offset = program_dispatch::finalize_cross_node_dfbs(
+            kernel_groups_getter(index), programs, state.offset);
+        state.cross_node_dfb_offset = (state.offset > prev_offset_before_cross_node_dfb)
+            ? (prev_offset_before_cross_node_dfb - state.config_base_offset)
+            : 0;
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

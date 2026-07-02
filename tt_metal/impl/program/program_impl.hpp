@@ -57,6 +57,7 @@ class MeshWorkloadImpl;
 
 namespace experimental {
 class GlobalCircularBuffer;
+class CrossNodeDFB;
 }
 
 namespace program_dispatch {
@@ -106,6 +107,9 @@ struct ProgramConfig {
     uint32_t dfb_offset;
     uint32_t dfb_size;
     uint32_t local_cb_size;
+    // CrossNodeDFB region byte offset from kernel_config_base. Presence is indicated by
+    // num_cross_node_dfbs in the launch msg, not by this field being non-zero.
+    uint32_t remote_cross_node_dfb_offset = 0;
     uint32_t kernel_text_offset;  // offset of first kernel bin
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
@@ -136,6 +140,7 @@ struct ProgramOffsetsState {
     uint32_t local_cb_size = 0;
     uint32_t dfb_offset = 0;
     uint32_t dfb_size = 0;
+    uint32_t cross_node_dfb_offset = 0;
     // Kernel binary offsets and sizes.
     uint32_t kernel_text_offset = 0;
     uint32_t kernel_text_size = 0;
@@ -287,6 +292,38 @@ public:
 
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
+
+    // Per-core CrossNodeDFB attachment record.
+    struct CrossNodeDFBAttachment {
+        uint8_t  remote_dfb_id;
+        uint32_t config_page_addr;
+        uint32_t entry_size;
+        bool     auto_commit = true;
+        std::vector<std::string> relay_dfb_names;
+    };
+
+    // Runtime slot registry: one ascending slot per distinct CrossNodeDFB attached to this program.
+    struct CrossNodeDFBSlotRegistration {
+        uint8_t remote_dfb_id;
+        bool auto_commit = true;
+        std::vector<std::string> relay_dfb_names;
+    };
+
+    // Read-only accessor for dispatch to iterate CrossNodeDFB attachments.
+    const std::unordered_map<CoreCoord, std::vector<CrossNodeDFBAttachment>>& get_per_core_cross_node_dfbs() const {
+        return per_core_cross_node_dfbs_;
+    }
+
+    // CrossNodeDFB attachment (mirrors GlobalCB's remote-CB attachment path).
+    uint8_t attach_cross_node_dfb(
+        const CoreRangeSet& cores,
+        const experimental::CrossNodeDFB& gdfb,
+        const std::vector<std::string>& relay_dfb_names = {},
+        bool auto_commit = true);
+
+    // Update the config page address for a previously-attached CrossNodeDFB slot.
+    // Called when the CrossNodeDFB was reallocated dynamically.
+    void update_dynamic_cross_node_dfb_address(const experimental::CrossNodeDFB& gdfb);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
@@ -487,6 +524,12 @@ private:
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
         dataflow_buffer_by_id_;
+
+    // CrossNodeDFB attachments: per-core list of (remote_dfb_id, config_page_addr, entry_size).
+    // 0-based ascending index space; separate from CB remote index space.
+    std::unordered_map<CoreCoord, std::vector<CrossNodeDFBAttachment>> per_core_cross_node_dfbs_;
+    std::unordered_map<size_t, CrossNodeDFBSlotRegistration> cross_node_dfb_slot_registry_;
+    uint8_t next_cross_node_dfb_slot_ = 0;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
