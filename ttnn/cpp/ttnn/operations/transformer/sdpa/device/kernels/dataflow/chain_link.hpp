@@ -10,12 +10,17 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
 /**
  * ChainConfig: Runtime args for store-and-forward chain configuration.
  * Mirrors the append_to_args() layout in ring_joint_sdpa_program_factory.cpp.
  */
 struct ChainConfig {
+    static constexpr uint32_t kRuntimeArgCount =
+        ttnn::operations::transformer::sdpa::ring_joint::kChainConfigRuntimeArgCount;
+    static_assert(kRuntimeArgCount == 18, "ChainConfig::read_from_args must match the shared runtime arg layout");
+
     bool participates = false;
     bool is_injector = false;
     bool is_sink = false;
@@ -35,7 +40,7 @@ struct ChainConfig {
     uint32_t mcast_num_dests = 0;
     uint32_t mcast_sender_wait = 0;
 
-    // Read 18 args in canonical order matching append_to_args()
+    // Read kRuntimeArgCount args in canonical order matching append_to_args().
     static ChainConfig read_from_args(uint32_t& argidx) {
         ChainConfig cfg;
         cfg.participates = static_cast<bool>(get_arg_val<uint32_t>(argidx++));

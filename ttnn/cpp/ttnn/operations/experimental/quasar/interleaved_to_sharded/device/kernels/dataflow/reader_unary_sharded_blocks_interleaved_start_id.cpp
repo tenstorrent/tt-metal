@@ -5,10 +5,11 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "tensix_types.h"
+#include "experimental/kernel_args.h"
 
 // #include "api/debug/dprint.h"
 
@@ -19,25 +20,24 @@ constexpr uint32_t get_barrier_read_threshold() {
 }
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t padded_offset_bytes = get_arg_val<uint32_t>(3);       // input width in tiles - block width in tiles
-    const uint32_t input_width_offset_tiles = get_arg_val<uint32_t>(4);  // input width in tiles - block width in tiles
-    const uint32_t block_num_tiles = get_arg_val<uint32_t>(5);           // block_height_tiles * block_width_tiles
-    const uint32_t start_id_offset = get_arg_val<uint32_t>(6);
-    const uint32_t start_id_base = get_arg_val<uint32_t>(7);
+    const uint32_t block_height_tiles = get_arg(args::block_height_tiles);
+    const uint32_t block_width_tiles = get_arg(args::block_width_tiles);
+    const uint32_t padded_offset_bytes =
+        get_arg(args::padded_offset_bytes);  // input width in tiles - block width in tiles
+    const uint32_t input_width_offset_tiles =
+        get_arg(args::input_width_offset_tiles);                      // input width in tiles - block width in tiles
+    const uint32_t block_num_tiles = get_arg(args::block_num_tiles);  // block_height_tiles * block_width_tiles
+    const uint32_t start_id_offset = get_arg(args::start_id_offset);
+    const uint32_t start_id_base = get_arg(args::start_id_base);
     const uint32_t start_id = start_id_base + start_id_offset;
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t num_readers = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t num_readers = get_arg(args::num_readers);
 
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    constexpr uint32_t tile_bytes = get_arg(args::tile_bytes);
 
     Noc noc;
-    CircularBuffer cb_in(cb_id_in0);
-    const auto s = TensorAccessor(src_args, src_addr);
+    DataflowBuffer cb_in(dfb::in0);
+    const auto s = TensorAccessor(tensor::src);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_readers>();
     uint32_t barrier_count = 0;

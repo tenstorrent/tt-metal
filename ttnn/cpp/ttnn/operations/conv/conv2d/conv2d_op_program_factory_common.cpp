@@ -417,6 +417,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
 
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
         default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
@@ -454,6 +455,7 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
 
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
         default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
@@ -492,6 +494,7 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
     // NOLINTBEGIN(modernize-use-std-numbers)
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
         default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
@@ -551,7 +554,8 @@ static uint32_t get_tilize_cycles_per_tile(
                {DataType::BFLOAT8_B, {40, 43}}}}  // [non-fp32_dest_acc, fp32_dest_acc]
          }}};
 
-    auto arch_it = tilize_cycles.find(arch);
+    // Quasar is not yet benchmarked; reuse the Blackhole tilize-cycle table.
+    auto arch_it = tilize_cycles.find(arch == tt::ARCH::QUASAR ? tt::ARCH::BLACKHOLE : arch);
     if (arch_it == tilize_cycles.end()) {
         TT_THROW("Unsupported architecture when calculating tilize cycles");
     }

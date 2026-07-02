@@ -33,8 +33,8 @@ ttnn.read_device_profiler = read_device_profiler
 
 model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
-    "WEIGHTS_DTYPE": ttnn.bfloat8_b,
-    "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
+    "WEIGHTS_DTYPE": ttnn.bfloat16,
+    "ACTIVATIONS_DTYPE": ttnn.bfloat16,
 }
 
 

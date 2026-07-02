@@ -45,6 +45,7 @@ from helpers.test_variant_parameters import (
     SFPU_TILE_INDICES,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES, MAX_TILE_ELEMENTS
@@ -123,6 +124,10 @@ def _run_sfpu_binary_llk_golden(
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
+            # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
+            # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
+            TYPECAST_FORMATS(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -518,6 +523,10 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
+            # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
+            # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
+            # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
+            TYPECAST_FORMATS(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),

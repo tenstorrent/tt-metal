@@ -32,6 +32,11 @@ inline Tensor make_zero_host_tensor(const TensorSpec& spec) {
             return Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
+            // Block-float formats pack a shared exponent per group of datums, so the
+            // packed byte count is NOT element_count * sizeof. from_vector requires a
+            // buffer of exactly logical-volume elements and (per its contract) `float`
+            // for block formats; it tilizes + quantizes internally.
+            return Tensor::from_vector<float>(std::vector<float>(spec.logical_shape().volume()), spec);
         case DataType::UINT32:
             return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
         case DataType::FP8_E4M3: TT_THROW("StreamService: FP8_E4M3 is not supported");

@@ -13,24 +13,71 @@ from models.common.utility_functions import _nearest_y, is_blackhole, is_wormhol
 from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50_model_utils import is_blackhole_p100
 
 
+def fit_width_sharded_cores(width_elems, desired_cores, device):
+    """Tie a WIDTH_SHARDED core count to the device.
+
+    The model's per-batch grids target a full silicon part; Quasar has at most 32 Tensix neo
+    clusters and the emulator 1-2, so a hardcoded grid (e.g. 8x8=64) requests more shards than
+    there are L1 banks. Return (num_cores, core_range_set) where num_cores is the largest count
+    <= min(desired, device cores) that divides the width into tile-aligned (multiple of 32)
+    shards, so the shard width (width_elems // num_cores) stays exact and tile-aligned. On a full
+    part where the desired grid already fits this is a no-op.
+    """
+    grid = device.compute_with_storage_grid_size()
+    cap = min(desired_cores, grid.x * grid.y)
+    width_tiles = max(1, width_elems // 32)
+    num_cores = cap
+    while num_cores > 1 and width_tiles % num_cores != 0:
+        num_cores -= 1
+    return num_cores, ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
+
+
+def fit_fc_grid(device, n_tiles, k_tiles):
+    """Pick a rectangular core grid for the resnet fc 1D-mcast matmul that fits the device and
+    evenly tiles the N output dimension.
+
+    Returns (grid_x, grid_y, num_cores, per_core_N, in0_block_w). The stock config is an 8x4=32
+    grid with per_core_N=1 (N=1024/32=32 tiles, one tile/core) and in0_block_w=2 (K=2048/32=64
+    tiles -> 2 tiles/core). On Quasar (32 cores) this is unchanged; on a smaller part (emulator)
+    we pick the largest rectangle that fits the device AND divides n_tiles, then raise per_core_N
+    so every N tile is still covered (num_cores * per_core_N == n_tiles). A rectangle (not a
+    row-wise core set) is required because both the matmul config and the activation width-shard
+    feeding it take a (grid_x, grid_y) and must agree.
+    """
+    grid = device.compute_with_storage_grid_size()
+    best_gx, best_gy, best_nc = 1, 1, 1
+    for gy in range(1, grid.y + 1):
+        for gx in range(1, grid.x + 1):
+            nc = gx * gy
+            if n_tiles % nc == 0 and nc > best_nc:
+                best_gx, best_gy, best_nc = gx, gy, nc
+    per_core_N = n_tiles // best_nc
+    kt_per_core = k_tiles // best_nc  # best_nc | n_tiles | k_tiles, so this is exact
+    in0_block_w = 2 if kt_per_core % 2 == 0 else kt_per_core
+    return best_gx, best_gy, best_nc, per_core_N, in0_block_w
+
+
 def ResnetLinear(
     weight: ttnn.Tensor,
     bias: ttnn.Tensor,
     output_mem_config,
     model_config,
     compute_kernel_config,
+    matmul_grid=(8, 4),
+    per_core_N=1,
+    in0_block_w=2,
 ):
     """
     Returns a function for linear operation in resnet with bias.
     """
 
     matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=2,
+        compute_with_storage_grid_size=matmul_grid,
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=1,
-        per_core_N=1,
+        per_core_N=per_core_N,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -121,12 +168,13 @@ class resnet50Bottleneck:
                         else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                     ),
                     deallocate_activation=True,
-                    reallocate_halo_output=False,
+                    # bfloat16 doubles every tensor; mirror the large variant's minimal
+                    # downsample config (no double buffering / activation reuse / full
+                    # inner dim) and cap the activation block height at one tile so the
+                    # CBs fit alongside the pinned residual + the wide projection output.
+                    reallocate_halo_output=True,
+                    act_block_h_override=32,
                     reshard_if_not_optimal=reshard_if_not_optimal,
-                    enable_act_double_buffer=True if not (is_blackhole_p100(device) and batch_size > 16) else False,
-                    enable_weights_double_buffer=True if input_width < 56 else False,
-                    full_inner_dim=True,
-                    enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
                 ),
             }
 
@@ -144,6 +192,10 @@ class resnet50Bottleneck:
                 return_weights_and_bias=True,
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
+            # Mirror the large variant: free the residual input and defragment the
+            # downsample output so the following convs have contiguous L1.
+            ttnn.deallocate(x)
+            ds_out = ttnn.experimental.quasar.reallocate(ds_out)
         else:
             ds_out = x
         return ds_out
@@ -210,8 +262,34 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        act_block_h_override = 0
+        # bfloat16 doubles every tensor and the residual is pinned through conv2, so the
+        # bfloat8_b-tuned act_block_h overflows L1. Cap conv2 at one tile on every arch
+        # (one tile divides any per-core height); throughput is not a concern here.
+        act_block_h_override = 32
+
+        # Mirror the large resnet50 variant: run the downsample before conv2 for the
+        # projection/strided modules. bfloat16 doubles every tensor, so the pinned
+        # residual input can no longer co-reside in L1 with conv2's circular buffers.
+        # Running the downsample first lets the residual be consumed/freed before
+        # conv2. layer1_module1 (input 56, 64 in-channels) keeps the original order.
+        run_downsample_before_conv2 = not (ds_input_height == 56 and self.conv1_input_channels == 64)
         ds_out = None
+        if run_downsample_before_conv2:
+            if ds_input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
+                # Defragment L1 before the projection conv so it fits alongside conv2.
+                x_rm = ttnn.experimental.quasar.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(x)
+                x = ttnn.experimental.quasar.reallocate(x_rm)
+            ds_out = self.run_downsample_if_req(
+                x,
+                device,
+                batch_size,
+                ds_input_height,
+                ds_input_width,
+                reshard_if_not_optimal,
+                height_sharding,
+                packer_l1_accum_enabled=packer_l1_acc,
+            )
 
         logger.debug(f"Running conv2")
 
@@ -237,27 +315,11 @@ class resnet50Bottleneck:
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                enable_act_double_buffer=True,
-                enable_weights_double_buffer=True,
-                full_inner_dim=True,
-                enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
+                # bfloat16 doubles every tensor; mirror the large variant's minimal
+                # conv2 config (no double buffering / activation reuse / full inner
+                # dim) so the CBs fit in L1.
             ),
         }
-
-        if is_blackhole():
-            if layer_module == "layer1_module3":
-                conv_kwargs_2["conv_config"].act_block_h_override = 16 * 32
-            if batch_size == 32 and is_blackhole_p100(device):
-                if (
-                    layer_module == "layer1_module2"
-                    or layer_module == "layer1_module3"
-                    or layer_module == "layer2_module1"
-                ):
-                    conv_kwargs_2["conv_config"].act_block_h_override = 32
-
-        if is_wormhole_b0():
-            if layer_module == "layer1_module2" or layer_module == "layer1_module3":
-                conv_kwargs_2["conv_config"].act_block_h_override = 14 * 32
 
         (
             out,
@@ -317,16 +379,17 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        ds_out = self.run_downsample_if_req(
-            x,
-            device,
-            batch_size,
-            ds_input_height,
-            ds_input_width,
-            reshard_if_not_optimal,
-            height_sharding,
-            packer_l1_accum_enabled=packer_l1_acc,
-        )
+        if not run_downsample_before_conv2:
+            ds_out = self.run_downsample_if_req(
+                x,
+                device,
+                batch_size,
+                ds_input_height,
+                ds_input_width,
+                reshard_if_not_optimal,
+                height_sharding,
+                packer_l1_accum_enabled=packer_l1_acc,
+            )
 
         if ds_out.memory_config() != out.memory_config():
             ds_out = ttnn.experimental.quasar.to_memory_config(ds_out, out.memory_config())
@@ -427,12 +490,22 @@ class resnet50:
         self.layer4_module2 = self.layer4[1]
         self.layer4_module3 = self.layer4[2]
 
+        # Tie the fc 1D-mcast matmul grid to the device. resnet50 fc: N=1000 -> padded 1024 = 32
+        # tiles, K=2048 = 64 tiles. On Quasar (32 cores) this stays the stock 8x4 grid /
+        # per_core_N=1; on a smaller part it shrinks the grid and raises per_core_N so all N tiles
+        # are covered. The same (grid_x, grid_y) is reused for the activation width-shard feeding
+        # fc (see run()), since mcast_in0 requires the input sharding to match the matmul grid.
+        fc_gx, fc_gy, self.fc_num_cores, fc_per_core_N, fc_in0_block_w = fit_fc_grid(device, n_tiles=32, k_tiles=64)
+        self.fc_matmul_grid = (fc_gx, fc_gy)
         self.fc = ResnetLinear(
-            weight=ttnn.to_device(parameters.fc.weight, device),
-            bias=ttnn.to_device(parameters.fc.bias, device),
+            weight=ttnn.experimental.quasar.to_device(parameters.fc.weight, device),
+            bias=ttnn.experimental.quasar.to_device(parameters.fc.bias, device),
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             model_config=model_config,
             compute_kernel_config=compute_kernel_config,
+            matmul_grid=self.fc_matmul_grid,
+            per_core_N=fc_per_core_N,
+            in0_block_w=fc_in0_block_w,
         )  # num_classes = 1000
 
         act_block_h_override = 0
@@ -443,16 +516,17 @@ class resnet50:
         if is_blackhole() and self.batch_size == 32:
             act_block_h_override = 32 * 32 if is_blackhole_p100(device) else 49 * 32
 
+        # Mirror the large resnet50 variant's first-conv config: bfloat16 doubles the
+        # activation footprint, so activation reuse + double buffering no longer fit in
+        # L1. The large variant omits both and relies on reallocate_halo_output instead.
         self.conv1_config = ttnn.Conv2dConfig(
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=dealloc_input,
+            reallocate_halo_output=True,
             act_block_h_override=act_block_h_override,
-            enable_act_double_buffer=True,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
-            # otherwise act block h is not big enough for the reuse
-            enable_activation_reuse=(not is_wormhole_b0() or device.get_num_devices() <= 8),
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -523,6 +597,17 @@ class resnet50:
             if is_blackhole_p100(device):
                 core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
             self.fold_compute_grid_size = core_grid
+
+        # Cap the fold compute grid to the device's real core count. The per-batch grids above target
+        # a full silicon part; Quasar has at most 32 Tensix neo clusters and the emulator 1-2, so an
+        # 8x8 (=64) fold grid would request more shards than there are L1 banks. Clamp to the device
+        # grid (no-op when it already fits) so this matches the (also-capped) input sharding.
+        _fold_compute_grid = device.compute_with_storage_grid_size()
+        _fold_max_cores = _fold_compute_grid.x * _fold_compute_grid.y
+        if self.fold_compute_grid_size.num_cores() > _fold_max_cores:
+            self.fold_compute_grid_size = ttnn.num_cores_to_corerangeset(
+                _fold_max_cores, _fold_compute_grid, row_wise=True
+            )
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -622,7 +707,7 @@ class resnet50:
             override_memory_config=self.override_fold_mem_config,
         )
         n, c, h, w = fold_output_tensor.shape
-        fold_output_tensor = ttnn.reshape(fold_output_tensor, (1, 1, n * c * h, w))
+        fold_output_tensor = ttnn.experimental.quasar.reshape(fold_output_tensor, (1, 1, n * c * h, w))
 
         ttnn.deallocate(input_tensor)
 
@@ -886,10 +971,11 @@ class resnet50:
             layer_module="layer4_module3",
         )
 
-        grid_size = (8, 8)
+        # WIDTH_SHARDED grid tied to device core count.
+        num_cores, core_grid = fit_width_sharded_cores(x.shape[3], 8 * 8, device)
         width_mem_config = ttnn.create_sharded_memory_config_(
-            [nearest_32(x.shape[2]), x.shape[3] // (grid_size[0] * grid_size[1])],
-            ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+            [nearest_32(x.shape[2]), x.shape[3] // num_cores],
+            core_grid,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.ShardOrientation.ROW_MAJOR,
             tile_layout=True,
@@ -907,16 +993,20 @@ class resnet50:
             stride=[1, 1],
             padding=[0, 0, 0, 0],
             output_layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
                 self.device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
             ),
         )
 
-        grid_size = (8, 4)
+        # WIDTH_SHARDED activation for fc, on the SAME rectangular grid as the fc
+        # 1D-mcast matmul (mcast_in0 requires the input sharding to match the matmul grid). Both
+        # were derived together from the device in __init__ (fit_fc_grid), so this is the stock
+        # 8x4=32 layout on Quasar and a smaller rectangle on the emulator.
+        fc_core_grid = ttnn.CoreGrid(x=self.fc_matmul_grid[0], y=self.fc_matmul_grid[1])
         width_mem_config = ttnn.create_sharded_memory_config_(
-            [nearest_32(x.shape[2]), x.shape[3] // (grid_size[0] * grid_size[1])],
-            ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+            [nearest_32(x.shape[2]), x.shape[3] // self.fc_num_cores],
+            fc_core_grid,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.ShardOrientation.ROW_MAJOR,
             tile_layout=True,
@@ -932,7 +1022,7 @@ class resnet50:
             output_tensor_end=(desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             memory_config=self.final_output_mem_config,
         )
-        x = ttnn.reshape(
+        x = ttnn.experimental.quasar.reshape(
             x,
             (
                 self.batch_size,

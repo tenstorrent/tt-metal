@@ -144,6 +144,7 @@ inline void _llk_unpack_A_mop_config_(
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
+        tmp.set_start_op(unpack_srca_set_dvalid);
         tmp.program();
     }
     else
@@ -309,11 +310,6 @@ inline void _llk_unpack_A_init_(
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }
 
-    // TODO NC: Move to TRISC1 tt-metal#36411
-    if constexpr (BType != BroadcastType::NONE && unpack_to_dest)
-    {
-        _llk_unpack_dbg_feature_disable_();
-    }
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
@@ -434,7 +430,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            unpack_to_dest_tile_done(unp_cfg_context);
+            unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
 

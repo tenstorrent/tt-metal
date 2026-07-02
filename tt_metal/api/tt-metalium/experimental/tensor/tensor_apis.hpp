@@ -123,6 +123,8 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 // ======================================================================================
 
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
+HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile);
+HostTensor to_row_major_layout(const HostTensor& tensor);
 
 // ======================================================================================
 //                                  .pad() and .unpad()

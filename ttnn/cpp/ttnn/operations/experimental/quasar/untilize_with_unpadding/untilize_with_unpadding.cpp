@@ -5,7 +5,7 @@
 #include "untilize_with_unpadding.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -53,7 +53,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(
+            auto unsqueezed_tensor = ttnn::operations::experimental::quasar::reshape(
                 output,
                 *original_shape,
                 std::nullopt,              /*Memory Config*/

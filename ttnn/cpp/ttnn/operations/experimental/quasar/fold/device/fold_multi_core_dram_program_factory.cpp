@@ -17,28 +17,24 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::operations::experimental::quasar {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
 
-ProgramDescriptor fold_multi_core_tiled_interleaved(
+ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
 
     const uint32_t input_width = input_tensor.logical_shape()[2];
-
-    Buffer* src0_buffer = input_tensor.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -79,121 +75,94 @@ ProgramDescriptor fold_multi_core_tiled_interleaved(
         nblocks_per_core,
         nblocks_per_core_cliff);
 
-    ProgramDescriptor desc;
-
-    const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t num_input_tiles = tiles_per_channel_dim;
 
-    // Source CB
-    {
-        CBDescriptor cb;
-        cb.total_size = num_input_tiles * single_tile_size;
-        cb.core_ranges = all_cores;
-        cb.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        });
-        desc.cbs.push_back(std::move(cb));
-    }
+    // ---- Resource names ----
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName SRC0{"src0"};
+    const DFBSpecName SRC1{"src1"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_MAIN{"compute_main"};
+    const KernelSpecName COMPUTE_CLIFF{"compute_cliff"};
 
-    const uint32_t src1_cb_index = tt::CBIndex::c_1;
-    {
-        CBDescriptor cb;
-        cb.total_size = num_input_tiles * out_single_tile_size;
-        cb.core_ranges = all_cores;
-        cb.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src1_cb_index),
-            .data_format = out_cb_data_format,
-            .page_size = out_single_tile_size,
-        });
-        desc.cbs.push_back(std::move(cb));
-    }
+    // ---- Tensor parameters ----
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.mesh_tensor().tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.mesh_tensor().tensor_spec()};
 
-    // Reader kernel compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {
-        tiles_per_channel_dim,
-        tiles_per_width_dim,
-        src0_cb_index,
+    // ---- Dataflow buffers ----
+    // Source CB (c_0): reader -> compute
+    DataflowBufferSpec src0_dfb{
+        .unique_id = SRC0,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = cb_data_format,
     };
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-
-    // Writer kernel compile-time args
-    std::vector<uint32_t> writer_compile_time_args = {
-        input_width,
-        stride_h,
-        stride_w,
-        stick_nbytes,
-        aligned_stick_nbytes,
-        tiles_per_channel_dim,
-        tiles_per_width_dim,
-        datum_size(out_cb_data_format),
-        src1_cb_index,
-    };
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    // Reader kernel: DRAM -> CB
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    // Writer kernel: CB -> DRAM
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/writer_cb2dram_for_tiled_input.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Compute kernel arguments — main grid and (optional) cliff grid handle the
-    // last core when the work doesn't divide evenly.
-    std::vector<uint32_t> compute_compile_time_args = {
-        nblocks_per_core * tiles_per_width_dim,
-        tiles_per_channel_dim,
-        src0_cb_index,
-        src1_cb_index,
+    // Untilized CB (c_1): compute -> writer
+    DataflowBufferSpec src1_dfb{
+        .unique_id = SRC1,
+        .entry_size = out_single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = out_cb_data_format,
     };
 
-    std::vector<uint32_t> compute_compile_time_args_cliff = {
-        nblocks_per_core_cliff * tiles_per_width_dim,
-        tiles_per_channel_dim,
-        src0_cb_index,
-        src1_cb_index,
+    // ---- Reader kernel (DRAM -> SRC0) ----
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
+        .compile_time_args =
+            {{"tiles_per_channel_dim", tiles_per_channel_dim}, {"tiles_per_width_dim", tiles_per_width_dim}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_block_id", "num_blocks"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
     };
 
+    // ---- Writer kernel (SRC1 -> DRAM) ----
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/"
+            "writer_cb2dram_for_tiled_input.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC1, .accessor_name = "src1", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
+        .compile_time_args =
+            {{"input_width", input_width},
+             {"stride_height", stride_h},
+             {"stride_width", stride_w},
+             {"stick_nbytes", stick_nbytes},
+             {"aligned_stick_nbytes", aligned_stick_nbytes},
+             {"tiles_per_channel_dim", tiles_per_channel_dim},
+             {"tiles_per_width_dim", tiles_per_width_dim},
+             {"element_size", datum_size(out_cb_data_format)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"start_block_id", "num_blocks", "patch_height_offset", "output_offset"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+    };
+
+    // ---- Compute kernels (untilize SRC0 -> SRC1) ----
     const bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
-    const std::string compute_kernel_name =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/compute/untilize.cpp";
-
-    log_debug(tt::LogOp, "compute_kernel_name: {}", compute_kernel_name);
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_kernel_name;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_range;
-    compute_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-    };
-
-    std::optional<KernelDescriptor> compute_cliff_desc;
-    if (!core_range_cliff.ranges().empty()) {
-        KernelDescriptor cliff;
-        cliff.kernel_source = compute_kernel_name;
-        cliff.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        cliff.core_ranges = core_range_cliff;
-        cliff.compile_time_args = std::move(compute_compile_time_args_cliff);
-        cliff.config = ComputeConfigDescriptor{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
+    auto make_compute = [&](KernelSpecName unique_id, uint32_t per_core_block_cnt) {
+        return KernelSpec{
+            .unique_id = std::move(unique_id),
+            .source = "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/compute/untilize.cpp",
+            .dfb_bindings =
+                {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = SRC1, .accessor_name = "src1", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .compile_time_args =
+                {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_tile_cnt", tiles_per_channel_dim}},
+            .hw_config = ComputeHardwareConfig{.fp32_dest_acc_en = fp32_dest_acc_en},
         };
-        compute_cliff_desc = std::move(cliff);
-    }
+    };
+    KernelSpec compute_main = make_compute(COMPUTE_MAIN, nblocks_per_core * tiles_per_width_dim);
 
+    const bool has_cliff = !core_range_cliff.ranges().empty();
+
+    // ---- Per-core runtime args ----
     // Determine the "full" core set vs. the cliff core for runtime arg distribution.
     uint32_t ncores_full = ncores;
     auto full_cores = all_cores;
@@ -209,6 +178,10 @@ ProgramDescriptor fold_multi_core_tiled_interleaved(
 
     const uint32_t patch_size = stride_h * stride_w;       // Size of each patch
     const uint32_t output_width = input_width / stride_w;  // Output width
+
+    Group<ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs> reader_rta;
+    Group<ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs> writer_rta;
+
     for (auto core : cores) {
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
@@ -219,10 +192,15 @@ ProgramDescriptor fold_multi_core_tiled_interleaved(
         if (!full_cores.contains(core)) {
             continue;
         }
-        // Buffer* slots register BufferBindings so the framework patches addresses on cache hits.
-        reader_desc.emplace_runtime_args(core, {src0_buffer, block_start_id, nblocks_per_core});
-        writer_desc.emplace_runtime_args(
-            core, {dst_buffer, block_start_id, nblocks_per_core, patch_height_offset, output_offset});
+        reader_rta.push_back(
+            {.node = core, .args = {{"start_block_id", block_start_id}, {"num_blocks", nblocks_per_core}}});
+        writer_rta.push_back(
+            {.node = core,
+             .args = {
+                 {"start_block_id", block_start_id},
+                 {"num_blocks", nblocks_per_core},
+                 {"patch_height_offset", patch_height_offset},
+                 {"output_offset", output_offset}}});
         block_start_id += nblocks_per_core;
     }
 
@@ -233,32 +211,58 @@ ProgramDescriptor fold_multi_core_tiled_interleaved(
         uint32_t output_offset =
             (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
-        reader_desc.emplace_runtime_args(core, {src0_buffer, block_start_id, nblocks_per_core_cliff});
-        writer_desc.emplace_runtime_args(
-            core, {dst_buffer, block_start_id, nblocks_per_core_cliff, patch_height_offset, output_offset});
+        reader_rta.push_back(
+            {.node = core, .args = {{"start_block_id", block_start_id}, {"num_blocks", nblocks_per_core_cliff}}});
+        writer_rta.push_back(
+            {.node = core,
+             .args = {
+                 {"start_block_id", block_start_id},
+                 {"num_blocks", nblocks_per_core_cliff},
+                 {"patch_height_offset", patch_height_offset},
+                 {"output_offset", output_offset}}});
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
-    if (compute_cliff_desc.has_value()) {
-        desc.kernels.push_back(std::move(*compute_cliff_desc));
+    // ---- Assemble the spec ----
+    ProgramSpec spec;
+    spec.name = "fold_multi_core_tiled_interleaved";
+    spec.dataflow_buffers = {std::move(src0_dfb), std::move(src1_dfb)};
+    spec.tensor_parameters = {std::move(input_param), std::move(output_param)};
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute_main)};
+    // Reader/writer cover all_cores; the compute work splits into a main core group
+    // and an optional cliff core group (same source, different per_core_block_cnt CTA).
+    spec.work_units = {
+        WorkUnitSpec{.name = "wu_main", .kernels = {READER, WRITER, COMPUTE_MAIN}, .target_nodes = core_range}};
+    if (has_cliff) {
+        spec.kernels.push_back(make_compute(COMPUTE_CLIFF, nblocks_per_core_cliff * tiles_per_width_dim));
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "wu_cliff", .kernels = {READER, WRITER, COMPUTE_CLIFF}, .target_nodes = core_range_cliff});
     }
 
-    return desc;
+    // ---- Run args ----
+    // The compute kernels have no runtime args; an entry with empty runtime_arg_values
+    // satisfies the "a KernelRunArgs for every kernel" contract trivially.
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_rta)},
+        ProgramRunArgs::KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_rta)},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE_MAIN},
+    };
+    if (has_cliff) {
+        run_args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE_CLIFF});
+    }
+    run_args.tensor_args.insert({INPUT, input_tensor.mesh_tensor()});
+    run_args.tensor_args.insert({OUTPUT, output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-ProgramDescriptor fold_multi_core_row_major_interleaved(
+ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
 
     const uint32_t batch_size = input_tensor.logical_shape()[0];
     const uint32_t input_height = input_tensor.logical_shape()[1];
     const uint32_t input_width = input_tensor.logical_shape()[2];
-
-    Buffer* src0_buffer = input_tensor.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -285,8 +289,6 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
     CoreRangeSet all_cores{CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})};
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, true);
 
-    const uint32_t cb_src0_index = tt::CBIndex::c_0;
-
     uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(cb_data_format);
     // Align to DRAM read alignment.
     uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
@@ -298,73 +300,105 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
         aligned_stick_nbytes,
         hal::get_dram_alignment());
 
-    ProgramDescriptor desc;
-
-    const int double_buffer = 2;
-    {
-        CBDescriptor cb;
-        cb.total_size = double_buffer * aligned_stick_nbytes * stride_w * stride_h;
-        cb.core_ranges = all_cores;
-        cb.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_src0_index),
-            .data_format = cb_data_format,
-            .page_size = aligned_stick_nbytes * stride_w * stride_h,
-        });
-        desc.cbs.push_back(std::move(cb));
-    }
-
     const bool is_l1_aligned = stick_nbytes == aligned_stick_nbytes;
 
-    const uint32_t cb_src1_index = tt::CBIndex::c_1;
+    // ---- Resource names ----
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName SRC0{"src0"};
+    const DFBSpecName SRC1{"src1"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+
+    // ---- Tensor parameters ----
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.mesh_tensor().tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.mesh_tensor().tensor_spec()};
+
+    // ---- Dataflow buffers ----
+    const int double_buffer = 2;
+    DataflowBufferSpec src0_dfb{
+        .unique_id = SRC0,
+        .entry_size = aligned_stick_nbytes * stride_w * stride_h,
+        .num_entries = double_buffer,
+        .data_format_metadata = cb_data_format,
+    };
+
+    // ---- Compile-time args ----
+    // The cb_src0 / cb_src1 indices become DFB bindings; the rest are named CTAs.
+    // Each kernel only declares the CTAs it actually reads.
+    KernelSpec::CompileTimeArgs reader_cta{
+        {"stick_nbytes", stick_nbytes},
+        {"aligned_stick_nbytes", aligned_stick_nbytes},
+        {"stride_h", stride_h},
+        {"stride_w", stride_w},
+        {"input_width", input_width},
+        {"work_per_core", patches_per_core},
+    };
+    KernelSpec::CompileTimeArgs writer_cta{
+        {"stick_nbytes", stick_nbytes},
+        {"aligned_stick_nbytes", aligned_stick_nbytes},
+        {"stride_h", stride_h},
+        {"stride_w", stride_w},
+        {"input_width", input_width},
+        {"work_per_core", patches_per_core},
+        {"is_l1_aligned", static_cast<uint32_t>(is_l1_aligned)},
+    };
+
+    // ---- Reader kernel (DRAM -> SRC0) ----
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
+        .compile_time_args = std::move(reader_cta),
+        .runtime_arg_schema = {.runtime_arg_names = {"src_index", "curr_src_row_index"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+    };
+
+    // ---- Writer kernel (SRC0 [+ SRC1 scratch] -> DRAM) ----
+    // SRC1 is an intermediate L1 scratch buffer used only on the !is_l1_aligned path.
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
+        .compile_time_args = std::move(writer_cta),
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_index"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+    };
+    // SRC0 is consumed by the writer.
+    writer.dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::CONSUMER});
+
+    ProgramSpec spec;
+    spec.name = "fold_multi_core_row_major_interleaved";
+    spec.dataflow_buffers = {std::move(src0_dfb)};
+    spec.tensor_parameters = {std::move(input_param), std::move(output_param)};
+
+    DataflowBufferSpec src1_dfb;
     if (!is_l1_aligned) {
-        // If not L1 aligned, use a separate circular buffer for src1 as an intermediate scratch.
+        // If not L1 aligned, use a separate scratch buffer for src1.
+        // It is written and read by the writer kernel only (no cross-kernel FIFO),
+        // so bind it as a self-loop (PRODUCER + CONSUMER) on the writer.
         log_debug(tt::LogOp, "Using intermediate L1 scratch buffer for src1");
-        CBDescriptor cb;
-        cb.total_size = stick_nbytes * stride_w * stride_h;
-        cb.core_ranges = all_cores;
-        cb.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_src1_index),
-            .data_format = cb_data_format,
-            .page_size = stick_nbytes * stride_w * stride_h,
-        });
-        desc.cbs.push_back(std::move(cb));
+        src1_dfb = DataflowBufferSpec{
+            .unique_id = SRC1,
+            .entry_size = stick_nbytes * stride_w * stride_h,
+            .num_entries = 1,
+            .data_format_metadata = cb_data_format,
+        };
+        spec.dataflow_buffers.push_back(std::move(src1_dfb));
+        writer.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "src1", .endpoint_type = DFBEndpointType::PRODUCER});
+        writer.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "src1", .endpoint_type = DFBEndpointType::CONSUMER});
+        // The kernel-side reference to dfb::src1 is gated on USE_SCRATCH_SRC1.
+        writer.compiler_options.defines.insert({"USE_SCRATCH_SRC1", "1"});
     }
 
-    // Common compile-time args shared by reader and writer (indices 0..8)
-    std::vector<uint32_t> common_compile_time_args(
-        {stick_nbytes,
-         cb_src0_index,
-         aligned_stick_nbytes,
-         stride_h,
-         stride_w,
-         input_width,
-         patches_per_core,
-         cb_src1_index,
-         is_l1_aligned});
-
-    // Reader kernel — appends src TensorAccessorArgs to compile-time args.
-    auto reader_compile_time_args = common_compile_time_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    // Writer kernel — appends dst TensorAccessorArgs to compile-time args.
-    auto writer_compile_time_args = common_compile_time_args;
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Per-core runtime args. The Buffer* slots auto-register as BufferBindings.
+    // ---- Per-core runtime args ----
     const uint32_t output_height = input_height / stride_h;
     const uint32_t output_width = input_width / stride_w;
     const uint32_t patch_size = stride_h * stride_w;
@@ -373,6 +407,10 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
     uint32_t src_idx = 0;
     uint32_t dst_idx = 0;
     uint32_t src_col_offset = 0;
+
+    Group<ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs> reader_rta;
+    Group<ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs> writer_rta;
+
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
 
@@ -392,19 +430,27 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
         }
 
         curr_patches += patches_per_core;
-        reader_desc.emplace_runtime_args(core, {src0_buffer, src_idx, src_col_offset});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, dst_idx});
+        reader_rta.push_back({.node = core, .args = {{"src_index", src_idx}, {"curr_src_row_index", src_col_offset}}});
+        writer_rta.push_back({.node = core, .args = {{"dst_index", dst_idx}}});
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    spec.kernels = {std::move(reader), std::move(writer)};
+    spec.work_units = {WorkUnitSpec{.name = "wu", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_rta)},
+        ProgramRunArgs::KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_rta)},
+    };
+    run_args.tensor_args.insert({INPUT, input_tensor.mesh_tensor()});
+    run_args.tensor_args.insert({OUTPUT, output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace
 
-ProgramDescriptor Fold::MultiCoreDRAMFold::create_descriptor(
+ttnn::device_operation::ProgramArtifacts Fold::MultiCoreDRAMFold::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {

@@ -13,26 +13,34 @@ if TYPE_CHECKING:
 from helpers.llk_params import GoldenType
 
 from .block_data import BlockData
-from .compute_node import ComputeNode
+from .fpu_node import FpuNode
 from .fused_fpu import Fpu
 from .fused_sfpu import Sfpu
 from .fused_unpacker import Unpacker
 from .pack_node import PackNode
+from .sfpu_node import SfpuNode
 
 
 class ComputePipeline:
-    operations: List[ComputeNode]
-    pack_nodes: List[PackNode]
+    math_nodes: List[Union[FpuNode, SfpuNode]]
+    pack_nodes: List[Union[PackNode, SfpuNode]]
 
-    def __init__(self, operations: List[ComputeNode], pack_nodes: List[PackNode]):
-        self.operations = operations
+    def __init__(
+        self,
+        math_nodes: List[Union[FpuNode, SfpuNode]],
+        pack_nodes: List[Union[PackNode, SfpuNode]],
+    ):
+        self.math_nodes = math_nodes
         self.pack_nodes = pack_nodes
+
+    def _get_pack_nodes(self) -> List[PackNode]:
+        return [pn for pn in self.pack_nodes if isinstance(pn, PackNode)]
 
     def get_unpackers(self) -> List["Unpacker"]:
         unpackers: List["Unpacker"] = []
 
-        for operation in self.operations:
-            if operation.unpacker is not None:
+        for operation in self.math_nodes:
+            if isinstance(operation, FpuNode) and operation.unpacker is not None:
                 unpackers.append(operation.unpacker)
 
         return unpackers
@@ -40,17 +48,16 @@ class ComputePipeline:
     def get_math_units(self) -> List[Union["Fpu", "Sfpu"]]:
         math_units = []
 
-        for operation in self.operations:
-            if operation.fpu is not None:
+        for operation in self.math_nodes:
+            if isinstance(operation, FpuNode):
                 math_units.append(operation.fpu)
-
-            if operation.sfpu is not None:
+            elif isinstance(operation, SfpuNode):
                 math_units.append(operation.sfpu)
 
         return math_units
 
-    def _all_same_operand_formats(self, ops: List[ComputeNode]) -> bool:
-        def signature(op: ComputeNode):
+    def _all_same_operand_formats(self, ops: List[FpuNode]) -> bool:
+        def signature(op: FpuNode):
             return (
                 op.src_a.data_format if op.src_a is not None else None,
                 op.src_b.data_format if op.src_b is not None else None,
@@ -192,7 +199,11 @@ class ComputePipeline:
         return ""
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        unpack_ops = [cu for cu in self.operations if cu.unpacker is not None]
+        unpack_ops = [
+            cu
+            for cu in self.math_nodes
+            if isinstance(cu, FpuNode) and cu.unpacker is not None
+        ]
         hoist = len(unpack_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
@@ -215,7 +226,9 @@ class ComputePipeline:
 
         def batch_body(block: BlockData):
             body = ""
-            for cu in self.operations:
+            for cu in self.math_nodes:
+                if not isinstance(cu, FpuNode):
+                    continue
                 if not hoist_reconfig and cu.unpacker is not None:
                     body += cu.unpack_reconfig(operation, config)
                 if not hoist:
@@ -269,7 +282,7 @@ class ComputePipeline:
 
     def math_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._math_constants(operation, config)
-        fpu_ops = [cu for cu in self.operations if cu.fpu is not None]
+        fpu_ops = [cu for cu in self.math_nodes if isinstance(cu, FpuNode)]
         hoist = len(fpu_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(fpu_ops)
 
@@ -278,25 +291,30 @@ class ComputePipeline:
         if hoist_reconfig and fpu_ops:
             init_code += fpu_ops[0].math_reconfig(operation, config)
         if hoist and not fpu_ops[0].fpu.per_block_init:
-            init_code += fpu_ops[0].math_init(operation, config, None)
+            init_code += fpu_ops[0].fpu_init(operation, config, None)
         code += self._zone(config, "INIT", init_code)
 
         init_fn = None
         uninit_fn = None
         if hoist and fpu_ops[0].fpu.per_block_init:
-            init_fn = lambda block: fpu_ops[0].math_init(operation, config, block)
-            uninit_fn = lambda block: fpu_ops[0].math_uninit(operation, config, block)
+            init_fn = lambda block: fpu_ops[0].fpu_init(operation, config, block)
+            uninit_fn = lambda block: fpu_ops[0].fpu_uninit(operation, config, block)
 
         def batch_body(block: BlockData):
             body = self._math_wait_for_dest(operation, config)
-            for cu in self.operations:
-                if not hoist_reconfig and cu.fpu is not None:
-                    body += cu.math_reconfig(operation, config)
-                if not hoist or cu.fpu is None:
-                    body += cu.math_init(operation, config, block)
-                body += cu.math_run(operation, config, block)
-                if not hoist or cu.fpu is None:
-                    body += cu.math_uninit(operation, config, block)
+            for cu in self.math_nodes:
+                if isinstance(cu, FpuNode):
+                    if not hoist_reconfig:
+                        body += cu.math_reconfig(operation, config)
+                    if not hoist:
+                        body += cu.fpu_init(operation, config, block)
+                    body += cu.fpu_run(operation, config, block)
+                    if not hoist:
+                        body += cu.fpu_uninit(operation, config, block)
+                elif isinstance(cu, SfpuNode):
+                    body += cu.sfpu_init(operation, config, block)
+                    body += cu.sfpu_run(operation, config, block)
+                    body += cu.sfpu_uninit(operation, config, block)
             body += self._math_dest_section_done(operation, config)
             return body
 
@@ -308,7 +326,7 @@ class ComputePipeline:
 
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
-            uninit_code += fpu_ops[0].math_uninit(operation, config, None)
+            uninit_code += fpu_ops[0].fpu_uninit(operation, config, None)
         code += self._zone(config, "INIT", uninit_code)
 
         return code
@@ -366,39 +384,49 @@ class ComputePipeline:
         return code
 
     def _all_same_pack_formats(self) -> bool:
-        if len(self.pack_nodes) <= 1:
+        pack_only = self._get_pack_nodes()
+        if len(pack_only) <= 1:
             return True
-        first_fmt = self.pack_nodes[0].output.data_format
-        return all(pn.output.data_format == first_fmt for pn in self.pack_nodes[1:])
+        first_fmt = pack_only[0].output.data_format
+        return all(pn.output.data_format == first_fmt for pn in pack_only[1:])
 
     def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._pack_constants(operation, config)
-        hoist = len(self.pack_nodes) == 1
+        pack_only = self._get_pack_nodes()
+        hoist = len(pack_only) == 1 and len(self.pack_nodes) == 1
         hoist_reconfig = hoist or self._all_same_pack_formats()
 
-        init_code = config.sentinel.hw_configure_pack(
-            config, operation, self.pack_nodes
-        )
+        init_code = config.sentinel.hw_configure_pack(config, operation, pack_only)
         init_code += self._pack_dest_init(operation, config)
         init_code += self._pack_reduce_mask_config(operation)
-        if hoist_reconfig:
-            init_code += self.pack_nodes[0].reconfig(operation, config)
+        if hoist_reconfig and pack_only:
+            init_code += pack_only[0].reconfig(operation, config)
         if hoist:
-            init_code += self.pack_nodes[0].configure(operation, config, None)
+            init_code += pack_only[0].configure(operation, config, None)
         code += self._zone(config, "INIT", init_code)
 
         def batch_body(block: BlockData):
             body = self._packer_wait_for_math(config)
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
+            prev_was_pack = False
             for pack_node in self.pack_nodes:
-                if not hoist_reconfig:
-                    body += pack_node.reconfig(operation, config)
-                if not hoist:
-                    body += pack_node.configure(operation, config, block)
-                body += pack_node.pack_loop(operation, config, block)
-                if not hoist:
-                    body += pack_node.uninit(operation, config)
+                if isinstance(pack_node, SfpuNode):
+                    if prev_was_pack:
+                        body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
+                    body += pack_node.sfpu_init(operation, config, block)
+                    body += pack_node.sfpu_run(operation, config, block)
+                    body += pack_node.sfpu_uninit(operation, config, block)
+                    prev_was_pack = False
+                elif isinstance(pack_node, PackNode):
+                    if not hoist_reconfig:
+                        body += pack_node.reconfig(operation, config)
+                    if not hoist:
+                        body += pack_node.configure(operation, config, block)
+                    body += pack_node.pack_loop(operation, config, block)
+                    if not hoist:
+                        body += pack_node.uninit(operation, config)
+                    prev_was_pack = True
             body += self._packer_dest_section_done(operation, config)
             return body
 
@@ -408,7 +436,7 @@ class ComputePipeline:
 
         uninit_code = self.packer_sync_with_unpacker(operation, config)
         if hoist:
-            uninit_code += self.pack_nodes[0].uninit(operation, config)
+            uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += self._pack_reduce_mask_clear(operation)
         code += self._zone(config, "INIT", uninit_code)
 
@@ -420,7 +448,9 @@ class ComputePipeline:
         config: "GlobalConfig",
         golden_type: GoldenType,
     ):
-        first_fpu = next((op for op in self.operations if op.src_a is not None), None)
+        first_fpu = next(
+            (op for op in self.math_nodes if isinstance(op, FpuNode)), None
+        )
         if first_fpu is not None:
             tensor_a = torch.zeros(first_fpu.src_a.dimensions)
             tensor_b = torch.zeros(first_fpu.src_b.dimensions)
@@ -428,23 +458,25 @@ class ComputePipeline:
             tensor_a = torch.zeros(operation.max_output_dimensions)
             tensor_b = torch.zeros(operation.max_output_dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
-        for op in self.operations:
+        for op in self.math_nodes:
             config.sentinel.configure_golden(config, operation, op)
-            if op.src_a is not None:
+            if isinstance(op, FpuNode):
                 input_tensor_a = (
                     op.src_a.raw_data
                     if golden_type == GoldenType.L1_GOLDEN
                     else op.src_a.master_golden
                 )
-            else:
-                input_tensor_a = None
-            if op.src_b is not None:
                 input_tensor_b = (
-                    op.src_b.raw_data
-                    if golden_type == GoldenType.L1_GOLDEN
-                    else op.src_b.master_golden
+                    (
+                        op.src_b.raw_data
+                        if golden_type == GoldenType.L1_GOLDEN
+                        else op.src_b.master_golden
+                    )
+                    if op.src_b is not None
+                    else None
                 )
             else:
+                input_tensor_a = None
                 input_tensor_b = None
             tensor_a, tensor_b, tensor_dst = op.golden(
                 input_tensor_a,
@@ -457,6 +489,12 @@ class ComputePipeline:
             )
 
         for pack_node in self.pack_nodes:
+            if isinstance(pack_node, SfpuNode):
+                tensor_a, tensor_b, tensor_dst = pack_node.golden(
+                    None, None, tensor_a, tensor_b, tensor_dst, operation, config
+                )
+                continue
+
             config.sentinel.configure_golden(
                 config, operation, output_format=pack_node.output.data_format
             )
@@ -474,11 +512,14 @@ class ComputePipeline:
 
     def __str__(self):
         result = "Math:"
-        for op in self.operations:
+        for op in self.math_nodes:
             result += "\n    "
             result += op.__str__()
-        result += f"\n  Pack:"
+        result += "\n  Pack:"
         for pn in self.pack_nodes:
-            result += f"\n    "
-            result += pn.output.__str__()
+            result += "\n    "
+            if isinstance(pn, PackNode):
+                result += pn.output.__str__()
+            else:
+                result += str(pn)
         return result

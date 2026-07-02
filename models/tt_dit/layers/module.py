@@ -396,7 +396,7 @@ class Parameter:
         )
 
     def save(self, path: str | Path, /) -> None:
-        ttnn.dump_tensor(path, self.data)
+        ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
     def load(self, path: str | Path, /) -> None:
         try:

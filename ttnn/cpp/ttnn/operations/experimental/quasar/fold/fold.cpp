@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/quasar/slice/slice.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/pad/pad.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -22,6 +23,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/experimental/quasar/fold/device/fold_device_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
 #include "fold.hpp"
 
@@ -328,7 +330,7 @@ static Tensor apply_halo_padding(
         .snap_to_tile = false};
 
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
-    auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
+    auto reshaped_tensor = ttnn::operations::experimental::quasar::reshape(input_tensor, new_shape);
 
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
         tt::tt_metal::hal::get_arch(),
@@ -343,7 +345,7 @@ static Tensor apply_halo_padding(
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(
         {input_shape[0], input_shape[1] + pad_top + pad_bottom, input_shape[2] + pad_left + pad_right, input_shape[3]});
-    return ttnn::reshape(halo_output, padded_shape);
+    return ttnn::operations::experimental::quasar::reshape(halo_output, padded_shape);
 }
 
 // Each core needs to process multiple of (stride_h * input_width) rows to ensure that
@@ -461,7 +463,7 @@ Tensor fold(
 
         // If processed tensor is tiled, convert to row-major.
         if (processed_tensor.layout() == Layout::TILE) {
-            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+            processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
         // Reshard if needed for optimal fold computation
         processed_tensor = operations::experimental::quasar::reshard_if_needed(processed_tensor, stride_h, stride_w);
@@ -492,7 +494,7 @@ Tensor fold(
 
     // The interleaved fold kernels operate on row-major data, so untilize first.
     if (was_tiled) {
-        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+        processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
 
     auto output_tensor = ttnn::prim::qsr::fold(processed_tensor, stride_h, stride_w);
@@ -501,7 +503,7 @@ Tensor fold(
     if (was_tiled) {
         const ttnn::Shape final_shape(
             {batch_size, input_height / stride_h, input_width / stride_w, in_channels * stride_h * stride_w});
-        return ttnn::reshape(output_tensor, final_shape);
+        return ttnn::operations::experimental::quasar::reshape(output_tensor, final_shape);
     }
 
     return output_tensor;

@@ -62,12 +62,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(tdma_desc_src_a);
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(tdma_desc_src_b);
 
-    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM); // transpose in src_A not supported for
-                                                                                                                    // quasar
+    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
+        buf_desc_id_src_a, buf_desc_id_src_b, params.CT_DIM, params.RT_DIM, params.KT_DIM); // transpose in src_A not supported for
+                                                                                            // quasar
 
-    for (std::uint32_t j = 0; j < KT_DIM; j++)
+    for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
-        _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+        _llk_unpack_matmul_(params.CT_DIM, params.RT_DIM, params.KT_DIM, j, j * params.CT_DIM);
     }
 }
 
@@ -101,11 +102,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // configured as MxFp4_2x_A or MxFp4_2x_B.
     // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
     // the auto-increment-addr_mod MVMUL variant.
-    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(params.CT_DIM, params.RT_DIM);
 
-    for (std::uint32_t i = 0; i < KT_DIM; i++)
+    for (std::uint32_t i = 0; i < params.KT_DIM; i++)
     {
-        _llk_math_matmul_block_(CT_DIM, RT_DIM);
+        _llk_math_matmul_block_(params.CT_DIM, params.RT_DIM);
     }
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
@@ -137,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
-    _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
+    _llk_pack_matmul_init_(buf_desc_id_dst, params.RT_DIM, params.CT_DIM, 1); // Use destination buffer descriptor for packing output
 
     _llk_pack_matmul_(0, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

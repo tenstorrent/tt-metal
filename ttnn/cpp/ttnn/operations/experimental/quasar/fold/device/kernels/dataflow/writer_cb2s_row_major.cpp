@@ -5,22 +5,23 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t src_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t pixel_size = get_compile_time_arg_val(2);
-    constexpr uint32_t aligned_pixel_size = get_compile_time_arg_val(3);
-    constexpr uint32_t aligned_dst_pixel_size = get_compile_time_arg_val(4);
-    constexpr uint32_t aligned_chunk_size = get_compile_time_arg_val(5);
-    constexpr uint32_t aligned_row_size = get_compile_time_arg_val(6);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(7);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(8);
-    constexpr uint32_t num_dst_rows = get_compile_time_arg_val(9);
-    constexpr uint32_t num_dst_cols = get_compile_time_arg_val(10);
-    constexpr uint32_t dst_row_offset = get_compile_time_arg_val(11);
-    constexpr uint32_t element_size = get_compile_time_arg_val(12);
-    constexpr uint32_t is_reader = get_compile_time_arg_val(13);
+    // src_cb / dst_cb are now DFB bindings (dfb::src0 / dfb::dst0); the remaining
+    // values are named compile-time arguments.
+    constexpr uint32_t pixel_size = get_arg(args::pixel_size);
+    constexpr uint32_t aligned_pixel_size = get_arg(args::aligned_pixel_size);
+    constexpr uint32_t aligned_dst_pixel_size = get_arg(args::aligned_dst_pixel_size);
+    constexpr uint32_t aligned_chunk_size = get_arg(args::aligned_chunk_size);
+    constexpr uint32_t aligned_row_size = get_arg(args::aligned_row_size);
+    constexpr uint32_t stride_h = get_arg(args::stride_h);
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t num_dst_rows = get_arg(args::num_dst_rows);
+    constexpr uint32_t num_dst_cols = get_arg(args::num_dst_cols);
+    constexpr uint32_t dst_row_offset = get_arg(args::dst_row_offset);
+    constexpr uint32_t element_size = get_arg(args::element_size);
+    constexpr uint32_t is_reader = get_arg(args::is_reader);
 
     constexpr uint32_t dst_row_size = num_dst_cols * aligned_dst_pixel_size;
     constexpr uint32_t cols_per_core = num_dst_cols / 2;
@@ -33,8 +34,8 @@ void kernel_main() {
     constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
 
     Noc noc;
-    experimental::CB src_cb_obj(src_cb);
-    experimental::CB dst_cb_obj(dst_cb);
+    DataflowBuffer src_cb_obj(dfb::src0);
+    DataflowBuffer dst_cb_obj(dfb::dst0);
 
     const uint32_t dst_addr_base = dst_cb_obj.get_write_ptr();
     uint32_t src_addr_base = src_cb_obj.get_read_ptr();

@@ -85,8 +85,8 @@ std::vector<Tensor> clamp_bw(
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
-    Tensor minT = ttnn::le(input, min.value(), std::nullopt, output_memory_config);
-    Tensor maxT = ttnn::ge(input, max.value(), std::nullopt, output_memory_config);
+    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
+    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
     result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
     grad_tensor.emplace_back(result);

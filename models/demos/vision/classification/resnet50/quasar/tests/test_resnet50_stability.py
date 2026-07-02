@@ -18,7 +18,7 @@ test_demo_trace_with_imagenet.__test__ = False
 )
 @pytest.mark.parametrize(
     "batch_size, iterations, act_dtype, weight_dtype",
-    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+    ((16, 100, ttnn.bfloat16, ttnn.bfloat16),),
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @pytest.mark.parametrize("test_duration_seconds", [24 * 60 * 60, 10], ids=["long", "short"])
