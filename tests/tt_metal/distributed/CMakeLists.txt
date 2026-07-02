@@ -37,6 +37,9 @@ target_link_libraries(
 )
 if(ENABLE_DISTRIBUTED)
     target_link_libraries(distributed_unit_tests PRIVATE OpenMPI::MPI)
+    if(TARGET MPI::MPI_CXX)
+        target_link_libraries(distributed_unit_tests PRIVATE MPI::MPI_CXX)
+    endif()
 endif()
 
 target_include_directories(
