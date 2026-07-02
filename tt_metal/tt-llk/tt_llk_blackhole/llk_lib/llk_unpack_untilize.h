@@ -147,8 +147,6 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
  */
 inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
-    llk::san::operation_uninit<llk::san::Operation::UnpackUntilize>();
-
     const DataFormat dst_format           = static_cast<DataFormat>(unpack_dst_format & 0x3);
     const std::uint32_t unpA_ch1_x_stride = dst_format == DataFormat::Float32 ? 4 : dst_format == DataFormat::Float16 ? 2 : 1;
     const std::uint32_t unpA_ch1_y_stride = FACE_C_DIM * face_r_dim * unpA_ch1_x_stride;

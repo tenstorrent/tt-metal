@@ -499,7 +499,10 @@
       tier: 1
     # Blackhole
     bh_quietbox_2:
-      timeout: 10
+      # 10 min was too tight: the suite runs to ~12 min and got wall-clock
+      # killed mid-"Full MLP Pipeline" on the prefill_4096 test_decoder while
+      # all components were still passing (PCC 0.96-0.99). Bump to 15.
+      timeout: 15
       tier: 1
     bh_galaxy:
       timeout: 10
