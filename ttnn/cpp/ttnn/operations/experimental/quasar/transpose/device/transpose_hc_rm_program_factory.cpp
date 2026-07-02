@@ -21,7 +21,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
-ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts TransposeHCRMProgramFactory::create_program_spec(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};  // legacy c_0: stick stream (reader produces, writer consumes)
@@ -214,7 +214,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         {INPUT_TENSOR, TensorArgument{std::cref(input_tensor.mesh_tensor())}},
         {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor.mesh_tensor())}}};
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

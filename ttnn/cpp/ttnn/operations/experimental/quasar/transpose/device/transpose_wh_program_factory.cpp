@@ -13,6 +13,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include "ttnn/spec_run_args.hpp"
+
 #include <vector>
 
 using namespace tt::constants;
@@ -21,8 +23,18 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
-ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_program_artifacts(
-    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+std::vector<tt::tt_metal::MeshTensor> TransposeWHProgramFactory::get_owned_tensors(
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& /*tensor_args*/,
+    Tensor& /*output_tensor*/) {
+    return {};
+}
+
+ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_program_spec(
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor,
+    std::span<const tt::tt_metal::MeshTensor> /*owned_tensors*/) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};        // legacy c_0: input tile stream
     const DFBSpecName CB_OUT0{"cb_out0"};      // legacy c_16: transposed output stream
@@ -117,12 +129,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     };
 
     std::vector<KernelSpec> kernels;
-    KernelRunArgs reader_run{.kernel = READER_KERNEL};
-    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
-    compute_run.runtime_arg_values.reserve(num_cores_total);
+    ttnn::spec::ProgramRunArgsBuilder rab;
 
     if (row_major) {
         // --------------------------------------------------------------------
@@ -211,7 +218,15 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             compute_spec.compiler_options.defines = {{"DST_ACCUM_MODE", "1"}};
         }
 
-        kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
+        // push_back(move) not `= {…}`: initializer_list elements are const, so a braced move silently copies.
+        kernels.reserve(3);
+        kernels.push_back(std::move(reader_spec));
+        kernels.push_back(std::move(writer_spec));
+        kernels.push_back(std::move(compute_spec));
+
+        auto& reader_b = rab.kernel(READER_KERNEL, {"start_id", "num_hw_blocks"}).reserve(num_cores_total);
+        auto& compute_b = rab.kernel(COMPUTE_KERNEL, {"num_hw_blocks"}).reserve(num_cores_total);
+        auto& writer_b = rab.kernel(WRITER_KERNEL, {"start_id", "num_hw_blocks"}).reserve(num_cores_total);
 
         for (uint32_t i = 0, num_sticks_read = 0, num_sticks_write = 0; i < num_cores_total; i++) {
             const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -225,11 +240,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             }
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values.push_back(
-                {node, {{"start_id", num_sticks_read}, {"num_hw_blocks", num_hw_blocks_per_core}}});
-            compute_run.runtime_arg_values.push_back({node, {{"num_hw_blocks", num_hw_blocks_per_core}}});
-            writer_run.runtime_arg_values.push_back(
-                {node, {{"start_id", num_sticks_write}, {"num_hw_blocks", num_hw_blocks_per_core}}});
+            reader_b.emit(node, num_sticks_read, num_hw_blocks_per_core);
+            compute_b.emit(node, num_hw_blocks_per_core);
+            writer_b.emit(node, num_sticks_write, num_hw_blocks_per_core);
 
             num_sticks_read += num_hw_blocks_per_core * H;
             num_sticks_write += num_hw_blocks_per_core * W;
@@ -284,13 +297,23 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .hw_config = compute_cfg,
         };
 
-        kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
+        // push_back(move) not `= {…}`: initializer_list elements are const, so a braced move silently copies.
+        kernels.reserve(3);
+        kernels.push_back(std::move(reader_spec));
+        kernels.push_back(std::move(writer_spec));
+        kernels.push_back(std::move(compute_spec));
 
         // Tiled work walk uses padded-shape tile counts (preserved from legacy).
         const auto input_shape = input_tensor.padded_shape();
         const uint32_t Wt_walk = input_shape[3] / TILE_WIDTH;
         const uint32_t Ht_walk = input_shape[2] / TILE_HEIGHT;
         const uint32_t HtWt_walk = Ht_walk * Wt_walk;
+
+        auto& reader_b =
+            rab.kernel(READER_KERNEL, {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"})
+                .reserve(num_cores_total);
+        auto& compute_b = rab.kernel(COMPUTE_KERNEL, {"NHtWt"}).reserve(num_cores_total);
+        auto& writer_b = rab.kernel(WRITER_KERNEL, {"num_pages", "start_id"}).reserve(num_cores_total);
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
             const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -307,18 +330,17 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             const uint32_t w = num_tiles_read / Ht_walk % Wt_walk;
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values.push_back(
-                {node,
-                 {{"num_tiles", num_tiles_per_core},
-                  {"start_id", tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w},
-                  {"start_ht", h},
-                  {"start_wt", w},
-                  {"Ht", Ht_walk},
-                  {"Wt", Wt_walk},
-                  {"HtWt", HtWt_walk}}});
-            compute_run.runtime_arg_values.push_back({node, {{"NHtWt", num_tiles_per_core}}});
-            writer_run.runtime_arg_values.push_back(
-                {node, {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_read}}});
+            reader_b.emit(
+                node,
+                num_tiles_per_core,
+                tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w,
+                h,
+                w,
+                Ht_walk,
+                Wt_walk,
+                HtWt_walk);
+            compute_b.emit(node, num_tiles_per_core);
+            writer_b.emit(node, num_tiles_per_core, num_tiles_read);
 
             num_tiles_read += num_tiles_per_core;
         }
@@ -338,13 +360,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
         .work_units = {wu},
     };
 
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    // take() moves every kernel's run-args in -- no braced-init copy, no manual assembly.
+    ProgramRunArgs run_args = rab.take();
     run_args.tensor_args = {
         {INPUT_TENSOR, TensorArgument{std::cref(input_tensor.mesh_tensor())}},
         {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor.mesh_tensor())}}};
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

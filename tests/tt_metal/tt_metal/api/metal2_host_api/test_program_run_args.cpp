@@ -841,8 +841,8 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
 inline ProgramSpec MakeSpecWithNamedArgs(
     const NodeCoord& node, const std::vector<std::string>& named_rtas, const std::vector<std::string>& named_crtas) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arg_schema.runtime_arg_names = named_rtas;
-    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = named_crtas;
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names.assign(named_rtas.begin(), named_rtas.end());
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names.assign(named_crtas.begin(), named_crtas.end());
     (void)node;  // node inherited from MakeMinimalValidProgramSpec (0,0)
     return spec;
 }

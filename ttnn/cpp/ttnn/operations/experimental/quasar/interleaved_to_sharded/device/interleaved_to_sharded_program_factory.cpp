@@ -46,10 +46,18 @@ const KernelSpecName I2S_COMPUTE{"i2s_compute"};
 constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
 
-ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::create_program_artifacts(
+std::vector<tt::tt_metal::MeshTensor> InterleavedToShardedProgramFactory::get_owned_tensors(
+    const InterleavedToShardedParams& /*operation_attributes*/,
+    const InterleavedToShardedInputs& /*tensor_args*/,
+    Tensor& /*output_tensor*/) {
+    return {};
+}
+
+ttnn::device_operation::ProgramSpecArtifacts InterleavedToShardedProgramFactory::create_program_spec(
     const InterleavedToShardedParams& /*operation_attributes*/,
     const InterleavedToShardedInputs& tensor_args,
-    Tensor& output_tensor) {
+    Tensor& output_tensor,
+    std::span<const tt::tt_metal::MeshTensor> /*owned_tensors*/) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
     // Keep explicit bool init to match legacy behavior which forced it true
@@ -495,17 +503,17 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         }
     }
 
-    run_args.kernel_run_args.push_back(reader_run);
-    run_args.kernel_run_args.push_back(writer_run);
+    run_args.kernel_run_args.push_back(std::move(reader_run));
+    run_args.kernel_run_args.push_back(std::move(writer_run));
     if (convert_df) {
-        run_args.kernel_run_args.push_back(compute_run);
+        run_args.kernel_run_args.push_back(std::move(compute_run));
     }
 
     // Tensor arguments: reference the same MeshTensors the parameters were declared from.
     run_args.tensor_args.emplace(I2S_INPUT, TensorArgument{input.mesh_tensor()});
     run_args.tensor_args.emplace(I2S_OUTPUT, TensorArgument{output.mesh_tensor()});
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

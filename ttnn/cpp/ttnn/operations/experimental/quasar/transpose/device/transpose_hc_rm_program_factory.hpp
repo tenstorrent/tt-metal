@@ -6,15 +6,15 @@
 #include "transpose_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::prim::qsr {
 
-// Metal 2.0 (MetalV2FactoryConcept) factory for the H<->C row-major transpose path.
+// Metal 2.0 (ProgramSpecFactoryConcept) factory for the H<->C row-major transpose path.
 struct TransposeHCRMProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
         const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
 };
 

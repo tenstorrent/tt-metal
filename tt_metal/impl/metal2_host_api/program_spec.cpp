@@ -677,6 +677,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 kernel.unique_id,
                 kind,
                 name);
+            // Runtime-arg names are keyed by the fixed-capacity RtaName; enforce the shared limit here
+            // so an over-long name is rejected when the ProgramSpec is built, not at dispatch time.
+            TT_FATAL(
+                name.size() <= experimental::RtaName::CAP,
+                "KernelSpec '{}' {} name '{}' exceeds the {}-character limit ({} chars).",
+                kernel.unique_id,
+                kind,
+                name,
+                experimental::RtaName::CAP,
+                name.size());
             auto [it, inserted] = seen.try_emplace(name, kind);
             TT_FATAL(
                 inserted,
@@ -2728,7 +2738,12 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
         //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
-        const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
+        // Materialize the declared names as std::string for the legacy Kernel ctor (which takes
+        // std::vector<std::string>) and the impl schema's declaration-order lists. The hot-path
+        // lookups use the RtaName-keyed *_name_to_slot maps built below.
+        const std::vector<std::string> user_named_crtas(
+            kernel_spec.runtime_arg_schema.common_runtime_arg_names.begin(),
+            kernel_spec.runtime_arg_schema.common_runtime_arg_names.end());
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
             kernel_spec, resolved_tensor_parameters, /*base_named_crta_count=*/user_named_crtas.size());
 
@@ -2739,7 +2754,9 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
         // address section is tracked separately (via tensor_binding_handles), so we pass the user
         // CRTA list through unchanged.
-        const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
+        const std::vector<std::string> named_rtas(
+            kernel_spec.runtime_arg_schema.runtime_arg_names.begin(),
+            kernel_spec.runtime_arg_schema.runtime_arg_names.end());
 
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
@@ -2831,9 +2848,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // An explicit override of 0 erases the scalar-default entry so run-params treats
         // that node as having no varargs (rather than requiring an "empty" value list).
         // Overlapping override entries (two entries covering the same node) are an error.
-        const auto& user_schema = kernel_spec.runtime_arg_schema;
         detail::ProgramImpl::KernelRTASchema runtime_schema;
-        runtime_schema.runtime_arg_names = user_schema.runtime_arg_names;
+        runtime_schema.runtime_arg_names = named_rtas;
 
         // Pass the user CRTA list through.
         // NOTE: The TensorBinding address section is tracked separately on the Kernel

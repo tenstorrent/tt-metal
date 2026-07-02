@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -55,8 +56,8 @@ struct KernelAdvancedOptions {
     //
     // CAUTION: This feature is unsafe if used incorrectly! The onus is on the programmer
     // to ensure that the designated arguments remain valid across enqueues.
-    Group<std::string> enqueue_invariant_runtime_args;
-    Group<std::string> enqueue_invariant_common_runtime_args;
+    Group<RtaName> enqueue_invariant_runtime_args;
+    Group<RtaName> enqueue_invariant_common_runtime_args;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs

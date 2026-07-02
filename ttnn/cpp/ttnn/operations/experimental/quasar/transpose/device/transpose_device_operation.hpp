@@ -8,7 +8,6 @@
 #include "transpose_hc_rm_program_factory.hpp"
 #include "transpose_hc_sharded_program_factory.hpp"
 #include "transpose_hc_tiled_interleaved_program_factory.hpp"
-#include "transpose_hc_tiled_program_factory.hpp"
 #include "transpose_wh_program_factory.hpp"
 #include "transpose_wh_sharded_program_factory.hpp"
 #include "transpose_wh_sharded_rm_program_factory.hpp"
@@ -30,7 +29,6 @@ struct TransposeDeviceOperation {
         TransposeWHShardedProgramFactory,
         TransposeWHShardedRMProgramFactory,
         TransposeHCTiledInterleavedProgramFactory,
-        TransposeHCTiledProgramFactory,
         TransposeHCRMProgramFactory,
         TransposeHCShardedProgramFactory,
         TransposeCNProgramFactory>;
