@@ -41,6 +41,7 @@
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h" // calculate_binary_max_min / _init_binary_max_min_
+#include "llk_sfpu/ckernel_sfpu_quant.h"          // _quant_int32_ / _requant_int32_ / _dequant_int32_ (quant family)
 #include "sfpu/ckernel_sfpu_add.h"                // _add_int_ (int add)
 #include "sfpu/ckernel_sfpu_binary_comp.h"        // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"          // _mul_int32_ (int mul)
@@ -229,14 +230,22 @@ constexpr bool quasar_binary_op_is_max_min(ckernel::BinaryOp op)
     return op == ckernel::BinaryOp::MAX || op == ckernel::BinaryOp::MIN;
 }
 
+constexpr bool quasar_binary_op_is_quant(ckernel::BinaryOp op)
+{
+    return op == ckernel::BinaryOp::QUANT || op == ckernel::BinaryOp::REQUANT || op == ckernel::BinaryOp::DEQUANT;
+}
+
 /**
  * @brief Run the per-operation init step for a Quasar binary SFPU op.
  *
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
+ * @param zero_point fp32 bit-pattern of the zero-point loaded once by the quant
+ *        family init (DEQUANT expects the bits of -zero_point); ignored by the
+ *        other ops, which have no runtime init argument.
  * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
  */
 template <ckernel::BinaryOp OP>
-void init_binary_sfpu_operation_quasar()
+void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point = 0)
 {
     if constexpr (OP == BinaryOp::MUL)
     {
@@ -249,6 +258,18 @@ void init_binary_sfpu_operation_quasar()
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
         _init_binary_max_min_();
+    }
+    else if constexpr (OP == BinaryOp::QUANT)
+    {
+        _quant_int32_init_<false /*APPROX*/>(zero_point);
+    }
+    else if constexpr (OP == BinaryOp::REQUANT)
+    {
+        _requant_int32_init_<false /*APPROX*/>(zero_point);
+    }
+    else if constexpr (OP == BinaryOp::DEQUANT)
+    {
+        _dequant_int32_init_<false /*APPROX*/>(zero_point); // caller passes bits of -zero_point
     }
     // ADD / GT / LT / LE / GE are stateless — no init.
 }
@@ -310,6 +331,18 @@ void call_binary_sfpu_operation_quasar(
     {
         _llk_math_eltwise_binary_sfpu_params_(
             calculate_sfpu_binary<false /*APPROX*/, BinaryOp::DIV, is_fp32_dest_acc_en, ITERATIONS>, src0_tile, src1_tile, dst_tile);
+    }
+    else if constexpr (OP == BinaryOp::QUANT)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(_quant_int32_<false, ITERATIONS>, in0_off, in1_off, out_off);
+    }
+    else if constexpr (OP == BinaryOp::REQUANT)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(_requant_int32_<false, ITERATIONS>, in0_off, in1_off, out_off);
+    }
+    else if constexpr (OP == BinaryOp::DEQUANT)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(_dequant_int32_<false, ITERATIONS>, in0_off, in1_off, out_off);
     }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
