@@ -108,7 +108,7 @@ def test_prompt_to_audio(device):
     # --- Build the full TT stack (real weights) ---
     tt_text, hf_text = build_text_encoder(device)
     tt_ce = build_condition_encoder(args, device)
-    pipe = create_tt_pipeline(args, device, with_vae=True)
+    pipe = create_tt_pipeline(args, device, with_vae=True, with_encoders=False)
 
     # --- Reference stack (genuine HF, same checkpoint) ---
     m = load_modeling_module()

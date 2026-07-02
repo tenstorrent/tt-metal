@@ -53,7 +53,17 @@ def _shifted_timesteps(infer_steps: int, shift: float, device, dtype=torch.float
 
 @dataclass
 class AceStepPipeline:
-    """Assembled TT pipeline: DiT denoiser + flow-match solver + Oobleck VAE decoder."""
+    """Assembled TT pipeline: text encoder + condition encoder + DiT denoiser + Oobleck VAE.
+
+    Customer-facing usage is a single call (tokenization + all encoders + denoise + decode handled
+    internally):
+
+        pipe = create_tt_pipeline(AceStepModelConfig.from_hf(), device)   # full text-to-music
+        wav  = pipe.generate_song("upbeat synthwave, nostalgic", lyrics="neon city lights", seconds=8)
+        # wav: torch [1, 2, samples] @ 48 kHz stereo
+
+    Lower-level stages (generate / decode) remain available for advanced use.
+    """
 
     args: AceStepModelConfig
     dit: object  # AceStepDiTModel
@@ -62,6 +72,10 @@ class AceStepPipeline:
     mesh_device: object
     _rope: Qwen3RotaryEmbedding
     _mod: object  # reference modeling module (for create_4d_mask)
+    text_encoder: object = None  # AceStepTextEncoder (prompt/lyrics -> embeddings)
+    condition_encoder: object = None  # AceStepConditionEncoder (-> DiT cross-attn context)
+    tokenizer: object = None  # HF Qwen3 tokenizer
+    _hf_text_cfg: object = None  # text-encoder HF config (for its RoPE)
 
     # ---- denoise ----
     def _rope_tables(self, t_prime: int):
@@ -118,6 +132,115 @@ class AceStepPipeline:
             xt = xt_new
         return xt  # [1,1,T,64] clean latents
 
+    # ---- high-level customer API ----
+    SAMPLE_RATE = 48000
+    LATENT_HZ = 25  # 25 latent frames / second
+
+    def generate_song(
+        self,
+        prompt: str,
+        *,
+        lyrics: str = "",
+        seconds: float = 8.0,
+        infer_steps: int = 30,
+        shift: float = 1.0,
+        seed: int = 0,
+    ):
+        """Text -> 48 kHz stereo song in one call. Returns torch waveform [1, 2, samples].
+
+        prompt:  style / caption text.  lyrics: optional lyric text.  seconds: song length.
+        Tokenization, text encoding, conditioning, denoise (infer_steps ODE) and VAE decode are
+        all handled internally. Requires the pipeline built with text/condition encoders
+        (create_tt_pipeline(..., with_encoders=True), the default).
+        """
+        assert (
+            self.text_encoder is not None and self.condition_encoder is not None
+        ), "generate_song needs the encoders; build with create_tt_pipeline(..., with_encoders=True)"
+        assert self.vae is not None, "generate_song needs the VAE; build with with_vae=True"
+
+        enc_hs = self.encode_prompt(prompt, lyrics)
+        seq_len = self._latent_len(seconds)
+        gen = torch.Generator().manual_seed(seed)
+        noise = torch.randn(1, 1, seq_len, self.args.audio_acoustic_hidden_dim, generator=gen)
+        # text2music: silence source latents + all-valid chunk mask.
+        hidden_ch = self.args.audio_acoustic_hidden_dim
+        context = torch.cat([torch.zeros(1, 1, seq_len, hidden_ch), torch.ones(1, 1, seq_len, hidden_ch)], dim=-1)
+        noise_tt = ttnn.from_torch(noise, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        context_tt = ttnn.from_torch(context, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        latents = self.generate(noise_tt, context_tt, enc_hs, infer_steps=infer_steps, shift=shift)
+        return self.decode(latents)
+
+    def _latent_len(self, seconds: float) -> int:
+        n = max(2, int(round(seconds * self.LATENT_HZ)))
+        return n + (n % 2)  # even for patch_size=2
+
+    def encode_prompt(self, prompt: str, lyrics: str = ""):
+        """Tokenize + encode prompt/lyrics -> DiT cross-attn context TT tensor [1,1,ctx,hidden].
+
+        text  -> tokenizer -> TT text encoder -> text_hidden_states (projected inside cond-enc)
+        lyric -> tokenizer -> text_encoder.embed_tokens lookup (matches the reference)
+        timbre-> silence (text2music, no reference audio)
+        """
+        from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
+
+        text_ids = torch.tensor([self.tokenizer(prompt, truncation=True, max_length=256).input_ids])
+        lyric_ids = torch.tensor([self.tokenizer(lyrics or prompt, truncation=True, max_length=2048).input_ids])
+        tlen, llen = text_ids.shape[1], lyric_ids.shape[1]
+
+        # 1. text encoder (its own RoPE: theta from the text-encoder config, head_dim 128).
+        te_rope = Qwen3RotaryEmbedding(self._hf_text_cfg)
+        tcos, tsin = self._rope_tt(te_rope, tlen)
+        text_hs = self.text_encoder.forward(text_ids, tcos, tsin)  # [1,1,tlen,text_hidden]
+
+        # 2. lyric embeddings = text_encoder.embed_tokens lookup only (per reference).
+        lyric_hs = self.text_encoder.embed_tokens[lyric_ids.long()].reshape(
+            1, 1, llen, self.text_encoder.config.hidden_size
+        )
+        lyric_tt = ttnn.from_torch(lyric_hs, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+        # 3. timbre = silence (text2music: no reference audio).
+        timbre_len = 96
+        timbre = torch.zeros(1, 1, timbre_len, self.args.audio_acoustic_hidden_dim)
+        timbre_tt = ttnn.from_torch(timbre, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+        # 4. condition encoder -> packed cross-attn context.
+        lcos, lsin = self._rope_tt(self._rope, llen)
+        tbcos, tbsin = self._rope_tt(self._rope, timbre_len)
+        return self.condition_encoder.forward(
+            text_hs,
+            lyric_tt,
+            timbre_tt,
+            lcos,
+            lsin,
+            tbcos,
+            tbsin,
+            lyric_sliding=self._enc_sliding(llen),
+            timbre_sliding=self._enc_sliding(timbre_len),
+        )
+
+    def _rope_tt(self, rope, seq_len: int):
+        pos = torch.arange(seq_len).unsqueeze(0)
+        cos, sin = rope(torch.zeros(1, seq_len, HEAD_DIM), pos)
+        cos_tt = ttnn.from_torch(
+            cos.unsqueeze(1), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        sin_tt = ttnn.from_torch(
+            sin.unsqueeze(1), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        return cos_tt, sin_tt
+
+    def _enc_sliding(self, seq_len: int):
+        mk = self._mod.create_4d_mask(
+            seq_len=seq_len,
+            dtype=torch.float32,
+            device=torch.device("cpu"),
+            attention_mask=None,
+            sliding_window=self.args.sliding_window,
+            is_sliding_window=True,
+            is_causal=False,
+        )
+        return ttnn.from_torch(mk, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
     # ---- decode ----
     def decode(self, latents_tt):
         """VAE-decode clean latents [1,1,T,64] -> 48kHz stereo waveform torch [1,2,T*1920]."""
@@ -131,20 +254,49 @@ class AceStepPipeline:
         return wav
 
 
-def create_tt_pipeline(args: AceStepModelConfig, mesh_device, *, with_vae: bool = True) -> AceStepPipeline:
-    """Assemble the full TT generation pipeline from the genuine checkpoint.
+def create_tt_pipeline(
+    args: AceStepModelConfig, mesh_device, *, with_vae: bool = True, with_encoders: bool = True
+) -> AceStepPipeline:
+    """Assemble the full TT text-to-music pipeline from the genuine checkpoint.
 
-    Builds the DiT denoiser and, if requested, the Oobleck VAE decoder (build_vae_decoder).
-    Weights load lazily on first forward. This is the single public model-construction entry point.
+    Single public model-construction entry point. Builds the DiT denoiser and, by default, the
+    Oobleck VAE decoder + text encoder + condition encoder + tokenizer — so `generate_song(prompt)`
+    works out of the box. Weights load lazily on first forward.
+
+    - with_vae:      build the VAE decoder (needed for audio output / generate_song / decode).
+    - with_encoders: build the text + condition encoders + tokenizer (needed for generate_song /
+                     encode_prompt). Set False for DiT-only latent tests.
     """
+    from models.experimental.acestep.tt.model_config import build_condition_encoder, build_text_encoder
+
     dit = _build_dit_model(args, mesh_device)
     vae, vae_cfg = (None, None)
     if with_vae:
         vae, vae_cfg = build_vae_decoder(mesh_device)
 
+    text_encoder = condition_encoder = tokenizer = hf_text_cfg = None
+    if with_encoders:
+        from transformers import AutoTokenizer
+        from models.experimental.acestep.reference.weight_utils import pipeline_dir
+
+        text_encoder, hf_text = build_text_encoder(mesh_device)
+        hf_text_cfg = hf_text.config
+        condition_encoder = build_condition_encoder(args, mesh_device)
+        tokenizer = AutoTokenizer.from_pretrained(str(pipeline_dir() / "Qwen3-Embedding-0.6B"))
+
     hf = load_config()
     rope = Qwen3RotaryEmbedding(hf)
     mod = load_modeling_module()
     return AceStepPipeline(
-        args=args, dit=dit, vae=vae, vae_config=vae_cfg, mesh_device=mesh_device, _rope=rope, _mod=mod
+        args=args,
+        dit=dit,
+        vae=vae,
+        vae_config=vae_cfg,
+        mesh_device=mesh_device,
+        _rope=rope,
+        _mod=mod,
+        text_encoder=text_encoder,
+        condition_encoder=condition_encoder,
+        tokenizer=tokenizer,
+        _hf_text_cfg=hf_text_cfg,
     )

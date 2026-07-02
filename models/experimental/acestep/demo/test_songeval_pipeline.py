@@ -122,7 +122,7 @@ def test_songeval_ttnn_pipeline(device):
         ref_wav = ref_vae.decode(ref_latents.transpose(1, 2)).sample  # [1,2,samples]
 
     # --- TTNN pipeline (device DiT + device VAE) ---
-    pipe = create_tt_pipeline(args, device, with_vae=True)
+    pipe = create_tt_pipeline(args, device, with_vae=True, with_encoders=False)
     noise_tt = to_ttnn_tensor(noise.reshape(1, 1, SEQ_LEN, HIDDEN_CH), device)
     context_tt = to_ttnn_tensor(context.reshape(1, 1, SEQ_LEN, CONTEXT_CH), device)
     encoder_tt = to_ttnn_tensor(encoder.reshape(1, 1, 96, args.hidden_size), device)

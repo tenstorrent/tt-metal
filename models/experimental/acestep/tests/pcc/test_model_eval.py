@@ -5,7 +5,7 @@
 Unlike the per-module PCC tests, this exercises the public factory contract:
 
     args  = AceStepModelConfig.from_hf(...)
-    model = create_tt_pipeline(args, device, with_vae=False).dit
+    model = create_tt_pipeline(args, device, with_vae=False, with_encoders=False).dit
     out   = model.forward(...)
 
 against the genuine HF AceStepDiTModel, over a small evaluation dataset of denoise-step inputs
@@ -63,7 +63,7 @@ def test_model_eval_dataset(device):
 
     # Public factory contract.
     args = AceStepModelConfig.from_hf(num_hidden_layers=NUM_DIT_LAYERS)
-    model = create_tt_pipeline(args, device, with_vae=False).dit
+    model = create_tt_pipeline(args, device, with_vae=False, with_encoders=False).dit
 
     # Reference DiT with the same real weights.
     m = load_modeling_module()
