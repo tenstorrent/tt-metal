@@ -245,13 +245,14 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     //   cb_inp).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (welford_unpack_fp32_active && !fuse_pre_add) {
+    if (welford_unpack_fp32_active) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-    if (welford_unpack_fp32_active && fuse_pre_add) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_3)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        if (fuse_pre_add) {
+            unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] =
+                tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_3)] =
+                tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
     }
 
     // Intermediate scratch CB (c_1) holds data only for the final transpose operation,
