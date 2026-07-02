@@ -124,6 +124,9 @@ Decode persistent all-reduce was kept. Prefill stayed high-level.
 - `gate_up_width_l1_10c_i8_s8`: 2.524747 / 0.326578 ms.
 - `wo_1d_explicit_8c_i4_s4`: rejected with exact blocker `Number of blocks exceeds number of cores: 20 blocks > 8 cores`.
 - `down_dram_2c_i38_n40`: 2.505407 / 0.369568 ms.
+- `down_dram_1c_i76_n80`: added after review to close the remaining legal <=8-core down candidate; trace replay passed with PCC 1.0 and `capture_vs_replay_max_delta=8.84375`, then measured 2.450187 / 0.286979 ms under the final QKV plus gate/up geometry. Rejected because traced decode is slower than the final 4-core default at 0.279089 ms. Artifacts: `down_dram_1c_trace_replay.log`, `down_dram_1c_perf.csv`, `down_dram_1c_perf.log`.
+
+The DRAM-sharded matmul program type used for decode down does not expose output-subblock knobs: the C++ config has only `in0_block_w`, `per_core_M`, `per_core_N`, and `fused_activation`. For local K=2432, Kt is 76 tiles. The matmul factory requires `Kt % in0_block_w == 0`, and the auto-selected core count is the largest <=8 divisor of Kt. Therefore the legal <=8-core down family is 1 core (`in0_block_w=76`, `per_core_N=80`), 2 cores (`in0_block_w=38`, `per_core_N=40`), and 4 cores (`in0_block_w=19`, `per_core_N=20`, final default). 8 cores is not legal for this K because 76 is not divisible by 8. Artifact: `down_dram_geometry_closure.log`.
 
 9. Swept combinations:
 
@@ -131,6 +134,7 @@ Decode persistent all-reduce was kept. Prefill stayed high-level.
 - `combo_qkv_1d_dram_24c_i5_s2_plus_gate_up_1d_l1_20c_i10_s4`: 2.414958 / 0.280689 ms.
 - `combo_gate_up_1d_l1_20c_i10_s4_plus_down_dram_2c_i38_n40`: 2.751126 / 0.306159 ms.
 - `combo_qkv_1d_dram_24c_i5_s2_plus_gate_up_1d_l1_20c_i10_s4_plus_down_dram_2c_i38_n40`: 2.447248 / 0.282649 ms.
+- `combo_qkv_1d_dram_24c_i5_s2_plus_gate_up_1d_l1_20c_i10_s4_plus_down_dram_1c_i76_n80`: 2.450187 / 0.286979 ms.
 
 The QKV plus gate/up combination became the final default geometry.
 
@@ -199,7 +203,7 @@ prefill: 2.413568 ms
 traced decode: 0.284548 ms
 ```
 
-Rejected because the primary target is traced decode and the split gate/up default remains faster at 0.279989 ms. The packed weight is env-gated and is not loaded on the final default path.
+Rejected because the primary target is traced decode and the split gate/up default remains faster at 0.279089 ms. The packed weight is env-gated and is not loaded on the final default path.
 
 18. Searched for same-model same-stage optimized references in the current checkout:
 
@@ -218,7 +222,7 @@ pytest -q -s models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py --tb
   > models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/final_correctness.log 2>&1
 ```
 
-Result: `8 passed, 3 skipped in 78.02s`.
+Result: `8 passed, 3 skipped in 78.18s`.
 
 Final PCC:
 
@@ -241,8 +245,10 @@ pytest -q -s models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::tes
 
 Result:
 
-- warmed prefill seq16: 2.439038 ms
-- traced warmed decode pos16: 0.279989 ms
+- warmed prefill seq16: 2.514707 ms
+- traced warmed decode pos16: 0.279089 ms
+
+Artifact: `final_perf.log`.
 
 Tracy/perf report:
 
@@ -277,6 +283,8 @@ python .agents/scripts/check_context_contract.py --model-dir models/autoports/qw
 
 Result: full 40960-token context supported. Artifact: `context_contract_check.log`.
 
+`doc/context_contract.json` is updated for the optimized stage. The final persistent decode all-reduce allocates two BF16 L1 scratch buffers per device for key `(M=32, width=2560, dtype=BF16)`. Each buffer has logical shape `[1, 1, 32, 10240]`: `32 * 10240 * 2 = 655360` bytes per device. Two copies plus a conservative 4096-byte semaphore payload bound total 1,314,816 bytes per device. The buffers are L1-resident and independent of KV-cache pages/context length, so the 40960-token context contract is unchanged.
+
 Device health:
 
 ```bash
@@ -297,14 +305,16 @@ The first `$stage-review` returned `more-work-needed`. An `$autofix` loop used `
 - Decode-down bounce removal with final correctness and perf evidence.
 - Packed gate/up candidate with replay correctness and whole-decoder perf rejection evidence.
 - Updated README and work log tied to the final default path.
+- Follow-up review required optimized-stage context-contract accounting and complete down DRAM-sharded geometry closure. The follow-up pass updated `doc/context_contract.json` with persistent L1 all-reduce scratch/semaphore accounting, added the `down_dram_1c_i76_n80` candidate, recorded `down_dram_geometry_closure.log`, regenerated final default correctness/perf, and reran the context contract check.
 
-Final `$stage-review` rereview returned `clean-pass` with no required work. Reviewer noted two controlled anomalies, not blockers: Tracy trace-replay host timestamps precede replay signpost even though rows carry trace/replay session IDs, and process-exit nanobind refcount warnings occur after passing tests with clean device close and healthy `tt-smi`.
+Final `$stage-review` rereview returned `clean-pass` with no required work. The first clean-pass reviewer noted two controlled anomalies, not blockers: Tracy trace-replay host timestamps precede replay signpost even though rows carry trace/replay session IDs, and process-exit nanobind refcount warnings occur after passing tests with clean device close and healthy `tt-smi`. The follow-up rereview after remediation also returned `clean-pass`; reviewer agent `019f233c-629a-7e33-808f-5ef4d8e38869` verified that the context-contract and down-geometry findings were fixed from artifacts/code and noted no blocking hard-check gaps.
 
 Checkpoint commit:
 
 - Repo: `/home/ubuntu/tt-metal`
 - Branch: `agentic-research/fast-models-fast`
 - Stage checkpoint SHA: `bfa8d3c1bedd3ba1832122ab10bc58f8e24283ba`
+- Final optimized checkpoint SHA: `PENDING_FINAL_COMMIT_SHA`
 
 ## Final State
 

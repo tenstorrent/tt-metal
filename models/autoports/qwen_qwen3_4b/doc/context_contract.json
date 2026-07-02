@@ -3,8 +3,8 @@
   "autoport_dir": "models/autoports/qwen_qwen3_4b",
   "hf_advertised_context": 40960,
   "current_supported_context": 40960,
-  "decode_status": "multichip_single_layer_paged_prefill_decode_validated",
-  "stage": "multichip-decoder",
+  "decode_status": "optimized_multichip_single_layer_paged_prefill_decode_validated",
+  "stage": "optimized-multichip-decoder",
   "limiting_reason": "none",
   "mesh_contract": {
     "target_mesh": "1x4 Blackhole p150b ring",
@@ -14,7 +14,7 @@
     "single_chip_baseline": "models/autoports/qwen_qwen3_4b/tt/optimized_decoder.py"
   },
   "capacity_evidence": {
-    "status": "full_hf_context_capacity_planned_and_allocated_for_decoder_layer",
+    "status": "full_hf_context_capacity_planned_and_allocated_for_optimized_decoder_layer",
     "hf_context": 40960,
     "paged_kv_config": {
       "max_num_blocks": 2560,
@@ -52,11 +52,45 @@
       "per_device_decode_page_update_token_bytes": 1024,
       "per_device_total_representative_activation_bytes": 578560
     },
+    "optimized_persistent_decode_ccl_estimate": {
+      "status": "context_independent_l1_all_reduce_scratch_accounted",
+      "source": "models/autoports/qwen_qwen3_4b/tt/multichip_decoder.py::_persistent_all_reduce_resources",
+      "triggered_keys_in_final_default_decode": [
+        {
+          "m": 32,
+          "width": 2560,
+          "dtype": "bfloat16",
+          "uses": [
+            "attention_output_all_reduce",
+            "mlp_down_output_all_reduce"
+          ]
+        }
+      ],
+      "resource_copies_per_key": 2,
+      "logical_buffer_shape_per_copy": [
+        1,
+        1,
+        32,
+        10240
+      ],
+      "buffer_dtype": "bfloat16",
+      "bytes_per_element": 2,
+      "per_device_l1_buffer_bytes_per_copy": 655360,
+      "per_device_l1_buffer_bytes_for_two_copies": 1310720,
+      "active_l1_cores_per_device": 8,
+      "per_active_core_l1_buffer_bytes_per_copy": 81920,
+      "per_active_core_l1_buffer_bytes_for_two_copies": 163840,
+      "global_semaphores_per_key": 2,
+      "semaphore_payload_upper_bound_bytes_per_device": 4096,
+      "per_device_total_persistent_decode_ccl_bytes_upper_bound": 1314816,
+      "context_impact": "none; persistent decode CCL scratch is L1-resident, allocated for the fixed tile-padded decode M=32 and hidden width, and does not scale with KV-cache pages or advertised context length"
+    },
     "notes": [
       "Qwen3-4B has 36 decoder layers, hidden_size=2560, 32 Q heads, 8 KV heads, head_dim=128, intermediate_size=9728.",
       "TP4 gives per-device local heads: 8 Q heads and 2 KV heads.",
       "The multichip decoder allocates one local-head K cache and one local-head V cache per device with 2560 pages of 16 tokens, preserving the 40960-token HF context capacity.",
       "Per-device memory estimate for the full decoder stack is about 1.51 GB KV cache plus 0.45 GB decoder weights before TT runtime allocator overhead.",
+      "The optimized decoder adds persistent L1 all-reduce scratch for traced decode: two BF16 logical buffers of shape [1, 1, 32, 10240] per device plus two semaphores, conservatively 1,314,816 bytes per device. This is context-independent L1 scratch and does not reduce the 40960-token paged KV-cache capacity.",
       "Largest PCC validation in this stage uses shorter logical lengths to keep single-layer CI/runtime tractable; no context reduction is claimed."
     ]
   },
@@ -114,6 +148,37 @@
       "status": "passed",
       "result": "1 passed in 10.03s; shape-faithful reduce-scatter residual probe produced local hidden width 640 and recorded exact full-residual, full-RMSNorm-weight, and gate/up matmul shape-contract blockers.",
       "log": "models/autoports/qwen_qwen3_4b/doc/multichip_decoder/reduce_scatter_residual_probe.log"
+    },
+    {
+      "command": "pytest -q -s models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py --tb=short",
+      "stage": "optimized-multichip-decoder",
+      "status": "passed",
+      "result": "8 passed, 3 skipped in 78.18s",
+      "largest_validated_prefill_seq": 64,
+      "largest_validated_decode_prefix": 17,
+      "pcc": {
+        "prefill_seq_16": 0.9997333805764328,
+        "prefill_seq_17": 0.9997359676733848,
+        "prefill_seq_64": 0.999684148069019,
+        "paged_decode_prefix_16": 0.999583534225651,
+        "paged_decode_prefix_17": 0.9995836610905112,
+        "trace_replay": 1.0,
+        "inter_device_replication": 1.0
+      },
+      "log": "models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/final_correctness.log"
+    },
+    {
+      "command": "QWEN3_4B_MULTICHIP_RUN_PERF=1 QWEN3_4B_MULTICHIP_PERF_OUT=models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/perf_host_timings.csv pytest -q -s models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_perf_signposts --tb=short",
+      "stage": "optimized-multichip-decoder",
+      "status": "passed",
+      "result_csv": "models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/perf_host_timings.csv"
+    },
+    {
+      "command": "python .agents/scripts/check_context_contract.py --model-dir models/autoports/qwen_qwen3_4b",
+      "stage": "optimized-multichip-decoder",
+      "status": "passed",
+      "result": "Context contract OK for models/autoports/qwen_qwen3_4b: target=40960, supported=40960 (full HF context).",
+      "log": "models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/context_contract_check.log"
     }
   ],
   "notes": [

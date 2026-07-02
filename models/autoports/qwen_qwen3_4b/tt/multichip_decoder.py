@@ -202,6 +202,8 @@ class MultichipDecoder(LightweightModule):
         )
 
     def _decode_dram_num_cores(self, k: int) -> int:
+        if "down_dram_1c_i76_n80" in self.geometry_modes and k == self.local_intermediate_size:
+            return 1
         if "down_dram_2c_i38_n40" in self.geometry_modes and k == self.local_intermediate_size:
             return 2
         return self._decode_dram_matmul_num_cores(self.mesh_device, k)

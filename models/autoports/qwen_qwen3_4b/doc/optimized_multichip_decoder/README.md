@@ -14,13 +14,13 @@ Kept changes:
 
 - Decode QKV uses an explicit 1D matmul geometry: `qkv_1d_dram_24c_i5_s2`.
 - Decode gate/up use an explicit 1D L1-input matmul geometry: `gate_up_1d_l1_20c_i10_s4`.
-- Decode MLP down uses a DRAM-sharded weight and L1 width-sharded activation/output staging. The local K is 2432, so the default decode DRAM-sharded matmul uses 4 cores because 76 K tiles is divisible by 4 but not by 8.
+- Decode MLP down uses a DRAM-sharded weight and L1 width-sharded activation/output staging. The local K is 2432, so the default decode DRAM-sharded matmul uses 4 cores because 76 K tiles is divisible by 4 but not by 8. Legal <=8-core alternatives for this K are 1, 2, and 4 cores; 1-core and 2-core candidates were measured and rejected.
 - Decode row-parallel projection reductions use the lower `ttnn.experimental.all_reduce_async(input, buffer, cluster_axis, mesh_device, semaphore, ...)` overload with preallocated L1 width-sharded scratch buffers and semaphores.
 - Prefill remains on high-level async all-reduce and default prefill matmul geometry. Prefill-specific geometry candidates either regressed or hit exact shape blockers.
 
 The public layer boundary remains a replicated BF16 hidden-state tensor of shape `[1, 1, logical_seq_or_batch, 2560]`. Inside a layer, QKV, attention heads, gate/up, and down are TP-local. There is no gather, reshard, or all-reduce between decoder layers. Full-model bringup should preserve this replicated inter-layer residual contract unless it also implements a distributed residual, RMSNorm, and projection stack.
 
-The context contract is unchanged: paged KV cache remains BF16, local KV heads per device, 2560 blocks of 16 tokens, maximum context 40960. `doc/context_contract.json` did not need an update.
+The context capacity is unchanged: paged KV cache remains BF16, local KV heads per device, 2560 blocks of 16 tokens, maximum context 40960. `doc/context_contract.json` was updated for this optimized stage with the persistent decode CCL buffer accounting: two BF16 L1 scratch buffers of logical shape `[1, 1, 32, 10240]` per device plus semaphores, conservatively 1,314,816 bytes per device. These buffers are L1-resident and context-independent, so they do not reduce the 40960-token KV-cache capacity.
 
 ## Correctness
 
@@ -31,7 +31,7 @@ pytest -q -s models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py --tb
   > models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/final_correctness.log 2>&1
 ```
 
-Result: `8 passed, 3 skipped in 78.02s`.
+Result: `8 passed, 3 skipped in 78.18s`.
 
 PCC:
 
@@ -64,10 +64,10 @@ Before/after host timings:
 
 | Mode | Before multichip ms | Final multichip ms | Change |
 | --- | ---: | ---: | ---: |
-| warmed prefill seq16 | 2.696187 | 2.439038 | -9.54% |
-| traced warmed decode pos16 | 0.437868 | 0.279989 | -36.06% |
+| warmed prefill seq16 | 2.696187 | 2.514707 | -6.73% |
+| traced warmed decode pos16 | 0.437868 | 0.279089 | -36.26% |
 
-Final CSV: `perf_host_timings.csv`. These numbers were regenerated after the trace replay correctness fix and after removing the decode-down L1-to-DRAM-to-L1 bounce before persistent all-reduce.
+Final CSV: `perf_host_timings.csv`. These numbers were regenerated after the trace replay correctness fix, after removing the decode-down L1-to-DRAM-to-L1 bounce before persistent all-reduce, and after the down-matmul geometry closure follow-up.
 
 Final Tracy host timings:
 
@@ -113,7 +113,7 @@ Final traced decode table summary:
 - Decode QKV row is 18.234 us with 24 cores, `in0_block_w=5`, output subblock 1x2.
 - Decode gate/up rows are 18.556/18.162 us with 19 cores, L1 input, `in0_block_w=10`, output subblock 1x4.
 - Decode persistent all-reduce rows are 16.123/15.675 us with L1 width-sharded input.
-- Decode down row is DRAM-sharded and L1 width-sharded, 14.727 us.
+- Decode down row is DRAM-sharded and L1 width-sharded, 14.727 us. `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` exposes only `in0_block_w`, `per_core_M`, `per_core_N`, and `fused_activation`; there is no output-subblock field to tune for this DRAM-sharded program. Evidence: `down_dram_geometry_closure.log`.
 - The Tracy report still shows a large QKV op-to-op gap. The final runtime number is the host trace replay timing in `perf_host_timings.csv`; the per-op table is used for operation topology and device-time evidence.
 
 ## Operation Topology Audit
@@ -121,7 +121,7 @@ Final traced decode table summary:
 Repeated same-input matmuls:
 
 - QKV is already packed per device and now uses a better decode program config.
-- Gate and up still share the same post-attention RMSNorm input and remain separate matmuls in the final default. A packed gate/up candidate was added under `packed_gate_up_1d_l1_20c_i10_s4`: it packs local gate/up weights, runs one decode matmul to `2 * local_intermediate`, slices gate/up on device, then runs SiLU, multiply, DRAM-sharded down, and persistent all-reduce. It passed trace replay with PCC 1.0 and `capture_vs_replay_max_delta=6.65625`, but whole-decoder traced decode measured 0.284548 ms versus 0.279989 ms for the split default. It is rejected for decode latency and its packed weight is loaded only when that geometry mode is selected.
+- Gate and up still share the same post-attention RMSNorm input and remain separate matmuls in the final default. A packed gate/up candidate was added under `packed_gate_up_1d_l1_20c_i10_s4`: it packs local gate/up weights, runs one decode matmul to `2 * local_intermediate`, slices gate/up on device, then runs SiLU, multiply, DRAM-sharded down, and persistent all-reduce. It passed trace replay with PCC 1.0 and `capture_vs_replay_max_delta=6.65625`, but whole-decoder traced decode measured 0.284548 ms versus 0.279089 ms for the split default. It is rejected for decode latency and its packed weight is loaded only when that geometry mode is selected.
 
 Material collectives:
 
@@ -182,11 +182,12 @@ MoE:
 | Persistent decode all-reduce only | 2.523017 | 0.370138 | Kept as CCL base. |
 | QKV geometry only, `qkv_1d_dram_24c_i5_s2` | 2.386648 | 0.343278 | Useful, superseded by combo. |
 | Gate/up geometry only, `gate_up_1d_l1_20c_i10_s4` | 2.631487 | 0.303408 | Useful, superseded by combo. |
-| QKV plus gate/up geometry | 2.414958 | 0.280689 | Kept as final geometry family. |
+| QKV plus gate/up geometry | 2.414958 | 0.280689 | Kept as final geometry family; superseded by current final retest. |
+| QKV plus gate/up plus `down_dram_1c_i76_n80` | 2.450187 | 0.286979 | Rejected: slower than final geometry. |
 | QKV plus gate/up plus `down_dram_2c_i38_n40` | 2.447248 | 0.282649 | Rejected: slower than final geometry. |
 | Packed gate/up, `packed_gate_up_1d_l1_20c_i10_s4` | 2.413568 | 0.284548 | Rejected: decode slower than split gate/up default. |
 | Stack-compatible sharded residual family | 2.410048 local stack min | n/a | Rejected for this stage: 2.558287x slower than replicated stack micro-path. |
-| Final default retest after trace fix, L1-down bounce removal, and packed candidate rejection | 2.439038 | 0.279989 | Kept. |
+| Final default retest after trace fix, L1-down bounce removal, packed candidate rejection, and down-matmul geometry closure | 2.514707 | 0.279089 | Kept. |
 
 Prefill-specific geometry:
 
