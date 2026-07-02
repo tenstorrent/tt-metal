@@ -262,7 +262,17 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
         else
         {
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(to_underlying(DataFormat::Float32));
+            }
             ckernel_template::run();
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(src_zero_flag_srcb_fmt);
+            }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
     }
