@@ -25,7 +25,6 @@ from typing import Callable
 
 from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
 
@@ -78,44 +77,3 @@ class DeepSeekV32Adapter(SparseMLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 
         return deepseek_v32_hf_config
-
-
-class GLM51Adapter(SparseMLAPrefillAdapter):
-    # --- identity ---
-    name = "glm_5_1"
-    model_config = GLM51Config
-
-    # --- test metadata ---
-    # FP8 repo: the 55k golden trace was generated from the FP8 checkpoint, so the auto-download fallback
-    # must match that precision (bf16 zai-org/GLM-5.1 would diverge from the trace).
-    hf_repo_id = "zai-org/GLM-5.1-FP8"
-    env_var = "GLM51_HF_MODEL"
-    mla_ref_cache_env = "GLM51_MLA_REF_CACHE"
-    mla_pcc_threshold = 0.995
-    moe_pcc_threshold = 0.971
-
-    # --- full-transformer / chunked pytest path ---
-    # GLM runs the same test set as Kimi (single-shot + chunked transformer) against a vLLM golden trace
-    # (approach B). No reference_model_cls: not because glm_moe_dsa is unloadable (transformers >=5.10 ships
-    # GlmMoeDsaModel and it IS AutoConfig-loadable) but because the DSA family validates by composing the
-    # CPU references it already has — sparse-MLA (reference.cpu_deepseek_v32) + a per-expert noaux_tc MoE
-    # (reference.glm_5_1) — rather than a single HF decoder-layer forward. That composition is provably the
-    # SAME computation as GlmMoeDsaModel: its router route_tokens_to_experts is the DeepSeek MoEGate
-    # noaux_tc and its GlmMoeDsaNaiveMoe expert is the silu-gated FFN (just packed weights) — verified
-    # equal to our reference at PCC 1.0. So reference_model_cls would be redundant AND need extra plumbing
-    # (GlmMoeDsaConfig, unpacking packed experts, the DSA layer forward). See test_glm_prefill_block.
-    # Serving is still NOT wired (base's allocate_kv_cache / build_runtime raise); these fields only enable
-    # the pytest pretrained path (supports_pretrained gates it, and it's consumed exclusively by the tests).
-    supports_pretrained = True
-    ttnn_cache_env = "TT_GLM51_PREFILL_TTNN_CACHE"
-    ref_cache_env = "TT_GLM51_PREFILL_HOST_REF_CACHE"
-    prefill_trace_layout = "chunked_group_a_v1"
-    test_prefill_trace_default = (
-        "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
-    )
-
-    @property
-    def config_builder(self) -> Callable:
-        from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
-
-        return glm_hf_config
