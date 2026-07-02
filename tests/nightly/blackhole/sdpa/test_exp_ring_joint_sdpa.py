@@ -30,10 +30,7 @@ from tests.nightly.sdpa_perf_utils import (
     post_process_ops_log,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.profiling.realtime_profiler_utils import (
-    create_realtime_profiler_publish_sentinel,
-    profile_realtime_program,
-)
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
 
@@ -47,11 +44,9 @@ def profile_exp_ring_joint_runtime_duration_ns(mesh_device, run_fn):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for SDPA perf checks")
 
-    publish_realtime_profile_record = create_realtime_profiler_publish_sentinel(mesh_device)
     _, records = profile_realtime_program(
         mesh_device,
         run_fn,
-        flush_fn=publish_realtime_profile_record,
         collect_all=True,
     )
     runtime_id = records[0]["runtime_id"]

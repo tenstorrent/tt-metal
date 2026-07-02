@@ -255,10 +255,7 @@ from tests.nightly.sdpa_perf_utils import (
     compute_cores_used,
     compute_math_utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import (
-    create_realtime_profiler_publish_sentinel,
-    profile_realtime_program,
-)
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
 def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_count):
@@ -444,8 +441,6 @@ def test_sdpa_perf_check(sdpa_realtime_profiled_device, shape_id, q_chunk_size, 
     b, nh, s, d = INPUT_SHAPES[idx]
     device = sdpa_realtime_profiled_device
 
-    publish_realtime_profile_record = create_realtime_profiler_publish_sentinel(device)
-
     def run_sdpa():
         return run_sdpa_noncausal(
             device,
@@ -463,7 +458,6 @@ def test_sdpa_perf_check(sdpa_realtime_profiled_device, shape_id, q_chunk_size, 
     measured_out, perf_record = profile_realtime_program(
         device,
         run_sdpa,
-        flush_fn=publish_realtime_profile_record,
     )
 
     core_count = 11 * 10
