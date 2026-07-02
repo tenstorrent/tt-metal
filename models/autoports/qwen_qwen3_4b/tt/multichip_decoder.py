@@ -82,6 +82,10 @@ class MultichipDecoder(LightweightModule):
         paged_kv_config: PagedKVConfig,
         attention_math_fidelity: ttnn.MathFidelity,
         mlp_math_fidelity: ttnn.MathFidelity,
+        auxiliary_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
+        activation_dtype: ttnn.DataType = ttnn.bfloat16,
+        residual_dtype: ttnn.DataType = ttnn.bfloat16,
+        ccl_dtype: ttnn.DataType = ttnn.bfloat16,
         topology: ttnn.Topology = ttnn.Topology.Ring,
         num_links: int = 1,
     ) -> None:
@@ -120,6 +124,9 @@ class MultichipDecoder(LightweightModule):
         self.attention_mask = attention_mask
         self.max_seq_len = max_seq_len
         self.paged_kv_config = paged_kv_config
+        self.activation_dtype = activation_dtype
+        self.residual_dtype = residual_dtype
+        self.ccl_dtype = ccl_dtype
         self.topology = topology
         self.num_links = num_links
         self.geometry_mode = os.environ.get(
@@ -154,7 +161,11 @@ class MultichipDecoder(LightweightModule):
             if attention_math_fidelity == ttnn.MathFidelity.LoFi
             else self.compute_kernel_config_hifi2
         )
-        self.auxiliary_compute_kernel_config = self.compute_kernel_config_lofi
+        self.auxiliary_compute_kernel_config = (
+            self.compute_kernel_config_lofi
+            if auxiliary_math_fidelity == ttnn.MathFidelity.LoFi
+            else self.compute_kernel_config_hifi2
+        )
         self.sdpa_decode_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             exp_approx_mode=False,
@@ -459,6 +470,10 @@ class MultichipDecoder(LightweightModule):
         mlp_weight_dtype: ttnn.DataType | None = ttnn.bfloat4_b,
         attention_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
         mlp_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
+        auxiliary_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
+        activation_dtype: ttnn.DataType = ttnn.bfloat16,
+        residual_dtype: ttnn.DataType = ttnn.bfloat16,
+        ccl_dtype: ttnn.DataType = ttnn.bfloat16,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Ring,
         static_position_table_seq_len: int | None = None,
@@ -570,6 +585,10 @@ class MultichipDecoder(LightweightModule):
             paged_kv_config=paged_kv_config,
             attention_math_fidelity=attention_math_fidelity,
             mlp_math_fidelity=mlp_math_fidelity,
+            auxiliary_math_fidelity=auxiliary_math_fidelity,
+            activation_dtype=activation_dtype,
+            residual_dtype=residual_dtype,
+            ccl_dtype=ccl_dtype,
             topology=topology,
             num_links=num_links,
         )
@@ -650,6 +669,8 @@ class MultichipDecoder(LightweightModule):
     def _all_reduce_hidden(
         self, partial: ttnn.Tensor, *, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_persistent: bool = False
     ) -> ttnn.Tensor:
+        if partial.get_dtype() != self.ccl_dtype:
+            partial = ttnn.typecast(partial, self.ccl_dtype)
         if use_persistent:
             m = int(partial.shape[-2])
             width = int(partial.shape[-1])
@@ -667,16 +688,20 @@ class MultichipDecoder(LightweightModule):
                 topology=self.topology,
                 num_links=self.num_links,
             )
-            return ttnn.to_memory_config(reduced, memory_config)
-        return ttnn.experimental.all_reduce_async(
-            partial,
-            cluster_axis=1,
-            mesh_device=self.mesh_device,
-            num_links=self.num_links,
-            math_op=ttnn.ReduceType.Sum,
-            topology=self.topology,
-            memory_config=memory_config,
-        )
+            reduced = ttnn.to_memory_config(reduced, memory_config)
+        else:
+            reduced = ttnn.experimental.all_reduce_async(
+                partial,
+                cluster_axis=1,
+                mesh_device=self.mesh_device,
+                num_links=self.num_links,
+                math_op=ttnn.ReduceType.Sum,
+                topology=self.topology,
+                memory_config=memory_config,
+            )
+        if reduced.get_dtype() != self.residual_dtype:
+            reduced = ttnn.typecast(reduced, self.residual_dtype)
+        return reduced
 
     def _fill_paged_kv_cache(self, k, v, kv_cache, page_table, *, user_id: int = 0) -> None:
         k_cache, v_cache = kv_cache
@@ -698,7 +723,7 @@ class MultichipDecoder(LightweightModule):
         qkv = ttnn.matmul(
             normed,
             self.qkv_prefill_weight,
-            dtype=ttnn.bfloat16,
+            dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self._qkv_prefill_geometry(),
             compute_kernel_config=self.attention_compute_kernel_config,
@@ -764,7 +789,7 @@ class MultichipDecoder(LightweightModule):
                 post_norm,
                 self.packed_gate_up_proj_weight,
                 transpose_b=True,
-                dtype=ttnn.bfloat16,
+                dtype=self.activation_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=gate_up_program_config,
                 compute_kernel_config=self.mlp_compute_kernel_config,
@@ -784,7 +809,7 @@ class MultichipDecoder(LightweightModule):
                 post_norm,
                 self.gate_proj_weight,
                 transpose_b=True,
-                dtype=ttnn.bfloat16,
+                dtype=self.activation_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=gate_up_program_config,
                 compute_kernel_config=self.mlp_compute_kernel_config,
@@ -794,18 +819,18 @@ class MultichipDecoder(LightweightModule):
                 post_norm,
                 self.up_proj_weight,
                 transpose_b=True,
-                dtype=ttnn.bfloat16,
+                dtype=self.activation_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=gate_up_program_config,
                 compute_kernel_config=self.mlp_compute_kernel_config,
             )
-        gated = ttnn.multiply(gate, up, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gated = ttnn.multiply(gate, up, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if use_dram_sharded_down:
             gated = ttnn.to_memory_config(gated, self._decode_dram_input_memory_config(self.local_intermediate_size))
             down_partial = ttnn.matmul(
                 gated,
                 self.down_proj_weight_dram_sharded,
-                dtype=ttnn.bfloat16,
+                dtype=self.activation_dtype,
                 memory_config=self._decode_dram_output_memory_config(
                     self.local_intermediate_size, self.cfg.hidden_size
                 ),
@@ -819,7 +844,7 @@ class MultichipDecoder(LightweightModule):
             gated,
             self.down_proj_weight,
             transpose_b=True,
-            dtype=ttnn.bfloat16,
+            dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self._down_prefill_geometry(),
             compute_kernel_config=self.mlp_compute_kernel_config,
@@ -852,12 +877,14 @@ class MultichipDecoder(LightweightModule):
             attn,
             self.o_proj_weight,
             transpose_b=True,
-            dtype=ttnn.bfloat16,
+            dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.attention_compute_kernel_config,
         )
         attn_out = self._all_reduce_hidden(attn_partial)
-        attn_residual = ttnn.add(attn_out, hidden_states, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_residual = ttnn.add(
+            attn_out, hidden_states, dtype=self.residual_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         post_norm = ttnn.rms_norm(
             attn_residual,
             epsilon=RMS_NORM_EPS,
@@ -866,7 +893,7 @@ class MultichipDecoder(LightweightModule):
             compute_kernel_config=self.auxiliary_compute_kernel_config,
         )
         output = ttnn.add(
-            self._mlp(post_norm), attn_residual, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            self._mlp(post_norm), attn_residual, dtype=self.residual_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         signpost("PERF_MULTICHIP_PREFILL_END")
@@ -905,7 +932,7 @@ class MultichipDecoder(LightweightModule):
         qkv = ttnn.matmul(
             hidden_states,
             self.qkv_decode_weight,
-            dtype=ttnn.bfloat16,
+            dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=qkv_program_config,
             compute_kernel_config=self.attention_compute_kernel_config,
@@ -1006,13 +1033,15 @@ class MultichipDecoder(LightweightModule):
             attn,
             self.o_proj_weight,
             transpose_b=True,
-            dtype=ttnn.bfloat16,
+            dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self._wo_decode_geometry(),
             compute_kernel_config=self.attention_compute_kernel_config,
         )
         attn_out = self._all_reduce_hidden(attn_partial, use_persistent=True)
-        attn_residual = ttnn.add(attn_out, hidden_states, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_residual = ttnn.add(
+            attn_out, hidden_states, dtype=self.residual_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         post_norm = ttnn.rms_norm(
             attn_residual,
             epsilon=RMS_NORM_EPS,
@@ -1023,7 +1052,7 @@ class MultichipDecoder(LightweightModule):
         output = ttnn.add(
             self._mlp(post_norm, use_dram_sharded_down=True),
             attn_residual,
-            dtype=ttnn.bfloat16,
+            dtype=self.residual_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0

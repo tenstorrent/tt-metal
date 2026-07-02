@@ -3,11 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import json
 
 from models.autoports.qwen_qwen3_4b.tt.generator import Qwen3Generator, build_generator
-from models.autoports.qwen_qwen3_4b.tt.model import Qwen3FullModel, Qwen3FullModelConfig
+from models.autoports.qwen_qwen3_4b.tt.model import (
+    Qwen3FullModel,
+    Qwen3FullModelConfig,
+    load_precision_config_for_model,
+)
 from models.common.readiness_check.contract import Generator
 from models.common.readiness_check.generate import _chat_or_plain_prompt_tokens
+
+MODEL_DIR = "models/autoports/qwen_qwen3_4b"
 
 
 def test_generator_declares_readiness_contract_keywords():
@@ -110,6 +117,53 @@ def test_full_model_config_preserves_optimized_multichip_defaults():
     assert cfg.mlp_weight_dtype.name == "BFLOAT4_B"
     assert cfg.attention_math_fidelity.name == "LoFi"
     assert cfg.mlp_math_fidelity.name == "LoFi"
+
+
+def test_precision_config_file_maps_all_policy_fields(tmp_path):
+    path = tmp_path / "selected_precision_config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "config_id": "unit_policy",
+                "weight_groups": {
+                    "attention": {"dtype": "bfloat8_b", "layers": "all"},
+                    "mlp": {"dtype": "bfloat4_b", "layers": "all"},
+                    "lm_head": {"dtype": "bfloat8_b", "layers": "all"},
+                },
+                "layer_exceptions": [],
+                "compute_fidelities": {
+                    "attention": "HiFi2",
+                    "mlp": "LoFi",
+                    "lm_head": "HiFi2",
+                    "auxiliary": "LoFi",
+                },
+                "activation_dtype": "bfloat16",
+                "residual_dtype": "bfloat16",
+                "ccl_dtype": "bfloat8_b",
+                "kv_cache_dtype": "bfloat8_b",
+                "kv_cache_block_size": 32,
+                "kv_cache_max_num_blocks": 1280,
+                "logits_dtype": "bfloat16",
+                "sampling_dtype_assumptions": {"dtype": "bfloat16"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_precision_config_for_model(MODEL_DIR, explicit_path=path, overrides={"num_layers": 1})
+
+    assert cfg.precision_config_id == "unit_policy"
+    assert cfg.num_layers == 1
+    assert cfg.attention_weight_dtype.name == "BFLOAT8_B"
+    assert cfg.mlp_weight_dtype.name == "BFLOAT4_B"
+    assert cfg.lm_head_weight_dtype.name == "BFLOAT8_B"
+    assert cfg.attention_math_fidelity.name == "HiFi2"
+    assert cfg.ccl_dtype.name == "BFLOAT8_B"
+    assert cfg.paged_kv_config.cache_dtype.name == "BFLOAT8_B"
+    summary = cfg.precision_summary()
+    assert summary["weight_groups"]["attention"]["dtype"] == "BFLOAT8_B"
+    assert summary["compute_fidelities"]["attention"] == "HiFi2"
+    assert summary["kv_cache_dtype"] == "BFLOAT8_B"
 
 
 def test_readiness_chat_template_accepts_mapping_tokenizer_output():

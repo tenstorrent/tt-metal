@@ -1,0 +1,177 @@
+{
+  "status": "pass",
+  "checked_at_utc": "2026-07-02T23:38:48.439299+00:00",
+  "selected_precision_config": "models/autoports/qwen_qwen3_4b/doc/datatype_sweep/selected_precision_config.json",
+  "measured_runtime_artifact": "models/autoports/qwen_qwen3_4b/doc/datatype_sweep/post_selection_token_out_no_readback_benchmark.json",
+  "measured_runtime_log": "models/autoports/qwen_qwen3_4b/doc/datatype_sweep/logs/post_selection_token_out_no_readback.log",
+  "selected_qualitative_log": "models/autoports/qwen_qwen3_4b/doc/datatype_sweep/logs/selected_qualitative.log",
+  "checks": {
+    "config_id": true,
+    "attention_weight_dtype": true,
+    "mlp_weight_dtype": true,
+    "lm_head_weight_dtype": true,
+    "layer_exceptions": true,
+    "attention_fidelity": true,
+    "mlp_fidelity": true,
+    "lm_head_fidelity": true,
+    "auxiliary_fidelity": true,
+    "activation_dtype": true,
+    "residual_dtype": true,
+    "ccl_dtype": true,
+    "kv_cache_dtype": true,
+    "kv_cache_block_size": true,
+    "kv_cache_max_num_blocks": true,
+    "max_seq_len": true,
+    "logits_dtype": true,
+    "sampling_dtype_assumption": true,
+    "default_path_consumed": true,
+    "trace_verified_token_out": true
+  },
+  "selected_policy": {
+    "version": 1,
+    "config_id": "baseline_bfp4_lofi_bf16kv_bf16ccl",
+    "description": "Qwen3-4B datatype sweep candidate",
+    "max_seq_len": 40960,
+    "kv_cache_block_size": 32,
+    "kv_cache_max_num_blocks": 1280,
+    "weight_groups": {
+      "attention": {
+        "dtype": "bfloat4_b",
+        "layers": "all",
+        "operations": [
+          "qkv_prefill",
+          "qkv_decode",
+          "o_proj"
+        ]
+      },
+      "mlp": {
+        "dtype": "bfloat4_b",
+        "layers": "all",
+        "operations": [
+          "gate_proj",
+          "up_proj",
+          "packed_gate_up_proj",
+          "down_proj"
+        ]
+      },
+      "lm_head": {
+        "dtype": "bfloat4_b",
+        "layers": "all",
+        "operations": [
+          "vocab_sharded_lm_head"
+        ]
+      },
+      "embedding": {
+        "dtype": "bfloat16",
+        "layers": "all"
+      },
+      "norm": {
+        "dtype": "bfloat16",
+        "layers": "all"
+      }
+    },
+    "layer_exceptions": [],
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi",
+      "auxiliary": "LoFi"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat16",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype_assumptions": {
+      "dtype": "bfloat16",
+      "sampler": "Qwen3GreedyTP4Sampler consumes BF16 vocab-sharded logits and emits UINT32 token ids"
+    },
+    "selected": true,
+    "selection_reason": "fastest evaluated config satisfying top1/top5/top100 gates using traced teacher-forcing decode t/s/u",
+    "selection_metric": {
+      "top1": 0.94,
+      "top5": 1.0,
+      "top100": 1.0,
+      "ttft_ms": 872.85,
+      "trace_verified_teacher_forcing_decode_tps_per_user": 64.3
+    },
+    "source_candidate_path": "models/autoports/qwen_qwen3_4b/doc/datatype_sweep/configs/baseline_bfp4_lofi_bf16kv_bf16ccl.json"
+  },
+  "runtime_policy_summary": {
+    "config_id": "baseline_bfp4_lofi_bf16kv_bf16ccl",
+    "precision_config_path": "models/autoports/qwen_qwen3_4b/doc/datatype_sweep/selected_precision_config.json",
+    "weight_groups": {
+      "attention": {
+        "dtype": "BFLOAT4_B",
+        "layers": "all"
+      },
+      "mlp": {
+        "dtype": "BFLOAT4_B",
+        "layers": "all"
+      },
+      "lm_head": {
+        "dtype": "BFLOAT4_B",
+        "layers": "all"
+      },
+      "embedding": {
+        "dtype": "BFLOAT16",
+        "layers": "all"
+      },
+      "norm": {
+        "dtype": "BFLOAT16",
+        "layers": "all"
+      }
+    },
+    "layer_exceptions": [],
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi",
+      "auxiliary": "LoFi"
+    },
+    "activation_dtype": "BFLOAT16",
+    "residual_dtype": "BFLOAT16",
+    "ccl_dtype": "BFLOAT16",
+    "kv_cache_dtype": "BFLOAT16",
+    "kv_cache_block_size": 32,
+    "kv_cache_max_num_blocks": 1280,
+    "max_seq_len": 40960,
+    "logits_dtype": "BFLOAT16",
+    "sampling_dtype_assumptions": {
+      "dtype": "BFLOAT16",
+      "greedy_tp4_sampler_input": "BFLOAT16 logits; sampler emits UINT32 tokens"
+    }
+  },
+  "code_paths": [
+    {
+      "file": "models/autoports/qwen_qwen3_4b/tt/generator.py",
+      "lines": "793-807",
+      "evidence": "build_generator loads load_precision_config_for_model(model_dir) when model_config is omitted; measured token-out and qualitative scripts omitted precision_config_path/env override."
+    },
+    {
+      "file": "models/autoports/qwen_qwen3_4b/tt/model.py",
+      "lines": "128-238",
+      "evidence": "Qwen3FullModelConfig parses selected JSON fields into TTNN dtypes/fidelities, KV cache geometry, layer exceptions, logits, and sampling assumptions."
+    },
+    {
+      "file": "models/autoports/qwen_qwen3_4b/tt/model.py",
+      "lines": "326-375, 402-424, 743-766",
+      "evidence": "Full model consumes lm-head dtype/fidelity, passes decoder precision fields to every layer, and emits logits using logits_dtype."
+    },
+    {
+      "file": "models/autoports/qwen_qwen3_4b/tt/multichip_decoder.py",
+      "lines": "530-612, 669-704, 830-895, 1014-1053",
+      "evidence": "Decoder consumes attention/MLP weight dtypes, KV-cache dtype, CCL dtype, activation/residual dtypes, and auxiliary/attention/MLP compute fidelities in prefill/decode paths."
+    },
+    {
+      "file": "models/autoports/qwen_qwen3_4b/tests/test_full_model_contract.py",
+      "evidence": "Host-only contract test verifies all selected JSON policy fields map into Qwen3FullModelConfig and preserve num_layers override."
+    }
+  ],
+  "normal_selected_path_evidence": {
+    "token_out_command": "python inline script using build_generator(model_dir=model_dir, mesh_device=mesh) with no QWEN3_4B_PRECISION_CONFIG override",
+    "token_out_selected_policy_summary_in_log": true,
+    "qualitative_command": "python inline selected qualitative script using build_generator(model_dir=model_dir, mesh_device=mesh) with no QWEN3_4B_PRECISION_CONFIG override",
+    "qualitative_selected_policy_summary_in_log": true
+  }
+}

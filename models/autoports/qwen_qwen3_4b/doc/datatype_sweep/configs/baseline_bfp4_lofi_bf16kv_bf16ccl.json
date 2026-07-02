@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "config_id": "baseline_bfp4_lofi_bf16kv_bf16ccl",
+  "description": "Qwen3-4B datatype sweep candidate",
+  "max_seq_len": 40960,
+  "kv_cache_block_size": 32,
+  "kv_cache_max_num_blocks": 1280,
+  "weight_groups": {
+    "attention": {
+      "dtype": "bfloat4_b",
+      "layers": "all",
+      "operations": [
+        "qkv_prefill",
+        "qkv_decode",
+        "o_proj"
+      ]
+    },
+    "mlp": {
+      "dtype": "bfloat4_b",
+      "layers": "all",
+      "operations": [
+        "gate_proj",
+        "up_proj",
+        "packed_gate_up_proj",
+        "down_proj"
+      ]
+    },
+    "lm_head": {
+      "dtype": "bfloat4_b",
+      "layers": "all",
+      "operations": [
+        "vocab_sharded_lm_head"
+      ]
+    },
+    "embedding": {
+      "dtype": "bfloat16",
+      "layers": "all"
+    },
+    "norm": {
+      "dtype": "bfloat16",
+      "layers": "all"
+    }
+  },
+  "layer_exceptions": [],
+  "compute_fidelities": {
+    "attention": "LoFi",
+    "mlp": "LoFi",
+    "lm_head": "LoFi",
+    "auxiliary": "LoFi"
+  },
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat16",
+  "kv_cache_dtype": "bfloat16",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype_assumptions": {
+    "dtype": "bfloat16",
+    "sampler": "Qwen3GreedyTP4Sampler consumes BF16 vocab-sharded logits and emits UINT32 token ids"
+  }
+}

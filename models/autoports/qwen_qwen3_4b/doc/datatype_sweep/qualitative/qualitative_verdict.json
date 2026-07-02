@@ -1,0 +1,50 @@
+[
+  {
+    "id": 0,
+    "prompt": "Write a haiku about machine learning.",
+    "verdict": "pass",
+    "notes": [],
+    "hf_excerpt": "<think>\nOkay, the user wants a haiku about machine learning. Let me start by recalling what a haiku is. It's a traditional Japanese poem with three lines. The syllable structure is 5-7-5. So first line 5 syllables, second 7, third 5.\n\nNow",
+    "tt_excerpt": "<think>\nOkay, the user wants a haiku about machine learning. Let me start by recalling what a haiku is. It's a traditional Japanese poem with three lines, syllables in the pattern 5-7-5. So first line 5 syllables, then 7, then 5.\n\nNow"
+  },
+  {
+    "id": 1,
+    "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+    "verdict": "pass",
+    "notes": [],
+    "hf_excerpt": "<think>\nOkay, the user is asking about the difference between supervised and unsupervised learning in simple terms. Let me start by recalling what I know about machine learning. \n\nFirst, supervised learning involves using labeled data. That means each training example has an input and a corresponding output. The model ",
+    "tt_excerpt": "<think>\nOkay, the user wants me to explain the difference between supervised and unsupervised learning in simple terms. Let me start by recalling what I know about machine learning. Supervised learning involves training a model with labeled data, meaning the input data has the correct output already. For example, if yo"
+  },
+  {
+    "id": 2,
+    "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+    "verdict": "pass",
+    "notes": [],
+    "hf_excerpt": "<think>\nOkay, the user wants me to complete the story about a curious young inventor in a faraway kingdom. Let me start by recalling the beginning they provided: \"Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered...\" \n\nFirst, I need to think about the direction",
+    "tt_excerpt": "<think>\nOkay, the user wants me to complete the story about a curious young inventor. Let me start by recalling the beginning they provided. The story starts with a young inventor in a faraway kingdom. The next part should introduce the inventor's discovery. Maybe something magical or unique to make it engaging.\n\nHmm, "
+  },
+  {
+    "id": 3,
+    "prompt": "What are the three laws of thermodynamics?",
+    "verdict": "pass",
+    "notes": [],
+    "hf_excerpt": "<think>\nOkay, the user is asking about the three laws of thermodynamics. I need to make sure I explain each one clearly. Let me start by recalling what each law is.\n\nFirst, the zeroth law. I remember that it's about thermal equilibrium. If two systems are each in equilibrium with a third system",
+    "tt_excerpt": "<think>\nOkay, the user is asking about the three laws of thermodynamics. I need to make sure I get each one right. Let me start by recalling what I know.\n\nFirst, the zeroth law. I think that's about temperature and thermal equilibrium. If two objects are in thermal equilibrium with a third,"
+  },
+  {
+    "id": 4,
+    "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+    "verdict": "pass",
+    "notes": [],
+    "hf_excerpt": "<think>\nOkay, the user wants to translate \"Hello, how are you today?\" into French. Let me start by recalling the basic greetings. \"Hello\" in French is \"Bonjour\". Then \"how are you\" is \"comment allez-vous?\" But wait, I need to make sure about the correct structure.",
+    "tt_excerpt": "<think>\nOkay, the user wants to translate \"Hello, how are you today?\" into French. Let me start by recalling the basic phrases. \"Hello\" in French is \"Bonjour\". Then \"how are you\" is \"comment vous allez\". But wait, the user said \"how are you today?\" so"
+  },
+  {
+    "id": 5,
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "verdict": "pass",
+    "notes": [],
+    "hf_excerpt": "<think>\nOkay, I need to write a Python function to calculate the Fibonacci sequence. Let me think about how the Fibonacci sequence works. The sequence starts with 0 and 1, and each subsequent number is the sum of the two preceding ones. So the sequence goes 0, 1, 1, ",
+    "tt_excerpt": "<think>\nOkay, I need to write a Python function to calculate the Fibonacci sequence. Let me think about how to approach this. The Fibonacci sequence starts with 0 and 1, and each subsequent number is the sum of the two previous ones. So the sequence goes 0, 1, 1, "
+  }
+]

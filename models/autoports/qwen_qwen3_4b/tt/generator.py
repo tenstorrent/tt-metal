@@ -14,7 +14,11 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.autoports.qwen_qwen3_4b.tt.functional_decoder import HF_MODEL_ID
-from models.autoports.qwen_qwen3_4b.tt.model import Qwen3FullModel, Qwen3FullModelConfig
+from models.autoports.qwen_qwen3_4b.tt.model import (
+    Qwen3FullModel,
+    Qwen3FullModelConfig,
+    load_precision_config_for_model,
+)
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.readiness_check.contract import Generator, NextInputFn
 
@@ -787,4 +791,17 @@ class Qwen3Generator(Generator):
 
 
 def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Qwen3Generator:
+    precision_config_path = kwargs.pop("precision_config_path", None)
+    if kwargs.get("model_config") is None:
+        config_overrides = {}
+        for key in ("num_layers",):
+            if key in kwargs:
+                config_overrides[key] = kwargs.pop(key)
+        kwargs["model_config"] = load_precision_config_for_model(
+            model_dir,
+            explicit_path=precision_config_path,
+            overrides=config_overrides or None,
+        )
+    elif precision_config_path is not None:
+        raise ValueError("precision_config_path cannot be combined with an explicit model_config")
     return Qwen3Generator(model_dir=model_dir, mesh_device=mesh_device, **kwargs)

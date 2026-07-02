@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,49 @@ def _load_hf_state_dict(hf_model_id: str) -> tuple[Any, dict[str, torch.Tensor]]
     return hf_config, state_dict
 
 
+_DTYPE_BY_NAME = {
+    "bfloat16": ttnn.bfloat16,
+    "BFLOAT16": ttnn.bfloat16,
+    "bfloat8_b": ttnn.bfloat8_b,
+    "BFLOAT8_B": ttnn.bfloat8_b,
+    "bfloat4_b": ttnn.bfloat4_b,
+    "BFLOAT4_B": ttnn.bfloat4_b,
+}
+
+
+_FIDELITY_BY_NAME = {
+    "LoFi": ttnn.MathFidelity.LoFi,
+    "HiFi2": ttnn.MathFidelity.HiFi2,
+    "HiFi4": ttnn.MathFidelity.HiFi4,
+}
+
+
+def _dtype_from_name(name: str) -> ttnn.DataType:
+    try:
+        return _DTYPE_BY_NAME[name]
+    except KeyError as exc:
+        raise ValueError(f"unsupported Qwen3 precision dtype {name!r}") from exc
+
+
+def _fidelity_from_name(name: str) -> ttnn.MathFidelity:
+    try:
+        return _FIDELITY_BY_NAME[name]
+    except KeyError as exc:
+        raise ValueError(f"unsupported Qwen3 compute fidelity {name!r}") from exc
+
+
+def _dtype_name(dtype: ttnn.DataType) -> str:
+    return dtype.name
+
+
+def _fidelity_name(fidelity: ttnn.MathFidelity) -> str:
+    return fidelity.name
+
+
+def _default_precision_config_path(model_dir: str | Path) -> Path:
+    return Path(model_dir) / "doc" / "datatype_sweep" / "selected_precision_config.json"
+
+
 @dataclass(frozen=True)
 class Qwen3FullModelConfig:
     hf_model_id: str = HF_MODEL_ID
@@ -68,9 +112,127 @@ class Qwen3FullModelConfig:
     mlp_weight_dtype: ttnn.DataType = ttnn.bfloat4_b
     attention_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     mlp_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
+    auxiliary_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
+    activation_dtype: ttnn.DataType = ttnn.bfloat16
+    residual_dtype: ttnn.DataType = ttnn.bfloat16
+    ccl_dtype: ttnn.DataType = ttnn.bfloat16
+    logits_dtype: ttnn.DataType = ttnn.bfloat16
+    sampling_dtype: ttnn.DataType = ttnn.bfloat16
+    layer_exceptions: tuple[dict[str, Any], ...] = ()
+    precision_config_id: str = "optimized_full_model_default"
+    precision_config_path: str | None = None
     topology: ttnn.Topology = ttnn.Topology.Ring
     num_links: int = 1
     trace_region_size_bytes: int = 128 << 20
+
+    @classmethod
+    def from_precision_config_file(
+        cls,
+        path: str | Path,
+        *,
+        overrides: dict[str, Any] | None = None,
+    ) -> "Qwen3FullModelConfig":
+        path = Path(path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        cfg = cls.from_precision_config_dict(data, precision_config_path=str(path))
+        if overrides:
+            return cls(**{**cfg.__dict__, **overrides})
+        return cfg
+
+    @classmethod
+    def from_precision_config_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        precision_config_path: str | None = None,
+    ) -> "Qwen3FullModelConfig":
+        weights = data.get("weight_groups", {})
+        fidelities = data.get("compute_fidelities", {})
+        kv_cache_dtype = data.get("kv_cache_dtype", data.get("kv_cache", {}).get("dtype", "bfloat16"))
+        max_seq_len = int(data.get("max_seq_len", DEFAULT_MULTICHIP_KV_CONFIG.max_seq_len))
+        block_size = int(data.get("kv_cache_block_size", DEFAULT_MULTICHIP_KV_CONFIG.block_size))
+        max_num_blocks = int(data.get("kv_cache_max_num_blocks", max_seq_len // block_size))
+        if max_num_blocks * block_size < max_seq_len:
+            raise ValueError(f"KV cache capacity {max_num_blocks * block_size} is below max_seq_len={max_seq_len}")
+        layer_exceptions = tuple(data.get("layer_exceptions", ()))
+        unsupported_exceptions = [item for item in layer_exceptions if item]
+        if unsupported_exceptions:
+            raise ValueError(
+                "Qwen3 precision layer exceptions are only supported when empty; " f"got {unsupported_exceptions!r}"
+            )
+        return cls(
+            max_seq_len=max_seq_len,
+            paged_kv_config=PagedKVConfig(
+                max_num_blocks=max_num_blocks,
+                block_size=block_size,
+                cache_dtype=_dtype_from_name(str(kv_cache_dtype)),
+            ),
+            lm_head_weight_dtype=_dtype_from_name(str(weights.get("lm_head", {}).get("dtype", "bfloat4_b"))),
+            attention_weight_dtype=_dtype_from_name(str(weights.get("attention", {}).get("dtype", "bfloat4_b"))),
+            mlp_weight_dtype=_dtype_from_name(str(weights.get("mlp", {}).get("dtype", "bfloat4_b"))),
+            lm_head_math_fidelity=_fidelity_from_name(str(fidelities.get("lm_head", "LoFi"))),
+            attention_math_fidelity=_fidelity_from_name(str(fidelities.get("attention", "LoFi"))),
+            mlp_math_fidelity=_fidelity_from_name(str(fidelities.get("mlp", "LoFi"))),
+            auxiliary_math_fidelity=_fidelity_from_name(str(fidelities.get("auxiliary", "LoFi"))),
+            activation_dtype=_dtype_from_name(str(data.get("activation_dtype", "bfloat16"))),
+            residual_dtype=_dtype_from_name(str(data.get("residual_dtype", "bfloat16"))),
+            ccl_dtype=_dtype_from_name(str(data.get("ccl_dtype", "bfloat16"))),
+            logits_dtype=_dtype_from_name(str(data.get("logits_dtype", "bfloat16"))),
+            sampling_dtype=_dtype_from_name(
+                str(data.get("sampling_dtype", data.get("sampling_dtype_assumptions", {}).get("dtype", "bfloat16")))
+            ),
+            layer_exceptions=layer_exceptions,
+            precision_config_id=str(data.get("config_id", "precision_config_file")),
+            precision_config_path=precision_config_path,
+        )
+
+    def precision_summary(self) -> dict[str, Any]:
+        return {
+            "config_id": self.precision_config_id,
+            "precision_config_path": self.precision_config_path,
+            "weight_groups": {
+                "attention": {"dtype": _dtype_name(self.attention_weight_dtype), "layers": "all"},
+                "mlp": {"dtype": _dtype_name(self.mlp_weight_dtype), "layers": "all"},
+                "lm_head": {"dtype": _dtype_name(self.lm_head_weight_dtype), "layers": "all"},
+                "embedding": {"dtype": "BFLOAT16", "layers": "all"},
+                "norm": {"dtype": "BFLOAT16", "layers": "all"},
+            },
+            "layer_exceptions": list(self.layer_exceptions),
+            "compute_fidelities": {
+                "attention": _fidelity_name(self.attention_math_fidelity),
+                "mlp": _fidelity_name(self.mlp_math_fidelity),
+                "lm_head": _fidelity_name(self.lm_head_math_fidelity),
+                "auxiliary": _fidelity_name(self.auxiliary_math_fidelity),
+            },
+            "activation_dtype": _dtype_name(self.activation_dtype),
+            "residual_dtype": _dtype_name(self.residual_dtype),
+            "ccl_dtype": _dtype_name(self.ccl_dtype),
+            "kv_cache_dtype": _dtype_name(self.paged_kv_config.cache_dtype),
+            "kv_cache_block_size": self.paged_kv_config.block_size,
+            "kv_cache_max_num_blocks": self.paged_kv_config.max_num_blocks,
+            "max_seq_len": self.max_seq_len,
+            "logits_dtype": _dtype_name(self.logits_dtype),
+            "sampling_dtype_assumptions": {
+                "dtype": _dtype_name(self.sampling_dtype),
+                "greedy_tp4_sampler_input": "BFLOAT16 logits; sampler emits UINT32 tokens",
+            },
+        }
+
+
+def load_precision_config_for_model(
+    model_dir: str | Path,
+    *,
+    explicit_path: str | Path | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> Qwen3FullModelConfig:
+    path_value = explicit_path or os.environ.get("QWEN3_4B_PRECISION_CONFIG")
+    if path_value is None:
+        default_path = _default_precision_config_path(model_dir)
+        path_value = default_path if default_path.exists() else None
+    if path_value is None:
+        cfg = Qwen3FullModelConfig()
+        return Qwen3FullModelConfig(**{**cfg.__dict__, **overrides}) if overrides else cfg
+    return Qwen3FullModelConfig.from_precision_config_file(path_value, overrides=overrides)
 
 
 @dataclass
@@ -166,6 +328,13 @@ class Qwen3FullModel(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        self.auxiliary_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=self.config.auxiliary_math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
         self.layers = [
             MultichipDecoder.from_state_dict(
@@ -179,6 +348,10 @@ class Qwen3FullModel(LightweightModule):
                 mlp_weight_dtype=self.config.mlp_weight_dtype,
                 attention_math_fidelity=self.config.attention_math_fidelity,
                 mlp_math_fidelity=self.config.mlp_math_fidelity,
+                auxiliary_math_fidelity=self.config.auxiliary_math_fidelity,
+                activation_dtype=self.config.activation_dtype,
+                residual_dtype=self.config.residual_dtype,
+                ccl_dtype=self.config.ccl_dtype,
                 topology=self.config.topology,
                 num_links=self.config.num_links,
                 static_position_table_seq_len=1,
@@ -470,12 +643,12 @@ class Qwen3FullModel(LightweightModule):
             epsilon=RMS_NORM_EPS,
             weight=self.final_norm_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_lofi,
+            compute_kernel_config=self.auxiliary_compute_kernel_config,
         )
         logits = ttnn.linear(
             normed,
             self.lm_head_weight,
-            dtype=ttnn.bfloat16,
+            dtype=self.config.logits_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_lofi,
             output_tile=output_tile,
