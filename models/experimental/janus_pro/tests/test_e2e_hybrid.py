@@ -7,10 +7,16 @@ Hybrid end-to-end PCC test for Janus-Pro.
 
 The TT vision tower + aligner run on the device; the LLaMA-style decoder runs as a
 torch/CPU reference. This isolates the vision port's error from the decoder's ttnn
-port: a single HF ``JanusForConditionalGeneration`` instance provides the decoder for
-BOTH the golden path and the hybrid path, so the only difference between them is the
-vision features (TT vs torch). We reuse HF Janus' own image-token fusion
-(``masked_scatter`` on ``image_token_id``), the same pattern gemma's e2e model uses.
+port: a single HF ``JanusForConditionalGeneration`` instance provides the vision
+weights for the TT modules AND serves as the decoder for both the golden path and the
+hybrid path, so the only difference between them is the vision features (TT vs torch).
+We reuse HF Janus' own image-token fusion (``masked_scatter`` on ``image_token_id``),
+the same pattern gemma's e2e model uses.
+
+Real weights by default; pass ``--dummy_weights true`` to use random weights (same
+opt-in mechanism as the other Janus-Pro tests). Because the TT vision weights and the
+torch golden are derived from the SAME model instance, the PCC delta stays a pure
+vision-port measurement in either mode.
 """
 
 import os
@@ -23,6 +29,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.janus_pro.tt.janus_pro_vision_aligner import TtJanusProVisionAligner
 from models.experimental.janus_pro.tt.janus_pro_vision_block import TtJanusProVisionModel
+from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -43,18 +50,20 @@ from models.tt_transformers.tt.ccl import TT_CCL
     ],
     indirect=True,
 )
-def test_e2e_hybrid(mesh_device, reset_seeds):
+def test_e2e_hybrid(mesh_device, reset_seeds, dummy_weights):
+    # Random weights are well-conditioned (small init), so they clear a tighter bar than
+    # the real trained weights, whose larger dynamic range amplifies bf16 error.
     pcc_required = 0.95
     dtype = ttnn.bfloat16
 
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     model_args.WEIGHTS_DTYPE = dtype
-    state_dict = model_args.load_state_dict()
 
-    # Single HF instance shared by both paths -> identical decoder, so the PCC delta
-    # is purely TT vision+aligner vs torch vision+aligner.
+    # Single instance: the TT vision/aligner weights and the torch golden are both
+    # derived from this exact model, so the PCC delta is purely the TT vision port.
     hf_model = model_args.reference_vision_transformer(wrap=False)
     hf_model.eval()
+    state_dict = convert_vision_hf_to_meta(hf_model.state_dict(), model_args.head_dim)
 
     image_token_id = hf_model.config.image_token_id
     num_image_tokens = model_args.mm_tokens_per_image
