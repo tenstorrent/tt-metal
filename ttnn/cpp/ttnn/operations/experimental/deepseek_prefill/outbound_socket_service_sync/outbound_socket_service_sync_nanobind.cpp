@@ -13,6 +13,7 @@
 // bind a function taking it by reference -- the forward declaration in the public
 // header is not enough at the binding site.
 #include "ttnn/tensor/d2d_stream_service.hpp"
+#include "ttnn/services/d2h_socket_service.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::outbound_socket_service_sync::detail {
 
@@ -45,11 +46,19 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
     ttnn::bind_function<"outbound_socket_service_sync", "ttnn.experimental.deepseek_prefill.">(
         mod,
         doc,
-        &ttnn::experimental::outbound_socket_service_sync,
-        nb::arg("service"),
-        nb::arg("input"),
-        nb::kw_only(),
-        nb::arg("metadata") = std::nullopt);
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(
+                const tt::tt_metal::D2DStreamServiceSender&, const ttnn::Tensor&, const std::optional<ttnn::Tensor>&)>(
+                &ttnn::experimental::outbound_socket_service_sync),
+            nb::arg("service"),
+            nb::arg("input"),
+            nb::kw_only(),
+            nb::arg("metadata") = std::nullopt),
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(const tt::tt_metal::D2HStreamService&, const ttnn::Tensor&)>(
+                &ttnn::experimental::outbound_socket_service_sync),
+            nb::arg("service"),
+            nb::arg("record")));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::outbound_socket_service_sync::detail
