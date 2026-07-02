@@ -200,6 +200,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--local-files-only", action="store_true", help="Do not fetch tokenizer files from HF hub")
     parser.add_argument("--bounded-sliding-kv-cache", action="store_true")
+    parser.add_argument(
+        "--disable-eos-stop",
+        action="store_true",
+        help="Do not stop generation or trim decoded output at tokenizer EOS (useful for fixed-block smoke tests)",
+    )
     return parser
 
 
@@ -260,6 +265,9 @@ def main(argv: list[str] | None = None) -> int:
             _log_mesh_dram(mesh_device, "post-adapter")
             return 0
         config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=args.max_denoising_steps)
+        generate_kwargs = {}
+        if args.disable_eos_stop:
+            generate_kwargs.update(eos_token_id=None, stop_token_ids=[], decode_kwargs={"skip_special_tokens": True})
         generation = generate_text_from_checkpoint_model_inputs(
             checkpoint_model_inputs,
             args.prompt,
@@ -268,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
             num_blocks=args.num_blocks,
             seed=args.seed,
             batch=args.batch,
+            **generate_kwargs,
         )
     finally:
         _close_mesh_device(mesh_device)

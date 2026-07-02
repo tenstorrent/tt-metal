@@ -149,3 +149,60 @@ def test_adapter_logits_once_prefills_and_calls_real_builder(monkeypatch):
     assert calls["adapter_call"] == (fake_canvas, 0)
     assert calls["adapter_reset"] is True
     assert fake_canvas.deallocated is True
+
+
+def test_text_demo_disable_eos_stop_threads_generation_kwargs(monkeypatch):
+    calls = {}
+
+    class _FakeMesh:
+        def get_num_devices(self):
+            return 1
+
+    fake_generation = SimpleNamespace(
+        generation=SimpleNamespace(
+            generated=torch.zeros((1, 64), dtype=torch.long),
+            trajectories=[object(), object()],
+            prompt_len=1024,
+            next_pos=1088,
+        ),
+        sequences=torch.zeros((1, 1088), dtype=torch.long),
+        text=["ok"],
+    )
+
+    def fake_generate(checkpoint_model_inputs, prompt, **kwargs):
+        calls["generate"] = (checkpoint_model_inputs, prompt, kwargs)
+        return fake_generation
+
+    monkeypatch.setattr(text_demo, "load_checkpoint_inputs", lambda *args, **kwargs: "checkpoint-inputs")
+    monkeypatch.setattr(text_demo, "_open_mesh_device", lambda mesh: _FakeMesh())
+    monkeypatch.setattr(text_demo, "_close_mesh_device", lambda mesh: calls.setdefault("closed", mesh))
+    monkeypatch.setattr(text_demo, "_log_mesh_dram", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        text_demo,
+        "build_tt_model_from_checkpoint_inputs",
+        lambda *args, **kwargs: SimpleNamespace(tokenizer="tok", tt_model="model", state_dict={}),
+    )
+    monkeypatch.setattr(text_demo, "generate_text_from_checkpoint_model_inputs", fake_generate)
+
+    assert (
+        text_demo.main(
+            [
+                "--checkpoint",
+                "/tmp/ckpt",
+                "--local-files-only",
+                "--disable-eos-stop",
+                "--num-blocks",
+                "2",
+                "--max-new-tokens",
+                "64",
+            ]
+        )
+        == 0
+    )
+
+    _, _, kwargs = calls["generate"]
+    assert kwargs["eos_token_id"] is None
+    assert kwargs["stop_token_ids"] == []
+    assert kwargs["decode_kwargs"] == {"skip_special_tokens": True}
+    assert kwargs["num_blocks"] == 2
+    assert kwargs["max_new_tokens"] == 64
