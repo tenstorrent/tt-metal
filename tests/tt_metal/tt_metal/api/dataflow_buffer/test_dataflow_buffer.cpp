@@ -56,7 +56,7 @@ protected:
         init_max_cbs();
     }
 };
-    
+
 static std::string ImplicitSyncParamName(const ::testing::TestParamInfo<bool>& info) {
     return info.param ? "ImplicitSyncTrue" : "ImplicitSyncFalse";
 }
