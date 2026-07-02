@@ -404,6 +404,31 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // -------------------------------------------------------------------------
     std::vector<std::pair<uint32_t, uint32_t>> reader_noc_coords;
 
+    // H-mux: mirror the W-mux (N workers per (link,dir) feed the H-axis eth link through a mux). Gated on
+    // TT_NP_H_MUX during bring-up; auto num_h_workers by heuristic (capped 2), zeros-only. H cores placed
+    // in columns after the W-mux block. See PLAN_NP_FABRIC_MUX_IMPL.md.
+    const bool h_force_mux = std::getenv("TT_NP_H_MUX") != nullptr;
+    const bool use_h_mux = is_2d && h_force_mux && (h_coalesce_n > 0);
+    uint32_t num_h_workers = (use_h_mux && is_padding_zeros) ? 2u : 1u;  // capped at the validated 2
+    if (const char* e = std::getenv("TT_NP_H_WORKERS")) {
+        num_h_workers = std::max(1, atoi(e));
+    }
+    std::vector<CoreCoord> hmux_worker_logical, hmux_worker_virtual, hmux_core_logical;
+    if (use_h_mux) {
+        const uint32_t h_mux_col = use_w_mux ? (2u + num_w_workers) : 1u;
+        for (uint32_t s = 0; s < num_links * num_directions; s++) {
+            hmux_core_logical.push_back(CoreCoord{h_mux_col, s});
+            for (uint32_t wk = 0; wk < num_h_workers; wk++) {
+                CoreCoord wc{h_mux_col + 1 + wk, s};
+                hmux_worker_logical.push_back(wc);
+                hmux_worker_virtual.push_back(mesh_device->worker_core_from_logical_core(wc));
+            }
+        }
+    }
+    KernelHandle h_reader_kernel_id = 0;
+    KernelHandle h_writer_kernel_id = 0;
+
+    if (!use_h_mux) {
     // -------------------------------------------------------------------------
     // NP H-fabric reader kernel
     // -------------------------------------------------------------------------
@@ -417,7 +442,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     h_reader_kernel_config.compile_args.push_back(recv_cb_index);   // recv_cb_id
     h_reader_kernel_config.compile_args.push_back(hsend_cb_index);  // send_cb_id (batched H send)
     h_reader_kernel_config.compile_args.push_back(h_coalesce_n);    // H-send bank-major coalesce factor (0=off)
-    auto h_reader_kernel_id = CreateKernel(
+    h_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"
         "np_h_reader.cpp",
@@ -448,7 +473,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     h_writer_kernel_config.compile_args.push_back(use_w_two_pass);    // unused on H writer; keeps arg layout aligned
     h_writer_kernel_config.compile_args.push_back(use_corner_first);  // H-writer corner-first gate
     h_writer_kernel_config.compile_args.push_back(h_coalesce_n);      // coalesce factor (H-writer uses the H branch)
-    auto h_writer_kernel_id = CreateKernel(
+    h_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"
         "np_writer.cpp",
@@ -590,6 +615,146 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         }
         link_offset_start_id += (link_dims_to_read * num_sticks_per_halo_dim);
         writer_link_offset_start_id += (link_dims_to_read * output_num_sticks_per_halo_dim);
+    }
+    }  // end if(!use_h_mux)
+
+    if (use_h_mux) {
+        using tt::tt_fabric::FabricMuxChannelType;
+        const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        auto hmux_cfg = tt::tt_fabric::FabricMuxConfig(
+            static_cast<uint8_t>(num_h_workers), 0, 1, 0, mux_buf_size, l1_base);
+
+        const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
+        std::set<CoreRange> hw_crs, hm_crs;
+        for (const auto& c : hmux_worker_logical) hw_crs.insert(CoreRange(c));
+        // Mux kernel only for (link,dir) that send (edge outward dirs don't).
+        for (uint32_t s = 0; s < hmux_core_logical.size(); s++) {
+            const bool sends = (s % num_directions == 0) ? !is_last_device : !is_first_device;
+            if (sends) hm_crs.insert(CoreRange(hmux_core_logical[s]));
+        }
+        CoreRangeSet hw_crset(hw_crs);
+        CoreRangeSet hm_crset(hm_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : hm_crs);
+
+        // Send CB (hsend) + sender CB (c_in0) on the H worker cores.
+        {
+            CircularBufferConfig cb_hs(16u * h_coalesce_n * l1_scratch_cb_page_size_bytes, {{hsend_cb_index, df}});
+            cb_hs.set_page_size(hsend_cb_index, l1_scratch_cb_page_size_bytes);
+            CreateCircularBuffer(program, hw_crset, cb_hs);
+            CircularBufferConfig cb_s0(np_cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}});
+            cb_s0.set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
+            CreateCircularBuffer(program, hw_crset, cb_s0);
+        }
+
+        // H reader on worker cores (same CT layout as the standard H reader).
+        std::vector<uint32_t> hr_ct = {sender_cb_index, is_padding_zeros, page_size};
+        TensorAccessorArgs(*input_buffer).append_to(hr_ct);
+        hr_ct.push_back(h_use_l1);
+        hr_ct.push_back(recv_cb_index);
+        hr_ct.push_back(hsend_cb_index);
+        hr_ct.push_back(h_coalesce_n);
+        auto hr_cfg = ReaderDataMovementConfig{};
+        hr_cfg.compile_args = hr_ct;
+        h_reader_kernel_id = CreateKernel(program, kdir + "np_h_reader.cpp", hw_crset, hr_cfg);
+        SetCommonRuntimeArgs(
+            program, h_reader_kernel_id,
+            {input_buffer->address(), halo_buffer->address(), op.h_neighbor_semaphore.address()});
+
+        // H-mux writer on worker cores.
+        std::vector<uint32_t> hw_ct = {hsend_cb_index, page_size};
+        TensorAccessorArgs(*halo_buffer).append_to(hw_ct);
+        hw_ct.push_back(h_coalesce_n);
+        ttnn::ccl::fabric_mux_connection_ct_args(num_h_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, hmux_cfg, hw_ct);
+        auto hw_cfg = WriterDataMovementConfig{};
+        hw_cfg.compile_args = hw_ct;
+        h_writer_kernel_id = CreateKernel(program, kdir + "np_h_mux_writer.cpp", hw_crset, hw_cfg);
+        SetCommonRuntimeArgs(
+            program, h_writer_kernel_id,
+            {input_buffer->address(), halo_buffer->address(), op.h_neighbor_semaphore.address(),
+             op.barrier_semaphore.address()});
+
+        auto hmux_kernel_id = CreateKernel(
+            program, "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp", hm_crset,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = hmux_cfg.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+        // W-reader barrier targets (H workers signal these so the W reader clears its H->W wait).
+        const std::vector<CoreCoord>& w_sig = use_w_mux ? mux_worker_virtual : w_fabric_virtual_cores;
+        const uint32_t top_halo_total = outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim;
+        const uint32_t frames_per_link = outer_dim_size / num_links;
+        const uint32_t frames_extra = outer_dim_size % num_links;
+
+        for (uint32_t link = 0; link < num_links; link++) {
+            const uint32_t link_f0 = link * frames_per_link + std::min(link, frames_extra);
+            const uint32_t link_fc = frames_per_link + (link < frames_extra ? 1u : 0u);
+            const uint32_t per_wk = link_fc / num_h_workers;
+            const uint32_t extra_wk = link_fc % num_h_workers;
+            for (uint32_t dir = 0; dir < num_directions; dir++) {
+                const uint32_t s = link * num_directions + dir;
+                CoreCoord mux_lc = hmux_core_logical[s];
+                CoreCoord mux_vc = mesh_device->worker_core_from_logical_core(mux_lc);
+                const bool sends = (dir == 0) ? !is_last_device : !is_first_device;
+                if (sends) {
+                    const auto src_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                    const auto dst_id = mesh_device->get_fabric_node_id(dir ? backward_coord.value() : forward_coord.value());
+                    auto mux_rt = hmux_cfg.get_fabric_mux_run_time_args(src_id, dst_id, link, program, {mux_lc});
+                    SetRuntimeArgs(program, hmux_kernel_id, {mux_lc}, mux_rt);
+                }
+                CoreCoord term_master_vc =
+                    mesh_device->worker_core_from_logical_core(hmux_worker_logical[s * num_h_workers + 0]);
+                const uint32_t h_section_base = dir ? top_halo_total : 0u;
+                const uint32_t h_dev_off = (dir ? backward_coord.has_value() : forward_coord.has_value()) ? 1u : 0u;
+                for (uint32_t wk = 0; wk < num_h_workers; wk++) {
+                    CoreCoord wc = hmux_worker_logical[s * num_h_workers + wk];
+                    CoreCoord wc_vc = hmux_worker_virtual[s * num_h_workers + wk];
+                    const uint32_t wk_f0 = link_f0 + wk * per_wk + std::min(wk, extra_wk);
+                    const uint32_t wk_fc = per_wk + (wk < extra_wk ? 1u : 0u);
+                    // Reader RT args (same layout as the standard H reader).
+                    std::vector<uint32_t> r_rt = {
+                        wk_f0 * num_sticks_per_halo_dim * input_halo_dim_size,  // outer_dim_offset_start_id
+                        0u,                                                     // stick_start_id
+                        input_halo_dim_size,
+                        wk_fc,  // outer_dim_size (frames this worker owns)
+                        op.np_padding_h,
+                        num_sticks_per_halo_dim,
+                        num_sticks_per_halo_dim,
+                        corner_sticks_per_row};
+                    r_rt.push_back(dir ? is_last_device : is_first_device);
+                    r_rt.push_back(dir ? is_first_device : is_last_device);
+                    r_rt.push_back(dir);
+                    SetRuntimeArgs(program, h_reader_kernel_id, {wc}, r_rt);
+                    // Writer RT args (np_h_mux_writer layout).
+                    std::vector<uint32_t> w_rt = {
+                        h_section_base + wk_f0 * op.np_padding_h * num_sticks_per_halo_dim,  // h_base
+                        wk_fc,                                                               // outer_dim_count
+                        op.np_padding_h,
+                        num_sticks_per_halo_dim,  // num_sticks_to_read (W_dev)
+                        num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
+                        wc_vc.x, wc_vc.y,         // recv-sem target = same-dir worker
+                        static_cast<uint32_t>(is_first_device), static_cast<uint32_t>(is_last_device), dir,
+                        0u, h_dev_off};  // route mesh, distance-in-hops
+                    ttnn::ccl::fabric_mux_connection_rt_args(
+                        sends, /*is_termination_master=*/wk == 0, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_vc, wk,
+                        wc, hmux_cfg, program, term_master_vc, w_rt, std::nullopt);
+                    // H->W barrier targets.
+                    constexpr uint32_t MAX_W_BARRIER_TARGETS = 16;
+                    w_rt.push_back(static_cast<uint32_t>(w_sig.size()));
+                    for (uint32_t t = 0; t < MAX_W_BARRIER_TARGETS; t++) {
+                        if (t < w_sig.size()) {
+                            w_rt.push_back(w_sig[t].x);
+                            w_rt.push_back(w_sig[t].y);
+                        } else {
+                            w_rt.push_back(0);
+                            w_rt.push_back(0);
+                        }
+                    }
+                    SetRuntimeArgs(program, h_writer_kernel_id, {wc}, w_rt);
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
