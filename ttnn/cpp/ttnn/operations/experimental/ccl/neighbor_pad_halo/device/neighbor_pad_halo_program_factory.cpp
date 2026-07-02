@@ -201,16 +201,25 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         const uint64_t w_rows_est = static_cast<uint64_t>(outer_dim_size) * w_h_total_est;  // W interior rows/dir
         const uint64_t w_bytes_per_link_dir =
             (pad2_num_links > 0) ? (w_rows_est * op.np_pad2_left * page_size / pad2_num_links) : 0;
+        // Heuristic (all_gather): >256KB=>4, 4KB..256KB=>2. NOT auto-applied: the multi-worker mux path
+        // is under bring-up (hangs on multi-worker sem coordination — barrier/recv sems are per-device
+        // singletons, N workers use them concurrently; needs per-worker sems). Opt-in via TT_NP_W_WORKERS
+        // until validated, so the shipping single-worker op stays safe on all shapes.
+        uint32_t heuristic = 1;
         if (w_bytes_per_link_dir > 256u * 1024u) {
-            num_w_workers = 4;
+            heuristic = 4;
         } else if (w_bytes_per_link_dir > 4u * 1024u) {
-            num_w_workers = 2;
+            heuristic = 2;
         }
         if (const char* e = std::getenv("TT_NP_W_WORKERS")) {
             num_w_workers = std::max(1, atoi(e));
         }
         log_debug(
-            tt::LogOp, "np_halo mux: W bytes/(link,dir)={}, num_w_workers={}", w_bytes_per_link_dir, num_w_workers);
+            tt::LogOp,
+            "np_halo mux: W bytes/(link,dir)={}, heuristic={}, num_w_workers={}",
+            w_bytes_per_link_dir,
+            heuristic,
+            num_w_workers);
     }
 
     // H fabric cores occupy column 0, rows [0, num_h_fabric_cores). W fabric cores
