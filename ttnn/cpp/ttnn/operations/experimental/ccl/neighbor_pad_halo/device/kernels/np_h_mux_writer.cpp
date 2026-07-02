@@ -93,6 +93,10 @@ void kernel_main() {
         w_bar_x[t] = get_arg_val<uint32_t>(arg_idx++);
         w_bar_y[t] = get_arg_val<uint32_t>(arg_idx++);
     }
+    // Opposite-direction H-worker coords on the neighbor device, for the pairwise startup barrier (so the
+    // non-sending edge worker on the neighbor also gets incremented). NOC coords are device-independent.
+    const uint8_t opp_bar_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t opp_bar_y = get_arg_val<uint32_t>(arg_idx++);
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
     // is_first_chip/is_last_chip are direction-adjusted by the factory (match np_h_reader + np_writer):
@@ -120,6 +124,33 @@ void kernel_main() {
     fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_count});
+
+    // Startup barrier (2-device H-axis: 1-hop pairwise fully syncs). Without it, the W reader's H->W
+    // barrier (= this device's H-send done) can fire before the neighbor's incoming H lands, so the W
+    // reader snapshots stale H-section corners. Each sending worker incs the neighbor's barrier_sem at
+    // BOTH the same-dir and opp-dir H-worker cores (so the neighbor's non-sending edge worker is covered);
+    // every worker waits one inc per existing neighbor, then resets. Mirrors np_writer's W pairwise barrier.
+    auto pkt_hdr_bar = PacketHeaderPool::allocate_header();
+    fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_bar, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1u});
+    volatile tt_l1_ptr uint32_t* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+    if (has_neighbor && mux_connection_valid) {
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &mux_connection, pkt_hdr_bar,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, barrier_sem, 0), 0});
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &mux_connection, pkt_hdr_bar,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{safe_get_noc_addr(opp_bar_x, opp_bar_y, barrier_sem, 0), 0});
+    }
+    {
+        const uint32_t bwait = (is_first_chip ? 0u : 1u) + (is_last_chip ? 0u : 1u);
+        if (bwait > 0) {
+            noc_semaphore_wait_min(barrier_ptr, bwait);
+        }
+        noc_semaphore_set(barrier_ptr, 0);
+    }
 
     // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame. h_base already
     // includes this worker's outer_dim_start offset + the h_top/h_bot section base. Per frame the reader

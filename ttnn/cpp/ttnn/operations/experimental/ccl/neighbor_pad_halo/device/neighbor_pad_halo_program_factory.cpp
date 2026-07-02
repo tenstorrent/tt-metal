@@ -753,6 +753,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                             w_rt.push_back(0);
                         }
                     }
+                    // Opp-direction H-worker coords on the neighbor (for the pairwise startup barrier).
+                    CoreCoord opp_vc = hmux_worker_virtual[(link * num_directions + (1 - dir)) * num_h_workers + wk];
+                    w_rt.push_back(opp_vc.x);
+                    w_rt.push_back(opp_vc.y);
                     SetRuntimeArgs(program, h_writer_kernel_id, {wc}, w_rt);
                 }
             }
@@ -917,9 +921,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         const uint32_t wk_units = units_per_wk + (wk < extra_units ? 1 : 0);
                         const uint32_t wk_start = base_link_start + prior_units * BANKS;
                         const uint32_t wk_count = wk_units * BANKS;
-                        // Reader RT args (same layout as the standard W reader).
+                        // Reader RT args (same layout as the standard W reader). barrier_count = number of
+                        // H workers that signal the H->W barrier (H-mux: links*dirs*workers; else H cores).
+                        const uint32_t h_signal_count =
+                            use_h_mux ? (num_links * num_directions * num_h_workers) : num_h_fabric_cores;
                         std::vector<uint32_t> r_rt = {
-                            wk_count, wk_start, pw, num_h_fabric_cores, output_num_sticks_per_halo_dim,
+                            wk_count, wk_start, pw, h_signal_count, output_num_sticks_per_halo_dim,
                             op.np_pad2_left, num_sticks_per_halo_dim,
                             static_cast<uint32_t>(w_dir ? is_last_w_device : is_first_w_device),
                             static_cast<uint32_t>(w_dir ? is_first_w_device : is_last_w_device),
@@ -1033,7 +1040,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 CoreCoord w_core = w_fabric_logical_cores[w_core_idx];
                 CoreCoord w_virtual_core = w_fabric_virtual_cores[w_core_idx];
 
-                uint32_t barrier_count = num_h_fabric_cores;  // fabric_only: no local_copy writers
+                // barrier_count = number of H workers that signal the H->W barrier (H-mux:
+                // links*dirs*workers; else H fabric cores).
+                uint32_t barrier_count =
+                    use_h_mux ? (num_links * num_directions * num_h_workers) : num_h_fabric_cores;
 
                 // W reader runtime args
                 std::vector<uint32_t> w_reader_rt_args = {
