@@ -19,6 +19,7 @@ on:
           - mochi
           - wan2.2-t2v-a14b
           - z-image-turbo
+          - voxtral-tts
       system-type:
         description: "Select system type to test"
         required: false
