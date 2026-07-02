@@ -169,10 +169,9 @@ class ConnectorBlock(Module):
 
         n_local_heads = self.num_heads // tp
 
-        # Fused head split (was reshape+permute per q/k/v, ~11% of whole-encode device time via
-        # TILE re-tile+transpose). QK-norm ran on the full inner dim above, so split here — after
-        # norm — by concatenating q|k|v and using the fused nlp_create_qkv_heads. The SPLIT→
-        # INTERLEAVED channel permute (done at load) is preserved, so RoPE below is unaffected.
+        # Fused head split: QK-norm ran on the full inner dim above, so split here — after norm —
+        # by concatenating q|k|v and using the fused nlp_create_qkv_heads. The SPLIT→INTERLEAVED
+        # channel permute (done at load) is preserved, so RoPE below is unaffected.
         B, S = q.shape[0], q.shape[1]
         qkv = ttnn.concat([q, k, v], dim=-1)  # (B, S, 3*n_local_heads*D)
         qkv = ttnn.reshape(qkv, (B, 1, S, 3 * n_local_heads * self.head_dim))

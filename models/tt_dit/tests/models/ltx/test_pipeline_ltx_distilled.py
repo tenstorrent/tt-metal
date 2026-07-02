@@ -186,13 +186,23 @@ def test_pipeline_distilled(
     # RUN_CLIP=0 skips the CLIP prompt-alignment gate; defaults on (mirrors the wan2.2 test).
     run_clip = os.environ.get("RUN_CLIP", "1") in ("1", "true", "True")
 
+    # An enabled quality gate whose deps are absent must report SKIPPED (visible), never a silent
+    # green pass. Unguarded by rank on purpose: dep availability is per-process (same venv on every
+    # rank), and a rank-divergent skip would hang the collective generate().
+    if run_vbench:
+        pytest.importorskip("vbench", reason="RUN_VBENCH=1 but vbench not installed (set RUN_VBENCH=0)")
+    if run_clip:
+        pytest.importorskip("decord", reason="RUN_CLIP=1 but decord not installed (set RUN_CLIP=0)")
+
     def check_output_with_vbench(prompt, number):
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
         if int(ttnn.distributed_context_get_rank()) == 0:
+            thresholds = vbench_thresholds_by_height.get(height)
+            if thresholds is None:
+                pytest.skip(f"no VBench thresholds calibrated for height {height}")
             output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
-            thresholds = vbench_thresholds_by_height[height]
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
@@ -210,8 +220,7 @@ def test_pipeline_distilled(
 
             from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
         except ImportError as e:
-            logger.warning(f"CLIP deps unavailable ({e}), skipping CLIP score check")
-            return
+            pytest.skip(f"CLIP deps unavailable ({e})")
 
         # LTX baseline mean ~31.3 (vs wan2.2's ~37): the LTX prompt exceeds CLIP's 77-token limit
         # so only its head is scored, and frames are read back re-encoded (CRF=25). 28.0 leaves
