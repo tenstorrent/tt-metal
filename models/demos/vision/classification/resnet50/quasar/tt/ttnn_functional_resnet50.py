@@ -571,13 +571,14 @@ class resnet50:
         )
         num_cores_x = 8
         num_cores_y = 8
-        if self.batch_size == 16:
-            num_cores_x = 8
-            num_cores_y = 8
-            self.fold_compute_grid_size = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
-            )
-        elif self.batch_size == 20:
+        # Default grid, used for batch 16 and for any batch not explicitly handled below (e.g. the
+        # small batches used on the 2x3 emulator / craq-sim grid). The device-cap clamp further down
+        # reduces this to the device's real core count, so leaving fold_compute_grid_size always-set
+        # here is what lets resnet run on tiny grids instead of hitting an undefined-attribute error.
+        self.fold_compute_grid_size = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+        )
+        if self.batch_size == 20:
             if is_wormhole_b0():
                 num_cores_x = 8
                 num_cores_y = 5

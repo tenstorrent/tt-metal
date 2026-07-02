@@ -147,8 +147,12 @@ class ResNet50TestInfra:
         self.resnet50_first_conv_kernel_size = 3
         self.resnet50_first_conv_stride = 2
 
-        if batch_size <= 2:
-            pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+        # Batch 1-2 don't shard cleanly across a full compute grid, but they DO fit the tiny 2x3
+        # emulator / craq-sim grid (<=2 cores) — which is exactly the small-grid bring-up the LLK team
+        # runs. Only skip on larger grids; let small batch through on a 1-2 core device.
+        _compute_grid = device.compute_with_storage_grid_size()
+        if batch_size <= 2 and _compute_grid.x * _compute_grid.y > 2:
+            pytest.skip("Batch size 1 and 2 are not supported with sharded data on grids larger than 2 cores")
         elif batch_size == 8:
             pytest.skip("Skipping batch size 8 due to memory config issue")
         elif is_wormhole_b0() and batch_size == 20:
@@ -210,6 +214,10 @@ class ResNet50TestInfra:
         return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+        # Default grid; the device-cap clamp below (num_cores = min(..., max_num_cores, ...)) reduces it
+        # to the device's real core count, so batches not explicitly handled here (e.g. the small batches
+        # used on the 2x3 emulator / craq-sim grid) still get a valid grid instead of an undefined name.
+        core_grid = ttnn.CoreGrid(y=8, x=8)
         if self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
