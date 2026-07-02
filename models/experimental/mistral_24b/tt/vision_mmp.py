@@ -9,7 +9,6 @@ import torch
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 import ttnn
-from ttnn import ConcatMeshToTensor
 
 
 class TTMistral3PatchMerger(LightweightModule):
@@ -55,39 +54,23 @@ class TTMistral3PatchMerger(LightweightModule):
 
         tokens_per_image = [h * w for h, w in image_sizes]
         d = image_features.shape[-1]
+        s = self.spatial_merge_size  # 2
 
         permuted_tensor = []
         for image_index, image_tokens in enumerate(ttnn.split(image_features, tokens_per_image, dim=0)):
-            # Reshape image_tokens into a 2D grid
             h, w = image_sizes[image_index]
+            n_h, n_w = h // s, w // s  # Grid dims after spatial merge (pool s×s patch groups into one token).
 
+            # On-device unfold(kernel=s, stride=s): reshape→permute(0,2,4,1,3)→reshape gives (n_h*n_w, d*s*s).
             image_tokens = ttnn.to_layout(image_tokens, ttnn.ROW_MAJOR_LAYOUT)
-
-            image_grid = ttnn.view(image_tokens, (h, w, d))
-            # Permute the grid to have channels last
-            image_grid = ttnn.permute(image_grid, (2, 0, 1))  # Channels first
-            image_grid = ttnn.unsqueeze(image_grid, dim=0)  # Add batch dimension
-            # Reshape the grid to merge patches
-            if self.args.num_devices > 1:
-                image_grid_torch = ttnn.to_torch(image_grid, mesh_composer=ConcatMeshToTensor(self.device, dim=0))
-                image_grid_torch = image_grid_torch[0].unsqueeze(0)  # shape: [1, 1024, 30, 44]
-                image_grid_torch = image_grid_torch.to(dtype=torch.bfloat16)
-            else:
-                image_grid_torch = ttnn.to_torch(image_grid).to(dtype=torch.bfloat16)
-
-            grid = torch.nn.functional.unfold(
-                image_grid_torch, kernel_size=self.spatial_merge_size, stride=self.spatial_merge_size
-            )
-
-            grid = ttnn.from_torch(grid, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-            grid = ttnn.view(grid, (d * self.spatial_merge_size**2, -1))
-            grid = ttnn.transpose(grid, 0, 1)  # Transpose to have features first
+            image_tokens = ttnn.reshape(image_tokens, (n_h, s, n_w, s, d))
+            image_tokens = ttnn.permute(image_tokens, (0, 2, 4, 1, 3))  # (n_h, n_w, d, s, s)
+            grid = ttnn.reshape(image_tokens, (n_h * n_w, d * s * s))
+            grid = ttnn.to_layout(grid, ttnn.TILE_LAYOUT)
 
             permuted_tensor.append(grid)
 
         image_features = ttnn.concat(permuted_tensor, dim=0)
-        # Apply merging layer
         image_features = ttnn.linear(
             image_features, self.merging_weights, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -152,7 +135,9 @@ class TTMistral3MultiModalProjector(LightweightModule):
             self.linear_2_bias = None
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
-        image_features = self.norm(image_features, mode="decode")
+        image_features = self.norm(
+            image_features, mode="prefill"
+        )  # Fix: projector norm runs during prefill, not decode.
         image_features = self.patch_merger(image_features, image_sizes)
 
         hidden_states = ttnn.linear(
