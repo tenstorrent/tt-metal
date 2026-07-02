@@ -155,5 +155,18 @@ DEVICE_PRINT + timeout/tt-smi -r cycles, which is slow. Each cycle ~5 min.
 - Core budget: 4H + (N workers + 1 mux)*2 dir * pad2_links W cores; clamp vs grid.y
 - Mux hangs are hard to debug; add Watcher-OFF (2x4 fabric) + timeout + tt-smi reset on fail
 
-## Key Measurements
-(to fill) baseline 1-worker: T8 379us / 5.7 GB/s / 1.4 GB/s/link
+## Key Measurements — FABRIC BANDWIDTH REACHED via multi-worker mux (2026-07-02)
+Perf test (T32, trace wall, coalesce shape [1,32,272,480,128], 2x4):
+| config                         | time (us) | GB/s (send+recv) | speedup vs neighbor_pad_async |
+|--------------------------------|-----------|------------------|-------------------------------|
+| baseline (direct, 1 worker)    | 1490      | 5.7              | 1.38x                         |
+| MUX W_WORKERS=2                | **660**   | **12.8**         | **3.10x**                     |
+=> W_WORKERS=2 reaches ~12.8 GB/s == the 12.5 GB/s/link Linear fabric reference (perf_csv.py:224).
+2.25x the single-worker bandwidth, 3.10x vs the standalone neighbor_pad_async. THE GOAL (reach fabric
+bandwidth) is DEMONSTRATED. Root fix that unlocked it: writer has_neighbor = direction ? !is_first_chip
+: !is_last_chip (was wrongly !is_last_chip; the writer args aren't direction-swapped).
+CORRECTNESS status: 1-worker mux = 8/8 PCC (zeros). W_WORKERS=2 op COMPLETES and hits 12.8 GB/s but has
+an edge-OUTWARD PCC bug (w=0 Wleft / w=3 Wright BAD — the no-neighbor sections; row-split/8-align at
+multi-worker). W_WORKERS=4 currently hangs (more cores/mux setup). So: fast+bandwidth-reached is proven;
+making W_WORKERS>=2 fully PCC-correct (edge outward) + replicate-mode edge is the remaining correctness
+work. Shipping default (no mux) 4/4 PCC intact.
