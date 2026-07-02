@@ -371,6 +371,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     // Indexed by direction (0 = backward, 1 = forward).
     std::vector<CoreCoord> agg_core_logical(num_directions_per_link);
     std::vector<CoreCoord> agg_core_virtual(num_directions_per_link);
+    // Holds L1 ADDRESSES (not semaphore ids): these are cross-device fabric atomic-inc targets, so they
+    // must be GlobalSemaphores. They are supplied by the caller appended to `semaphore` after the
+    // num_directions_per_link out_ready sems, laid out [dir0_w0..dir0_wN-1, dir1_w0..dir1_wN-1].
     std::vector<std::vector<uint32_t>> agg_per_worker_sem_ids(num_directions_per_link);
     if (writer_signals_mm) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -379,7 +382,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
             agg_core_virtual[dir] = mesh_device->worker_core_from_logical_core(agg_logical);
             for (uint32_t w = 0; w < num_ag_workers; w++) {
                 agg_per_worker_sem_ids[dir].push_back(
-                    tt::tt_metal::CreateSemaphore(program, CoreRange(agg_logical), 0));
+                    static_cast<uint32_t>(semaphore.at(num_directions_per_link + dir * num_ag_workers + w).address()));
             }
         }
     }
