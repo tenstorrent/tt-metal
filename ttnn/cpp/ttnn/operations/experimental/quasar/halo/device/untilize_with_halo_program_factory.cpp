@@ -378,10 +378,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
             .hw_config =
                 ComputeHardwareConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .math_approx_mode = math_approx_mode,
+                    ComputeGen2Config{
+                        .math_fidelity = math_fidelity,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_approx_mode = math_approx_mode,
+                    },
                 },
         };
         kernels.push_back(std::move(compute));
@@ -407,7 +409,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .source = std::filesystem::path(kReaderKernelPath),
             .hw_config =
                 DataMovementHardwareConfig{
-                    .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
+                    DataMovementGen1Config{.processor = processor, .noc = noc},
                 },
         };
 

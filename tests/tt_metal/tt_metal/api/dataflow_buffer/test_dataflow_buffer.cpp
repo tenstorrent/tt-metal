@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -62,7 +64,7 @@ void execute_program_and_verify(
     std::optional<std::vector<uint32_t>> expected_output = std::nullopt) {
     detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
 
-    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (mesh_device->arch() == ARCH::QUASAR) {
         // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
@@ -132,7 +134,7 @@ void run_single_dfb_program(
             (producer_type == DFBPorCType::DM && consumer_type == DFBPorCType::DM),
         "Multi-core DFB programs only support DM producer and consumer.");
 
-    const auto arch = mesh_device->get_devices()[0]->arch();
+    const auto arch = mesh_device->arch();
 
     if (arch != ARCH::QUASAR) {
         // WH/BH DM: one BRISC (RISCV_0) as producer and one NCRISC (RISCV_1) as consumer.
@@ -224,18 +226,20 @@ void run_single_dfb_program(
 
     // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
     // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
-    const experimental::DataMovementHardwareConfig dm_producer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = std::invoke([&] {
+        if (arch == ARCH::QUASAR) {
+            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        }
+        return experimental::DataMovementHardwareConfig{
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0}};
+    });
+    const experimental::DataMovementHardwareConfig dm_consumer_cfg = std::invoke([&] {
+        if (arch == ARCH::QUASAR) {
+            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        }
+        return experimental::DataMovementHardwareConfig{
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1}};
+    });
 
     experimental::KernelSpec producer_spec;
     if (producer_type == DFBPorCType::DM) {
@@ -321,12 +325,14 @@ void run_single_dfb_program(
     // Each DM endpoint votes per-DFB on opting out of implicit sync.
     const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
     if (producer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
+        std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(DFB_NAME);
     }
     if (consumer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
+        std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(DFB_NAME);
     }
 
     experimental::WorkUnitSpec wu{
@@ -589,9 +595,7 @@ void run_concurrent_dfbs_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_dfbs,
     experimental::dfb::DataflowBufferConfig& dfb_config) {
-    TT_FATAL(
-        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
-        "Concurrent DFB tests require Quasar (multi-threaded DM)");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "Concurrent DFB tests require Quasar (multi-threaded DM)");
     TT_FATAL(
         dfb_config.num_producers == 1 && dfb_config.num_consumers == 1,
         "run_concurrent_dfbs_program requires 1Sx1S per DFB");
@@ -663,13 +667,12 @@ void run_concurrent_dfbs_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"chunk_offset", chunk_offset},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
         });
         if (disable_isync) {
-            std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+            std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config))
+                .disable_implicit_sync_for.push_back(dfb_name);
         }
         kernel_names.push_back(producer_name);
 
@@ -690,13 +693,12 @@ void run_concurrent_dfbs_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"chunk_offset", chunk_offset},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
         });
         if (disable_isync) {
-            std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+            std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config))
+                .disable_implicit_sync_for.push_back(dfb_name);
         }
         kernel_names.push_back(consumer_name);
     }
@@ -753,9 +755,7 @@ void run_concurrent_tensix_dm_dfbs_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_dfbs,
     experimental::dfb::DataflowBufferConfig& dfb_config) {
-    TT_FATAL(
-        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
-        "Concurrent Tensix→DM DFB tests require Quasar");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "Concurrent Tensix→DM DFB tests require Quasar");
     TT_FATAL(
         dfb_config.num_producers == 1 && dfb_config.num_consumers == 1,
         "run_concurrent_tensix_dm_dfbs_program requires 1Sx1S per DFB");
@@ -856,13 +856,12 @@ void run_concurrent_tensix_dm_dfbs_program(
                     {"num_entries_per_consumer", num_entries_per_consumer},
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
         });
         if (!dfb_config.enable_producer_implicit_sync) {
-            std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+            std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config))
+                .disable_implicit_sync_for.push_back(dfb_name);
         }
         kernel_names.push_back(consumer_name);
     }
@@ -941,9 +940,7 @@ void run_sequential_dfbs_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<experimental::dfb::DataflowBufferConfig>& configs) {
     TT_FATAL(!configs.empty(), "configs must not be empty");
-    TT_FATAL(
-        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
-        "Sequential multi-DFB TC-exhaustion tests require Quasar");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "Sequential multi-DFB TC-exhaustion tests require Quasar");
 
     const uint32_t num_dfbs      = static_cast<uint32_t>(configs.size());
     const uint32_t num_producers = configs[0].num_producers;
@@ -1019,9 +1016,7 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_producers", num_producers},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
     };
 
     // Consumer kernel: same layout, plus per-DFB entries_per_consumer_<i> /
@@ -1038,9 +1033,7 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_consumers", num_consumers},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
     };
 
     // Build per-DFB DataflowBufferSpec, TensorParameter, and bindings (dfb_<i> /
@@ -1066,10 +1059,12 @@ void run_sequential_dfbs_program(
         });
         const bool disable_isync = !configs[i].enable_producer_implicit_sync;
         if (disable_isync) {
-            std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
-            std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+            std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config))
+                .disable_implicit_sync_for.push_back(dfb_name);
+            std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config))
+                .disable_implicit_sync_for.push_back(dfb_name);
         }
         tensor_parameters.push_back(experimental::TensorParameter{
             .unique_id = in_tensor_name,
@@ -1154,7 +1149,7 @@ void run_in_dfb_out_dfb_program(
         "Num entries must be the same for in and out DFBs");
     TT_FATAL(
         dm2tensix_config.entry_size == tensix2dm_config.entry_size, "Entry size must be the same for in and out DFBs");
-    TT_FATAL(mesh_device->get_devices()[0]->arch() == ARCH::QUASAR, "run_in_dfb_out_dfb_program is Quasar-only");
+    TT_FATAL(mesh_device->arch() == ARCH::QUASAR, "run_in_dfb_out_dfb_program is Quasar-only");
 
     const CoreCoord logical_core(0, 0);
     const CoreRangeSet core_range_set(CoreRange(logical_core, logical_core));
@@ -1226,13 +1221,12 @@ void run_in_dfb_out_dfb_program(
                 {"num_producers", dm2tensix_config.num_producers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
     };
     if (!dm2tensix_config.enable_producer_implicit_sync) {
-        std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(IN_DFB);
+        std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(IN_DFB);
     }
 
     experimental::KernelSpec compute_spec{
@@ -1286,13 +1280,12 @@ void run_in_dfb_out_dfb_program(
                 {"num_consumers", tensix2dm_config.num_consumers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
     };
     if (!tensix2dm_config.enable_producer_implicit_sync) {
-        std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(OUT_DFB);
+        std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(OUT_DFB);
     }
 
     experimental::WorkUnitSpec wu{
@@ -1670,18 +1663,20 @@ static void run_dfb_size_override_test(
     MeshTensor in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
     MeshTensor out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = std::invoke([&] {
+        if (device->arch() == ARCH::QUASAR) {
+            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        }
+        return experimental::DataMovementHardwareConfig{
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0}};
+    });
+    const experimental::DataMovementHardwareConfig dm_consumer_cfg = std::invoke([&] {
+        if (device->arch() == ARCH::QUASAR) {
+            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        }
+        return experimental::DataMovementHardwareConfig{
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1}};
+    });
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -1716,10 +1711,12 @@ static void run_dfb_size_override_test(
         .hw_config = dm_consumer_cfg,
     };
     if (!implicit_sync) {
-        std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
-        std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
+        std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(DFB_NAME);
+        std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(DFB_NAME);
     }
 
     const CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
@@ -2335,13 +2332,12 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {"num_producers", 1u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
     };
     if (!remapper_dfb_config.enable_producer_implicit_sync) {
-        std::get<experimental::DataMovementHardwareConfig>(dm_producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(REMAPPER_DFB);
+        std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(dm_producer_spec.hw_config))
+            .disable_implicit_sync_for.push_back(REMAPPER_DFB);
     }
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),

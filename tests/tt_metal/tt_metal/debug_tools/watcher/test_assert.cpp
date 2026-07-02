@@ -109,14 +109,15 @@ static void RunTest(
                         assert_kernel_spec.num_threads = 1;
                     }
                     // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-                    assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
-                        .gen1_config =
-                            experimental::DataMovementHardwareConfig::Gen1Config{
-                                .processor = gen1_processor,
-                                .noc = gen1_noc,
-                            },
-                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-                    };
+                    assert_kernel_spec.hw_config = std::invoke([&] {
+                        if (is_quasar) {
+                            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+                        }
+                        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                            .processor = gen1_processor,
+                            .noc = gen1_noc,
+                        }};
+                    });
                     break;
                 }
                 case HalProcessorClassType::COMPUTE: {

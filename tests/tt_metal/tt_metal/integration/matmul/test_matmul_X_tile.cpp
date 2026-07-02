@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>
@@ -280,13 +281,14 @@ static void matmul_tile_block(
                   "in0_block_size_bytes",
                   "in1_block_size_bytes"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -298,12 +300,14 @@ static void matmul_tile_block(
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {DST_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+            }),
     };
 
     // matmul_block.cpp uses named CTAs. Map cfg.compute_kernel_args (positional) to the
@@ -357,11 +361,23 @@ static void matmul_tile_block(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = cfg.math_fidelity,
-                .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-                .dst_full_sync_en = cfg.dst_full_sync_en,
-            },
+            std::invoke([&] {
+                experimental::ComputeHardwareConfig hw_cfg;
+                if (mesh_device->arch() == ARCH::QUASAR) {
+                    hw_cfg = experimental::ComputeGen2Config{
+                        .math_fidelity = cfg.math_fidelity,
+                        .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+                        .dst_full_sync_en = cfg.dst_full_sync_en,
+                    };
+                } else {
+                    hw_cfg = experimental::ComputeGen1Config{
+                        .math_fidelity = cfg.math_fidelity,
+                        .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+                        .dst_full_sync_en = cfg.dst_full_sync_en,
+                    };
+                }
+                return hw_cfg;
+            }),
     };
 
     experimental::WorkUnitSpec wu{

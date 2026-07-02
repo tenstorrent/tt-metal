@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "kernel_types.hpp"
 #include "multi_device_fixture.hpp"
 #include "dm_common.hpp"
@@ -140,12 +141,13 @@ bool run_noc_api_latency_test(
             .source = kernel_path,
             .num_threads = 1,
             .compile_time_args = named_compile_args,
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config{
-                            .processor = riscv, .noc = test_config.noc_id, .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
-                    .gen2_config = DataMovementHardwareConfig::Gen2Config{}}}},
+            .hw_config = std::invoke([&] {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
+                }
+                return DataMovementHardwareConfig{DataMovementGen1Config{
+                    .processor = riscv, .noc = test_config.noc_id, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+            })}},
         .work_units = {WorkUnitSpec{
             .name = "noc_work_unit",
             .kernels = {KernelSpecName{"noc_kernel"}},

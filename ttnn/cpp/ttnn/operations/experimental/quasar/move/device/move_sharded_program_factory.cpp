@@ -99,11 +99,8 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
         // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}},
+        .hw_config = m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}},
     };
 
     reader.runtime_arg_schema.runtime_arg_names = m2::Group<std::string>{"total_size_bytes"};

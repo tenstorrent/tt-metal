@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -122,12 +123,14 @@ void run_single_core_copy_block_matmul_partials(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {SRC0_DFB}}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {SRC0_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -140,12 +143,14 @@ void run_single_core_copy_block_matmul_partials(
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {DST_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+            }),
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -175,17 +180,30 @@ void run_single_core_copy_block_matmul_partials(
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
+            std::invoke([&] {
+                experimental::ComputeHardwareConfig cfg;
                 // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
                 // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
                 // Default is unpack via SrcA/B, ~19-bit precision.
-                .unpack_to_dest_mode = test_config.fp32_dest_acc_en
-                                           ? experimental::ComputeHardwareConfig::
-                                                 UnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                                           : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+                auto unpack_modes =
+                    test_config.fp32_dest_acc_en
+                        ? experimental::ComputeUnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                        : experimental::ComputeUnpackToDestModes{};
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    cfg = experimental::ComputeGen2Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .unpack_to_dest_mode = unpack_modes,
+                    };
+                } else {
+                    cfg = experimental::ComputeGen1Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                        .unpack_to_dest_mode = unpack_modes,
+                    };
+                }
+                return cfg;
+            }),
     };
 
     experimental::WorkUnitSpec wu{

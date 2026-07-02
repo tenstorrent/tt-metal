@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -104,14 +105,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
                 .runtime_arg_names = {"num_of_transactions", "pages_per_transaction"},
             },
         .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = NOC::RISCV_1_default,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+            std::invoke([&] {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
+                }
+                return DataMovementHardwareConfig{DataMovementGen1Config{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                }};
+            }),
     };
 
     KernelSpec writer_spec{
@@ -126,14 +128,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
                 .runtime_arg_names = {"num_of_transactions", "pages_per_transaction", "dram_addr"},
             },
         .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+            std::invoke([&] {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
+                }
+                return DataMovementHardwareConfig{DataMovementGen1Config{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                }};
+            }),
     };
 
     ProgramSpec spec{

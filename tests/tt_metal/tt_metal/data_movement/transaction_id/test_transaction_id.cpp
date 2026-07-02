@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
@@ -120,14 +121,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
                 .runtime_arg_names = {"num_transactions", "bytes_per_transaction"},
             },
         .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+            std::invoke([&] {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
+                }
+                return DataMovementHardwareConfig{DataMovementGen1Config{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = test_config.noc_id,
+                }};
+            }),
     };
 
     ProgramSpec spec{

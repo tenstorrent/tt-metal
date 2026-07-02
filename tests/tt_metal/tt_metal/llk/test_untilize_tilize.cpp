@@ -274,11 +274,13 @@ void run_single_core_tilize_program(
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = reader_schema,
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -290,11 +292,13 @@ void run_single_core_tilize_program(
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+            }),
     };
 
     std::string compute_kernel;
@@ -343,10 +347,21 @@ void run_single_core_tilize_program(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-            },
+            std::invoke([&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    cfg = experimental::ComputeGen2Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                } else {
+                    cfg = experimental::ComputeGen1Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                }
+                return cfg;
+            }),
     };
 
     experimental::WorkUnitSpec wu{
@@ -605,13 +620,14 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "scaler"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {INP_DATA_DFB, INP_SCALER_DFB}}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
+                        .disable_implicit_sync_for = {INP_DATA_DFB, INP_SCALER_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+            }),
     };
 
     experimental::KernelSpec writer_spec{
@@ -622,12 +638,14 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
+            std::invoke([&] {
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    return experimental::DataMovementHardwareConfig{
+                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUT_DFB}}};
+                }
+                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+            }),
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines = {
@@ -665,10 +683,21 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .compile_time_args =
             {{"per_core_block_cnt", test_config.num_tiles_r}, {"per_core_block_tile_cnt", test_config.num_tiles_c}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-            },
+            std::invoke([&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    cfg = experimental::ComputeGen2Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                } else {
+                    cfg = experimental::ComputeGen1Config{
+                        .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                        .dst_full_sync_en = test_config.dst_full_sync_en,
+                    };
+                }
+                return cfg;
+            }),
     };
 
     experimental::WorkUnitSpec wu{
@@ -943,9 +972,7 @@ static void run_quasar_tilize_untilize_test(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -956,9 +983,7 @@ static void run_quasar_tilize_untilize_test(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
     };
 
     std::string compute_kernel;
@@ -1007,10 +1032,21 @@ static void run_quasar_tilize_untilize_test(
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-            },
+            std::invoke([&] {
+                experimental::ComputeHardwareConfig cfg;
+                if (mesh_device->arch() == tt::ARCH::QUASAR) {
+                    cfg = experimental::ComputeGen2Config{
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                    };
+                } else {
+                    cfg = experimental::ComputeGen1Config{
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                    };
+                }
+                return cfg;
+            }),
     };
 
     experimental::WorkUnitSpec wu{

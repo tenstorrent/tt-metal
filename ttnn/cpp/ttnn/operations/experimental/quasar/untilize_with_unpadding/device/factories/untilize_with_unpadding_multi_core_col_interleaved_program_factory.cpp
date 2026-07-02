@@ -116,9 +116,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"third_dim", third_dim},
              {"number_blocks_per_core", nblocks_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_number", "tiles_per_row", "num_blocks"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
     };
 
     // ---- Writer kernel ----
@@ -138,9 +136,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"core_number", "size_per_row_per_block", "blocks_per_core", "width_size"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
     };
 
     // ---- Compute kernel (full + cliff) ----
@@ -150,9 +146,10 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ComputeHardwareConfig hw{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
         if (fp32_dest_acc_en) {
-            hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            std::get<ComputeGen2Config>(hw).unpack_to_dest_mode.emplace(
+                IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
         return hw;
     };

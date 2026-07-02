@@ -235,8 +235,7 @@ ProgramArtifacts create_sharded_artifacts(
         .dfb_bindings = {m2::ProducerOf(IN0, "in0"), m2::ProducerOf(IN1, "in1")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config = m2::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1}},
+            m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1}},
     };
 
     m2::KernelSpec writer_spec{
@@ -246,8 +245,7 @@ ProgramArtifacts create_sharded_artifacts(
         .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config = m2::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0}},
+            m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}},
     };
 
     // bf8/bf16 outputs do not need fp32 dest accumulation (matches descriptor factory: false unless
@@ -264,8 +262,10 @@ ProgramArtifacts create_sharded_artifacts(
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
             m2::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+                m2::ComputeGen2Config{
+                    .math_fidelity = MathFidelity::HiFi4,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                },
             },
     };
 

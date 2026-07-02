@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "common/device_fixture.hpp"
 
 #include <cmath>
@@ -86,20 +87,20 @@ experimental::ProgramSpec build_bmm_program_spec(
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
-    experimental::DataMovementHardwareConfig reader_config{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
-    experimental::DataMovementHardwareConfig writer_config{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
-    if (!use_implicit_sync) {
-        reader_config.gen2_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
-        writer_config.gen2_config->disable_implicit_sync_for = {DST_DFB};
-    }
+    experimental::DataMovementHardwareConfig reader_config = std::invoke([&] {
+        if (use_implicit_sync) {
+            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        }
+        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}};
+    });
+    experimental::DataMovementHardwareConfig writer_config = std::invoke([&] {
+        if (use_implicit_sync) {
+            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        }
+        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}};
+    });
 
     experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
