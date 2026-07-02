@@ -39,6 +39,12 @@ void kernel_main() {
 
     // Compile-time args:
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    // The DST window is opened with tile_regs_acquire() before the ht loop and only closed by
+    // tile_regs_commit() inside the last-tile (ht == Ht-1) branch. If Ht were 0 the loop body would
+    // never run, tile_regs_commit() would be skipped, and the paired tile_regs_wait() below would
+    // deadlock with cb_partial reserved-but-never-pushed. All current callers guarantee Ht >= 1 for
+    // an H-reduce; enforce it so a future Ht=0 caller fails to compile instead of hanging (issue #48486).
+    static_assert(Ht >= 1, "Welford H-reduce requires at least one height tile (Ht >= 1)");
     constexpr uint32_t H = get_compile_time_arg_val(1);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
