@@ -1,0 +1,21 @@
+# Rank bindings for 4-Galaxy all-reduce experiments.
+# Each MPI rank owns one Galaxy (32 devices, mesh shape 32x1).
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+
+  - rank: 2
+    mesh_id: 2
+    mesh_host_rank: 0
+
+  - rank: 3
+    mesh_id: 3
+    mesh_host_rank: 0
+
+mesh_graph_desc_path: "tt-train/all_reduce_experiments/configs/mgd.textproto"
