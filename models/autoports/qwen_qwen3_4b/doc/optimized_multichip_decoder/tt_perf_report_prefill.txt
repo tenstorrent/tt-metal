@@ -1,0 +1,14 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_MULTICHIP_PREFILL_WARMED'.
+Using operations until 'PERF_MULTICHIP_PREFILL_WARMED_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/tt_perf_report_prefill.csv
+Overall DRAM roofline (modeled ops): 6.7% (35 GB/s)
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/tt_perf_report_prefill_stacked.csv.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen3_4b/doc/optimized_multichip_decoder/tt_perf_report_prefill_stacked.csv.png

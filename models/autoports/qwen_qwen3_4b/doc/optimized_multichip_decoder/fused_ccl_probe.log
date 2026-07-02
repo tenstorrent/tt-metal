@@ -1,0 +1,36 @@
+2026-07-02 12:25:37.290 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+arch blackhole
+fused_mm_reduce_scatter_supported_for_decode_like_shape False
+reason Blackhole gate in models/demos/gpt_oss/tt/attention/operations.py disables minimal_matmul_strided_reduce_scatter_async due documented race
+common_attention_1d_fused_all_gather_auto_enable False
+qwen_hidden_dim_tile_condition True
+reason_all_gather common attention_1d fused all_gather_matmul config is gated to num_devices == 8; Qwen3-4B target mesh is TP4
+nanobind: leaked 1 instances!
+ - leaked instance 0x7fe440563768 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 14 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 233 functions!
+ - leaked function "unpad"
+ - leaked function ""
+ - leaked function "num_cores"
+ - leaked function "worker_core_from_logical_core"
+ - leaked function "tensor_topology"
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function "unpad_from_tile"
+ - leaked function "get_fabric_node_id"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

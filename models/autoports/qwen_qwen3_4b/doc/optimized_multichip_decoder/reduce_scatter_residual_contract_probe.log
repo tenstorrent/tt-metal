@@ -1,0 +1,113 @@
+2026-07-02 13:07:59.756 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ubuntu/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ubuntu/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_reduce_scatter_residual_contract_probe 2026-07-02 13:08:07.829 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 13:08:07.829 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 13:08:07.829 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 13:08:07.829 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 13:08:07.831 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 13:08:07.831 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 13:08:07.834 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 13:08:08.001 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 13:08:08.001 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 13:08:08.001 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 13:08:08.001 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 13:08:08.004 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 13:08:08.257 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 13:08:08.863 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:08:08.863 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:08:08.863 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:08:08.863 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:08:08.864 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:08:08.864 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:08:08.879 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:08.879 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:08.879 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:08.879 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:08.938 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:08:09.022 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:08:09.027 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:08:09.028 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:08:09.030 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:08:09.030 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:08:09.030 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:08:09.081 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:09.081 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:09.081 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:09.081 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:09.653 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349977 GHz, device_time_at_sync=5481581319242 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:09.665 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=5491363104946 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:09.665 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=5471495607556 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:09.665 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=5480892566187 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:09.766 | INFO     | conftest:expect_error_:874 - [EXPECTED_ERROR BEGIN] RuntimeError message="Invalid subtile broadcast type"
+2026-07-02 13:08:09.766 | critical |          Always | TT_THROW: Invalid subtile broadcast type (assert.hpp:104)
+2026-07-02 13:08:09.767 | INFO     | conftest:expect_error_:879 - [EXPECTED_ERROR END] RuntimeError message="Invalid subtile broadcast type"
+2026-07-02 13:08:09.772 | INFO     | conftest:expect_error_:874 - [EXPECTED_ERROR BEGIN] RuntimeError message="Input and gamma padded widths must match"
+2026-07-02 13:08:09.772 | critical |          Always | TT_FATAL: Input and gamma padded widths must match and gamma logical width must be >= input logical width (otherwise valid input columns would be multiplied by gamma padding). Got input: logical[-1]=640 padded[-1]=640 vs gamma: logical[-1]=2560 padded[-1]=2560 (assert.hpp:104)
+2026-07-02 13:08:09.773 | INFO     | conftest:expect_error_:879 - [EXPECTED_ERROR END] RuntimeError message="Input and gamma padded widths must match"
+2026-07-02 13:08:10.811 | INFO     | conftest:expect_error_:874 - [EXPECTED_ERROR BEGIN] RuntimeError message="width of the first tensor must be equal to the height"
+2026-07-02 13:08:10.811 | critical |          Always | TT_FATAL: The width of the first tensor must be equal to the height of the second tensor. Mismatch: width=640 height=2560 (assert.hpp:104)
+2026-07-02 13:08:10.812 | INFO     | conftest:expect_error_:879 - [EXPECTED_ERROR END] RuntimeError message="width of the first tensor must be equal to the height"
+reduce_scatter_local_shape=(1, 1, 16, 640)
+full_residual_add_error=TT_THROW @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.cpp:227: tt::exception
+full_weight_rms_norm_error=TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:81: a.padded_shape()[-1] == gamma.value().padded_shape()[-1] && gamma.value().logical_shape()[-1] >= a.logical_shape()[-1]
+sharded_norm_local_shape=(1, 1, 16, 640)
+gate_up_matmul_error=TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:57: a_shape[-1] == b_shape[-2]
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/ubuntu/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+5.65s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_reduce_scatter_residual_contract_probe
+3.12s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_reduce_scatter_residual_contract_probe
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_reduce_scatter_residual_contract_probe
+============================== 1 passed in 9.97s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f91eddf5188 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7f91ee405038 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function "device"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "__hash__"
+ - leaked function "get_tile"
+ - leaked function "subtract"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 13:08:13.104 | info     |    BuildKernels | JIT cache stats: 68/68 hits (100.0%) [68 cached, 58 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 13:08:13.104 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 13:08:13.126 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 13:08:13.126 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 13:08:13.754 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 13:08:13.754 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 13:08:13.754 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

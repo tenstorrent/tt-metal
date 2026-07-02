@@ -1,0 +1,3 @@
+model,decoder,profile,layer,mode,seq_len,decode_pos,batch,traced,single_chip_ms,multichip_ms,speedup,efficiency
+Qwen/Qwen3-4B,MultichipDecoder,qwen3_4b_multichip_decoder_1x4_tp4_v1,0,prefill,16,,1,False,1.713751,2.440627,0.702177,0.175544
+Qwen/Qwen3-4B,MultichipDecoder,qwen3_4b_multichip_decoder_1x4_tp4_v1,0,decode,1,16,1,True,0.502297,0.368888,1.361652,0.340413

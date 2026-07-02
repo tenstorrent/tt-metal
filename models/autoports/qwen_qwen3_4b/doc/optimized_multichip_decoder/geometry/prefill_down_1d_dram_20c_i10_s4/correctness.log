@@ -1,0 +1,166 @@
+=== prefill_down_1d_dram_20c_i10_s4 correctness ===
+2026-07-02 12:58:00.256 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ubuntu/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ubuntu/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic 2026-07-02 12:58:10.685 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 12:58:10.685 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 12:58:10.685 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 12:58:10.685 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 12:58:10.687 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 12:58:10.687 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 12:58:10.690 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 12:58:10.858 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 12:58:10.858 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 12:58:10.858 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 12:58:10.858 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 12:58:10.861 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 12:58:11.175 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 12:58:11.778 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 12:58:11.778 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 12:58:11.779 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 12:58:11.779 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 12:58:11.779 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 12:58:11.780 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 12:58:11.793 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:58:11.793 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:58:11.793 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:58:11.793 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:58:11.840 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 12:58:11.925 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 12:58:11.932 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 12:58:11.934 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 12:58:11.935 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 12:58:11.935 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 12:58:11.935 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 12:58:11.987 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:58:11.987 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:58:11.987 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:58:11.987 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:58:12.559 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=4902899882073 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 12:58:12.560 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=4903970336606 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 12:58:12.571 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=4894825502733 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 12:58:12.571 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=4912263331581 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 12:58:17.545 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 12:58:17.674 | critical |          Always | TT_FATAL: Kt must be divisible by in0_block_w (assert.hpp:104)
+FAILED
+
+=================================== FAILURES ===================================
+_________________ test_multichip_trace_replay_is_deterministic _________________
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py:326: in test_multichip_trace_replay_is_deterministic
+    eager, traced, traced_ms = _multichip_prefill_then_decode(
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py:237: in _multichip_prefill_then_decode
+    decoder.prefill_forward(tt_prefix, kv_cache=kv_cache, page_table=page_table)
+models/autoports/qwen_qwen3_4b/tt/multichip_decoder.py:821: in prefill_forward
+    self._mlp(post_norm), attn_residual, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    ^^^^^^^^^^^^^^^^^^^^
+models/autoports/qwen_qwen3_4b/tt/multichip_decoder.py:770: in _mlp
+    down_partial = ttnn.matmul(
+ttnn/ttnn/decorators.py:473: in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1779: (a_shape_padded[-1] / in0_tile.get_width()) % program_config.in0_block_w == 0
+E   info:
+E   Kt must be divisible by in0_block_w
+E   backtrace:
+E    --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(+0x7c2dc9) [0x7fb8230dbdc9]
+E    --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(+0x1882362) [0x7fb82419b362]
+E    --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)
+E    --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7fb8241a3e89]
+E    --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7fb8241a2a2e]
+E    --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7fb8241a193a]
+E    --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)
+E    --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(+0x181bd61) [0x7fb824134d61]
+E    --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7fb824134173]
+E    --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x4de8ef) [0x7fb824c6c8ef]
+E    --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x4de03c) [0x7fb824c6c03c]
+E    --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x310535) [0x7fb824a9e535]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ac2cf8]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1890366]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ac2cf8]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1890366]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ac2cf8]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1890366]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ac2cf8]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1890366]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ac2cf8]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1890366]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ac2cf8]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1890366]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ac2cf8]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1890366]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x187cd9e]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x18bb609]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x19f8885]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x19f8350]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x19f825d]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1ae65e3]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x1972218]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3() [0x197202c]
+E    --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fb89226ed90]
+E    --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fb89226ee40]
+E    --- /home/ubuntu/tt-metal/python_env/bin/python3(_start+0x29) [0x19bf069]
+- generated xml file: /home/ubuntu/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+9.52s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic
+5.61s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic
+============================== 1 failed in 16.42s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7fb7ae38d2d8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7fb7add7d188 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "default_core_range"
+ - leaked function ""
+ - leaked function "item"
+ - leaked function "storage_type"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 12:58:20.059 | info     |    BuildKernels | JIT cache stats: 166/166 hits (100.0%) [166 cached, 85 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 12:58:20.059 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 12:58:20.081 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 12:58:20.081 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 12:58:20.794 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 12:58:20.795 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 12:58:20.795 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+correctness_rc=1

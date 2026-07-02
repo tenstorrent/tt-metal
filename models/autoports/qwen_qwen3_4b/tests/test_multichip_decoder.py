@@ -243,26 +243,40 @@ def _multichip_prefill_then_decode(hf_config, state_dict, hidden_states, prefix_
             replicated=True,
         )
         if trace:
+            replay_hidden_states = hidden_states.clone()
+            torch.manual_seed(20260703)
+            replay_hidden_states[:, prefix_len:, :] = torch.randn_like(replay_hidden_states[:, prefix_len:, :])
+            tt_replay_input = _tt_tensor(
+                replay_hidden_states[:, prefix_len:, :].reshape(1, 1, 1, hf_config.hidden_size),
+                mesh,
+                replicated=True,
+            )
             eager_output = decoder.decode_forward(
-                tt_decode_input,
+                tt_replay_input,
                 current_pos=current_pos,
                 page_table=page_table,
                 kv_cache=kv_cache,
                 position_cos=position_cos,
                 position_sin=position_sin,
             )
-            trace_id, traced_output = decoder.trace_decode_once(
+            trace_kv_cache = decoder.init_paged_kv_cache()
+            trace_page_table = decoder.make_identity_page_table()
+            decoder.prefill_forward(tt_prefix, kv_cache=trace_kv_cache, page_table=trace_page_table)
+            trace_id, traced_output, capture_output = decoder.trace_decode_once(
                 tt_decode_input,
                 current_pos=current_pos,
-                page_table=page_table,
-                kv_cache=kv_cache,
+                page_table=trace_page_table,
+                kv_cache=trace_kv_cache,
                 position_cos=position_cos,
                 position_sin=position_sin,
+                replay_hidden_states=replay_hidden_states[:, prefix_len:, :].reshape(1, 1, 1, hf_config.hidden_size),
+                return_capture_output=True,
             )
             assert trace_id is not None
             eager = _first_device_to_torch(eager_output)
             traced = _first_device_to_torch(traced_output)
-            return eager, traced, decoder.timings.traced_decode_ms
+            capture = capture_output[0].reshape(1, 1, hf_config.hidden_size)
+            return eager, traced, capture, decoder.timings.traced_decode_ms
         output = decoder.decode_forward(
             tt_decode_input,
             current_pos=current_pos,
@@ -323,10 +337,13 @@ def test_multichip_kv_cache_layout_contract(hf_config):
 def test_multichip_trace_replay_is_deterministic(hf_config):
     state_dict = _synthetic_state_dict(hf_config)
     hidden_states = torch.randn(1, SMALL_SEQ_LEN + 1, hf_config.hidden_size, dtype=torch.bfloat16)
-    eager, traced, traced_ms = _multichip_prefill_then_decode(
+    eager, traced, capture, traced_ms = _multichip_prefill_then_decode(
         hf_config, state_dict, hidden_states, SMALL_SEQ_LEN, trace=True
     )
     _assert_pcc(eager, traced, 0.999)
+    max_delta = torch.max(torch.abs(capture - traced)).item()
+    print(f"capture_vs_replay_max_delta={max_delta}")
+    assert max_delta > 1e-4
     assert traced_ms is not None
 
 
@@ -421,11 +438,14 @@ def test_multichip_watcher_single_mesh_stress(hf_config):
             position_cos=position_cos,
             position_sin=position_sin,
         )
+        trace_kv_cache = decoder.init_paged_kv_cache()
+        trace_page_table = decoder.make_identity_page_table()
+        decoder.prefill_forward(tt_prefix, kv_cache=trace_kv_cache, page_table=trace_page_table)
         trace_id, traced_output = decoder.trace_decode_once(
             tt_decode_input,
             current_pos=current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
+            page_table=trace_page_table,
+            kv_cache=trace_kv_cache,
             position_cos=position_cos,
             position_sin=position_sin,
         )

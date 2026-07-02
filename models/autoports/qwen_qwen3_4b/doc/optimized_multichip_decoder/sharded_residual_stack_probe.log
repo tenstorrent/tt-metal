@@ -1,0 +1,99 @@
+2026-07-02 13:20:32.512 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-02 13:20:32.595 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 13:20:32.595 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 13:20:32.595 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 13:20:32.595 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 13:20:32.596 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 13:20:32.596 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 13:20:32.600 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 13:20:32.766 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 13:20:32.766 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 13:20:32.766 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 13:20:32.766 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 13:20:32.769 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 13:20:32.960 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 13:20:33.566 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:20:33.566 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:20:33.567 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:20:33.567 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:20:33.567 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:20:33.568 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:20:33.582 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:20:33.582 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:20:33.582 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:20:33.582 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:20:33.641 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:20:33.691 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:20:33.693 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:20:33.694 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:20:33.695 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:20:33.695 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:20:33.695 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:20:33.749 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:20:33.749 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:20:33.749 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:20:33.749 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:20:34.328 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349974 GHz, device_time_at_sync=6131886295888 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:20:34.331 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=6132572268186 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:20:34.332 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=6121657848752 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:20:34.332 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=6143341050594 cycles (realtime_profiler_manager.cpp:1127)
+Building ncrisc, compile step:
+cd /home/ubuntu/.cache/tt-metal-cache/13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb_post_allgather/2072014255892681100/ncrisc/ && /home/ubuntu/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ubuntu/tt-metal/ -I/home/ubuntu/tt-metal/ttnn -I/home/ubuntu/tt-metal/ttnn/cpp -I/home/ubuntu/tt-metal/tt_metal -I/home/ubuntu/tt-metal/tt_metal/hw/inc -I/home/ubuntu/tt-metal/tt_metal/tt-llk/common -I/home/ubuntu/tt-metal/tt_metal/hostdevcommon/api -I/home/ubuntu/tt-metal/tt_metal/api/ -I/home/ubuntu/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ubuntu/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ubuntu/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ubuntu/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ubuntu/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ubuntu/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ubuntu/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ubuntu/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ubuntu/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow -c -o /home/ubuntu/.cache/tt-metal-cache/13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb_post_allgather/2072014255892681100/ncrisc/ncrisck.9665760926942716396.o /home/ubuntu/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ubuntu/.cache/tt-metal-cache/13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb_post_allgather/2072014255892681100/ncrisc/ncrisck.9665760926942716396.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb_post_allgather/2072014255892681100/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_GAMMA='1' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=4,4,2048,0,0,0,20,20,2560,2,2048,2,2048,2,2048,0,0
+In file included from ../kernel_includes.hpp:1,
+                 from /home/ubuntu/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb_post_allgather.cpp: In function 'void kernel_main()':
+/home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb_post_allgather.cpp:85:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   85 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+probe=sharded_residual_stack_qwen_tp4
+target=1x4 Blackhole TP4 Ring
+path=replicated hidden -> reduce_scatter local hidden -> local residual add -> distributed RMSNorm -> local-K gate/up -> reduce_scatter local intermediate -> local down -> reduce_scatter local hidden
+local_residual_shape (1, 1, 16, 640)
+local_stats_shape (1, 1, 16, 32)
+gathered_stats_shape (1, 1, 16, 128)
+norm_shard_shape (1, 1, 16, 640)
+gate_local_shape (1, 1, 16, 2432)
+up_local_shape (1, 1, 16, 2432)
+down_local_shape (1, 1, 16, 640)
+final_local_shape (1, 1, 16, 640)
+final_device_0_finite True
+final_device_1_finite True
+final_device_2_finite True
+final_device_3_finite True
+RESULT sharded_residual_stack_qwen SUCCESS
+nanobind: leaked 2 instances!
+ - leaked instance 0x7fd2170c9338 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7fd2171d13c8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "ttnn._ttnn.types.iterator"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 343 functions!
+ - leaked function "__iter__"
+ - leaked function "disable_asynchronous_slow_dispatch"
+ - leaked function "DisableMemoryReports"
+ - leaked function ""
+ - leaked function "get_device_id"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "to_list"
+ - leaked function "__eq__"
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 13:20:45.223 | info     |    BuildKernels | JIT cache stats: 75/140 hits (53.6%) [75 cached, 66 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 13:20:45.223 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 13:20:45.243 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 13:20:45.243 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 13:20:45.927 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 13:20:45.927 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 13:20:45.927 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

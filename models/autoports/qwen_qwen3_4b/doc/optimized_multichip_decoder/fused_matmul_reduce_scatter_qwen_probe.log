@@ -1,0 +1,95 @@
+2026-07-02 13:08:31.078 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-02 13:08:32.392 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 13:08:32.392 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 13:08:32.393 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 13:08:32.393 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 13:08:32.394 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 13:08:32.394 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 13:08:32.397 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 13:08:32.567 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 13:08:32.567 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 13:08:32.567 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 13:08:32.567 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 13:08:32.570 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 13:08:32.760 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 13:08:33.362 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:08:33.362 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:08:33.363 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:08:33.363 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:08:33.363 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:08:33.364 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:08:33.378 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:33.378 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:33.378 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:33.378 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:08:33.436 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:08:33.507 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:08:33.508 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:08:33.510 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:08:33.511 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:08:33.511 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:08:33.511 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:08:33.563 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:33.563 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:33.563 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:33.563 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:08:34.134 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=5513952430835 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:34.146 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=5493810315933 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:34.146 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=5503307996754 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:34.146 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349970 GHz, device_time_at_sync=5503996880537 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:08:34.203 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:116 - Input shape per device: [1, 1, 32, 1024]
+2026-07-02 13:08:34.203 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:117 - Weight shape per device: [1, 1, 1024, 2560]
+2026-07-02 13:08:34.203 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:118 - MM output shape per device: [1, 1, 32, 2560]
+2026-07-02 13:08:34.203 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:119 - RS scatter dim: 3, ring_size: 4
+2026-07-02 13:08:34.203 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:120 - RS output shape per device: [1, 1, 32, 640]
+2026-07-02 13:08:39.148 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:343 - Waiting for op
+2026-07-02 13:08:39.148 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:345 - Done iteration 0
+2026-07-02 13:08:39.164 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:371 - MM output device 0, iter 0: Max ATOL Delta: 4.0, Max RTOL Delta: 756.0, PCC: 0.9998814481090346
+2026-07-02 13:08:39.169 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:371 - MM output device 1, iter 0: Max ATOL Delta: 4.0, Max RTOL Delta: 2976.0, PCC: 0.9998830086763201
+2026-07-02 13:08:39.174 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:371 - MM output device 2, iter 0: Max ATOL Delta: 4.5, Max RTOL Delta: 6784.0, PCC: 0.9998810967090516
+2026-07-02 13:08:39.179 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:371 - MM output device 3, iter 0: Max ATOL Delta: 4.5, Max RTOL Delta: 4384.0, PCC: 0.9998813784914392
+2026-07-02 13:08:39.183 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:391 - RS output device 0, iter 0: Max ATOL Delta: 8.0, Max RTOL Delta: 268.0, PCC: 0.9998757025965228
+2026-07-02 13:08:39.184 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:391 - RS output device 1, iter 0: Max ATOL Delta: 7.0, Max RTOL Delta: 466.0, PCC: 0.9998786130476713
+2026-07-02 13:08:39.186 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:391 - RS output device 2, iter 0: Max ATOL Delta: 8.0, Max RTOL Delta: 812.0, PCC: 0.9998777296178083
+2026-07-02 13:08:39.187 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:391 - RS output device 3, iter 0: Max ATOL Delta: 7.0, Max RTOL Delta: 99.5, PCC: 0.9998795110533374
+2026-07-02 13:08:39.187 | INFO     | tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async:run_minimal_matmul_strided_reduce_scatter_impl:394 - All checks passed!
+probe=fused_matmul_strided_reduce_scatter_qwen_tp4
+target=1x4 Blackhole TP4 Ring
+shape=WO-like decode padded M=32 K=1024 N=2560 dim=3
+note=N_tiles=80 divisible by TP4; this is Qwen-specific, not the GPT-OSS M_tiles=32 gate
+RESULT fused_mm_rs_qwen SUCCESS
+nanobind: leaked 1 instances!
+ - leaked instance 0x7f143fc5ffd8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 14 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 233 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "cpu"
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_descriptor"
+ - leaked function "merge"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 13:08:39.888 | info     |    BuildKernels | JIT cache stats: 43/98 hits (43.9%) [43 cached, 70 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 13:08:39.888 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 13:08:39.908 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 13:08:39.908 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 13:08:40.555 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 13:08:40.555 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 13:08:40.555 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

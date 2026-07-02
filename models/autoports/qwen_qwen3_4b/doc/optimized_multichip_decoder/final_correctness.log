@@ -1,0 +1,378 @@
+2026-07-02 13:53:09.960 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ubuntu/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ubuntu/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 11 items
+
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[16] 2026-07-02 13:53:20.397 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 13:53:20.397 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 13:53:20.397 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 13:53:20.397 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 13:53:20.399 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 13:53:20.399 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 13:53:20.402 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 13:53:20.569 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 13:53:20.569 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 13:53:20.569 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 13:53:20.569 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 13:53:20.572 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 13:53:20.834 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 13:53:21.438 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:21.438 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:21.438 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:53:21.438 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:53:21.439 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:53:21.439 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:53:21.453 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:21.453 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:21.453 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:21.453 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:21.497 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-02 13:53:21.549 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 13:53:22.118 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349978 GHz, device_time_at_sync=7877021507788 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:53:24.344 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-02 13:53:24.472 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-02 13:53:24.591 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-02 13:53:24.591 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:53:24.591 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:53:24.591 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:53:24.591 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:53:24.592 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:24.592 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:24.615 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:24.618 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:24.620 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:24.622 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:24.668 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:53:24.721 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:53:24.722 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:53:24.723 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:53:24.724 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:53:24.724 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:53:24.725 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:53:25.350 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=7869055780705 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:53:25.362 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=7882086055016 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:53:25.363 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=7895279485183 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:53:30.298 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 13:53:30.412 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+device=0
+PCC=0.9997333805764328
+device=1
+PCC=0.9997333805764328
+device=2
+PCC=0.9997333805764328
+device=3
+PCC=0.9997333805764328
+PCC=1.0
+PCC=1.0
+PCC=1.0
+PASSED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[17] 2026-07-02 13:53:33.184 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:33.184 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:33.206 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:33.209 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:33.211 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:33.214 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:33.256 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-02 13:53:35.488 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-02 13:53:35.557 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-02 13:53:35.691 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-02 13:53:35.691 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:53:35.691 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:53:35.691 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:53:35.691 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:53:35.692 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:35.692 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:35.714 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:35.717 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:35.719 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:35.722 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:35.768 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:53:35.784 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:53:35.786 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:53:35.787 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:53:35.788 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:53:35.788 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:53:35.788 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:53:40.711 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 13:53:40.754 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+device=0
+PCC=0.9997359676733848
+device=1
+PCC=0.9997359676733848
+device=2
+PCC=0.9997359676733848
+device=3
+PCC=0.9997359676733848
+PCC=1.0
+PCC=1.0
+PCC=1.0
+PASSED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[64] 2026-07-02 13:53:43.484 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:43.484 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:43.506 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:43.509 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:43.511 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:43.513 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:43.556 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-02 13:53:45.771 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-02 13:53:45.835 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-02 13:53:45.967 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-02 13:53:45.967 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:53:45.967 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:53:45.967 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:53:45.967 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:53:45.968 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:45.968 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:45.990 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:45.993 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:45.995 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:45.997 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:46.044 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:53:46.059 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:53:46.060 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:53:46.062 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:53:46.063 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:53:46.063 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:53:46.063 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:53:50.985 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 13:53:51.065 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+device=0
+PCC=0.999684148069019
+device=1
+PCC=0.999684148069019
+device=2
+PCC=0.999684148069019
+device=3
+PCC=0.999684148069019
+PCC=1.0
+PCC=1.0
+PCC=1.0
+PASSED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[16] 2026-07-02 13:53:53.822 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:53.822 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:53.845 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:53.848 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:53.850 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:53.852 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:53.895 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-02 13:53:56.141 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-02 13:53:56.194 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-02 13:53:56.202 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-07-02 13:53:56.264 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-07-02 13:53:56.384 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-02 13:53:56.384 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:53:56.384 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:53:56.384 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:53:56.384 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:53:56.385 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:53:56.385 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:53:56.407 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:56.410 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:56.412 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:56.415 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:53:56.461 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:53:56.477 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:53:56.478 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:53:56.480 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:53:56.481 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:53:56.481 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:53:56.481 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:54:01.449 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 13:54:01.488 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 13:54:01.492 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 13:54:01.586 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+device=0
+PCC=0.999583534225651
+device=1
+PCC=0.999583534225651
+device=2
+PCC=0.999583534225651
+device=3
+PCC=0.999583534225651
+PCC=1.0
+PCC=1.0
+PCC=1.0
+PASSED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[17] 2026-07-02 13:54:04.335 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:54:04.335 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:54:04.357 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:04.360 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:04.362 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:04.365 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:04.408 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-02 13:54:06.636 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-02 13:54:06.656 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-02 13:54:06.657 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-07-02 13:54:06.674 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-07-02 13:54:06.805 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-02 13:54:06.805 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:54:06.805 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:54:06.805 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:54:06.805 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:54:06.806 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:54:06.806 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:54:06.828 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:06.831 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:06.835 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:06.835 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:06.882 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:54:06.898 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:54:06.899 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:54:06.900 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:54:06.901 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:54:06.901 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:54:06.901 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:54:11.815 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 13:54:11.850 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 13:54:11.854 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 13:54:11.914 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+device=0
+PCC=0.9995836610905112
+device=1
+PCC=0.9995836610905112
+device=2
+PCC=0.9995836610905112
+device=3
+PCC=0.9995836610905112
+PCC=1.0
+PCC=1.0
+PCC=1.0
+PASSED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_kv_cache_layout_contract 2026-07-02 13:54:14.682 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-02 13:54:14.682 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:54:14.682 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:54:14.683 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:54:14.683 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:54:14.683 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:54:14.684 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:54:14.706 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:14.708 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:14.711 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:14.713 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:14.760 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:54:14.776 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:54:14.778 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:54:14.779 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:54:14.780 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:54:14.780 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:54:14.780 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+PASSED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic 2026-07-02 13:54:22.466 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-02 13:54:22.466 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 13:54:22.466 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 13:54:22.466 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 13:54:22.466 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 13:54:22.467 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 13:54:22.467 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 13:54:22.489 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:22.492 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:22.494 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:22.496 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 13:54:22.543 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 13:54:22.560 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 13:54:22.561 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 13:54:22.563 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 13:54:22.564 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 13:54:22.564 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 13:54:22.564 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 13:54:23.177 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=7959450787275 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 13:54:28.035 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 13:54:28.066 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 13:54:28.071 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 13:54:28.096 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 13:54:28.111 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 13:54:28.114 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 13:54:28.114 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 13:54:28.117 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 13:54:28.117 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 13:54:28.121 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 13:54:28.127 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_TRACE_DECODE
+2026-07-02 13:54:28.128 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_TRACE_DECODE_END
+PCC=1.0
+capture_vs_replay_max_delta=8.84375
+PASSED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_watcher_single_mesh_stress SKIPPED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_reduce_scatter_residual_contract_probe SKIPPED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_perf_signposts SKIPPED
+models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_runtime_has_no_host_fallback PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/ubuntu/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+12.60s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[16]
+10.29s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[16]
+10.11s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[17]
+10.11s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[17]
+10.09s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[64]
+8.19s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic
+7.58s call     models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_kv_cache_layout_contract
+5.64s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[16]
+0.23s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[16]
+0.23s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[17]
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[64]
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[17]
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_watcher_single_mesh_stress
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_kv_cache_layout_contract
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_reduce_scatter_residual_contract_probe
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_perf_signposts
+0.22s setup    models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_runtime_has_no_host_fallback
+
+(15 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[16]
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[17]
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_single_chip_optimized[64]
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[16]
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_paged_decode_matches_single_chip_optimized[17]
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_kv_cache_layout_contract
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_trace_replay_is_deterministic
+PASSED models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py::test_multichip_runtime_has_no_host_fallback
+SKIPPED [1] models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py:354: set QWEN3_4B_MULTICHIP_RUN_WATCHER_STRESS=1 to run the watcher single-mesh stress
+SKIPPED [1] models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py:462: set QWEN3_4B_MULTICHIP_RUN_RS_PROBE=1 to run the reduce-scatter residual probe
+SKIPPED [1] models/autoports/qwen_qwen3_4b/tests/test_multichip_decoder.py:534: set QWEN3_4B_MULTICHIP_RUN_PERF=1 to run multichip decoder perf signposts
+=================== 8 passed, 3 skipped in 78.02s (0:01:18) ====================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f852a9fd1e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f852a3e9188 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_num_devices"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "unpad_from_tile"
+ - leaked function "__init__"
+ - leaked function "__init__"
+ - leaked function "id"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 13:54:31.298 | info     |    BuildKernels | JIT cache stats: 438/438 hits (100.0%) [438 cached, 1861 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 13:54:31.298 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 13:54:31.321 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 13:54:31.321 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 13:54:31.929 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 13:54:31.930 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 13:54:31.930 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

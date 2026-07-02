@@ -1,0 +1,76 @@
+2026-07-02 12:37:24.629 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-02 12:37:24.709 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 12:37:24.709 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 12:37:24.710 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 12:37:24.710 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 12:37:24.711 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 12:37:24.711 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 12:37:24.715 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 12:37:24.881 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 12:37:24.881 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 12:37:24.881 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 12:37:24.881 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 12:37:24.885 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 12:37:25.003 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 12:37:25.606 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 12:37:25.606 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 12:37:25.607 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 12:37:25.607 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 12:37:25.607 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 12:37:25.608 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 12:37:25.622 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:37:25.622 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:37:25.622 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:37:25.622 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 12:37:25.680 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 12:37:25.771 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 12:37:25.779 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 12:37:25.780 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 12:37:25.781 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 12:37:25.781 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 12:37:25.781 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 12:37:25.834 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:37:25.834 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:37:25.834 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:37:25.834 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 12:37:26.407 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=3715502488471 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 12:37:26.408 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=3719517274264 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 12:37:26.418 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349978 GHz, device_time_at_sync=3711888494334 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 12:37:26.418 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349973 GHz, device_time_at_sync=3715600826530 cycles (realtime_profiler_manager.cpp:1127)
+PERSISTENT_AR_L1_OK Shape([1, 1, 1, 2560]) DataType.BFLOAT16 MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}], shape=[32, 320], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 320],"grid":[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0)
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f654da495d8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7f654d93d518 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 41 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 341 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "logical_volume"
+ - leaked function ""
+ - leaked function "set_program_cache_misses_allowed"
+ - leaked function "get_submeshes"
+ - leaked function "to"
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function "__hash__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 12:37:29.326 | info     |    BuildKernels | JIT cache stats: 54/68 hits (79.4%) [54 cached, 56 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 12:37:29.326 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 12:37:29.346 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 12:37:29.346 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 12:37:29.967 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 12:37:29.967 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 12:37:29.967 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
