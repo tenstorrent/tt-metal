@@ -20,8 +20,10 @@ namespace compute_kernel_lib {
  * Support matrix (every cell supported, no caveats):
  *   tile_order {SubblockMajor, TileRowMajor} × packer_l1_acc {on, off}
  *     × last_block_target {Out, OutWithRelu, Interm}
- * OutWithUntilize is SubblockMajor-only — a fused fast-path; route TileRowMajor or
- * multi-subblock-wide untilize through Interm + a downstream reblock_and_untilize phase.
+ * Untilized (row-major) output is NOT a matmul_block target: accumulate to Interm, then untilize
+ * in the kernel via reblock_and_untilize (SubblockMajor) or the standard untilize helper
+ * (TileRowMajor). (The old fused OutWithUntilize target was removed — it untilized a partial
+ * before accumulation finished and corrupted under packer_l1_acc.)
  *
  * ── Phase 1: ACCUMULATE the whole output block ──────────────────────────────
  *   packer_l1_acc ON  → in place: ONE reserve_back over the whole block before the K-loop and
@@ -38,7 +40,6 @@ namespace compute_kernel_lib {
  *     the correct dtype / layout / tile).
  *   Out / OutWithRelu, non-l1_acc     → the software-reload last block is the finished sum in DST,
  *     so it packs STRAIGHT TO OUT (relu / Activation applied on that pack) → NO finalize.
- *   OutWithUntilize                   → fused pack_untilize straight to out in the K-loop.
  *
  * Callers pass NO path-selection flag — the helper derives the path from packer_l1_acc +
  * last_block_target + tile_order + whether interm aliases out. Every restriction is legible from
@@ -72,14 +73,13 @@ enum class OutputCBLayout { SubblockMajor, TileRowMajor };
  *                  finalize (packer_l1_acc) or on the straight-to-out last pack (non-l1_acc). Never
  *                  per-partial (a per-partial relu under packer_l1_acc would relu before the sum).
  * Interm           pack to interm_buf for a downstream phase (bias add / untilize); any relu /
- *                  activation lives in that phase, not the matmul.
- * OutWithUntilize  fused pack_untilize_dest (tile-format DST -> row-major bytes) straight to out in
- *                  the K-loop, bracketed by pack_untilize_dest_init / pack_untilize_uninit. Requires
- *                  tile_order == SubblockMajor and untilize_block_ct_dim > 0 (= the per-call
- *                  out_subblock_num_tiles). For TileRowMajor / multi-subblock-wide untilize, route
- *                  through Interm + a downstream reblock_and_untilize phase.
+ *                  activation lives in that phase, not the matmul. UNTILIZE is one such phase:
+ *                  target Interm, then call reblock_and_untilize (SubblockMajor) or the standard
+ *                  untilize (TileRowMajor) helper in the kernel — see the gather / production
+ *                  matmul kernels. (This replaces the removed fused OutWithUntilize target, which
+ *                  untilized a partial before accumulation finished and corrupted under packer_l1_acc.)
  */
-enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm, OutWithUntilize };
+enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm };
 
 /**
  * Per-operand input lifecycle (compile-time). The helper waits/pops the bound CB
@@ -293,7 +293,7 @@ struct NoIn1BaseOffset {
  *
  *   transpose          transpose B tiles before the multiply (default false).
  *   packer_l1_acc      hardware L1 K-accumulation instead of software spill/reload.
- *   last_block_target  Out / OutWithRelu / Interm / OutWithUntilize — see LastBlockTarget.
+ *   last_block_target  Out / OutWithRelu / Interm — see LastBlockTarget.
  *   tile_order         SubblockMajor / TileRowMajor — see OutputCBLayout. The helper cannot
  *                      infer this; it follows the writer's read contract.
  *   init_mode          Short / None / ShortAfterPreKBlock — see InitMode.
@@ -302,8 +302,8 @@ struct NoIn1BaseOffset {
  *   PostComputeFn      per-subblock hook on the MATH thread, last K-block, before pack.
  *   PreKBlockFn        per-K-block hook before the input waits (see the restore contract).
  *   PostKBlockFn       per-K-block hook after the input pops and the L1_ACC drain.
- *   untilize_block_ct_dim  block_ct_dim for OutWithUntilize (= out_subblock_num_tiles);
- *                          required > 0 for that target, ignored otherwise.
+ *   untilize_block_ct_dim  UNUSED — retained for caller ABI compatibility. Untilize is now a
+ *                          downstream reblock_and_untilize phase, not a matmul_block target.
  *   KBlockInnerDimFn   per-K-block FMA step count (for unpadded/partial K-blocks).
  *   In0SourceFn        per-K-block in0 CB selector (alternates must share in0's dataformat).
  *   In1BaseOffsetFn    per-K-block in1 base-offset shift within the fronted region.
