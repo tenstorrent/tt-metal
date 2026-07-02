@@ -515,14 +515,21 @@ def _install_device_proj_out_forward(pipe) -> None:
         # scatter_add reads it row-wise so the non-contiguous broadcast is fine.
         scalar_timestep = vision_timesteps[:1] * self.config.timestep_scale
         single_embed = self.time_embedder(self.time_proj(scalar_timestep)).to(target_dtype)
-        packed_timestep_embeds_vision = single_embed.expand(vision_timesteps.shape[0], -1)
         t_after_timeembed = _time.perf_counter() if _hoist_timing_enabled else 0.0
-        packed_tokens_vision = self._apply_timestep_embeds_to_noisy_tokens(
-            packed_tokens=packed_tokens_vision,
-            packed_timestep_embeds=packed_timestep_embeds_vision,
-            noisy_frame_indexes=vision_noisy_frame_indexes,
-            token_shapes=vision_token_shapes,
+
+        # scatter_add requires materializing a [N_noisy, hidden] int64 index (3.7GB at
+        # 720p/189f) — expensive when the embed is uniform across all noisy tokens.
+        # Binary mask avoids the index alloc: noisy tokens (non-conditioning frames) are
+        # packed contiguously after the conditioning frame tokens.
+        import math as _math
+
+        _total_noisy = sum(
+            ni.shape[0] * _math.prod(ts[1:]) for ni, ts in zip(vision_noisy_frame_indexes, vision_token_shapes)
         )
+        _n_gen = packed_tokens_vision.shape[0]
+        _noisy_scale = packed_tokens_vision.new_ones(_n_gen, 1)
+        _noisy_scale[: _n_gen - _total_noisy] = 0.0
+        packed_tokens_vision = packed_tokens_vision + _noisy_scale * single_embed
 
         if _hoist_timing_enabled:
             t_after_vision_pre = _time.perf_counter()
