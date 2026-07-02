@@ -127,6 +127,8 @@ def run_group_norm_DRAM(
     use_input_mask,
     perf_test_mode=False,
     specify_grid=True,
+    input_layout=ttnn.TILE_LAYOUT,
+    output_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -173,7 +175,10 @@ def run_group_norm_DRAM(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    if input_layout == ttnn.TILE_LAYOUT:
+        input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+
+    gn_input_tensor = input_tensor_tilized if input_layout == ttnn.TILE_LAYOUT else input_tensor_row_major
 
     # Create dram group norm params
     [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
@@ -219,13 +224,13 @@ def run_group_norm_DRAM(
         num_itr = 1  # one iter if it is too slow
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
-            input_tensor_tilized,
+            gn_input_tensor,
             num_groups=num_groups,
             input_mask=input_mask_tensor if use_input_mask else None,
             weight=gamma_t,
             bias=beta_t,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_layout=ttnn.TILE_LAYOUT,
+            output_layout=output_layout,
             core_grid=grid_size if specify_grid else None,
             inplace=False,
             num_out_blocks=num_out_blocks if specify_grid else None,
@@ -525,75 +530,46 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     )
 
 
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
 @pytest.mark.parametrize(
-    "grid_size",
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        pytest.param(ttnn.CoreGrid(y=1, x=1), id="no_mcast"),
-        pytest.param(ttnn.CoreGrid(y=2, x=1), id="mcast"),
+        (1, 480, 1, 64, 8, 1, 1, 1),  # issue #26594 repro
+        (8, 768, 1, 512, 32, 2, 8, 8),  # base case
+        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
+        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+        (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
+        (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
+        (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
+        (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
+        (1, 128, 1, 512, 32, 2, 4, 4),
     ],
 )
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("with_affine", [False, True], ids=["no_weight_bias", "weight_bias"])
-@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
-def test_group_norm_row_major_interleaved_input(device, grid_size, output_layout, with_affine, use_welford):
-    """ROW_MAJOR interleaved input must complete and match torch (issue #26594)."""
-    torch.manual_seed(0)
-
-    N, C, H, W, num_groups = 1, 480, 1, 64, 8
-    epsilon = 1e-5
-
-    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
-    torch_bias = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
-
-    torch_output = torch.nn.functional.group_norm(
-        torch_input.float(),
+@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_tile_vs_rm_input(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, input_layout, output_layout
+):
+    run_group_norm_DRAM(
+        device,
+        N,
+        C,
+        H,
+        W,
         num_groups,
-        weight=torch_weight.float() if torch_weight is not None else None,
-        bias=torch_bias.float() if torch_bias is not None else None,
-        eps=epsilon,
-    )
-    torch_output = torch_output.permute(0, 2, 3, 1).view(N, 1, H * W, C)
-
-    input_tensor = ttnn.from_torch(
-        torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C),
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    gamma_t, beta_t = None, None
-    if with_affine:
-        gamma_t, beta_t = ttnn.dram_group_norm_params_from_torch(
-            [torch_weight.float(), torch_bias.float()],
-            C,
-            num_groups,
-            device,
-            core_grid=grid_size,
-            return_mask=False,
-        )
-
-    output_tensor = ttnn.group_norm(
-        input_tensor,
-        num_groups=num_groups,
-        epsilon=epsilon,
-        weight=gamma_t,
-        bias=beta_t,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        core_grid=grid_size,
-        inplace=False,
+        num_out_blocks,
+        cores_y,
+        cores_x,
+        welford_mode,
+        use_input_mask=True,
+        input_layout=input_layout,
         output_layout=output_layout,
-        use_welford=use_welford,
-    )
-
-    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
-
-    assert_numeric_metrics(
-        torch_output,
-        output_tensor,
-        pcc_threshold=0.9999,
-        rtol=0.065,
-        atol=0.065,
-        frobenius_threshold=0.016,
     )
