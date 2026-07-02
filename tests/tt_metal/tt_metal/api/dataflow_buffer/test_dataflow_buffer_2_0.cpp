@@ -954,7 +954,15 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     // The "two DfbGroups" assertion from the legacy test depends on inspecting
     // program.impl() before LaunchProgram; we keep that for the legacy test and
     // make this m2 variant a simpler end-to-end correctness check.
-    EXPECT_EQ(input, output) << "M2 D3: shared DFB pipeline mismatch";
+    //
+    // The shared pipeline runs only on core_b (the decoy claims core_a and is a no-op), so it produces
+    // only the first entries_per_core of the 2*entries_per_core tensor; the out_tensor's second half is
+    // never written. Compare only the produced first half.
+    ASSERT_EQ(input.size(), output.size());
+    const size_t produced = output.size() / 2;
+    input.resize(produced);
+    output.resize(produced);
+    EXPECT_EQ(input, output) << "M2 D3: shared DFB pipeline mismatch (core_b produced half)";
 }
 
 // =====================================================================================
@@ -1257,6 +1265,12 @@ static void run_single_dfb_multicore_2_0(
     CoreCoord grid = device->compute_with_storage_grid_size();
     if (grid.x * grid.y < 2) {
         GTEST_SKIP() << "Multi-core test requires >= 2 Tensix cores";
+    }
+    // DM-DM ALL + implicit sync is unsupported (legacy parity); the single-core path
+    // (run_single_dfb_program_2_0) skips it too. The multicore helper was missing this guard, so the
+    // *_1Sx4A_2_0/ImplicitSyncTrue variant would fail on the device instead of skipping.
+    if (cap == m2::DFBAccessPattern::ALL && implicit_sync) {
+        GTEST_SKIP() << "DM-DM ALL with implicit_sync not supported (legacy parity)";
     }
 
     constexpr uint32_t entry_size = 1024;
