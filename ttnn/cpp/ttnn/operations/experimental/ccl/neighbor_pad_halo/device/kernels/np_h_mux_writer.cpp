@@ -157,6 +157,15 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+
+    // H->W barrier: every H worker (incl. no-neighbor edges) increments barrier_sem on each W-reader core
+    // so the W reader clears its H->W wait after all H workers finish. Intra-device NOC inc (barrier_sem
+    // is per-core L1 at a fixed address). barrier_count on the W side = total H mux workers.
+    for (uint32_t t = 0; t < num_w_barrier_targets; t++) {
+        noc_semaphore_inc(safe_get_noc_addr(w_bar_x[t], w_bar_y[t], barrier_sem, 0), 1);
+    }
+    noc_async_atomic_barrier();
+
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(mux_connection);
         if (is_termination_master) {
