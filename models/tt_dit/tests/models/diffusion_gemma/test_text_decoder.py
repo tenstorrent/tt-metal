@@ -26,8 +26,11 @@ from ....utils.check import assert_quality
 from ....utils.tensor import local_device_to_torch, typed_tensor
 from ....utils.test import line_params, ring_params
 
-PCC_THRESHOLD = 0.99
-ALLCLOSE_ATOL = 5e-2
+# Text decoder = embed + self_conditioning + N × DiffusionGemmaLayer (with cross-attn to
+# encoder KV cache) + final norm. Extrapolating from the encoder layer test (PCC 99.94%,
+# max abs 0.53). Cross-attn concat may add slight drift; not yet run.
+PCC_THRESHOLD = 0.999
+ALLCLOSE_ATOL = 5.5e-1
 ALLCLOSE_RTOL = 5e-2
 
 

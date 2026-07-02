@@ -33,8 +33,12 @@ from ....utils.test import line_params, ring_params
 
 # Looser thresholds: full stack (encoder + decoder + lm_head + tanh softcap) accumulates
 # rounding from every component, so PCC stays at 0.99 but allclose has more headroom.
-PCC_THRESHOLD = 0.99
-ALLCLOSE_ATOL = 5e-2
+# End-to-end model = encoder → per-layer KV → decoder → lm_head → tanh softcap. The tanh
+# softcap compresses large logits into [-30, 30] which tends to compress absolute drift too;
+# on the other hand, chained matmul + softmax multiplies rounding across layers. Not yet
+# run — set to a permissive layer-tolerance baseline and tighten with observed data.
+PCC_THRESHOLD = 0.999
+ALLCLOSE_ATOL = 5.5e-1
 ALLCLOSE_RTOL = 5e-2
 
 

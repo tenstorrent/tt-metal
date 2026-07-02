@@ -24,14 +24,13 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
-# Thresholds calibrated to observed behavior on the demos/gemma4 kernel path:
-# PCC lands ~99.92% and max abs diff ~0.21 with peaked routing (N(0,1.0) router proj weights).
-# PCC 0.998 catches meaningful drift while leaving ~0.001 of headroom for run-to-run bf16
-# rounding jitter; atol=0.25 covers the ~0.21 outlier with slight headroom, rtol=0.05 matches
-# the demos/gemma4 test's tolerance for near-tie topk-selection divergence.
-PCC_THRESHOLD = 0.998
-ALLCLOSE_ATOL = 2.5e-1
-ALLCLOSE_RTOL = 5e-2
+# Observed: PCC 99.9155%, max abs diff 0.212 with peaked routing (N(0,1.0) router proj).
+# The MoE router does softmax → topk → sum-normalize; bf16 near-tie topk decisions can pick
+# different experts vs fp32 and the sparse_matmul accumulates that divergence — hence PCC
+# lands slightly lower than a plain matmul at this scale. Threshold tight to observed.
+PCC_THRESHOLD = 0.999
+ALLCLOSE_ATOL = 2.3e-1
+ALLCLOSE_RTOL = 3e-2
 
 
 @pytest.mark.parametrize(

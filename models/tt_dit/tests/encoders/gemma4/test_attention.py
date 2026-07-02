@@ -20,15 +20,14 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
-PCC_THRESHOLD = 0.999
-# allclose atol/rtol are looser than the module-level defaults on purpose. PCC (the primary
-# statistical correctness check) clears 0.999 on every configuration; the failing cells are
-# isolated near-cancellation outliers in the attention output, common when comparing bf16
-# arithmetic against an fp32 HF reference across chained matmuls + softmax. Compute config
-# is already maxed (HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False, fp32 cos/sin).
-# 0.3 comfortably clears observed 0.25-0.26 outliers with a small headroom for run-to-run drift.
-ALLCLOSE_ATOL = 3e-1
-ALLCLOSE_RTOL = 1e-1
+# Observed on the tuned compute path (HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False,
+# fp32 cos/sin): PCC 99.9545% (sliding) / 99.9645% (full), max abs 0.252 / 0.259.
+# Thresholds sit just below observed with a small headroom for bf16 accumulator jitter
+# across runs. Any regression that drops PCC below 99.95% or shifts a cell beyond 0.28 abs
+# indicates real drift, not noise.
+PCC_THRESHOLD = 0.9995
+ALLCLOSE_ATOL = 2.8e-1
+ALLCLOSE_RTOL = 5e-2
 
 
 @pytest.mark.parametrize(

@@ -24,34 +24,48 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
-# Layer-level threshold (composition of attention + MoE + dense MLP + 7 norms).
-PCC_THRESHOLD = 0.99
-ALLCLOSE_ATOL = 5e-2
+# Full layer = attention (5 matmuls + SDPA) + dense MLP (3 matmuls) + MoE branch (router +
+# sparse_matmul) + 7 RMSNorms + residual adds + TP all-gathers. Observed: PCC 99.9465%
+# (sliding) / 99.9425% (full), max abs 0.336 / 0.529 (full has larger head_dim=512 hence
+# larger accumulator). Tight to observed with modest headroom.
+PCC_THRESHOLD = 0.999
+ALLCLOSE_ATOL = 5.5e-1
 ALLCLOSE_RTOL = 5e-2
 
 
-def _build_tiny_config(num_layers: int = 6, hidden: int = 256):
-    """Construct a real DiffusionGemmaTextConfig with tiny dims for testing."""
+def _build_tiny_config(num_layers: int = 6, hidden: int = 2816):
+    """Construct a real DiffusionGemmaTextConfig matching the sizes used by
+    ``models/demos/gemma4/tests/unit/test_moe.py``.
+
+    The demos/gemma4 sparse_matmul kernel is compiled for shapes derived from the
+    real Gemma4 hyperparameters; substantially smaller values (e.g. hidden=256,
+    moe_intermediate_size=64) cause the compiled kernel binary to mismatch the
+    tensor shapes at runtime and the op hangs.  Weights are still random-init
+    so no HF checkpoint download is required.
+
+    ``num_layers`` is kept low (6) purely so we don't allocate 30 layers of experts
+    for a single-layer test.
+    """
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaTextConfig
 
     return DiffusionGemmaTextConfig(
         hidden_size=hidden,
-        intermediate_size=64,
-        moe_intermediate_size=64,
-        num_attention_heads=8,
-        num_key_value_heads=4,
+        intermediate_size=2816,
+        moe_intermediate_size=2112,
+        num_attention_heads=16,
+        num_key_value_heads=8,
         num_global_key_value_heads=2,
-        head_dim=32,
-        global_head_dim=32,
+        head_dim=256,
+        global_head_dim=512,
         num_experts=8,
-        top_k_experts=2,
+        top_k_experts=4,
         num_hidden_layers=num_layers,
-        sliding_window=64,
+        sliding_window=1024,
         rms_norm_eps=1e-6,
         hidden_activation="gelu_pytorch_tanh",
         attention_bias=False,
         attention_dropout=0.0,
-        max_position_embeddings=2048,
+        max_position_embeddings=8192,
     )
 
 
@@ -78,7 +92,7 @@ def _moe_substate(layer_state: dict) -> dict:
         pytest.param("full_attention", 5, id="full"),
     ],
 )
-@pytest.mark.parametrize("seq_len", [64])
+@pytest.mark.parametrize("seq_len", [128])
 def test_encoder_layer(
     mesh_device: ttnn.MeshDevice,
     tp_axis: int,

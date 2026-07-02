@@ -27,9 +27,12 @@ from ....encoders.gemma4.vision_rope import Gemma4VisionRotaryEmbedding
 from ....utils.check import assert_quality
 from ....utils.test import line_params
 
-PCC_THRESHOLD = 0.9999
-ALLCLOSE_ATOL = 1e-2
-ALLCLOSE_RTOL = 1e-2
+# Vision RoPE is a pure host-side cos/sin table upload — no on-device arithmetic beyond
+# ttnn's fp32 quantization at the boundary. Observed PCC = 100.0000%, max abs diff = 0.0.
+# Thresholds tight to catch any regression that introduces a downcast in get_cos_sin.
+PCC_THRESHOLD = 0.99999
+ALLCLOSE_ATOL = 1e-3
+ALLCLOSE_RTOL = 1e-3
 
 
 @pytest.mark.parametrize(

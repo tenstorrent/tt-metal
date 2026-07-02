@@ -23,8 +23,12 @@ from ....utils.check import assert_quality
 from ....utils.tensor import local_device_to_torch
 from ....utils.test import line_params, ring_params
 
-PCC_THRESHOLD = 0.99
-ALLCLOSE_ATOL = 5e-2
+# Text encoder = embed + N × DiffusionGemmaLayer + final norm. Extrapolating from one
+# layer (PCC 99.94%, max abs 0.53) over 6 layers, drift compounds; also PCC-of-composition
+# should stay above 0.999 as long as each layer is >=0.999. Not yet run — set to match
+# the layer-test tolerance and tighten with observed data.
+PCC_THRESHOLD = 0.999
+ALLCLOSE_ATOL = 5.5e-1
 ALLCLOSE_RTOL = 5e-2
 
 

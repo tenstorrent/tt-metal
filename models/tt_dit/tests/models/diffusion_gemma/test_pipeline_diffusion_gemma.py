@@ -40,7 +40,10 @@ from ....utils.test import line_params, ring_params
 
 MODEL_ID = os.environ.get("DIFFUSIONGEMMA_MODEL_ID", "google/diffusiongemma-26B-A4B-it")
 N_TOKEN_MATCH = 8  # First-N tokens must match HF exactly under seeded sampling.
-PCC_THRESHOLD = 0.99
+# End-to-end pipeline runs the tanh-softcapped logits through a sampler; the softcap compresses
+# most drift into the ~[-30, 30] band. First-N token-ID match under a seeded categorical sampler
+# is the primary correctness signal (line ~167). PCC is a secondary check.
+PCC_THRESHOLD = 0.999
 PROMPT = "Briefly: what is the capital of France?"
 MAX_NEW_TOKENS = 32
 SEED = 0

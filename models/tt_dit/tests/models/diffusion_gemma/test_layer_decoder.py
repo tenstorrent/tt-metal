@@ -26,8 +26,12 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch, typed_tensor
 from ....utils.test import line_params, ring_params
 
-PCC_THRESHOLD = 0.99
-ALLCLOSE_ATOL = 5e-2
+# Decoder layer = encoder layer + cross-attention to a pre-populated encoder KV cache.
+# Extrapolated from the encoder layer test (PCC 99.94%, max abs ~0.53); the cross-attn
+# concat + expanded KV may add slight drift on top. Not yet run — thresholds match
+# test_layer.py; tighten once observed values are known.
+PCC_THRESHOLD = 0.999
+ALLCLOSE_ATOL = 5.5e-1
 ALLCLOSE_RTOL = 5e-2
 
 

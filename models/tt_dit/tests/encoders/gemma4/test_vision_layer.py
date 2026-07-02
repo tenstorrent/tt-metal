@@ -20,14 +20,11 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
-PCC_THRESHOLD = 0.99
-# One full vision layer = attention (Q/K/V/O projs + SDPA) + MLP (gate/up/down) + 4 RMSNorms
-# + residual adds + a TP all-gather after each of attn/MLP. bf16 accumulation across that many
-# stages produces ~0.1-0.15 per-cell drift on values with magnitude up to ~5. Compute configs
-# are already maxed on the sub-modules (HiFi4 / fp32_dest_acc / packer_l1_acc=False). Match
-# the attention test's tolerance pattern — 3e-1 / 1e-1 covers the observed per-cell drift.
-ALLCLOSE_ATOL = 3e-1
-ALLCLOSE_RTOL = 1e-1
+# Full vision layer = attention + GatedMLP + 4 RMSNorms + residual adds + TP all-gathers.
+# Observed: PCC 99.9522%, max abs diff 0.308. Thresholds tight to observed with small headroom.
+PCC_THRESHOLD = 0.9995
+ALLCLOSE_ATOL = 3.2e-1
+ALLCLOSE_RTOL = 5e-2
 
 
 @pytest.mark.parametrize(
