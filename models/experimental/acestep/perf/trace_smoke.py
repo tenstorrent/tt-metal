@@ -42,10 +42,20 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _try_stage(name, device, eager_fn, tracer_fn, inputs, gate=0.99):
-    """Run eager once, then capture+replay via Tracer; compare. inputs: dict of ttnn tensors."""
+    """Run eager once, then capture+replay via Tracer; compare. inputs: dict of ttnn tensors.
+
+    A warmup eager call happens BEFORE the Tracer captures: it forces any lazy weight loads /
+    first-forward device allocations to occur OUTSIDE the trace region (ttnn forbids writes/allocs
+    during capture). Equivalent to LTX/SD35 pre-allocating consts before begin_trace_capture.
+    """
     try:
         eager_out = eager_fn(**{k: ttnn.clone(v) if isinstance(v, ttnn.Tensor) else v for k, v in inputs.items()})
         eager_t = ttnn.to_torch(eager_out).float()
+
+        # Warmup: trigger lazy weight loads outside the capture region.
+        warm = tracer_fn(**{k: ttnn.clone(v) if isinstance(v, ttnn.Tensor) else v for k, v in inputs.items()})
+        if isinstance(warm, ttnn.Tensor):
+            ttnn.deallocate(warm)
 
         tracer = Tracer(tracer_fn, device=device, prep_run=False, clone_prep_inputs=False)
         tracer(**inputs)  # capture (+ execute on capture)
