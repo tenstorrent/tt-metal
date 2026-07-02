@@ -71,8 +71,10 @@ namespace ttnn::experimental {
 // (block_cyclic_sp_axis) and passes the per-shard chunk length (block_cyclic_chunk_local); `sp` is DERIVED
 // from the mesh shape on that axis, so a caller cannot pass an sp that disagrees with the device.
 // block_cyclic_chunk_local must be q_isl (seq sharded only on the SP axis) or tp*q_isl (tp = mesh/sp). Both
-// set together, or neither = contiguous K (no remap); sp==1 is the identity. NOTE: seq sharded across the TP
-// axis too (chunk_local == tp*q_isl, tp>1) is not yet supported.
+// set together, or neither = contiguous K (no remap); sp==1 is the identity. Seq sharded across BOTH axes
+// (chunk_local == tp*q_isl, tp>1) is allowed ONLY with cluster_axis=None (flat row-major linearization over
+// all devices == a row-major nested 2D seq shard); with a NAMED cluster_axis it is rejected (chunk_start
+// would miss the second axis's seq offset).
 
 // DeepSeek-V3.2 DSA / GLM-5 (ttnn.experimental.indexer_score_dsa):
 //   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]

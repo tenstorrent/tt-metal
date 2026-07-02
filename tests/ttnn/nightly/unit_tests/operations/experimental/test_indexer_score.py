@@ -1581,6 +1581,41 @@ def test_indexer_score_qb_block_cyclic(mesh_device, case_id, heads):
     assert_indexer_match(out_t, ref, QB_CHUNK, QB_T, check_neg=True)
 
 
+# ---- Q sequence sharded across BOTH mesh axes via cluster_axis=None (block_cyclic_chunk_local == tp*q_isl) ----
+# On a 2x2 mesh with K block-cyclic over ONE axis (sp=2, tp=2), Q's sequence is split across all 4 devices.
+# cluster_axis=None ranks device (a,b) by its row-major position in the device list (a*B+b), so the flat
+# linearization IS a row-major nested 2D seq shard: device r's q-row 0 sits at base + r*Sq. For a slab-aligned
+# base every device stays inside its slab (no straddle), so the flat shard + block-cyclic remap reassembles to
+# a plain contiguous natural-order scoring of the whole chunk. A NAMED cluster_axis is rejected (its rank would
+# miss the second axis's offset).
+@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["2x2"], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_both_axes_seq(mesh_device, case_id, heads, expect_error):
+    """Q seq sharded across both axes (all 4 devices) with cluster_axis=None: chunk_local == tp*q_isl (tp=2),
+    which the guard allows only for cluster_axis=None. K block-cyclic over sp=2, aligned base -> no straddle,
+    so the reassembled score equals the contiguous natural-order reference. Also asserts a NAMED cluster_axis
+    (which would mis-rank) is still rejected."""
+    sp, chunk_global, t = 2, 256, 512  # cl=128, Sq per device = 256/4 = 64 (2 tiles); 2 chunks -> >1 slab/shard
+    q_g, k_nat, w_g = _global_inputs(heads, chunk_global, t, seed=42)
+    k_bc = _to_slab(k_nat, sp, chunk_global)
+    shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # flat row-major over all 4 devices == None's device order
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    kw = dict(block_cyclic_sp_axis=0, block_cyclic_chunk_local=chunk_global // sp, program_config=glx_config(heads))
+
+    # cluster_axis=None -> Q linearized row-major over all 4 devices (both axes). chunk_start OMITTED ->
+    # base = T - global_chunk = 256 (slab-aligned). Reassembled == contiguous natural scoring at base.
+    out = ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cluster_axis=None, **kw)
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    ref = indexer_score_dsa_ref(q_g, k_nat, w_g, t - chunk_global)
+    assert_indexer_match(out_t, ref, chunk_global, t, check_neg=True)
+
+    # A NAMED cluster_axis with tp*q_isl is rejected (rank would miss the second axis's seq offset).
+    with expect_error(RuntimeError, "NAMED cluster_axis"):
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cluster_axis=0, **kw)
+
+
 @pytest.mark.parametrize("mesh_device", [(QB_SP, 1)], ids=["sp4"], indirect=True)
 def test_indexer_score_qb_msa_block_cyclic(mesh_device):
     """MSA (raw dot, constant scale, num_groups=1) over a REAL SP=4 block-cyclic K cache: sp read from

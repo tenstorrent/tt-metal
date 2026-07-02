@@ -73,8 +73,9 @@ void bind_indexer_score(nb::module_& mod) {
             block_cyclic_chunk_local: optional int, REQUIRED with block_cyclic_sp_axis.
                 The per-shard chunk length (chunk_size_global / sp). Cross-checked
                 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
-                tp*q_isl (tp = mesh_size/sp). NOTE: the tp*q_isl case with tp>1 (seq
-                also sharded across the TP axis) is not yet supported.
+                tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp>1 (seq sharded
+                across BOTH axes) is allowed only with cluster_axis=None (flat row-major
+                linearization over all devices); with a named cluster_axis it is rejected.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",

@@ -512,13 +512,17 @@ ttnn::Tensor launch_indexer_score(
             chunk_local,
             Sq,
             Sq * tp);
-        // Seq sharded across the TP axis too (chunk_local == tp*q_isl with tp > 1) needs the per-device
-        // chunk_start to fold in the TP-axis seq offset; indexer's chunk_start ranks only along cluster_axis,
-        // so guard that case rather than silently mis-masking. (Follow-up: SP-on-both-axes chunk_start.)
+        // Seq sharded across BOTH axes (chunk_local == tp*q_isl, tp > 1) is allowed ONLY with cluster_axis
+        // unset: then chunk_start ranks device (a,b) by its row-major position in the full device list
+        // (a*B+b), giving each its true position -- i.e. the flat linearization IS a row-major nested 2D seq
+        // shard, and the per-device offset/straddle come out correct. With a NAMED cluster_axis the rank is
+        // only that axis's coord, so it misses the other axis's seq offset and chunk_start would be wrong --
+        // reject that.
         TT_FATAL(
-            !(chunk_local == Sq * tp && tp > 1),
-            "indexer_score: block-cyclic with seq sharded across the TP axis (block_cyclic_chunk_local == "
-            "tp*q_isl, tp={}) is not yet supported -- chunk_start deduction handles only seq on the SP axis",
+            !(chunk_local == Sq * tp && tp > 1 && cluster_axis.has_value()),
+            "indexer_score: block_cyclic_chunk_local == tp*q_isl (tp={} > 1) with a NAMED cluster_axis is not "
+            "supported -- chunk_start would miss the second axis's seq offset. To seq-shard across both axes, "
+            "use cluster_axis=None (flat row-major linearization over all devices).",
             tp);
         // Internal layout keeps the GLOBAL chunk (sp*chunk_local) so the reader + factory stay byte-identical.
         if (sp > 1) {
