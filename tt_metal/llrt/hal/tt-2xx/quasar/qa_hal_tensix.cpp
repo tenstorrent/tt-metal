@@ -323,7 +323,7 @@ HalCoreInfoType create_dispatch_mem_map() {
             // DM firmware is linked/loaded at MEM_DM_FIRMWARE_BASE (main.ld); per-DM fw_base_addr is the
             // cq-kernel link/load slot only. Reset still boots via JAL from L1[0] into firmware.
             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
-            .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+            .memory_load = ll_api::memory::Loading::CONTIGUOUS,
         });
     }
 

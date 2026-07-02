@@ -110,7 +110,25 @@ public:
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
+                DeviceAddr kn_text = MEM_KERNEL_BASE;
+                if (params.core_type == HalProgrammableCoreType::DISPATCH) {
+                    static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
+                        MEM_DISPATCH_DM0_KERNEL_BASE,
+                        MEM_DISPATCH_DM1_KERNEL_BASE,
+                        MEM_DISPATCH_DM2_KERNEL_BASE,
+                        MEM_DISPATCH_DM3_KERNEL_BASE,
+                        MEM_DISPATCH_DM4_KERNEL_BASE,
+                        MEM_DISPATCH_DM5_KERNEL_BASE,
+                        MEM_DISPATCH_DM6_KERNEL_BASE,
+                        MEM_DISPATCH_DM7_KERNEL_BASE,
+                    };
+                    static_assert(std::size(dispatch_dm_kernel_bases) == NUM_DM_CORES);
+                    if (params.processor_id >= NUM_DM_CORES) {
+                        TT_THROW("Invalid dispatch DM processor id {}", params.processor_id);
+                    }
+                    kn_text = dispatch_dm_kernel_bases[params.processor_id];
+                }
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
