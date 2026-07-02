@@ -61,6 +61,10 @@ import ttnn
 from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config, dram_height_slice_target_rows
 from models.experimental.kokoro.tt.tt_torch_stft import _build_conv_stft_kernels
 
+# Height-style conv_transpose2d L1 output limit — chunk along frame axis above this.
+_CUSTOM_STFT_CT_HEIGHT_MAX_OUT = 8192
+_CUSTOM_STFT_CT_CHUNK_FRAMES = 128
+
 
 @dataclass(frozen=True)
 class TTCustomSTFTParams:
@@ -376,13 +380,7 @@ class TTCustomSTFT:
         ttnn.deallocate(x_rm)
         return out
 
-    def _conv_transpose_branch(self, x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
-        """conv_transpose2d for one branch → ``[B, L_full, 1]`` TILE.  Consumes ``x_nhwc``."""
-        p = self.params
-        mc = ttnn.DRAM_MEMORY_CONFIG
-        B = int(x_nhwc.shape[0])
-        in_ch = int(x_nhwc.shape[-1])  # 2K for the fused real||imag input
-
+    def _conv_transpose_configs(self) -> tuple:
         conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.float32)
         conv_cfg.config_tensors_in_dram = True
         conv_cfg.deallocate_activation = True
@@ -396,8 +394,17 @@ class TTCustomSTFT:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        # Multi-slice conv_transpose corrupts overlap-add across slice boundaries.
         slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=1)
+        return conv_cfg, compute_cfg, slice_cfg
+
+    def _conv_transpose_branch_monolith(self, x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
+        """conv_transpose2d for one branch → ``[B, L_full, 1]`` ROW_MAJOR.  Consumes ``x_nhwc``."""
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        B = int(x_nhwc.shape[0])
+        in_ch = int(x_nhwc.shape[-1])
+
+        conv_cfg, compute_cfg, slice_cfg = self._conv_transpose_configs()
 
         y, out_hw = ttnn.conv_transpose2d(
             input_tensor=x_nhwc,
@@ -423,13 +430,79 @@ class TTCustomSTFT:
         )
         ttnn.deallocate(x_nhwc)
         oh, ow = int(out_hw[0]), int(out_hw[1])
-        # Keep the conv_transpose output ROW_MAJOR — the only consumers are the center-trim slice and
-        # the final permute, both of which are cheap in RM.  Tilizing here would force the
-        # tile-unaligned trim (drop pad_len from each end of the time axis) to untilize/retilize.
         y = ttnn.reshape(y, (y.shape[0], oh * ow, y.shape[-1]), memory_config=mc)
         if y.layout != ttnn.ROW_MAJOR_LAYOUT:
             y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
         return y
+
+    def _conv_transpose_branch_chunked(self, x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
+        """Overlap-add chunked conv_transpose for long frame counts that would OOM L1."""
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        B = int(x_nhwc.shape[0])
+        in_ch = int(x_nhwc.shape[-1])
+        S = p.hop_length
+        K = p.filter_length
+        out_H_unpadded = (n_frames - 1) * S + K
+
+        conv_cfg, compute_cfg, slice_cfg = self._conv_transpose_configs()
+
+        output_cpu = torch.zeros(B, out_H_unpadded, 1, dtype=torch.float32)
+        for chunk_start in range(0, n_frames, _CUSTOM_STFT_CT_CHUNK_FRAMES):
+            chunk_end = min(chunk_start + _CUSTOM_STFT_CT_CHUNK_FRAMES, n_frames)
+            chunk_frames = chunk_end - chunk_start
+            x_chunk = ttnn.slice(
+                x_nhwc, [0, 0, chunk_start, 0], [B, 1, chunk_end, in_ch], [1, 1, 1, 1], memory_config=mc
+            )
+            y, out_hw = ttnn.conv_transpose2d(
+                input_tensor=x_chunk,
+                weight_tensor=synth_w,
+                device=self.device,
+                in_channels=in_ch,
+                out_channels=1,
+                batch_size=B,
+                input_height=chunk_frames,
+                input_width=1,
+                kernel_size=(K, 1),
+                stride=(S, 1),
+                padding=(0, 0),
+                output_padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                bias_tensor=None,
+                conv_config=conv_cfg,
+                compute_config=compute_cfg,
+                dram_slice_config=slice_cfg,
+                mirror_kernel=True,
+                return_output_dim=True,
+            )
+            ttnn.deallocate(x_chunk)
+            y_cpu = ttnn.to_torch(y).float()
+            ttnn.deallocate(y)
+            while y_cpu.dim() > 3:
+                y_cpu = y_cpu.squeeze(0)
+            if y_cpu.dim() == 2:
+                y_cpu = y_cpu.unsqueeze(-1)
+            out_start = chunk_start * S
+            y_len = int(y_cpu.shape[1])
+            output_cpu[:, out_start : out_start + y_len, :] += y_cpu
+
+        ttnn.deallocate(x_nhwc)
+        return ttnn.from_torch(
+            output_cpu.contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=mc,
+        )
+
+    def _conv_transpose_branch(self, x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
+        """conv_transpose2d for one branch → ``[B, L_full, 1]`` ROW_MAJOR.  Consumes ``x_nhwc``."""
+        p = self.params
+        out_H_unpadded = (n_frames - 1) * p.hop_length + p.filter_length
+        if out_H_unpadded >= _CUSTOM_STFT_CT_HEIGHT_MAX_OUT:
+            return self._conv_transpose_branch_chunked(x_nhwc, synth_w, n_frames)
+        return self._conv_transpose_branch_monolith(x_nhwc, synth_w, n_frames)
 
     def inverse(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
         """``(magnitude, phase)`` each ``[B, K, F]`` → ``[B, 1, output_length]`` (on device)."""

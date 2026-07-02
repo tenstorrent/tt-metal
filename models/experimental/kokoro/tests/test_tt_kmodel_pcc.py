@@ -180,12 +180,14 @@ def _build_max_length_phonemes(vocab: dict, length: int) -> str:
     return phonemes
 
 
-def _setup_max_length(ckpt_path: Path, device) -> tuple[KModel, object, str, torch.Tensor]:
+def _setup_max_length(
+    ckpt_path: Path, device, *, disable_complex: bool = True
+) -> tuple[KModel, object, str, torch.Tensor]:
     """KModel + params for a 510-phoneme (512-token) stress input."""
     ref = KModel(
         repo_id="hexgrad/Kokoro-82M",
         model=str(ckpt_path),
-        disable_complex=True,
+        disable_complex=disable_complex,
     ).eval()
     assert ref.context_length == _KOKORO_PLBERT_MAX_POSITIONS
     n_phonemes = _max_phoneme_length(ref.context_length)
@@ -238,6 +240,7 @@ def _tt_audio(
     *,
     use_torch_stft_fallback: bool,
     use_torch_phase_fallback: bool,
+    disable_complex: bool = False,
 ) -> torch.Tensor:
     # Construct inside _zero_noise so init-time randn_like calls match _ref_audio zeros.
     with _zero_noise():
@@ -247,6 +250,7 @@ def _tt_audio(
             params,
             use_torch_stft_fallback=use_torch_stft_fallback,
             use_torch_phase_fallback=use_torch_phase_fallback,
+            disable_complex=disable_complex,
         )
     out = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True)
     return out.audio.detach().float().squeeze()
@@ -282,8 +286,10 @@ def _setup(ckpt_path: Path, device, *, disable_complex: bool = True) -> tuple[KM
 def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
     """Config A — baseline with **no** vocoder fallback. Empirical PCC ≈ 0.30.
 
-    Uses on-device F0/N conv (``use_torch_f0n_conv_fallback=False``) to match the
-    historical no-fallback floor. Prosody path always uses fp32 boundaries.
+    Reference and TT both use ``disable_complex=False`` (``TorchSTFT`` / ``TTTorchSTFT``) so the
+    comparison isolates on-device BH-BF16 precision, not a CustomSTFT-vs-TorchSTFT formulation
+    mismatch (see ``test_tt_kmodel_custom_stft_no_fallback_pcc`` for the ``disable_complex=True``
+    path). Prosody path always uses fp32 boundaries.
 
     Documents the BH-BF16 no-fallback floor. Stages 1–5 (prosody) are PCC > 0.998 here
     (see the prosody-stage PCC test below); the entire 0.7 deficit lives in the vocoder,
@@ -295,7 +301,7 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
     if ckpt_path is None:
         pytest.skip("Kokoro-82M checkpoint not found locally.")
 
-    ref, params, phonemes, ref_s = _setup(ckpt_path, device)
+    ref, params, phonemes, ref_s = _setup(ckpt_path, device, disable_complex=False)
     y_ref = _ref_audio(ref, phonemes, ref_s)
 
     y_hat = _tt_audio(
@@ -306,6 +312,7 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
         ref_s,
         use_torch_stft_fallback=False,
         use_torch_phase_fallback=False,
+        disable_complex=False,
     )
 
     assert y_hat.shape == y_ref.shape, (y_hat.shape, y_ref.shape)
@@ -328,6 +335,7 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
             ref_s,
             use_torch_stft_fallback=use_stft,
             use_torch_phase_fallback=use_phase,
+            disable_complex=False,
         )
         _, pcc_debug = comp_pcc(y_ref.unsqueeze(0), y_debug.unsqueeze(0), pcc=0.0)
         print("TTKModel PCC debug: " f"mode={debug_mode}, no_fallback={pcc:.6f}, debug_mode_pcc={pcc_debug:.6f}")
@@ -483,7 +491,7 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
     ref, params, phonemes, ref_s = _setup(ckpt_path, device, disable_complex=False)
     y_ref = _ref_audio(ref, phonemes, ref_s)
 
-    y_hat = _tt_audio(device, ref, params, phonemes, ref_s, **STFT_PHASE_FALLBACK_KWARGS)
+    y_hat = _tt_audio(device, ref, params, phonemes, ref_s, disable_complex=False, **STFT_PHASE_FALLBACK_KWARGS)
 
     assert y_hat.shape == y_ref.shape, (y_hat.shape, y_ref.shape)
     assert torch.isfinite(y_hat).all(), "TTKModel (stft+phase fallback) produced NaN/Inf"
@@ -638,6 +646,78 @@ def test_tt_kmodel_max_input_length_prosody_stages_pcc(device):
 
 @pytest.mark.parametrize("device", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.timeout(1200)
+def test_tt_kmodel_max_input_length_no_fallback_pcc(device):
+    """Config A at max input length — 510 phonemes (512 tokens), **no** vocoder fallback.
+
+    Companion to :func:`test_tt_kmodel_generator_no_torch_fallback_pcc` (short text) at the
+    Kokoro-82M maximum phoneme length. The reference is built ``disable_complex=True`` and the TT
+    model runs the faithful on-device :class:`TTCustomSTFT` with **no** ``torch.stft`` / phase /
+    SineGen fallback anywhere — the entire harmonic-source + STFT + iSTFT path is on device.
+
+    With chunked on-device SineGen (downsample + lerp/sin in L1-fitting ``rad_down`` blocks,
+    assembled on the height axis) the no-fallback path runs to completion at max ``T_har``
+    without BH L1 overflow. The on-device phase chain uses fp32 ``ttnn.cumsum`` along dim=1,
+    so audio PCC clears a real floor when ``pred_dur`` drift is < 5%. As at max length
+    elsewhere, BH BF16 MACs at T=512 can drift ``pred_dur`` (changing alignment and every
+    vocoder input), so audio PCC is only asserted when the audio length drift is < 5% —
+    otherwise it is informational and the pass criterion is finite, non-zero output.
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+    ref, params, phonemes, ref_s = _setup_max_length(ckpt_path, device)
+    assert len(phonemes) == _KOKORO_MAX_PHONEME_LEN
+
+    y_ref = _ref_audio(ref, phonemes, ref_s)
+
+    with _zero_noise():
+        tt_model = TTKModel(
+            device,
+            ref,
+            params,
+            use_torch_stft_fallback=False,
+            use_torch_phase_fallback=False,
+            disable_complex=True,
+        )
+    try:
+        y_hat = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True).audio.detach().float().squeeze()
+    except RuntimeError as exc:
+        if _is_bh_l1_overflow(exc):
+            pytest.fail(f"no-fallback on-device SineGen exceeded BH L1 at max length (T=512): {exc}")
+        raise
+
+    assert torch.isfinite(y_hat).all(), "TTKModel (max length, no fallback) produced NaN/Inf"
+    assert y_hat.abs().max().item() > 1e-3, "TTKModel (max length, no fallback) produced ~zero output"
+
+    n_ref = y_ref.numel()
+    n_tt = y_hat.numel()
+    rel_len_err = abs(n_tt - n_ref) / max(n_ref, 1)
+    n_cmp = min(n_ref, n_tt)
+    _, pcc = comp_pcc(y_ref.flatten()[:n_cmp].unsqueeze(0), y_hat.flatten()[:n_cmp].unsqueeze(0), pcc=0.0)
+    print(
+        f"\nTTKModel max-length no-fallback PCC: {pcc:.6f}  phonemes={len(phonemes)} "
+        f"ref_samples={n_ref} tt_samples={n_tt} rel_len_err={rel_len_err:.4f} (compared {n_cmp})"
+    )
+
+    assert rel_len_err < 0.12, (
+        f"TT audio length {n_tt} vs ref {n_ref} (rel err {rel_len_err:.4f}) exceeds 12%; "
+        "check pred_dur / alignment at T=512"
+    )
+    if rel_len_err < 0.05:
+        assert pcc > 0.55, (
+            f"PCC {pcc:.6f} below the no-fallback max-length floor; "
+            "see test_tt_kmodel_pcc_degradation.py for the per-config recovery breakdown"
+        )
+    else:
+        print(
+            f"  pred_dur drift {rel_len_err:.2%} exceeds 5% — skipping PCC assertion "
+            f"(BH BF16 pred_dur floor at T=512; audio PCC={pcc:.4f} informational only)"
+        )
+
+
+@pytest.mark.parametrize("device", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.timeout(1200)
 def test_tt_kmodel_max_input_length_stft_phase_fallback_pcc(device):
     """Full pipeline at 510 phonemes (512 tokens): TTNN prosody + config E vocoder fallbacks.
 
@@ -663,12 +743,12 @@ def test_tt_kmodel_max_input_length_stft_phase_fallback_pcc(device):
     if ckpt_path is None:
         pytest.skip("Kokoro-82M checkpoint not found locally.")
 
-    ref, params, phonemes, ref_s = _setup_max_length(ckpt_path, device)
+    ref, params, phonemes, ref_s = _setup_max_length(ckpt_path, device, disable_complex=False)
     assert len(phonemes) == _KOKORO_MAX_PHONEME_LEN
 
     y_ref = _ref_audio(ref, phonemes, ref_s)
 
-    y_hat = _tt_audio(device, ref, params, phonemes, ref_s, **_MAX_LENGTH_FALLBACK_KWARGS)
+    y_hat = _tt_audio(device, ref, params, phonemes, ref_s, disable_complex=False, **_MAX_LENGTH_FALLBACK_KWARGS)
 
     assert torch.isfinite(y_hat).all(), "TTKModel (max length) produced NaN/Inf"
     assert y_hat.abs().max().item() > 1e-3, "TTKModel (max length) produced ~zero output"

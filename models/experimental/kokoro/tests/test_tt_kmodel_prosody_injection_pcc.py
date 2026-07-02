@@ -163,7 +163,7 @@ def test_tt_kmodel_teacher_forcing_waveform_pcc(device):
         assert y_tf.abs().max().item() > 1e-3, f"{name}: teacher-forced audio is ~zero"
         pcc_tf = _audio_pcc(y_ref, y_tf)
 
-        y_full = _tt_audio(device, ref, params, phonemes, ref_s, **kw)
+        y_full = _tt_audio(device, ref, params, phonemes, ref_s, disable_complex=False, **kw)
         pcc_full = _audio_pcc(y_ref, y_full)
 
         rows[name] = {"teacher_forced": pcc_tf, "full_pipeline": pcc_full}
