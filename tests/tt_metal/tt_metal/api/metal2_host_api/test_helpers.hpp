@@ -22,6 +22,8 @@
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "impl/context/metal_context.hpp"
+
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
 // objects for unit tests. This cuts boilerplate in a unit testing context.
 //
@@ -83,7 +85,7 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_thre
         .num_threads = num_threads,
         .hw_config =
             DataMovementHardwareConfig{
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
+                DataMovementGen2Config{},
             },
     };
 }
@@ -98,10 +100,9 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .num_threads = 1,
         .hw_config =
             DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = processor,
-                    },
+                DataMovementGen1Config{
+                    .processor = processor,
+                },
             },
     };
 }
@@ -115,7 +116,7 @@ inline KernelSpec MakeMinimalRoleDMKernel(const std::string& name, DataMovementR
         .num_threads = 1,
         .hw_config =
             DataMovementHardwareConfig{
-                .gen1_config = DataMovementHardwareConfig::Gen1Config::create_from_role(role),
+                DataMovementGen1Config::create_from_role(role),
             },
     };
 }
@@ -126,13 +127,15 @@ inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint32_t num
         .unique_id = KernelSpecName{name},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        // Engage both sub-configs so tests can populate whichever matches their mock arch
-        // (ProgramSpecTestQuasar → gen2_config, ProgramSpecTestGen1 → gen1_config).
+        // Hold the sub-config matching the current (mock) arch; the mock fixtures set the arch via
+        // configure_mock_mode (ProgramSpecTestQuasar → Gen2, ProgramSpecTestGen1 → Gen1).
         .hw_config =
-            ComputeHardwareConfig{
-                .gen1_config = ComputeHardwareConfig::Gen1Config{},
-                .gen2_config = ComputeHardwareConfig::Gen2Config{},
-            },
+            [] {
+                if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                    return ComputeHardwareConfig{ComputeGen2Config{}};
+                }
+                return ComputeHardwareConfig{ComputeGen1Config{}};
+            }(),
     };
 }
 

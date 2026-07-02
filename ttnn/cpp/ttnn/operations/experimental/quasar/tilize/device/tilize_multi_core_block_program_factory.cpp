@@ -186,8 +186,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         TensorParameter{.unique_id = BLK_OUTPUT_TENSOR, .spec = output.tensor_spec()},
     };
 
-    ComputeHardwareConfig compute_hw_template{
-        .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
+    ComputeHardwareConfig compute_hw_template{ComputeGen2Config{.fp32_dest_acc_en = fp32_llk_acc}};
 
     uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
     for (const auto& g : groups) {
@@ -243,9 +242,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                       "sub_block_width_size",
                       "single_sub_block_size_row_arg"}},
             .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
         });
 
         // Writer: consumes c_16 (out); writes output tensor.
@@ -262,15 +259,13 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
             .runtime_arg_schema =
                 {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
             .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).
         ComputeHardwareConfig compute_hw = compute_hw_template;
         if (fp32_llk_acc) {
-            compute_hw.gen2_config->unpack_to_dest_mode = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
+            std::get<ComputeGen2Config>(compute_hw).unpack_to_dest_mode = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
         }
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,

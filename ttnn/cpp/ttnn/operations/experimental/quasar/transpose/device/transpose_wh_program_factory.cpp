@@ -153,9 +153,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
             .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
         };
 
         KernelSpec writer_spec{
@@ -177,17 +175,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
             .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         };
 
-        ComputeHardwareConfig compute_cfg{
-            .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+        ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
         if (src_is_float32) {
             // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
             // on the unpack-to-dest path; both feed the transpose.
-            compute_cfg.gen2_config->unpack_to_dest_mode = {
+            std::get<ComputeGen2Config>(compute_cfg).unpack_to_dest_mode = {
                 {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
                 {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
         }
@@ -257,9 +252,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"}},
             .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::READER)},
+                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::READER)},
         };
 
         KernelSpec writer_spec{
@@ -273,15 +266,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .compile_time_args = {{"page_size", dst_single_tile_size}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
             .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config::create_from_role(DataMovementRoleHint::WRITER)},
+                DataMovementHardwareConfig{DataMovementGen1Config::create_from_role(DataMovementRoleHint::WRITER)},
         };
 
-        ComputeHardwareConfig compute_cfg{
-            .gen2_config = ComputeHardwareConfig::Gen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
+        ComputeHardwareConfig compute_cfg{ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en}};
         if (src_is_float32) {
-            compute_cfg.gen2_config->unpack_to_dest_mode = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+            std::get<ComputeGen2Config>(compute_cfg).unpack_to_dest_mode = {
+                {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
         }
 
         KernelSpec compute_spec{

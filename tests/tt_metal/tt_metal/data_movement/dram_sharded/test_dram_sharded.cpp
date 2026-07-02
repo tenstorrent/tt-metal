@@ -114,14 +114,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
         .compile_time_args = cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = named_rtas},
         .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+            [&] {
+                if (device->arch() == tt::ARCH::QUASAR) {
+                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
+                }
+                return DataMovementHardwareConfig{DataMovementGen1Config{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                }};
+            }(),
     };
 
     ProgramSpec spec{
