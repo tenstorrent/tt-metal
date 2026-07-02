@@ -63,16 +63,14 @@ class LTXDistilledPipeline(LTXPipeline):
         denoise_mask: torch.Tensor | None,
         sigma: torch.Tensor,
         seed: int,
-        noise_dtype: torch.dtype,
     ) -> torch.Tensor:
         """GaussianNoiser (ltx_core): ``noise·(mask·σ) + base·(1−mask·σ)``.
 
         ``denoise_mask`` None is the plain forward step (mask ≡ 1); a per-token mask holding
-        ``1−strength`` at the conditioning tokens pins them toward ``base``. ``noise_dtype`` is
-        the RNG draw precision (bf16 for the pure-noise T2V start, fp32 elsewhere) and is
-        load-bearing: it reproduces prior seeds bit-for-bit."""
+        ``1−strength`` at the conditioning tokens pins them toward ``base``. Noise is drawn at
+        bf16 — the device latent dtype — matching the reference, which draws at ``latent.dtype``."""
         torch.manual_seed(seed)
-        noise = torch.randn(base.shape, dtype=noise_dtype).to(base.dtype)
+        noise = torch.randn(base.shape, dtype=torch.bfloat16).to(base.dtype)
         scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
         return noise * scaled_mask + base * (1.0 - scaled_mask)
 
@@ -387,17 +385,14 @@ class LTXDistilledPipeline(LTXPipeline):
             else:
                 base_v = torch.zeros(B, video_N_real, self.in_channels)
             base_v[:, : i2v.n_cond, :] = i2v.clean_latent[:, : i2v.n_cond, :]
-            noise_dtype = torch.float32
         elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
             base_v = initial_video_latent.float()
             assert (
                 base_v.shape[1] == video_N_real
             ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
-            noise_dtype = torch.float32
-        else:  # T2V S1: pure noise from zeros (bf16 draw, kept for seed reproducibility)
+        else:  # T2V S1: pure noise from zeros
             base_v = torch.zeros(B, video_N_real, self.in_channels)
-            noise_dtype = torch.bfloat16
-        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed, noise_dtype)
+        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
 
         if video_N > video_N_real:
             video_lat = torch.zeros(B, video_N, self.in_channels)
