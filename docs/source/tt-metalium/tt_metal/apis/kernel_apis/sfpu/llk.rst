@@ -255,8 +255,8 @@ available:
   * U32 - (vUInt), 32-bit unsigned integer
   * U16 - (vUInt16), 16-bit unsigned integer
   * SM32 - (vSMag), 32-bit sign-magnitude integer
-  * SM16 - (vSMag16), 16-bit sign-magitude integer
-  * M32 - (vMag), 32-bit maginitude only integer
+  * SM16 - (vSMag16), 16-bit sign-magnitude integer
+  * M32 - (vMag), 32-bit magnitude only integer
 
 On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
@@ -493,11 +493,11 @@ Swaps the values of ``a`` and ``b``.  Note that this uses the
 
 .. code-block:: c++
 
-    {vFloat,vSMag} min({vFloat,vSmag} a, {vFloat,vSmag} b);
+    {vFloat,vSMag} min({vFloat,vSMag} a, {vFloat,vSmag} b);
     vFloat min(vFloat a, float b);
-    {vFloat,vSMag} max({vFloat,vSmag} a, {vFloat,vSmag} b);
+    {vFloat,vSMag} max({vFloat,vSMag} a, {vFloat,vSmag} b);
     vFloat max(vFloat a, float b);
-    {vFloat,vSMag} clamp({vFloat,vSmag} a, {vFloat,vSmag} lower, {vFloat,vSmag} upper);
+    {vFloat,vSMag} clamp({vFloat,vSMag} a, {vFloat,vSmag} lower, {vFloat,vSmag} upper);
     vFloat clamp(vFloat a, float lower, float upper);
     vFloat symmetric_clamp(vFloat a, float bound);
 
@@ -506,14 +506,14 @@ clamps to the range `[-bound,+bound]`.
 
 .. code-block:: c++
 
-    std::pair<{vFloat,vSmag},{vFloat,vSmag}> min_max ({vFloat,vSmag} a, {vFloat,vSmag} b, unsigned mask = 0);
+    std::pair<{vFloat,vSMag},{vFloat,vSmag}> min_max ({vFloat,vSmag} a, {vFloat,vSmag} b, unsigned mask = 0);
 
 Separate `a` & `b` elements into minima and maxima according to
 ``mask``. Mask is either a 32-bit combination of 0xff or 0x00 bytes,
-or a 4-bit number.  Where each byte (or bit) is zero, the minumum
+or a 4-bit number.  Where each byte (or bit) is zero, the minimum
 element will be placed in the first part of the paired result.  Where
 it is non-zero, the maximum will be chosen.  Thus, by default this
-returns the min/max pair.  With a ``mask`` of `0xffffffff`` or ``0xf``
+returns the min/max pair.  With a ``mask`` of ``0xffffffff`` or ``0xf``
 the max/min pair will be returned. Non-permitted ``mask`` values will
 result in a compilation error. It may be convenient to use a
 structured binding to hold the result:
@@ -543,7 +543,7 @@ Compute ReLU, which is ``max (src, 0)``.
     vFloat approx_tanh (vFloat src);
 
 Compute approximate reciprocals, exponentials, square roots and
-hyperb=olic tangents. ``RecipMode`` may be ``All`` or ``IfNegative``.
+hyperbolic tangents. ``RecipMode`` may be ``All`` or ``IfNegative``.
 Not available on Wormhole, and `sqrt` and `tanh` not available on
 Blackhole.
 
