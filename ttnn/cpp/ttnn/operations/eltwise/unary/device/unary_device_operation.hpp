@@ -30,7 +30,26 @@ struct UnaryDeviceOperation {
         const CoreRangeSet worker_grid;
         std::optional<CoreRangeSet> sub_core_grids;
 
-        tt::stl::hash::hash_t to_hash() const;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "op_chain",
+            "output_dtype",
+            "memory_config",
+            "fp32_dest_acc_en",
+            "preserve_fp32_precision",
+            "bfp8_pack_precise",
+            "worker_grid",
+            "sub_core_grids");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                op_chain,
+                output_dtype,
+                memory_config,
+                fp32_dest_acc_en,
+                preserve_fp32_precision,
+                bfp8_pack_precise,
+                worker_grid,
+                sub_core_grids);
+        }
     };
 
     struct tensor_args_t {
@@ -50,7 +69,6 @@ struct UnaryDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
