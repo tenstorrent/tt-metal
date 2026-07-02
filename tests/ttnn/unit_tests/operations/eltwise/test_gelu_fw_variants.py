@@ -138,8 +138,15 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
     tt_output = ttnn.gelu(tt_input, variant=variant_enum)
     actual = ttnn.to_torch(tt_output)
 
-    # Drop NaN/Inf slots (tested separately).
-    valid = finite_mask & ~expected.isnan() & ~expected.isinf() & ~actual.isnan() & ~actual.isinf()
+    # Drop NaN/Inf slots (tested separately), but first make sure finite
+    # reference outputs did not become non-finite on device.
+    finite_reference = finite_mask & ~expected.isnan() & ~expected.isinf()
+    bad_actual_nonfinite = finite_reference & (actual.isnan() | actual.isinf())
+    assert not bad_actual_nonfinite.any(), (
+        f"{variant_name} [{dtype_name}]: device produced NaN/Inf for "
+        f"{int(bad_actual_nonfinite.sum().item())} finite reference outputs"
+    )
+    valid = finite_reference & ~actual.isnan() & ~actual.isinf()
     ulps = ulp_distance(expected, actual)
 
     # Inputs where |x| < 2^-125 cause the kernel's `0.5 * x` intermediate to

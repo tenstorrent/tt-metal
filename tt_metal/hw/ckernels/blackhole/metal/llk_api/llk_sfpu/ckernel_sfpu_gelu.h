@@ -353,35 +353,23 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // Saturation threshold for tanh -> +/- 1.
-    // Empirically calibrated to torch's CPU tanh saturation point.
-    constexpr float TANH_SAT_THRESHOLD = 8.6643f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // x^3.
         sfpi::vFloat x2 = x * x;
-        sfpi::vFloat x3 = x2 * x;
+        sfpi::vFloat p = GELU_TANH_K * x2 + 1.0f;
+        sfpi::vFloat q = x * p;
+        sfpi::vFloat u = SQRT_2_OVER_PI * q;
+        sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(u);
 
-        // x + (0.044715 * x^3).
-        sfpi::vFloat kx3 = x3 * GELU_TANH_K;
-        sfpi::vFloat inner = x + kx3;
-
-        sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
+        // reload due to register pressure
+        x = sfpi::dst_reg[0];
         sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
 
-        v_if(scaled >= TANH_SAT_THRESHOLD) {
-            // Saturated positive tail: gelu_tanh(x) = x.
-            result = x;
-        }
-        v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            sfpi::vFloat half_x = 0.5f * x;
-            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(scaled);
-            result = half_x * t + half_x;
-        }
-        v_endif;
+        sfpi::vFloat half_x = 0.5f * x;
+        result = half_x * t + half_x;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);

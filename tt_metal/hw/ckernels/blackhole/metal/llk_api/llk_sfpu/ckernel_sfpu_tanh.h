@@ -22,8 +22,8 @@ namespace ckernel::sfpu {
 // tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
-    sfpi::vFloat t, rcp, x0, x1, tmp, y0;
-    sfpi::vInt x_exp;
+    sfpi::vFloat t, rcp, x0, x1, y0, tmp;
+    sfpi::vInt magic_seed, x_exp;
 
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
     a = x + x;
@@ -49,20 +49,26 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     r = r * s + f;
     scale = sfpi::setexp(sfpi::vConst0, e);
     bias0 = scale - w;
-    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
+    a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - 1);
     x0 = r * scale + bias0;
     y = a * 0.0f + 1.0f;
     x1 = x0 + 1.0f;
 
+    // computes x0/x1 via reciprocal and residual correction
+    magic_seed = 0xfef30000;
+    rcp = sfpi::as<sfpi::vFloat>(magic_seed - sfpi::as<sfpi::vInt>(x1));
+    t = x1 * rcp + 1.0f;
+
+    //
     v_if(i < 61) {
-        // computes x0/x1 via reciprocal and residual correction
-        rcp = sfpi::approx_recip(x1);
-        t = -x1 * rcp + 1.0f;
+        t = t * t + t;
         y = x;
         rcp = rcp * t + rcp;
+        x_exp = sfpi::exexp(x, sfpi::ExponentMode::Biased);
         y0 = x0 * rcp;
-        x_exp = sfpi::exexp(x, sfpi::ExponentMode::NoDebias);
-        t = -x1 * y0 + x0;
+        t = x1 * y0 + x0;
+
+        //
         v_if(x_exp >= 115) { y = t * rcp + y0; }
         v_endif;
     }
@@ -82,7 +88,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // (5.876733921468257904052734375e-3))))));
     sfpi::vFloat result = PolynomialEvaluator::eval(
         val,
-        0.0f,
+        sfpi::vConst0,
         0.999004364013671875,
         3.0897438526153564453125e-2,
         -0.4890659749507904052734375,
@@ -92,7 +98,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
 
     // For larger x, the polynomial approximation may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
-    result = sfpi::min(result, 1.0f);
+    sfpi::vFloat threshold_value = sfpi::vConst1;
+    sfpi::vec_min_max(result, threshold_value);
 
     result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
 
