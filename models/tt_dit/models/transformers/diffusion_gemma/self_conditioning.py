@@ -72,9 +72,11 @@ class DiffusionGemmaSelfConditioning(Module):
         ttnn.deallocate(normed)
         # GatedMLP emits TP-fractured hidden; gather so the residual add against
         # replicated ``inputs_embeds`` (and the post_norm reduction) sees the full hidden dim.
+        # Use ``dim=-1`` so this works whether the caller feeds a 3D [B,S,H] tensor (as the
+        # decoder does — embed_tokens output before the 4D unsqueeze) or a 4D [1,B,S,H].
         if self.parallel_config.tensor_parallel.factor > 1:
             sc_signal = self.ccl_manager.all_gather_persistent_buffer(
-                sc_signal, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                sc_signal, dim=-1, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         combined = ttnn.add(inputs_embeds, sc_signal)
         ttnn.deallocate(sc_signal)
