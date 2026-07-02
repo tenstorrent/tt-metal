@@ -387,6 +387,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->receiver_log_buffer_address = buffer_address;
     buffer_address += RECEIVER_LOG_BUFFER_SIZE;
 
+    // [debug] Carve a third L1 scratch region for the sender flow-control trace (SenderLog in the kernel):
+    // one combined delta-encoded record per main-loop pass capturing both VC0 sender channels' state during a
+    // combine window. Distinct from the receiver region so the two traces never alias. Sized for a 16 B header
+    // + 256 * 14 B records = 3600 B (kept in sync with SENDER_LOG_CAPACITY in the kernel); like the other debug
+    // carves it must stay well under the unused channel-buffer headroom (the allocator's TT_FATAL catches it).
+    constexpr std::size_t SENDER_LOG_BUFFER_SIZE = 4096;  // 1024 uint32 words (>= 3600 B SenderLog)
+    this->sender_log_buffer_address = buffer_address;
+    buffer_address += SENDER_LOG_BUFFER_SIZE;
+
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -874,6 +883,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
     // [debug] Receiver flow-control trace buffer address (carved from channel-buffer headroom).
     named_args["RECEIVER_LOG_BUFFER_ADDR"] = static_cast<uint32_t>(config.receiver_log_buffer_address);
+    named_args["SENDER_LOG_BUFFER_ADDR"] = static_cast<uint32_t>(config.sender_log_buffer_address);
 
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {

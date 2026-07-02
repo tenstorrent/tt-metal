@@ -480,6 +480,11 @@ constexpr size_t combine_debug_buffer_addr = NAMED_CT_ARG("COMBINE_DEBUG_BUFFER_
 // headroom by the builder (see FabricEriscDatamoverConfig). Overlaid by ReceiverLog in the kernel.
 constexpr size_t receiver_log_buffer_addr = NAMED_CT_ARG("RECEIVER_LOG_BUFFER_ADDR");
 
+// [debug] Base L1 address of the sender flow-control trace region, carved from the channel-buffer headroom by
+// the builder (see FabricEriscDatamoverConfig). Overlaid by SenderLog in the kernel. Distinct from the
+// receiver region so the sender and receiver traces never alias, even if one eRisc services both roles.
+constexpr size_t sender_log_buffer_addr = NAMED_CT_ARG("SENDER_LOG_BUFFER_ADDR");
+
 // ============================================================================
 // Code Profiling
 // ============================================================================
