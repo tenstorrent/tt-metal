@@ -1,0 +1,20 @@
+/goal Use $forge-functional-decoder and $tt-device-usage for HF_MODEL in the current tt-metal checkout, translating the tt-forge emitted TTNN model at FORGE_DIR.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the functional-decoder state for the repo-local TTNN autoport pipeline by TRANSLATING the forge emit at FORGE_DIR, not by authoring from scratch. Work only under models/autoports/<model>; do not begin optimized-decoder, multichip, full-model, or vLLM work in this goal.
+
+Scope for this pass is PREFILL only. The forge emit is a static-shape prefill graph with no decode or paged-KV path. Deliver a correct, tested prefill_forward; implement decode_forward as a documented NotImplementedError stub pointing at the pending emitted-decode version. Do not fabricate a decode or paged-KV path.
+
+Goal completion requirements:
+- models/autoports/<model>/tt/functional_decoder.py exists with FunctionalDecoder(LightweightModule): from_state_dict(state_dict, *, hf_config, layer_idx, mesh_device, ...), prefill_forward(...), and a documented decode_forward stub. Runtime prefill_forward has no torch, ttnn.from_torch, ttnn.to_torch, or host fallback.
+- The prefill math matches the forge emit semantics in FORGE_DIR/model/graph_0/model_ttnn.py: fused QKV with [V, Q, K] slice order, per-head q_norm/k_norm at eps 1e-6, RoPE via ttnn.experimental.rotary_embedding, SDPA scale 1/sqrt(head_dim), SwiGLU MLP, RMSNorm eps 1e-6. Do NOT copy the seq=16 shard specs or matmul program-configs; use bf16/TILE/DRAM defaults and support arbitrary seq_len by rebuilding RoPE tables and mask at setup.
+- tests/test_functional_decoder.py covers real target config shapes: at least one REAL-weight single-layer prefill test that passes, at least one synthetic-weight prefill test, a small smoke seq_len, and one larger seq_len. A decode test may xfail/skip with the pending-decode reason. Include a static runtime-fallback audit that greps the runtime method source.
+- HF-vs-TTNN single-layer prefill PCC meets the bar: default PCC >= 0.99 (aim for >= 0.995). Record the measured value with the exact command.
+- models/autoports/<model>/doc/context_contract.json records hf_advertised_context (HF max_position_embeddings), current_supported_context (largest validated prefill seq), decode_status = pending_emitted_decode_version, and honest notes on the reduction. It must parse and not fail .agents/scripts/check_context_contract.py --model-dir models/autoports/<model>.
+- models/autoports/<model>/doc/functional_decoder/README.md and work_log.md record the forge-emit provenance (which FORGE_DIR files were translated), commands, PCC, the runtime contract (prefill/decode signatures + shapes), and a Limitations section (prefill-only, static-shape origin, decode pending, no paged KV, context below advertised).
+- At least one real-weights test passes and evidence shows it.
+- The forge-functional-decoder skill's done criteria are satisfied.
+- $stage-review returns clean-pass; findings fixed/rereviewed. Locally commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after $autofix fails.
