@@ -37,6 +37,30 @@ def test_prefill_prompt_tokenizes_and_writes_prompt_kv(monkeypatch):
     assert calls["prefill"] == ("tt-model", prompt_tokens)
 
 
+def test_generation_success_summary_reports_blocks_and_text_chars():
+    generation = SimpleNamespace(
+        generation=SimpleNamespace(
+            generated=torch.zeros((1, 512), dtype=torch.long),
+            trajectories=[object(), object()],
+            prompt_len=18,
+            next_pos=544,
+        ),
+        sequences=torch.zeros((1, 530), dtype=torch.long),
+        text=["", "ok"],
+    )
+
+    assert text_demo._generation_success_summary(generation) == (
+        "DG_TEXT_DEMO_SUCCESS "
+        "generated_tokens=512 "
+        "blocks=2 "
+        "prompt_len=18 "
+        "next_pos=544 "
+        "sequence_len=530 "
+        "text_count=2 "
+        "text_chars=2"
+    )
+
+
 def test_text_demo_rejects_conflicting_smoke_modes():
     parser = text_demo.build_arg_parser()
 

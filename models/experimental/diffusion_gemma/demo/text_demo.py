@@ -154,6 +154,23 @@ def _adapter_logits_once(checkpoint_model_inputs, prompt, *, canvas_length: int,
         canvas.deallocate(True)
 
 
+def _generation_success_summary(generation) -> str:
+    device_generation = generation.generation
+    generated_tokens = int(device_generation.generated.shape[-1])
+    sequence_len = int(generation.sequences.shape[-1])
+    text_chars = sum(len(text) for text in generation.text)
+    return (
+        "DG_TEXT_DEMO_SUCCESS "
+        f"generated_tokens={generated_tokens} "
+        f"blocks={len(device_generation.trajectories)} "
+        f"prompt_len={device_generation.prompt_len} "
+        f"next_pos={device_generation.next_pos} "
+        f"sequence_len={sequence_len} "
+        f"text_count={len(generation.text)} "
+        f"text_chars={text_chars}"
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DiffusionGemma text generation on a TT mesh.")
     parser.add_argument(
@@ -204,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
             max_new_tokens=0,
             batch=args.batch,
         )
+        logger.info(_generation_success_summary(generation))
         for text in generation.text:
             print(text)
         return 0
@@ -254,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         _close_mesh_device(mesh_device)
 
+    logger.info(_generation_success_summary(generation))
     for text in generation.text:
         print(text)
     return 0
