@@ -160,6 +160,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/embedding_backward/embedding_backward_nanobind.cpp
     cpp/ttnn/operations/examples/example/example_nanobind.cpp
     cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.cpp
+    cpp/ttnn/operations/examples/bh_dram_read/bh_dram_read_nanobind.cpp
     cpp/ttnn/operations/examples/examples_nanobind.cpp
     cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
     cpp/ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.cpp
