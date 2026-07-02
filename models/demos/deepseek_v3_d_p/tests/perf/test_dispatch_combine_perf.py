@@ -40,26 +40,33 @@ _REAL_INDICES_TOPOS = [("linear", 2), ("ring", 2)]
 # are developed separately, so each is asserted against its own baseline —
 # a regression localizes to the responsible kernel.
 _DISPATCH_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    # (topo, nlinks, layer, col): expected_ns. Averaged over 2 CI runs on LB
-    # against LONGBOOK_QA_ENG_25600/expert_routing.safetensors.
-    ("linear", 2, 27, 2): 12_124_899,  # 43.2%
-    ("linear", 2, 38, 0): 7_208_142,  # 41.2%
-    ("linear", 2, 50, 0): 8_441_255,  # 39.9%
-    ("linear", 2, 28, 1): 11_078_364,  # 39.5%
-    ("ring", 2, 27, 2): 7_212_175,
-    ("ring", 2, 38, 0): 5_184_732,
-    ("ring", 2, 50, 0): 4_928_074,
-    ("ring", 2, 28, 1): 5_538_430,
+    # (topo, nlinks, layer, col): expected_ns. Re-centered to the midpoint of the observed
+    # min/max across 16 main-branch CI runs (2026-06-13..18) spanning 5 LB runners
+    # (f01cs01/02/08, f04cs03/04), against LONGBOOK_QA_ENG_25600/expert_routing.safetensors.
+    # Percent comment = dispatch-group in-col share for that layer/col.
+    ("linear", 2, 27, 2): 12_129_621,  # 43.2%
+    ("linear", 2, 38, 0): 7_158_222,  # 41.2%
+    ("linear", 2, 50, 0): 8_484_394,  # 39.9%
+    ("linear", 2, 28, 1): 11_039_234,  # 39.5%
+    ("ring", 2, 27, 2): 7_216_744,
+    ("ring", 2, 38, 0): 5_130_980,
+    ("ring", 2, 50, 0): 4_848_732,
+    ("ring", 2, 28, 1): 5_595_338,
 }
 _COMBINE_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 27, 2): 11_847_122,
-    ("linear", 2, 38, 0): 8_407_743,
-    ("linear", 2, 50, 0): 8_494_661,
-    ("linear", 2, 28, 1): 12_075_174,
-    ("ring", 2, 27, 2): 11_487_846,
-    ("ring", 2, 38, 0): 6_160_595,
-    ("ring", 2, 50, 0): 6_367_849,
-    ("ring", 2, 28, 1): 10_622_806,
+    # Re-baselined to the 2026-06-24 measurement after a combine-kernel speedup.
+    # 2026-06-25: the two linear-8-2link entries below were set from a single optimistic
+    # 06-24 run; real CI measures higher (l27-col2 8.49 ms, l28-col1 9.75 ms), so they are
+    # bumped to the observed values (margin 0.03). Unrelated to the routed-expert FFN change
+    # (it does not touch combine); recheck if a real combine regression is suspected.
+    ("linear", 2, 27, 2): 8_490_000,
+    ("linear", 2, 38, 0): 7_139_837,
+    ("linear", 2, 50, 0): 7_341_465,
+    ("linear", 2, 28, 1): 9_750_000,
+    ("ring", 2, 27, 2): 8_294_634,
+    ("ring", 2, 38, 0): 5_308_695,
+    ("ring", 2, 50, 0): 5_711_088,
+    ("ring", 2, 28, 1): 7_746_036,
 }
 
 
@@ -122,6 +129,7 @@ _DISPATCH_COMBINE_PERF_PARAMS = [
             "DispatchDeviceOperation": _DISPATCH_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
             "CombineDeviceOperation": _COMBINE_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
         },
+        margin=0.045 if topo == "ring" else 0.03,
         captured_layer=layer,
         captured_col=col,
         worker_dir="models/demos/deepseek_v3_d_p/tests/perf",

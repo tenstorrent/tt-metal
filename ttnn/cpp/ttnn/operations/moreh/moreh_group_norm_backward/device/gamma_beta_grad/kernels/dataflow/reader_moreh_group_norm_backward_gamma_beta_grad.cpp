@@ -65,14 +65,17 @@ void kernel_main() {
         uint32_t u;
     } one;
     one.f = 1.0f;
-    fill_cb_with_value(cb_id_one, one.u);
+    CircularBuffer cb_one(cb_id_one);
+    fill_cb_with_value(cb_one, one.u);
 
     if (do_mask_h) {
-        generate_mask_h(cb_id_mask_h, mask_h);
+        CircularBuffer cb_mask_h(cb_id_mask_h);
+        generate_mask_h(cb_mask_h, mask_h);
     }
 
     if (do_mask_w) {
-        generate_mask_w(cb_id_mask_w, mask_w);
+        CircularBuffer cb_mask_w(cb_id_mask_w);
+        generate_mask_w(cb_mask_w, mask_w);
     }
 
     // output_grad

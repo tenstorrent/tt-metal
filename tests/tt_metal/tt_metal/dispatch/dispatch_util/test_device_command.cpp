@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/vector_aligned.hpp>
@@ -114,6 +115,20 @@ TEST(DeviceCommandTest, AddDispatchSetNumWorkerSems) {
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
     command.add_dispatch_set_num_worker_sems(0, DispatcherSelect::DISPATCH_MASTER);
+    EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
+}
+
+TEST(DeviceCommandTest, AddDispatchSetSubDeviceWorkerCounts) {
+    constexpr uint32_t num_sub_devices = 3;
+    std::array<uint32_t, num_sub_devices> workers_per_sub_device = {4, 7, 2};
+
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_sub_device_worker_counts(num_sub_devices);
+
+    HostMemDeviceCommand command(calculator.write_offset_bytes());
+    command.add_dispatch_set_sub_device_worker_counts(
+        tt::stl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()),
+        DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 

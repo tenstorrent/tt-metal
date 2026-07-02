@@ -52,15 +52,15 @@ ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         "Unsupported data format for add_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _add_int_,
         (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 #endif
 }
 

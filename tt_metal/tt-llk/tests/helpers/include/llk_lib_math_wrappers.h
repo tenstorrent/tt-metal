@@ -13,7 +13,9 @@
 #include "experimental/llk_math_reduce_custom.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_reduce.h"
 #include "llk_math_transpose_dest.h"
+#include "tensor_shape.h"
 
 using ckernel::PackMode;
 

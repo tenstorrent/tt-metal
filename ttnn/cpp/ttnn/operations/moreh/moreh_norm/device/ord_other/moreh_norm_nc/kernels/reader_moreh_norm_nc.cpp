@@ -26,7 +26,8 @@ void kernel_main() {
 
     Scalar one;
     one.f = 1.0f;
-    fill_cb_with_value(cb_id_one, one.u);
+    CircularBuffer cb_one(cb_id_one);
+    fill_cb_with_value(cb_one, one.u);
 
     Noc noc;
     CircularBuffer cb_input(cb_id_input);

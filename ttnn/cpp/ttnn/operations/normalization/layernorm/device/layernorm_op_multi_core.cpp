@@ -424,13 +424,13 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // backed by the same SRAM (multi-buffer-index CB pattern). cb_x retains the
     // default unpack_dst_format so post-welford FPU binary ops keep reading via SrcA; the
     // welford-alias index gets unpack_to_dest_mode=UnpackToDestFp32 so welford's
-    // transpose_wh_tile reads full fp32 into DEST.
+    // transpose_tile reads full fp32 into DEST.
     //
     // We deliberately disable the alias for the fused-pre-add + large_tensor combination:
     // cb_x = c_23 there holds the post-add result, which already lost precision through the
     // FPU add (SrcA Tf32), so an fp32-preserving unpack on the welford side would not recover
     // any real information, but would require the SFPU replay buffer recovery
-    // (welford_init<WelfordInitMode::PreserveStats>()) after every transpose_wh_tile.
+    // (welford_init<WelfordInitMode::PreserveStats>()) after every transpose_tile.
     const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
                                     !(fuse_pre_add && large_tensor_needed);
 
@@ -529,7 +529,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     // Welford input alias index (c_29): shares SRAM with cb_x but has UnpackToDestFp32 mode so
-    // the welford section's transpose_wh_tile reads full FP32 into DEST.
+    // the welford section's transpose_tile reads full FP32 into DEST.
     if (welford_fp32_alias) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
@@ -800,9 +800,9 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // CB 23 and CB 1 (if b - fused pre-add)
     if (b) {
         // CB 23: Intermediate 6 (if not rms_norm). Fused: x = a + b. Compute writes the
-        // post-add result here, then the welford intake reads it via transpose_wh_tile.
+        // post-add result here, then the welford intake reads it via transpose_tile.
         // When welford_fp32_alias is active, register c_29 as a second buffer index on the
-        // same SRAM with UnpackToDestFp32 mode so transpose_wh_tile preserves full FP32 into
+        // same SRAM with UnpackToDestFp32 mode so transpose_tile preserves full FP32 into
         // DEST.
         if (!rms_norm) {
             auto cb23_desc =

@@ -563,6 +563,50 @@ TEST_F(MeshDeviceFixture, AliasDFBAlloc3Way) {
         addr_a, addr_b, addr_c);
 }
 
+TEST_F(MeshDeviceFixture, AliasDFBAgreedGroupResize) {
+    IDevice* device = devices_.at(0)->get_devices()[0];
+    const CoreCoord core{0, 0};
+
+    // Two aliased DFBs starting at equal total size (4096 B), plus a trailing non-aliased DFB to
+    // observe the alias group's L1 footprint.
+    const auto cfg_a = make_1sx1s_config(512, 8);   // total 4096 (primary)
+    const auto cfg_b = make_1sx1s_config(256, 16);  // total 4096 (secondary)
+    const auto cfg_c = make_1sx1s_config(512, 4);   // total 2048 (trailing, non-aliased)
+
+    Program program = CreateProgram();
+    const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
+    const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
+    const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
+    program.impl().set_dfb_alias(id_a, id_b);
+
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(device);
+
+    const uint32_t addr_a0 = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
+    EXPECT_EQ(addr_a0, program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr())
+        << "Aliased DFBs must share one L1 address";
+    EXPECT_GE(program.impl().get_dataflow_buffer(id_c)->uniform_alloc_addr(), addr_a0 + 4096u)
+        << "Trailing DFB_C must follow the 4096 B alias group";
+
+    // Agreed group resize: both members -> new equal total 8192 B, via different views.
+    std::vector<detail::ProgramImpl::DfbSizeOverride> overrides = {
+        {.dfb_id = id_a, .entry_size = 512u, .num_entries = 16u},  // 8192
+        {.dfb_id = id_b, .entry_size = 1024u, .num_entries = 8u},  // 8192
+    };
+    EXPECT_NO_THROW(program.impl().apply_dfb_size_overrides(overrides));
+    program.impl().allocate_dataflow_buffers(device);
+
+    auto dfb_a = program.impl().get_dataflow_buffer(id_a);
+    auto dfb_b = program.impl().get_dataflow_buffer(id_b);
+    EXPECT_EQ(dfb_a->total_size(), 8192u);
+    EXPECT_EQ(dfb_b->total_size(), 8192u);
+    const uint32_t addr_a1 = dfb_a->uniform_alloc_addr();
+    EXPECT_EQ(addr_a1, dfb_b->uniform_alloc_addr())
+        << "Aliased DFBs must still share one L1 address after an agreed resize";
+    EXPECT_GE(program.impl().get_dataflow_buffer(id_c)->uniform_alloc_addr(), addr_a1 + 8192u)
+        << "Trailing DFB_C must follow the resized (8192 B) alias group footprint";
+}
+
 TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     const NodeCoord node{0, 0};
     constexpr uint32_t kEntrySize   = 512;

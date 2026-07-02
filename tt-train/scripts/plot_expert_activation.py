@@ -6,7 +6,7 @@
 """Offline heatmap plotter for MoE expert activation CSV logs.
 
 Consumes the CSV emitted by
-``tt-train/sources/examples/nano_gpt/moe_activation_logger.py``
+``tt-train/sources/examples/train/moe_activation_logger.py``
 (``step,layer,expert,prob``) and renders one heatmap per MoE layer
 (x = logged step, y = expert, color = P(activation) in [0, 1]).
 

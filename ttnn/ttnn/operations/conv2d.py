@@ -54,6 +54,7 @@ def prepare_conv_transpose2d_weights(*args, **kwargs):
     :param tuple[int  , int] kernel_size: size of the convolving kernel.
     :param tuple[int, int] stride: stride of the cross-correlation.
     :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] output_padding: additional size added to one side of each dimension in the output. Must match the value passed to conv_transpose2d so weight preparation and the op agree on the output size and slicing. Default: [0, 0].
     :param tuple[int, int] dilation: spacing between kernel elements.
     :param bool has_bias:  whether the convolution has a bias term.
     :param int groups:  number of blocked connections from input channels to output channels.

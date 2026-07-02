@@ -21,6 +21,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.qwen3_vl.tt.common import (
+    get_hf_visual,
     get_pad_embedding,
     merge_vision_tokens_single_user_ttnn,
     multimodal_rope_single_user_from_hf,
@@ -160,7 +161,7 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
+        visual_model = DropInVisionTransformer(get_hf_visual(reference_model), vision_model_args)
 
         return cls(
             model,

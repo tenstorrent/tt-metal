@@ -236,10 +236,13 @@ void bind_pipeline_builder(nb::module_& mod) {
     mod.def(
         "resolve_graph_layout",
         [](const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
-           const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips)
-            -> tt::tt_fabric::GraphLayoutResult { return tt::tt_fabric::resolve_graph_layout(edges, submesh_chips); },
+           const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
+           const std::map<std::string, uint32_t>& node_chip_counts) -> tt::tt_fabric::GraphLayoutResult {
+            return tt::tt_fabric::resolve_graph_layout(edges, submesh_chips, node_chip_counts);
+        },
         nb::arg("edges"),
         nb::arg("submesh_chips"),
+        nb::arg("node_chip_counts") = std::map<std::string, uint32_t>{},
         R"(
             Auto-discover the physical layout of a pipeline graph.
 
@@ -253,6 +256,12 @@ void bind_pipeline_builder(nb::module_& mod) {
                                edge from the last stage back to stage 0.
                 submesh_chips: For each submesh, a list of (mesh_id, chip_id, row, col)
                                tuples (obtained from submesh.get_fabric_node_id()).
+                node_chip_counts: Optional {node_name: expected_chip_count} map. When a
+                               node is present, it may only be assigned to a submesh with
+                               exactly that many chips (rows*cols of its declared shape),
+                               so e.g. a 4x2 stage cannot land on a 1x2 submesh. Nodes
+                               absent from the map are unconstrained; an empty map (default)
+                               disables the shape filter.
 
             Returns:
                 GraphLayoutResult with physical coords for every edge and the H2D/D2H

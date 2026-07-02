@@ -26,6 +26,9 @@ set(UNIT_TESTS_LEGACY_SRC
     test_multiple_programs.cpp
     test_pack_relu.cpp
     test_quasar_compute_kernels.cpp
+    test_quasar_events.cpp
+    test_quasar_mesh_buffers.cpp
+    test_quasar_mesh_workloads.cpp
     test_quasar_semaphores.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp

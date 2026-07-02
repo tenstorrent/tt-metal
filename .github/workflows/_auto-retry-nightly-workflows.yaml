@@ -16,6 +16,10 @@ on:
       - "(Single-card) Frequent model and ttnn tests"
       - "Package and release"
       - "(Release) Model Status for Console Deployment"
+      - "(Runtime) Unit Tests"
+      - "(Runtime) Integration Tests"
+      - "(Runtime) Sanity Tests"
+      - "(Runtime) Performance Tests"
     types:
       - completed
 

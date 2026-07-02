@@ -50,7 +50,10 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     model = transformers.models.vit.modeling_vit.ViTLayer(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    # transformers 5.x ViTLayer.forward returns a Tensor (4.x returned a tuple); unwrap only when it is
+    # a tuple (otherwise `*_` unpacking slices off the batch dim).
+    _layer_out = model(torch_hidden_states)
+    torch_output = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
     torch_hidden_states = torch_hidden_states.unsqueeze(1)
 
     parameters = preprocess_model_parameters(

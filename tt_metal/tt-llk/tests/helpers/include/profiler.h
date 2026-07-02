@@ -169,21 +169,25 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
+        ckernel::fence_compiler();
         if (!is_buffer_full())
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
             ++open_zone_cnt;
         }
+        ckernel::fence_compiler();
     }
 
     ~zone_scoped()
     {
+        ckernel::fence_compiler();
         if (is_opened)
         {
             write_entry(EntryType::ZONE_END, id16);
             --open_zone_cnt;
         }
+        ckernel::fence_compiler();
     }
 };
 
@@ -206,6 +210,15 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 } // namespace llk_profiler
 
+// WC build: emit only metadata; NC build: full wall_clock tracking. Mutually exclusive with MEASURE_PERF_COUNTERS.
+#ifdef PERF_COUNTERS_COMPILED
+
+#define ZONE_SCOPED(marker)          PROFILER_META(MARKER_FULL(marker))
+#define TIMESTAMP(marker)            PROFILER_META(MARKER_FULL(marker))
+#define TIMESTAMP_DATA(marker, data) PROFILER_META(MARKER_FULL(marker))
+
+#else // !PERF_COUNTERS_COMPILED
+
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
     const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();
@@ -217,6 +230,8 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 #define TIMESTAMP_DATA(marker, data)   \
     PROFILER_META(MARKER_FULL(marker)) \
     llk_profiler::write_timestamp(MARKER_ID(marker), data);
+
+#endif // PERF_COUNTERS_COMPILED
 
 #define PROFILER_SYNC() tensix_sync()
 

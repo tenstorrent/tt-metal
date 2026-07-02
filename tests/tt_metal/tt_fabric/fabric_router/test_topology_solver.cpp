@@ -5186,6 +5186,36 @@ AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace_80()
 // Shared enumeration cap for Benchmark_*_MultiSolve_SatDfs (keep Line64 and Ring64/trace comparable).
 constexpr size_t kTopologyBenchmarkMultiSolveEnumerationCap = 10;
 
+// Real inter-mesh physical adjacency captured from the superpod DeepSeek "blitz decode" 64-stage pipeline run
+// (512 ASICs -> 64 logical meshes). The logical topology is a pure 64-node ring and the physical graph here also
+// has 64 nodes, so the mapping is a bijection: embedding the ring is a Hamiltonian-cycle search on this sparse,
+// near-3-regular graph (degree histogram {2:8, 3:56}). This is the instance the general SAT solve historically
+// thrashed on. Unique neighbors only (RELAXED mode -> only adjacency matters); symmetrized to be undirected.
+AdjacencyGraph<TestGlobalNode> make_blitz_decode_physical_graph_64() {
+    const std::map<int, std::vector<int>> directed = {
+        {0, {48, 58, 26}},  {1, {28, 48, 51}},  {2, {16, 52, 54}},  {3, {23, 50, 52}},  {4, {59, 54, 19}},
+        {5, {17, 49, 56}},  {6, {21, 59, 50}},  {7, {61, 63, 29}},  {8, {22, 61, 60}},  {9, {27, 51, 57}},
+        {10, {20, 60, 55}}, {11, {24, 57, 58}}, {12, {62, 56, 18}}, {13, {53, 62, 25}}, {14, {49, 53, 30}},
+        {15, {63, 55, 31}}, {16, {2, 37, 47}},  {17, {42, 21, 5}},  {18, {45, 12, 37}}, {19, {46, 4}},
+        {20, {38, 28, 10}}, {21, {6, 36, 17}},  {22, {39, 8, 23}},  {23, {34, 3, 22}},  {24, {11, 44, 45}},
+        {25, {13, 32}},     {26, {0, 43, 46}},  {27, {35, 9, 30}},  {28, {1, 33, 20}},  {29, {7, 41, 32}},
+        {30, {14, 40, 27}}, {31, {15, 47, 44}}, {32, {25, 53, 29}}, {33, {28, 51}},     {34, {23, 52}},
+        {35, {27, 57, 36}}, {36, {21, 50, 35}}, {37, {16, 54, 18}}, {38, {20, 55, 40}}, {39, {22, 60}},
+        {40, {30, 49, 38}}, {41, {29, 61}},     {42, {17, 56}},     {43, {26, 48}},     {44, {24, 58, 31}},
+        {45, {18, 62, 24}}, {46, {19, 59, 26}}, {47, {31, 63, 16}}, {48, {0, 1, 43}},   {49, {40, 5, 14}},
+        {50, {36, 3, 6}},   {51, {1, 9, 33}},   {52, {34, 2, 3}},   {53, {32, 14, 13}}, {54, {37, 4, 2}},
+        {55, {10, 15, 38}}, {56, {42, 12, 5}},  {57, {35, 11, 9}},  {58, {11, 0, 44}},  {59, {46, 6, 4}},
+        {60, {8, 10, 39}},  {61, {41, 8, 7}},   {62, {45, 13, 12}}, {63, {15, 7, 47}}};
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (const auto& [u, nbrs] : directed) {
+        for (int v : nbrs) {
+            adj[static_cast<TestGlobalNode>(u)].push_back(static_cast<TestGlobalNode>(v));
+            adj[static_cast<TestGlobalNode>(v)].push_back(static_cast<TestGlobalNode>(u));
+        }
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
+
 }  // namespace
 
 // Benchmark: 64-node path (1×64 chain) into 4×16 mesh (64 nodes). Enumerates distinct full assignments
@@ -5529,6 +5559,59 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
                 kTraceNodes);
         }
     }
+}
+
+// Small single-solve timing for the real superpod "blitz decode" 64-stage pipeline: a 64-node logical ring
+// embedded bijectively into the captured 64-node physical inter-mesh graph (a Hamiltonian-cycle search). Measures
+// how long one SAT solve takes to find a valid mapping with the minimal SAT optimizations in place (bijection
+// completeness + rotational anchor pin). SAT only: this dense bijection has no generic-DFS-friendly structure, so
+// the backtracking DFS engine does not converge here -- the SAT path is what the production mapper relies on.
+TEST_F(TopologySolverTest, Benchmark_Ring64_On_BlitzDecodePhysical64_Solve) {
+    using namespace tt::tt_fabric::detail;
+    constexpr size_t kRingNodes = 64;
+
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(kRingNodes);
+    auto global_graph = make_blitz_decode_physical_graph_64();
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    ASSERT_EQ(target_graph.get_nodes().size(), kRingNodes);
+    ASSERT_EQ(global_graph.get_nodes().size(), kRingNodes)
+        << "blitz-decode physical graph must be 64 nodes (bijection)";
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, kRingNodes);
+    ASSERT_EQ(graph_data.n_global, kRingNodes);
+
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
+
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    const auto solve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count();
+
+    ASSERT_TRUE(result.success) << "SAT should find a mapping: " << result.error_message;
+    EXPECT_EQ(result.target_to_global.size(), kRingNodes);
+    std::vector<int> mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(result.target_to_global.at(tn)));
+    }
+    const bool edges_ok = topology_test_complete_mapping_preserves_edges(graph_data, mapping);
+    EXPECT_TRUE(edges_ok) << "mapping must preserve ring adjacency (valid Hamiltonian cycle)";
+
+    RecordProperty("benchmark_ring64_blitz64_sat_ms", static_cast<int>(solve_ms));
+    log_info(
+        tt::LogFabric,
+        "Benchmark_Ring64_On_BlitzDecodePhysical64_Solve: engine=SAT solve_ms={} ring_nodes={}",
+        solve_ms,
+        kRingNodes);
 }
 
 // UNSAT stress: 16-node complete graph target on 8×8 mesh (K16 requires degree 15, mesh max is 4).

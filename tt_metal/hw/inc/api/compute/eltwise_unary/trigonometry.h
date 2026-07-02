@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sin_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sine, ckernel::sfpu::sine_init, APPROX)); }
+ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -32,13 +32,19 @@ ALWI void sin_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sine, ckernel::sfpu::sine
  */
 // clang-format on
 ALWI void sin_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_sine, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sine,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cos_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(cosine, ckernel::sfpu::cosine_init, APPROX)); }
+ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosine_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -55,14 +61,21 @@ ALWI void cos_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(cosine, ckernel::sfpu::co
  */
 // clang-format on
 ALWI void cos_tile(uint32_t idst) {
-    MATH(
-        SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_cosine, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_cosine,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acosh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(acosh, ckernel::sfpu::init_inverse_hyperbolic, APPROX)); }
+ALWI void acosh_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(acosh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
@@ -79,13 +92,19 @@ ALWI void acosh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(acosh, ckernel::sfpu::i
  */
 // clang-format on
 ALWI void acosh_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(calculate_acosh, APPROX, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_acosh,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tan_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(tan, ckernel::sfpu::tangent_init, APPROX)); }
+ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -102,14 +121,21 @@ ALWI void tan_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(tan, ckernel::sfpu::tange
  */
 // clang-format on
 ALWI void tan_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(
-        calculate_tangent, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_tangent,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void asinh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(asinh, ckernel::sfpu::init_inverse_hyperbolic, APPROX)); }
+ALWI void asinh_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(asinh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
@@ -126,13 +152,21 @@ ALWI void asinh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(asinh, ckernel::sfpu::i
  */
 // clang-format on
 ALWI void asinh_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(calculate_asinh, APPROX, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_asinh,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atanh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(atanh, ckernel::sfpu::init_atanh, APPROX)); }
+ALWI void atanh_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init_atanh, (APPROX, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
@@ -149,7 +183,13 @@ ALWI void atanh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(atanh, ckernel::sfpu::i
  */
 // clang-format on
 ALWI void atanh_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_atanh, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_atanh,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 // clang-format off
@@ -167,13 +207,19 @@ ALWI void atanh_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void asin_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_asin, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_asin,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void asin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(asin, true)); }
+ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT(asin)); }
 
 // clang-format off
 /**
@@ -190,13 +236,19 @@ ALWI void asin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(asin, true)); }
  */
 // clang-format on
 ALWI void atan_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_atan, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_atan,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atan_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(atan, sfpu::atan_init, true)); }
+ALWI void atan_tile_init() { MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/))); }
 
 // clang-format off
 /**
@@ -213,20 +265,24 @@ ALWI void atan_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(atan, sfpu::atan_init, t
  */
 // clang-format on
 ALWI void acos_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_acos, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_acos,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acos_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(acos, true)); }
+ALWI void acos_tile_init() { MATH(SFPU_UNARY_INIT(acos)); }
 
 /**
-* Please refer to documentation for any_init.
-*/
-ALWI void cosh_tile_init() {
-    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(cosh, ckernel::sfpu::cosh_init, APPROX, DST_ACCUM_MODE));
-}
+ * Please refer to documentation for any_init.
+ */
+ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_init, (APPROX, DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -243,15 +299,19 @@ ALWI void cosh_tile_init() {
  */
 // clang-format on
 ALWI void cosh_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_cosh, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_cosh,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sinh_tile_init() {
-    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(sinh, ckernel::sfpu::sinh_init, APPROX, DST_ACCUM_MODE));
-}
+ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_init, (APPROX, DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -268,7 +328,13 @@ ALWI void sinh_tile_init() {
  */
 // clang-format on
 ALWI void sinh_tile(uint32_t idst) {
-    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_sinh, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sinh,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 }  // namespace ckernel

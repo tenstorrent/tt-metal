@@ -19,6 +19,8 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     encode_prompt_instruct,
     encode_prompt_hf,
+    get_rope_theta,
+    get_rope_scaling,
     nearest_multiple,
 )
 from typing import Tuple
@@ -2097,12 +2099,12 @@ class TtModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
-        # RoPE params
-        self.rope_theta = params.get("rope_theta")
+        # RoPE params (transformers 5.x nests these under `rope_parameters`)
+        self.rope_theta = get_rope_theta(params)
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        rope_scaling_params = params.get("rope_scaling", None)
+        rope_scaling_params = get_rope_scaling(params)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
             self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)

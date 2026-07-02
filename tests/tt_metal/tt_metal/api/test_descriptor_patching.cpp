@@ -51,7 +51,7 @@ namespace {
 // The kernel occupies core {0,0} and all runtime args are set via emplace_runtime_args.
 KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
     KernelDescriptor kd;
-    kd.kernel_source = "tt_metal/kernels/dataflow/blank.cpp";
+    kd.kernel_source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
     kd.source_type = KernelDescriptor::SourceType::FILE_PATH;
     kd.core_ranges = CoreRangeSet{CoreRange{core}};
     kd.config = ReaderConfigDescriptor{};

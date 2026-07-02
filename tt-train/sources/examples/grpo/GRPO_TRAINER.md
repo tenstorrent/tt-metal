@@ -58,12 +58,19 @@ trainer = GRPOTrainer(
     completer=completer,
     dataset=dataset,
     config=GRPOConfig(
-        batch_size=4,
-        num_generations=8,
-        max_completion_length=256,
+        epsilon=0.2,
+        per_device_train_batch_size=8,
+        num_iterations=1,
         gradient_accumulation_steps=4,
         logging_steps=1,
+        output_dir="generated/grpo_run",
+        checkpointing=True,
+        checkpoint_interval=5,
         prompts_to_train=1600,
+        temperature=0.7,
+        max_completion_length=256,
+        num_generations=8,
+        warmup_steps=0,
     ),
     reward_func=my_reward,
     optimizer_dict={"type": "MorehAdamW", "lr": 5e-6},
@@ -72,6 +79,19 @@ trainer = GRPOTrainer(
 )
 trainer.train()
 ```
+
+> `GRPOConfig` has no defaults for these fields, so all of them must be
+> supplied. Alternatively, load the config from a YAML file (see
+> `configs/training_configs/grpo_boolq_llama_1dev.yaml`):
+>
+> ```python
+> import yaml
+> from ttml.trainers import get_grpo_config
+>
+> with open("configs/training_configs/grpo_boolq_llama_1dev.yaml") as f:
+>     yaml_config = yaml.safe_load(f)
+> config = get_grpo_config(yaml_config, output_dir="generated/grpo_run")
+> ```
 
 ---
 
@@ -148,6 +168,41 @@ completer = LlamaGRPOCompleter(
 Device setup (`enable_fabric`, `open_device`, `initialize_parallelism_context`)
 is performed inside the completer constructor.
 
+### Qwen3GRPOCompleter
+
+```python
+from utils.qwen3_completer import Qwen3GRPOCompleter, Qwen3CompletionCtx
+```
+
+Qwen3-specific implementation of `GRPOCompleter`. Drives the pure-Python ttml
+Qwen3 model (`ttml.models.qwen3.Qwen3`) and shards it across the `"fsdp"` mesh
+axis with `ttml.fsdp.fully_shard`. The model architecture is read from the
+HuggingFace config of `model_source`; only `max_sequence_length` is taken from
+`transformer_config` (to bound the generation horizon).
+
+```python
+completer = Qwen3GRPOCompleter(
+    ctx=Qwen3CompletionCtx(
+        max_tokens_to_complete=256,
+        temperature=1.0,
+        completions_per_prompt=8,
+    ),
+    transformer_config=transformer_config,   # max_sequence_length only
+    device_config={"enable_fsdp": True, "mesh_shape": [32, 1]},
+    model_source="Qwen/Qwen3-32B",
+)
+```
+
+Unlike the Llama completer, `setup_device` opens a **named** mesh via
+`ttml.open_device_mesh` so an `"fsdp"` axis exists. By default
+(`lazy_parameter_init=True`) the model is built lazily, each block plus the root
+model is wrapped with `fully_shard`, the parameters are materialized
+already-sharded, and the HuggingFace weights are then streamed in sharded (the
+full unsharded model is never materialized on one chip). With
+`lazy_parameter_init=False` it instead loads the (still replicated) weights
+first and then wraps with `fully_shard`. Either way, parameters, gradients, and
+optimizer state end up sharded `1/N` across the FSDP axis.
+
 ---
 
 ## GRPOConfig
@@ -160,14 +215,13 @@ from ttml.trainers import GRPOConfig
 
 | Parameter | Type | Default | TRL equivalent | Description |
 |-----------|------|---------|----------------|-------------|
-| `batch_size` | `int` | — | `per_device_train_batch_size` | Number of prompts sampled per batch, **across all devices combined** (not per device). With DDP each device processes `batch_size // num_devices` prompts. |
+| `per_device_train_batch_size` | `int` | — | `per_device_train_batch_size` | Number of completions processed on a **single device** within one micro-batch. The across-mesh micro-batch holds `per_device_train_batch_size * num_devices` completions and always shards evenly along axis 0. The per-microbatch prompt count is **derived** as `per_device_train_batch_size * num_devices / num_generations`. |
 | `num_generations` | `int` | — | `num_generations` | Number of completions generated per prompt. Each prompt produces this many candidate responses for reward scoring. |
 | `max_completion_length` | `int` | — | `max_completion_length` | Maximum number of tokens to generate per completion. |
-| `micro_batch_size` | `int` | — | `generation_batch_size` | Number of completions processed in a single forward pass during loss computation. Controls memory usage. |
-| `gradient_accumulation_steps` | `int` | — | `gradient_accumulation_steps` | Number of batches accumulated before each optimizer step. Effective batch = `batch_size * gradient_accumulation_steps`. |
+| `gradient_accumulation_steps` | `int` | — | `gradient_accumulation_steps` | Number of micro-batches per generation (effective) batch. Each generation batch generates `gradient_accumulation_steps` times the per-micro-batch completions, and the trainer accumulates gradients over that many micro-batches before a single optimizer step. Effective batch size (in completions) = `per_device_train_batch_size * num_devices * gradient_accumulation_steps`. |
 | `num_iterations` | `int` | — | `num_iterations` | Number of training passes over each batch of completions (mini-epochs). |
 | `epsilon` | `float` | — | `epsilon` | Clipping parameter for the GRPO surrogate loss (analogous to PPO clip range). |
-| `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * batch_size * gradient_accumulation_steps`. |
+| `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * (per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations)`. **Currently, `prompts_to_train` must be divisible by the generation batch size in prompts (`per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations`) to avoid a ragged final batch.** |
 | `temperature` | `float` | — | `temperature` | Sampling temperature for completion generation. |
 | `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
@@ -359,11 +413,30 @@ device_config = {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enable_ddp` | `bool` | `False` | Enable distributed data-parallel training. |
+| `enable_ddp` | `bool` | `False` | Enable distributed data-parallel training (DDP). |
+| `enable_fsdp` | `bool` | `False` | Enable fully-sharded data parallel (FSDP). Supported by `Qwen3GRPOCompleter`. Shards params/grads/optimizer state across the `"fsdp"` mesh axis. |
 | `mesh_shape` | `list[int]` | `[1, 1]` | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`. |
 | `device_ids` | `list[int] \| None` | `None` | Specific device IDs to use (default: auto-select). |
 
 Device setup is handled by the completer constructor, not the trainer.
+
+### FSDP
+
+When the completer opens a named mesh with an `"fsdp"` axis (size > 1), the
+`GRPOTrainer` automatically:
+
+1. Slices each micro-batch across the whole mesh (dim 0): the across-mesh
+   micro-batch is `per_device_train_batch_size * num_devices` completions, with
+   `per_device_train_batch_size` landing on each device.
+   `per_device_train_batch_size * num_devices` must be divisible by
+   `num_generations` so each prompt's GRPO group stays intact within the batch.
+2. Synchronizes gradients with `ttml.sync_gradients(params, axis_names=("dp", "fsdp"))`
+   each optimizer step. FSDP-managed parameters skip the `"fsdp"` axis (their
+   gradients were already reduce-scattered by the FSDP backward hook); any
+   replicated parameter is all-reduced across the axis.
+
+Checkpointing is unsupported under FSDP (the checkpoint would store per-rank
+shards rather than full tensors) — set `checkpointing: false`.
 
 ---
 
@@ -378,8 +451,11 @@ DDP is configured through `device_config` passed to the completer. When
 3. Gradients are synchronized via `ttml.core.distributed.synchronize_gradients`
    before each optimizer step.
 
-`batch_size` specifies the **global** batch size across all devices. Each device
-processes `batch_size // total_devices` prompts per batch.
+`per_device_train_batch_size` specifies the number of completions on a **single
+device** per micro-batch. The whole mesh therefore processes
+`per_device_train_batch_size * total_devices` completions per micro-batch, and
+the per-micro-batch prompt count is derived as
+`per_device_train_batch_size * total_devices / num_generations`.
 
 ---
 
@@ -430,7 +506,6 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 |--------|-------------------|---------------------|
 | **Model** | Passed as a `transformers` model object | Built by a `GRPOCompleter` (e.g. `LlamaGRPOCompleter`) from a HF ID or local path |
 | **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
-| **Batch size** | `per_device_train_batch_size` (per device) | `batch_size` (global, across all devices) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |
 | **Device setup** | Handled by HF Accelerate | Handled by the completer via `device_config` dict |
@@ -449,6 +524,13 @@ function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
 
 ```bash
 python3 boolq_training_example.py
+```
+
+To train Qwen3 32B sharded across all 32 galaxy cards with FSDP:
+
+```bash
+python3 boolq_training_example.py --model qwen3 \
+    --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
 ### Accuracy Evaluation

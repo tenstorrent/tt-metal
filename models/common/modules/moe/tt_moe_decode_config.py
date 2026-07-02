@@ -20,8 +20,6 @@ def _is_subconfig(annotation: Any) -> bool:
         return False
 
 
-from ttnn.experimental.moe_compute_utils import get_tilize_drain_core
-
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config_schemas import (
     ActivationFunction,
@@ -220,10 +218,14 @@ class ComputeConfig(_TTOpKwargs):
     has_bias: bool
     activation_type: ActivationFunction
     intermediate_size: int
+    # Splatted into moe_compute as `num_shared_experts_per_device`. This is the *physical*
+    # per-device shared-expert count, derived by the parent from `shared_expert_ids_to_devices`
+    # (see TTMoEDecodeConfig._shared_experts_per_device) — NOT the logical `num_shared_experts`.
+    num_shared_experts_per_device: int
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
-        return {"cluster_axis", "has_bias"}
+        return {"cluster_axis", "has_bias", "num_shared_experts_per_device"}
 
 
 class PostCombineTilizeConfig(_TTOpKwargs):
@@ -399,11 +401,11 @@ class BuffersConfig(_TTOpKwargs):
     hidden_size: int
     effective_experts_k: int
     shard_dim: int = 0
-    # Per-arch tilize drain/sync core for the MoE compute op (WH (6,9) / BH (10,9)).
-    # Resolved from the current arch via the commonized moe_compute helper so the
-    # default tracks the hardware rather than hardcoding the WH coordinate; callers
-    # can still pin an explicit core.
-    compute_tilize_drain_core: CoreCoord = Field(default_factory=get_tilize_drain_core)
+    # Tilize drain core for the MoE compute op.  Must be None (default); TTMoEDecode
+    # resolves it dynamically via ttnn.experimental.get_moe_tilize_drain_core(), which
+    # accounts for the actual device grid, mux exclusion zones, and hidden-size-dependent
+    # core layout.  Pinning an explicit core is not supported.
+    compute_tilize_drain_core: Optional[CoreCoord] = None
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
@@ -479,6 +481,35 @@ class TTMoEDecodeConfig(BaseModel):
         "topology",
     )
 
+    @staticmethod
+    def _shared_experts_per_device(shared_expert_ids_to_devices: Any, num_devices: int, num_shared_experts: int) -> int:
+        """Number of *physical* shared experts resident on each device.
+
+        This is what `moe_compute` wants as `num_shared_experts_per_device`, and it is
+        NOT the logical `num_shared_experts`. It is derived from
+        `shared_expert_ids_to_devices` (global shared-expert id → list of hosting device
+        linear ids): fully-replicated placement puts every shared expert on every device
+        (per-device count == num_shared_experts), while a distributed placement (each
+        shared expert on a subset of devices) yields a smaller, uniform per-device count.
+        e.g. 2 shared experts each residing on half the devices → 1 per device.
+        """
+        if not num_shared_experts:
+            return 0
+        # None or the "fully_replicated" convenience keyword (not yet expanded at this
+        # point): every shared expert resides on every device.
+        if shared_expert_ids_to_devices is None or isinstance(shared_expert_ids_to_devices, str):
+            return num_shared_experts
+        counts = [0] * num_devices
+        for devices in shared_expert_ids_to_devices.values():
+            for device_id in devices:
+                counts[device_id] += 1
+        if len(set(counts)) != 1:
+            raise ValueError(
+                "shared_expert_ids_to_devices must place an equal number of shared experts on every "
+                f"device to derive num_shared_experts_per_device; got per-device counts {counts}"
+            )
+        return counts[0]
+
     @classmethod
     def _adoptable(cls, data: dict[str, Any]) -> dict[str, Any]:
         """Full lookup of values sub-configs may adopt by name.
@@ -522,6 +553,20 @@ class TTMoEDecodeConfig(BaseModel):
         pre_split_chunk = resolved["hidden_size"] // num_fast_reduce_outputs
         split_size = ((pre_split_chunk + align_unit - 1) // align_unit) * align_unit
 
+        # Derive the *physical* per-device shared-expert count moe_compute wants from the
+        # experts sub-config's device assignment. Use only `.values()` (device-id lists),
+        # so the dict/str/None and JSON-stringified-key forms all work uniformly.
+        experts_data = data.get("experts")
+        if isinstance(experts_data, BaseModel):
+            shared_expert_ids_to_devices = getattr(experts_data, "shared_expert_ids_to_devices", None)
+        elif isinstance(experts_data, dict):
+            shared_expert_ids_to_devices = experts_data.get("shared_expert_ids_to_devices")
+        else:
+            shared_expert_ids_to_devices = None
+        num_shared_experts_per_device = cls._shared_experts_per_device(
+            shared_expert_ids_to_devices, prod(resolved["mesh_shape"]), resolved["num_shared_experts"]
+        )
+
         return {
             **resolved,
             # derived
@@ -529,6 +574,7 @@ class TTMoEDecodeConfig(BaseModel):
             "split_size": split_size,
             "num_fast_reduce_outputs": num_fast_reduce_outputs,
             "effective_experts_k": resolved["select_experts_k"] + resolved["num_shared_experts"],
+            "num_shared_experts_per_device": num_shared_experts_per_device,
         }
 
     @model_validator(mode="before")
@@ -626,22 +672,6 @@ class TTMoEDecodeConfig(BaseModel):
             elif isinstance(dispatch_data, BaseModel) and getattr(dispatch_data, "shared_expert_ids", None) is None:
                 data["dispatch"] = dispatch_data.model_copy(update={"shared_expert_ids": shared_ids})
 
-        # The YAML/input `reduce.shared_expert_scale` is the LOGICAL scale (single
-        # contribution per token). Each replica device emits the shared-expert output
-        # independently and reduce-scatter sums them, so the kernel-ready scale is
-        # `logical / num_replicated`. Apply here so the stored field == what the
-        # kernel sees; callers that need to round-trip must un-scale first
-        # (`with_mesh_shape` does this).
-        num_replicated = adoptable["mesh_shape"][1 - adoptable["cluster_axis"]]
-        if num_replicated > 1:
-            reduce_data = data.get("reduce")
-            if isinstance(reduce_data, dict) and reduce_data.get("shared_expert_scale") is not None:
-                reduce_data["shared_expert_scale"] = reduce_data["shared_expert_scale"] / num_replicated
-            elif isinstance(reduce_data, BaseModel) and getattr(reduce_data, "shared_expert_scale", None) is not None:
-                data["reduce"] = reduce_data.model_copy(
-                    update={"shared_expert_scale": reduce_data.shared_expert_scale / num_replicated}
-                )
-
         return data
 
     # ---- Test-only mesh slicing ----
@@ -700,30 +730,7 @@ class TTMoEDecodeConfig(BaseModel):
         # the new num_routed_experts.
         if isinstance(data.get("dispatch"), dict):
             data["dispatch"].pop("shared_expert_ids", None)
-        # The dumped `reduce.shared_expert_scale` is the kernel-ready value
-        # (logical / old_num_replicated). Restore the logical value so the
-        # pre-validator can re-divide by the new num_replicated.
-        self._unscale_shared_expert_scale(data)
         return type(self).model_validate(data)
-
-    def _unscale_shared_expert_scale(self, data: dict) -> None:
-        """In-place: convert a dumped `reduce.shared_expert_scale` from the stored
-        kernel-ready value (logical / num_replicated) back to the logical value.
-
-        The pre-validator divides the logical input by `num_replicated` so the
-        stored field matches what the kernel sees. Any path that feeds dumped data
-        back through `model_validate` (mesh slicing, YAML round-trip) must undo that
-        first, otherwise the pre-validator divides a second time and under-scales.
-
-        TODO (AM): This is only necessary because the moe_compute flow does not properly TP shard the shared expert yet
-        https://github.com/tenstorrent/tt-metal/issues/45060
-
-        """
-        num_replicated = self.mesh_shape[1 - self.cluster_axis]
-        if num_replicated > 1 and isinstance(data.get("reduce"), dict):
-            reduce_data = data["reduce"]
-            if reduce_data.get("shared_expert_scale") is not None:
-                reduce_data["shared_expert_scale"] *= num_replicated
 
     @staticmethod
     def _drop_derived_fields(data: dict) -> None:
@@ -746,7 +753,6 @@ class TTMoEDecodeConfig(BaseModel):
         import yaml
 
         data = self.model_dump(mode="json", exclude_defaults=exclude_defaults, exclude_none=exclude_none, **dump_kwargs)
-        self._unscale_shared_expert_scale(data)
         self._drop_derived_fields(data)
         return yaml.safe_dump(data, sort_keys=False)
 

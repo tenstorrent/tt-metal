@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
-    from .compute_node import ComputeNode
+    from .fpu_node import FpuNode
     from .block_data import BlockData
 
 from .fused_loop import FusedLoop
@@ -22,11 +22,14 @@ class Unpacker:
     and override methods to emit the C++ LLK calls that configure and
     drive the Unpack thread, plus a Python golden function for test validation.
 
-    The lifecycle called by ComputeNode.unpack() is:
+    The lifecycle called by the pipeline is:
         init() -> loop.unpack_loop() [which calls unpack()] -> uninit()
 
     Override `loop` with an appropriate FusedLoop subclass to control
     the tile iteration pattern used by the unpack phases.
+
+    Set `per_block_init = True` if init() needs block dimensions and must
+    be called per-block inside the batch loop rather than hoisted out.
 
     To create a new unpacker:
         1. Subclass Unpacker
@@ -39,15 +42,16 @@ class Unpacker:
 
     # Controls the tile iteration pattern for unpack and math loops.
     loop: FusedLoop = FusedLoop()
+    per_block_init: bool = False
 
     def init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that initializes the unpacker before the tile loop.
+        """Return C++ code that initializes the unpacker.
 
         Called once per block before the unpack loop begins. Override to emit
         the _llk_unpack_*_init_<>() call with the appropriate parameters
@@ -60,7 +64,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that unpacks a single tile (or tile group).
@@ -76,7 +80,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that tears down the unpacker after the tile loop.
@@ -92,7 +96,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that mocks unpacker output for MATH_ISOLATE perf runs.
@@ -106,7 +110,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that mocks math consumption for UNPACK_ISOLATE perf runs.
@@ -131,7 +135,7 @@ class Unpacker:
         tensor_b: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode" = None,
+        compute_unit: "FpuNode" = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute the golden unpack transformation in Python.
 
@@ -139,7 +143,7 @@ class Unpacker:
         (transpose, broadcast, tilize, etc.). Set an output tensor to None
         to indicate that operand is unused by downstream math.
 
-        Called by ComputeNode.golden() before the math golden. The returned tensors
+        Called by FpuNode.golden() before the math golden. The returned tensors
         become the math unit's inputs.
         """
         return tensor_a, tensor_b

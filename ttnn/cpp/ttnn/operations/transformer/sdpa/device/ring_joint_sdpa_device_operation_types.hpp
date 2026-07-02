@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 #include "ttnn/core.hpp"
@@ -69,34 +71,6 @@ struct RingJointSDPAParams {
         kv_actual_isl(kv_actual_isl),
         latent_v_head_dim(latent_v_head_dim) {}
 
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("joint_strategy", joint_strategy);
-        attrs.emplace_back("is_causal", is_causal);
-        attrs.emplace_back("is_balanced", is_balanced);
-        attrs.emplace_back("is_cross", is_cross);
-        attrs.emplace_back("logical_n", logical_n);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_memory_config", output_memory_config);
-        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
-        attrs.emplace_back("ccl_core_grid_offset", ccl_core_grid_offset);
-        if (kv_cache_batch_idx.has_value()) {
-            attrs.emplace_back("kv_cache_batch_idx", kv_cache_batch_idx.value());
-        }
-        if (kv_actual_isl.has_value()) {
-            attrs.emplace_back("kv_actual_isl", kv_actual_isl.value());
-        }
-        attrs.emplace_back("latent_v_head_dim", latent_v_head_dim);
-        if (scale.has_value()) {
-            attrs.emplace_back("scale", scale);
-        }
-        if (program_config.has_value()) {
-            attrs.emplace_back("program_config", program_config);
-        }
-        return attrs;
-    }
-
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
     std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
@@ -104,6 +78,41 @@ struct RingJointSDPAParams {
     bool has_indexed_kv_cache() const { return kv_cache_batch_idx.has_value(); }
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "joint_strategy",
+        "scale",
+        "is_causal",
+        "is_balanced",
+        "is_cross",
+        "cache_key_logical_n",
+        "ring_size",
+        "compute_kernel_config",
+        "program_config",
+        "ccl_core_grid_offset",
+        "has_kv_cache_batch_idx",
+        "kv_pad_rotation_enabled",
+        "latent_v_head_dim",
+        "all_gather_operation_attributes",
+        "all_gather_tensor_args");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(joint_strategy),
+            std::cref(scale),
+            std::cref(is_causal),
+            std::cref(is_balanced),
+            std::cref(is_cross),
+            has_kv_pad_rotation() ? std::size_t{0} : logical_n,
+            std::cref(ring_size),
+            std::cref(compute_kernel_config),
+            std::cref(program_config),
+            std::cref(ccl_core_grid_offset),
+            kv_cache_batch_idx.has_value(),
+            has_kv_pad_rotation(),
+            std::cref(latent_v_head_dim),
+            std::cref(all_gather_operation_attributes),
+            std::cref(all_gather_tensor_args));
+    }
 };
 
 struct RingJointSDPAInputs {

@@ -128,6 +128,8 @@ flatbuffer::ShardDistributionStrategy to_flatbuffer(tt::tt_metal::ShardDistribut
         case tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D:
             return flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D;
         case tt::tt_metal::ShardDistributionStrategy::GRID_2D: return flatbuffer::ShardDistributionStrategy::GRID_2D;
+        case tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D:
+            return flatbuffer::ShardDistributionStrategy::CONTIGUOUS_1D;
     }
     TT_THROW("Unsupported ShardDistributionStrategy to flatbuffer.");
 }
@@ -137,6 +139,8 @@ tt::tt_metal::ShardDistributionStrategy from_flatbuffer(flatbuffer::ShardDistrib
         case flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D:
             return tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D;
         case flatbuffer::ShardDistributionStrategy::GRID_2D: return tt::tt_metal::ShardDistributionStrategy::GRID_2D;
+        case flatbuffer::ShardDistributionStrategy::CONTIGUOUS_1D:
+            return tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D;
     }
     TT_THROW("Unsupported ShardDistributionStrategy from flatbuffer.");
 }

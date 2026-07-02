@@ -179,6 +179,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     sudo \
     uuid-runtime \
+    unzip \
     wget \
     zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -232,22 +233,15 @@ RUN curl -fsSL -o /usr/local/bin/tt-smi \
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
 
 # Copy requirements files (needed for fallback install if no pre-built venv)
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /models/tt_dit/utils/vbench-requirements.txt ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/vbench-requirements.txt
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
-
-COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
-RUN umask 000 && \
-    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-    echo "Installing debugger for Ubuntu 22.04..." && \
-    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
-    echo "Debugger installation completed" && \
-    python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
-    fi
 
 #############################################################
 # CI Test image

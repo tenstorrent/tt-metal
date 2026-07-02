@@ -116,12 +116,6 @@ DeepseekMoeGateDeviceOperation::tensor_return_value_t DeepseekMoeGateDeviceOpera
     return {tensor_args.output_tensor, tensor_args.output_indices_tensor};
 }
 
-std::uint64_t DeepseekMoeGateDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    auto program_descriptor = build_moe_gate_program_descriptor(tensor_args, attrs);
-    return hash_moe_gate_program_structure(program_descriptor);
-}
-
 std::tuple<DeepseekMoeGateDeviceOperation::operation_attributes_t, DeepseekMoeGateDeviceOperation::tensor_args_t>
 DeepseekMoeGateDeviceOperation::invoke(
     const Tensor& input_tensor,

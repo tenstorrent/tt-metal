@@ -86,4 +86,7 @@ void kernel_main() {
             curr_row++;
         }
     }
+    // cb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
+    // reservation so the CB is left balanced.
+    cb_in1.push_back(1);
 }

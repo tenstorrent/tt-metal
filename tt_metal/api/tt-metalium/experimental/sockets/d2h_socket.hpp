@@ -17,6 +17,7 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketDescriptor;
 struct HDSocketConnectorState;
 
 /**
@@ -130,6 +131,22 @@ public:
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
     /**
+     * @brief Attaches to an existing D2HSocket from an in-memory descriptor.
+     *
+     * Used by D2HStreamService::connect to attach every per-coord socket from
+     * the embedded service descriptor without a separate file read per socket.
+     */
+    static std::unique_ptr<D2HSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
+
+    /**
+     * @brief Populates an HDSocketDescriptor from the owner-side socket state.
+     *
+     * Used by D2HStreamService::export_descriptor to embed socket descriptors
+     * inline in the service descriptor.
+     */
+    HDSocketDescriptor populate_descriptor() const;
+
+    /**
      * @brief Exports a descriptor file for cross-process socket attachment.
      *
      * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
@@ -159,6 +176,13 @@ public:
      * @return The page size in bytes, or 0 if not yet set.
      */
     uint32_t get_page_size() const { return page_size_; }
+
+    /**
+     * @brief Returns the current size of the FIFO in bytes.
+     *
+     * @return The current size of the FIFO in bytes.
+     */
+    uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
 
     /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
@@ -337,6 +361,8 @@ private:
     bool using_hugepage_ = false;
     uint32_t* hugepage_data_host_ptr_ = nullptr;
     volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
+
+    std::optional<DeviceAddr> svc_config_l1_addr_;
 };
 
 }  // namespace tt::tt_metal::distributed

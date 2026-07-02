@@ -7,6 +7,7 @@
 #include "../scatter_common.hpp"
 
 void kernel_main() {
+    Noc noc;
     constexpr auto ctas{get_ctas()};
 
     const uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
@@ -25,7 +26,7 @@ void kernel_main() {
              offset_bytes += input_and_output_chunk_size * sizeof(output_std_type)) {
             const uint32_t chunk_write_bytes = std::min(
                 ctas.output_stick_size_bytes - offset_bytes, input_and_output_chunk_size * sizeof(output_std_type));
-            write_to_output(ctas.output_cb, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
+            write_to_output(noc, ctas.output_cb, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
         }
     }
 }

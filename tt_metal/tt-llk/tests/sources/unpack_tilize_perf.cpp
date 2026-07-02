@@ -8,6 +8,7 @@
 
 #include "build.h"
 #include "ckernel.h"
+#include "counters.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
@@ -48,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -63,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -116,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en = false;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // copy srca to dest
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
             DataCopyType::A2D,
@@ -130,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -210,7 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     static constexpr bool UNTILIZE = false;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
@@ -219,7 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {

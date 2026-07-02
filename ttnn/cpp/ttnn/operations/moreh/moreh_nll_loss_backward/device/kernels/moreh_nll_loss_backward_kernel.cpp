@@ -36,14 +36,14 @@ void kernel_main() {
     cb_tmp1_obj.reserve_back(onetile);
 
     tile_regs_acquire();
-    copy_tile_init_with_dt(cb_divisor);
+    copy_tile_init_with_dt(cb_divisor_obj);
     copy_tile(cb_divisor, 0, dst0);
     recip_tile_init();
     recip_tile(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_tmp1);
+    pack_tile_with_dt(dst0, cb_tmp1_obj);
     tile_regs_release();
 
     cb_tmp1_obj.push_back(onetile);
@@ -57,14 +57,14 @@ void kernel_main() {
         cb_tmp2_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight_obj, cb_output_grad_obj);
         mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
         negative_tile_init();
         negative_tile(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
+        pack_tile_with_dt(dst0, cb_tmp2_obj);
         tile_regs_release();
 
         cb_tmp2_obj.push_back(onetile);
@@ -75,12 +75,12 @@ void kernel_main() {
         cb_tmp1_obj.wait_front(onetile);
 
         tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp2, cb_tmp1);
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp2_obj, cb_tmp1_obj);
         mul_tiles_bcast_scalar(cb_tmp2, cb_tmp1, 0, 0, dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
+        pack_tile_with_dt(dst0, cb_input_grad_obj);
         tile_regs_release();
 
         cb_input_grad_obj.push_back(onetile);
@@ -92,7 +92,7 @@ void kernel_main() {
         cb_input_grad_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight_obj, cb_output_grad_obj);
         mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
         negative_tile_init();
         negative_tile(dst0);
@@ -100,7 +100,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
+        pack_tile_with_dt(dst0, cb_input_grad_obj);
         tile_regs_release();
 
         cb_input_grad_obj.push_back(onetile);

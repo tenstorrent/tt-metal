@@ -61,8 +61,11 @@ void kernel_main() {
     constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t tile_height = get_compile_time_arg_val(6);
     constexpr bool use_32bit_index = get_compile_time_arg_val(7) == 1;
+    // Number of logical users (== number of running cores). Only this many input-index rows exist
+    // and are streamed in, even though the values tile is padded to a full tile_height.
+    constexpr uint32_t num_users = get_compile_time_arg_val(8);
 
-    constexpr auto s0_args = TensorAccessorArgs<8>();
+    constexpr auto s0_args = TensorAccessorArgs<9>();
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
 
     // ublocks size defined in tiles
@@ -92,8 +95,9 @@ void kernel_main() {
         }
     }
 
-    // input indices RM
-    for (uint32_t j = 0; j < Ht * tile_height; ++j) {
+    // input indices RM — push one stick per running core/user. Previously hard-coded to
+    // Ht * tile_height (== 32); now `num_users` so fewer-than-32-user configs don't over-read.
+    for (uint32_t j = 0; j < num_users; ++j) {
         input_indices_cb.reserve_back(onetile);
         noc.async_read(s1, input_indices_cb, input_indices_page_size, {.page_id = j}, {.offset_bytes = 0});
         noc.async_read_barrier();

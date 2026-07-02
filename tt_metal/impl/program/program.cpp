@@ -161,7 +161,8 @@ namespace {
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
+    const auto& env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
     jit_build_genfiles_descriptors(env, build_options);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
@@ -176,7 +177,8 @@ KernelCompileDescriptor build_kernel_descriptor(
     const std::shared_ptr<Kernel>& kernel,
     const JitBuildOptions& build_options,
     std::size_t kernel_hash) {
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
     uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
@@ -192,8 +194,10 @@ KernelCompileDescriptor build_kernel_descriptor(
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(
+                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }
@@ -1792,8 +1796,9 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
+                                                        .get_device_build_env(device->build_id())
+                                                        .build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -2008,14 +2013,15 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     }
 }
 
-void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        ttsl::hash::hash_combine(device_hash, device->id());
+        ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2028,36 +2034,35 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
 
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
 
-        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
-        // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     } else {
         TT_ASSERT(
             cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
-void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2070,12 +2075,12 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
@@ -2086,13 +2091,14 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
             trace_cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -2161,7 +2167,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             !endpoints.empty(),
             "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
             "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
-        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
+        RemoteCompileCoordinator coordinator(
+            std::move(endpoints), extract_context_id(device), device->build_id(), build_env.build_key());
 
         std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
 

@@ -70,7 +70,7 @@ void kernel_main() {
             cb_stats,
             cb_stats_reduced,
             num_devices,
-            [&](uint32_t) { return (static_cast<float>(W)); },
+            [W](uint32_t) { return (static_cast<float>(W)); },
             norm::kernel_util::compute::RSqrtPolicy{false, 0});
         cb_stats_reduced.push_back(stats_tile_stride);
         cb_stats_reduced.wait_front(stats_tile_stride);

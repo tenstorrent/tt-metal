@@ -103,6 +103,10 @@ def load_inputs(user_input, batch, instruct):
         if "context" in user_input[i]:
             max_length = user_input[i].get("max_length")
             context_text = load_and_cache_context(user_input[i]["context"], _CONTEXT_CACHE_DIR, max_length=max_length)
+            repeat_context = int(user_input[i].get("repeat_context", 1))
+            if repeat_context > 1:
+                context_text = "\n\n".join([context_text] * repeat_context)
+                logger.info(f"Repeated context {repeat_context}x ({len(context_text)} chars)")
             prompt = ("```" + context_text + "```\n\n" + prompt) if instruct else context_text
         in_prompt.append(prompt)
     return in_prompt
@@ -241,8 +245,8 @@ def _device_params():
             False,
             True,
         ),
-        (  # long-context-256k — single user, max context (uses the 128k prompt; KV pool sized for 256k)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+        (  # long-context-256k — single user, prompt is clipped to max_seq_len - max_generated_tokens
+            "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
             True,
             256 * 1024,
             1,

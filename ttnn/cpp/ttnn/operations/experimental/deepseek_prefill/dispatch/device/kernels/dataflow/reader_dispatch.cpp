@@ -125,6 +125,14 @@ void kernel_main() {
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto dispatch_table_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 
+#ifdef HAS_PADDING_CONFIG
+    // padding_config TensorAccessorArgs + scratch CB id are appended LAST in the compile-time args
+    // (after the 7 tensor accessors) so they never shift the existing index layout.
+    constexpr auto padding_cfg_args = TensorAccessorArgs<dispatch_table_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_padding_config_id =
+        get_compile_time_arg_val(padding_cfg_args.next_compile_time_args_offset());
+#endif
+
     // ===== Runtime Args =====
     uint32_t rt_args = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args++);
@@ -141,6 +149,11 @@ void kernel_main() {
     uint32_t dispatch_core_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t num_dispatch_cores = get_arg_val<uint32_t>(rt_args++);
     uint32_t core_mask = num_dispatch_cores - 1;
+
+#ifdef HAS_PADDING_CONFIG
+    // padding_config base address sits right after the 13 base runtime args (fixed index 13).
+    uint32_t padding_config_address = get_arg_val<uint32_t>(rt_args++);
+#endif
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -184,6 +197,31 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     tt_l1_ptr int32_t* expert_dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_base_addr);
+
+#ifdef HAS_PADDING_CONFIG
+    // Bound the token loop to this device's real (unpadded) tokens. The per-device padding_config
+    // row is [local_real_tokens, pad_side]; for right padding (pad_side == 0) we shrink token_end_idx
+    // to the next 32-aligned multiple of the real count. Left padding keeps the full range
+    // (unsupported fast path). The batch loop below derives total_batches from token_end_idx, so this
+    // single override shrinks the work. Padded tokens in the last partial batch keep their sentinel
+    // expert indices, so expert_dispatch_table[sentinel] == -1 drops them.
+    {
+        const auto padding_cfg_gen = TensorAccessor(padding_cfg_args, padding_config_address);
+        cb_reserve_back(cb_padding_config_id, 1);
+        uint32_t pc_l1 = get_write_ptr(cb_padding_config_id);
+        noc_async_read_page(0, padding_cfg_gen, pc_l1);
+        noc_async_read_barrier();
+        tt_l1_ptr uint32_t* pc = reinterpret_cast<tt_l1_ptr uint32_t*>(pc_l1);
+        uint32_t real_count = pc[0];
+        uint32_t pad_side = pc[1];
+        if (pad_side == 0) {
+            uint32_t rounded = ((real_count + 31u) / 32u) * 32u;
+            if (rounded < token_end_idx) {
+                token_end_idx = rounded;
+            }
+        }
+    }
+#endif
 
     // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
     // overwrites the same region at offsets [0, batch_count) without push/pop.

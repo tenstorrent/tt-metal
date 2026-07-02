@@ -510,6 +510,8 @@ def create_json_with_github_benchmark_environment(
 
     existing_device_info = partial_benchmark_data.device_info or {}
     device_info = existing_device_info | {"card_type": device_type, "dram_size": device_memory_size}
+    if sku_from_test:
+        device_info["sku"] = sku_from_test
 
     partial_benchmark_data = partial_benchmark_data.model_copy(
         update={

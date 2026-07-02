@@ -3,9 +3,59 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import os
+import time
 import torch
+from loguru import logger
 
 import ttnn
+
+# Diagnostic harness — set TT_UNIAD_TIMING=1 to print a per-sub-phase
+# wall-clock breakdown of the forward call. Skips the first call (cold,
+# includes JIT compile). Useful for localizing where forward time goes
+# without running a full Tracy profile.
+_TIMING_ENABLED = os.environ.get("TT_UNIAD_TIMING") == "1"
+_timing_call_idx = [0]
+# Per-call captured phase timings. Keyed by call_idx (1, 2, 3, …), each
+# value is a dict {phase_name: ms}. Populated whenever the timing harness
+# is enabled. Tests use get_timing_stats() / reset_timing_stats() to
+# enforce the per-phase warm-wall baseline.
+_timing_phase_stats: dict = {}
+
+
+def get_timing_stats() -> dict:
+    """Return the captured per-call phase timings collected since the last
+    `reset_timing_stats()` call. Outer dict keyed by call index (1, 2, 3, …);
+    inner dict keyed by phase name. Empty unless TT_UNIAD_TIMING=1."""
+    return _timing_phase_stats
+
+
+def reset_timing_stats() -> None:
+    """Drop accumulated per-call phase timings. Call between independent
+    perf measurements within the same Python process."""
+    _timing_phase_stats.clear()
+    _timing_call_idx[0] = 0
+
+
+def _timing_phase(name, device):
+    """Yield-managed timing block — sync, record, sync, print delta."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _ctx():
+        if not _TIMING_ENABLED or _timing_call_idx[0] == 0:
+            yield
+            return
+        ttnn.synchronize_device(device)
+        t0 = time.perf_counter()
+        yield
+        ttnn.synchronize_device(device)
+        dt = time.perf_counter() - t0
+        print(f"  [call#{_timing_call_idx[0]}] {name:48s} {dt*1000:>9.2f} ms")
+        _timing_phase_stats.setdefault(_timing_call_idx[0], {})[name.strip()] = dt * 1000
+
+    return _ctx()
+
 
 from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
 
@@ -346,6 +396,63 @@ class TtUniAD:
         dummy_metas = None
         return self.forward_test(img=img, img_metas=[[dummy_metas]])
 
+    def reset_test_state(self):
+        """Drop all per-sequence tracking state so the next forward_test
+        call takes the "first frame of a new scene" code path.
+
+        Used for benchmarking: replaying the same input multiple times in
+        a single process otherwise carries stale device tensors through
+        `self.test_track_instances` / `self.prev_bev`, which segfaults in
+        `ttnn_perception_transformer.get_states_and_refs` (the ttnn
+        tensors are held but their device backing has been recycled).
+        """
+        self.test_track_instances = None
+        self.prev_bev = None
+        self.l2g_r_mat = None
+        self.l2g_t = None
+        self.timestamp = None
+        if hasattr(self, "scene_token"):
+            self.scene_token = None
+        self.prev_frame_info = {
+            "prev_bev": None,
+            "scene_token": None,
+            "prev_pos": 0,
+            "prev_angle": 0,
+        }
+
+    def warmup(self, *args, n_iters=2, **kwargs):
+        """Pre-populate ttnn op caches, JIT'd kernels, and trace replay buffers
+        by running `n_iters` forward passes. Without warmup, the first
+        forward call on Blackhole p150b takes ~9 s (ttnn op first-call
+        dispatch setup dominates); after warmup, subsequent calls run at
+        the warm-cache target of ~1.4 s.
+
+        Takes the same positional / keyword arguments as `forward_test`.
+        Per-sequence state is reset before each iteration and once at the
+        end, so the caller can fire its real `forward_test` immediately
+        afterwards. Per-iter output is discarded.
+
+        Default `n_iters=2`: iter#1 compiles + warms op caches, iter#2
+        captures the trace boundaries (BEV encoder + DETR encoder). After
+        2 warmup iters, the next forward replays the trace and runs hot.
+
+        NOTE: reset_test_state() runs before each iteration, so every warmup
+        pass takes the first-frame path (prev_bev=None). The BEV encoder trace
+        is keyed on prev_bev presence (see _trace_key in ttnn_encoder), so the
+        temporal path (prev_bev != None) is NOT warmed here: in real sequential
+        inference the first temporal frame pays a one-time trace-capture cost
+        before steady-state replay. Outputs are unaffected — this is a warmup
+        completeness gap, not a correctness issue.
+        """
+        for i in range(n_iters):
+            logger.info(f"[warmup] iteration {i + 1}/{n_iters} — populating ttnn caches…")
+            t0 = time.perf_counter()
+            self.reset_test_state()
+            self.forward_test(*args, **kwargs)
+            logger.info(f"[warmup] iteration {i + 1}/{n_iters} done ({(time.perf_counter() - t0):.2f} s)")
+        self.reset_test_state()
+        logger.info("[warmup] complete — subsequent forward calls will run on warm cache")
+
     def __call__(self, return_loss=True, **kwargs):
         return self.forward_test(**kwargs)
 
@@ -398,8 +505,15 @@ class TtUniAD:
         img_metas = img_metas[0]
         timestamp = timestamp[0] if timestamp is not None else None
 
+        # Diagnostic timing entry-point — fires only when TT_UNIAD_TIMING=1.
+        if _TIMING_ENABLED:
+            _timing_call_idx[0] += 1
+            if _timing_call_idx[0] > 1:
+                print(f"\n=== TtUniAD.forward_test call #{_timing_call_idx[0]} ===")
+
         result = [dict() for i in range(len(img_metas))]
-        result_track = self.simple_test_track(img, l2g_t, l2g_r_mat, img_metas, timestamp)
+        with _timing_phase("simple_test_track (backbone+BEV+decoder+tracking)", self.device):
+            result_track = self.simple_test_track(img, l2g_t, l2g_r_mat, img_metas, timestamp)
 
         # Upsample bev for tiny model
         result_track[0] = self.upsample_bev_if_tiny(result_track[0])
@@ -407,32 +521,35 @@ class TtUniAD:
         bev_embed = result_track[0]["bev_embed"]
 
         if self.with_seg_head:
-            result_seg = self.seg_head.forward_test(
-                bev_embed,
-                [gt_lane_labels[0]],
-                [gt_lane_masks[0]],
-                img_metas,
-                rescale,
-            )
+            with _timing_phase("seg_head.forward_test", self.device):
+                result_seg = self.seg_head.forward_test(
+                    bev_embed,
+                    [gt_lane_labels[0]],
+                    [gt_lane_masks[0]],
+                    img_metas,
+                    rescale,
+                )
 
         if self.with_motion_head:
-            result_motion, outs_motion = self.motion_head.forward_test(
-                bev_embed, outs_track=result_track[0], outs_seg=result_seg[0]
-            )
-            outs_motion["bev_pos"] = result_track[0]["bev_pos"]
+            with _timing_phase("motion_head.forward_test", self.device):
+                result_motion, outs_motion = self.motion_head.forward_test(
+                    bev_embed, outs_track=result_track[0], outs_seg=result_seg[0]
+                )
+                outs_motion["bev_pos"] = result_track[0]["bev_pos"]
 
         outs_occ = dict()
         if self.with_occ_head:
-            occ_no_query = outs_motion["track_query"].shape[1] == 0
-            outs_occ = self.occ_head(
-                bev_embed,
-                outs_motion,
-                no_query=occ_no_query,
-                gt_segmentation=gt_segmentation,
-                gt_instance=gt_instance,
-                gt_img_is_valid=gt_occ_img_is_valid,
-            )
-            result[0]["occ"] = outs_occ
+            with _timing_phase("occ_head", self.device):
+                occ_no_query = outs_motion["track_query"].shape[1] == 0
+                outs_occ = self.occ_head(
+                    bev_embed,
+                    outs_motion,
+                    no_query=occ_no_query,
+                    gt_segmentation=gt_segmentation,
+                    gt_instance=gt_instance,
+                    gt_img_is_valid=gt_occ_img_is_valid,
+                )
+                result[0]["occ"] = outs_occ
 
         if self.with_planning_head:
             planning_gt = dict(
@@ -441,7 +558,8 @@ class TtUniAD:
                 sdc_planning_mask=sdc_planning_mask,
                 command=command,
             )
-            result_planning = self.planning_head.forward_test(bev_embed, outs_motion, outs_occ, command)
+            with _timing_phase("planning_head.forward_test", self.device):
+                result_planning = self.planning_head.forward_test(bev_embed, outs_motion, outs_occ, command)
             result[0]["planning"] = dict(
                 planning_gt=planning_gt,
                 result_planning=result_planning,
@@ -592,21 +710,24 @@ class TtUniAD:
             return None
         assert len(img.shape) == 5
         B, N, C, H, W = img.shape
-        img = ttnn.reshape(img, (B * N, C, H, W))
-        if self.use_grid_mask:
-            img = self.grid_mask(img)
-        img = ttnn.permute(img, (0, 2, 3, 1))
-        img = img.reshape(
-            1,
-            1,
-            (img.shape[0] * img.shape[1] * img.shape[2]),
-            img.shape[3],
-        )
-        img_feats = self.img_backbone(img)
+        with _timing_phase("      pre-backbone reshape/permute (grid_mask)", self.device):
+            img = ttnn.reshape(img, (B * N, C, H, W))
+            if self.use_grid_mask:
+                img = self.grid_mask(img)
+            img = ttnn.permute(img, (0, 2, 3, 1))
+            img = img.reshape(
+                1,
+                1,
+                (img.shape[0] * img.shape[1] * img.shape[2]),
+                img.shape[3],
+            )
+        with _timing_phase("      img_backbone (ResNet101)", self.device):
+            img_feats = self.img_backbone(img)
         if isinstance(img_feats, dict):
             img_feats = list(img_feats.values())
         if True:  # self.with_img_neck:
-            img_feats = self.img_neck(img_feats)
+            with _timing_phase("      img_neck (FPN)", self.device):
+                img_feats = self.img_neck(img_feats)
 
         img_feats = [
             ttnn.sharded_to_interleaved(img_feats[0], memory_config=ttnn.DRAM_MEMORY_CONFIG),
@@ -672,16 +793,19 @@ class TtUniAD:
             assert prev_bev is None
             prev_bev = self.get_history_bev(prev_img, prev_img_metas)
 
-        img_feats = self.extract_img_feat(img=imgs)
+        with _timing_phase("    extract_img_feat (ResNet + FPN)", self.device):
+            img_feats = self.extract_img_feat(img=imgs)
         if self.freeze_bev_encoder:
             with torch.no_grad():
+                with _timing_phase("    pts_bbox_head.get_bev_features (BEVFormer encoder)", self.device):
+                    bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
+                        mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev
+                    )
+        else:
+            with _timing_phase("    pts_bbox_head.get_bev_features (BEVFormer encoder)", self.device):
                 bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
                     mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev
                 )
-        else:
-            bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
-                mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev
-            )
 
         if bev_embed.shape[1] == self.bev_h * self.bev_w:
             bev_embed = ttnn.permute(bev_embed, (1, 0, 2))
@@ -691,7 +815,13 @@ class TtUniAD:
 
     def select_active_track_query(self, track_instances, active_index, img_metas, with_mask=True):
         result_dict = self._track_instances2results(track_instances[active_index], img_metas, with_mask=with_mask)
-        if sum(active_index) == 0:
+        # Python builtin `sum(ttnn_tensor)` iterates element by element with
+        # __getitem__, each potentially a host roundtrip; on a 901-element
+        # mask that's ~175 ms wasted per call (and the original code called
+        # it twice). One device sum + one host read instead. ttnn.sum needs
+        # bf16/fp32/uint32 — the active mask is int32, so cast on the way in.
+        n_active = int(ttnn.to_torch(ttnn.sum(ttnn.typecast(active_index, ttnn.bfloat16))).item())
+        if n_active == 0:
             result_dict["track_query_embeddings"] = ttnn.from_torch(
                 torch.randn(0, 256), device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
             )
@@ -699,7 +829,7 @@ class TtUniAD:
             result_dict["track_query_embeddings"] = track_instances.output_embedding[active_index][
                 result_dict["bbox_index"]
             ][result_dict["mask"]]
-        if sum(active_index) == 0:
+        if n_active == 0:
             result_dict["track_query_matched_idxes"] = ttnn.from_torch(
                 torch.randn(0), device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
             )
@@ -745,13 +875,15 @@ class TtUniAD:
 
         track_instances = TtInstances.cat([other_inst, active_inst], device=self.device)
 
-        bev_embed, bev_pos = self.get_bevs(img, img_metas, prev_bev=prev_bev)
-        det_output = self.pts_bbox_head.get_detections(
-            bev_embed,
-            object_query_embeds=track_instances.query,
-            ref_points=track_instances.ref_pts,
-            img_metas=img_metas,
-        )
+        with _timing_phase("  get_bevs (backbone + FPN + BEV encoder)", self.device):
+            bev_embed, bev_pos = self.get_bevs(img, img_metas, prev_bev=prev_bev)
+        with _timing_phase("  pts_bbox_head.get_detections (DETR decoder)", self.device):
+            det_output = self.pts_bbox_head.get_detections(
+                bev_embed,
+                object_query_embeds=track_instances.query,
+                ref_points=track_instances.ref_pts,
+                img_metas=img_metas,
+            )
         output_classes = det_output["all_cls_scores"]
         output_coords = det_output["all_bbox_preds"]
         last_ref_pts = det_output["last_ref_points"]
@@ -767,50 +899,53 @@ class TtUniAD:
             "bev_pos": bev_pos,
         }
 
-        track_scores = ttnn.to_torch(ttnn.sigmoid(output_classes[-1, 0, :])).max(dim=-1).values
-
-        track_instances.scores = ttnn.from_torch(track_scores, device=self.device, layout=ttnn.TILE_LAYOUT)
+        # ttnn.max replaces a torch .max(dim=-1).values round-trip — avoids
+        # one to_torch + from_torch per call.
+        track_instances.scores = ttnn.max(ttnn.sigmoid(output_classes[-1, 0, :]), dim=-1)
         track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
         track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim]
         track_instances.output_embedding = query_feats[-1][0]  # [300, feat_dim]
         track_instances.ref_pts = last_ref_pts[0]
 
-        obj_idxes = ttnn.to_torch(track_instances.obj_idxes)
+        with _timing_phase("  track_base.update + query select", self.device):
+            obj_idxes = ttnn.to_torch(track_instances.obj_idxes)
 
-        obj_idxes[900] = -2
-        track_instances.obj_idxes = ttnn.from_torch(
-            obj_idxes, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
-        )
-        self.track_base.update(track_instances, None)
+            obj_idxes[900] = -2
+            track_instances.obj_idxes = ttnn.from_torch(
+                obj_idxes, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
+            )
+            self.track_base.update(track_instances, None)
 
-        active_index = ttnn.bitwise_and(
-            (track_instances.obj_idxes >= 0),
-            (
-                ttnn.to_device(
-                    ttnn.to_dtype(
-                        ttnn.from_device(track_instances.scores >= self.track_base.filter_score_thresh),
-                        dtype=ttnn.int32,
-                    ),
-                    device=self.device,
-                )
-            ),
-        )
+            active_index = ttnn.bitwise_and(
+                (track_instances.obj_idxes >= 0),
+                (
+                    ttnn.to_device(
+                        ttnn.to_dtype(
+                            ttnn.from_device(track_instances.scores >= self.track_base.filter_score_thresh),
+                            dtype=ttnn.int32,
+                        ),
+                        device=self.device,
+                    )
+                ),
+            )
 
-        out.update(self.select_active_track_query(track_instances, active_index, img_metas))
-        out.update(self.select_sdc_track_query(track_instances[track_instances.obj_idxes == -2], img_metas))
+            out.update(self.select_active_track_query(track_instances, active_index, img_metas))
+            out.update(self.select_sdc_track_query(track_instances[track_instances.obj_idxes == -2], img_metas))
 
-        track_instances.mem_padding_mask = ttnn.to_torch(track_instances.mem_padding_mask).to(dtype=torch.bool)
-        if self.memory_bank is not None:
-            track_instances = self.memory_bank(track_instances)
+        with _timing_phase("  memory_bank update", self.device):
+            track_instances.mem_padding_mask = ttnn.to_torch(track_instances.mem_padding_mask).to(dtype=torch.bool)
+            if self.memory_bank is not None:
+                track_instances = self.memory_bank(track_instances)
 
-        tmp = {}
-        tmp["init_track_instances"] = self._generate_empty_tracks()
-        tmp["track_instances"] = track_instances
+            tmp = {}
+            tmp["init_track_instances"] = self._generate_empty_tracks()
+            tmp["track_instances"] = track_instances
 
-        tmp["track_instances"].mem_padding_mask = ttnn.from_torch(
-            tmp["track_instances"].mem_padding_mask, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
-        )
-        out_track_instances = self.query_interact(tmp)
+            tmp["track_instances"].mem_padding_mask = ttnn.from_torch(
+                tmp["track_instances"].mem_padding_mask, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
+            )
+        with _timing_phase("  query_interact", self.device):
+            out_track_instances = self.query_interact(tmp)
 
         out["track_instances_fordet"] = track_instances
         out["track_instances"] = out_track_instances

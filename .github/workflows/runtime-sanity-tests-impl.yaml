@@ -9,6 +9,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      wheel-artifact-name:
+        required: false
+        type: string
+        default: ""
       enabled-skus:
         required: true
         type: string
@@ -18,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
+      has-sim: ${{ steps.detect-sim.outputs.has-sim }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_sanity_tests.yaml
     steps:
@@ -46,9 +51,54 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
+      - name: Detect sim SKUs in matrix
+        id: detect-sim
+        run: |
+          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          has_sim=$(echo "$matrix" | jq -r 'any(.[]; .sku | startswith("sim_"))')
+          echo "has-sim=$has_sim" >> "$GITHUB_OUTPUT"
+
+  # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
+  fetch-ttsim:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.has-sim == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+      - name: Read ttsim version
+        id: ttsim-version
+        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
+      - name: Download wormhole_b0 ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ steps.ttsim-version.outputs.version }}
+          fileName: libttsim_wh.so
+          out-file-path: /tmp/ttsim
+      - name: Download blackhole ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ steps.ttsim-version.outputs.version }}
+          fileName: libttsim_bh.so
+          out-file-path: /tmp/ttsim
+      - name: Upload ttsim binaries artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttsim-binaries
+          path: /tmp/ttsim/
+          if-no-files-found: error
+          retention-days: 1
 
   runtime-sanity-tests:
-    needs: load-test-matrix
+    needs: [load-test-matrix, fetch-ttsim]
+    # fetch-ttsim is skipped when the matrix has no sim_* SKUs; allow that.
+    if: ${{ !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -59,7 +109,7 @@ jobs:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
-        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
@@ -68,7 +118,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || '--device /dev/tenstorrent' }}
     defaults:
       run:
         shell: bash
@@ -85,6 +135,13 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ⬇️  Setup TTSim
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
+        uses: ./docker-job/.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.test-group.sku }}
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
@@ -100,5 +157,10 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

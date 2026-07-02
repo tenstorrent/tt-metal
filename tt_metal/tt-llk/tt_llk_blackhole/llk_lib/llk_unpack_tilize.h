@@ -39,20 +39,28 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
     const std::uint32_t outerloop = (!skip_bh_workaround || (skip_bh_workaround && narrow_tile)) ? 1 : 2;
     const std::uint32_t innerloop = 1;
 
-    ckernel_template tmp(outerloop, innerloop, unpack_to_dest ? unpack_srca_to_dest : unpack_srcb_set_dvalid);
-
+    // ckernel_template is non-assignable, so build and program each variant in its own scope.
+    // skip_bh_workaround (8-bit formats) uses the two-op body (zerosrc + set_dvalid), mirroring Wormhole;
+    // otherwise the single-op BH workaround body is used. Both prepend unpack_srca unless unpacking to dest.
     if (skip_bh_workaround)
     {
         static constexpr std::uint32_t unpack_srcb_zerosrc = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::UNP_NOP, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
+        if (!unpack_to_dest)
+        {
+            tmp.set_start_op(unpack_srca);
+        }
+        tmp.program();
     }
-
-    if (!unpack_to_dest)
+    else
     {
-        tmp.set_start_op(unpack_srca);
+        ckernel_template tmp(outerloop, innerloop, unpack_to_dest ? unpack_srca_to_dest : unpack_srcb_set_dvalid);
+        if (!unpack_to_dest)
+        {
+            tmp.set_start_op(unpack_srca);
+        }
+        tmp.program();
     }
-
-    tmp.program();
 }
 
 /**

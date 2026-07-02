@@ -30,6 +30,8 @@ file(
     rms_allgather/device/kernels/*
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
+    send_recv_async/recv_async_h2d/device/kernels/*
+    send_recv_async/send_async_d2h/device/kernels/*
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
     strided_reduce_scatter_async/device/kernels/*

@@ -23,14 +23,16 @@ def get_model_prefix(layer_index: int = 0):
 
 @pytest.fixture(scope="module")
 def torch_model():
-    hugging_face_reference_model = transformers.FalconForCausalLM.from_pretrained(
-        PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True, device_map="auto"
-    ).eval()
+    hugging_face_reference_model = (
+        transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True, device_map="auto")
+        .eval()
+        .to(torch.float32)
+    )
     state_dict = hugging_face_reference_model.state_dict()
     mlp_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
-    torch_model = transformers.models.falcon.modeling_falcon.FalconMLP(configuration).eval()
+    torch_model = transformers.models.falcon.modeling_falcon.FalconMLP(configuration).eval().to(torch.float32)
     torch_model.load_state_dict(mlp_state_dict)
     return torch_model
 

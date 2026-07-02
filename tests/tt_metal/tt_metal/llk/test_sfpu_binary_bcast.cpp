@@ -194,7 +194,7 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
     // Writer: c_16 -> DRAM
     auto writer_kernel = tt_metal::CreateKernel(
         program_,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

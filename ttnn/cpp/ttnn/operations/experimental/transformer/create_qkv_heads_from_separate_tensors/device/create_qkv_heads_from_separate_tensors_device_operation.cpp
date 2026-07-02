@@ -185,9 +185,18 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_specs(
     auto k_spec = tt::tt_metal::ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
     auto v_spec = tt::tt_metal::ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
     // create sharded tensors
-    auto mem_config_q = operation_attributes.output_mem_config.with_shard_spec(q_spec);
-    auto mem_config_k = operation_attributes.output_mem_config.with_shard_spec(k_spec);
-    auto mem_config_v = operation_attributes.output_mem_config.with_shard_spec(v_spec);
+    auto mem_config_q = tt::tt_metal::MemoryConfig(
+        operation_attributes.output_mem_config.memory_layout(),
+        operation_attributes.output_mem_config.buffer_type(),
+        q_spec);
+    auto mem_config_k = tt::tt_metal::MemoryConfig(
+        operation_attributes.output_mem_config.memory_layout(),
+        operation_attributes.output_mem_config.buffer_type(),
+        k_spec);
+    auto mem_config_v = tt::tt_metal::MemoryConfig(
+        operation_attributes.output_mem_config.memory_layout(),
+        operation_attributes.output_mem_config.buffer_type(),
+        v_spec);
 
     auto out_tensor_q = TensorSpec(
         q_shape,
@@ -215,16 +224,6 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_tensors(
         create_device_tensor(std::get<0>(output_specs), tensor_args.input_tensor.device()),
         create_device_tensor(std::get<1>(output_specs), tensor_args.input_tensor.device()),
         create_device_tensor(std::get<2>(output_specs), tensor_args.input_tensor.device()));
-}
-    ttsl::hash::hash_t
-    CreateQKVHeadsSeparateTensorsDeviceOperation::compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<CreateQKVHeadsSeparateTensorsDeviceOperation>(
-        operation_attributes.num_q_heads,
-        operation_attributes.num_kv_heads,
-        operation_attributes.head_dim,
-        operation_attributes.transpose_k_heads,
-        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

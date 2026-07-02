@@ -6,7 +6,7 @@ on:
       test-category:
         required: true
         type: string
-        description: "Choice of 'smoke', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
+        description: "Choice of 'merge_gate', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
       docker-image:
         required: true
         type: string

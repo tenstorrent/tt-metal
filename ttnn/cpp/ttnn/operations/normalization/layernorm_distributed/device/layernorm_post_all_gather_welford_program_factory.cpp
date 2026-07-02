@@ -444,7 +444,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
         "conversion.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For those, setting
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode). For those, setting
     // the flag preserves FP32 precision by bypassing SrcA. Setting the flag on a
     // CB consumed by any FPU op (mul_tiles, add_tiles, sub_tiles, *_bcast_*, reduce_tile)
     // is unsafe: per base_types.hpp the CB is "incompatible with unpacking to SRCA/B", and

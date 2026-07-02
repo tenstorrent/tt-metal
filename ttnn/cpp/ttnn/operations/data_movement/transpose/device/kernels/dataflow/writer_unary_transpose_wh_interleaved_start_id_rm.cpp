@@ -45,7 +45,7 @@ void kernel_main() {
             uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
             for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
                 tt::data_movement::common::noc_async_write_sharded(
-                    cb_read_ptr + l1_read_offset, s, i_stick, 0, stick_size_bytes);
+                    noc, cb_read_ptr + l1_read_offset, s, i_stick, 0, stick_size_bytes);
                 l1_read_offset += l1_read_offset_bytes;
                 i_stick += 1;
             }

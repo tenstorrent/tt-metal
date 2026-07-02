@@ -66,8 +66,7 @@ void kernel_main() {
         cb_in_2,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        block_w * tt::constants::TILE_WIDTH,
-        /*compute_uses_reduce_tile=*/true>();
+        block_w * tt::constants::TILE_WIDTH>();
 
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c_bits = get_arg_val<uint32_t>(arg_idx++);
@@ -94,7 +93,7 @@ void kernel_main() {
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
     const uint32_t eps = get_arg_val<uint32_t>(base_post_rt + 1);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);

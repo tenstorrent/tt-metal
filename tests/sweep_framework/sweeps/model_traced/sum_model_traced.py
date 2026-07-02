@@ -76,6 +76,10 @@ def run(
         op_kwargs["memory_config"] = memory_config
 
     pos_args = extract_positional_args(kwargs)
+    # Reproduce the master's dim call form: named `dim=` vs positional (arg1).
+    # Master traced most configs with dim positional; passing it named then is
+    # an arg1/dim extra_key diff vs master.
+    dim_was_named = dim is not None and dim != "__ABSENT__"
     if dim is None:
         dim = pos_args.get(1, None)
     # Read keepdim from op_kwargs (from traced config), defaulting to False (TTNN default)
@@ -122,8 +126,10 @@ def run(
     start_time = start_measuring_time()
     if dim is None:
         output_tensor = ttnn.sum(input_tensor_a, **op_kwargs)
-    else:
+    elif dim_was_named:
         output_tensor = ttnn.sum(input_tensor_a, dim=dim, **op_kwargs)
+    else:
+        output_tensor = ttnn.sum(input_tensor_a, dim, **op_kwargs)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)

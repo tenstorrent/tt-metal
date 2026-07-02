@@ -198,8 +198,14 @@ def run(
         torch_stats[..., i * 32 : i * 32 + 1] = per_device_sum
 
     if is_mesh_device:
+        # The stats (arg1) tensor has its OWN traced placement (e.g.
+        # Shard(2)+Shard(3)) distinct from input_a's (Replicate+Shard(3)); using
+        # input_a's placement here is an arg1.tensor_placement diff vs master.
+        _stats_placement = kwargs.get("input_b_tensor_placement")
+        if not isinstance(_stats_placement, dict):
+            _stats_placement = input_a_tensor_placement
         stats_tensor = create_tensor_on_mesh(
-            torch_stats, device, ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+            torch_stats, device, ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, _stats_placement
         )
     else:
         stats_tensor = ttnn.from_torch(

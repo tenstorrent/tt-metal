@@ -14,4 +14,7 @@ void kernel_main() {
     CircularBuffer cb_out(cb_id_out);
 
     cb_out.wait_front(num_units);
+    // Output is sharded in place, so the data is already where it needs to be; the
+    // wait above is only a readiness handshake. Pop to leave the CB balanced.
+    cb_out.pop_front(num_units);
 }

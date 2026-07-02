@@ -480,40 +480,47 @@ class QwenImagePipeline(PipelineAPIMixin):
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             on_event(SectionStart(f"denoising_step_{i}"))
 
-            for idx, (device, tracer) in enumerate(zip(self._submesh_devices, self._tracers, strict=True)):
+            velocity_preds = []
+            for idx, tracer in enumerate(self._tracers):
                 timestep = ttnn.full(
                     [1, 1],
                     fill_value=t,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.float32,
-                    device=device,
+                    device=self._submesh_devices[idx],
                 )
 
-                velocity_pred = tracer(
-                    cfg_enabled=self._cfg_enabled,
-                    submesh_idx=idx,
-                    latents=latents[idx],
-                    prompt=context[idx] if i == 0 else tracer.inputs["prompt"],
-                    timestep=timestep,
-                    spatial_rope=(latents_rope_cos[idx], latents_rope_sin[idx])
-                    if i == 0
-                    else tracer.inputs["spatial_rope"],
-                    prompt_rope=(prompt_rope_cos[idx], prompt_rope_sin[idx])
-                    if i == 0
-                    else tracer.inputs["prompt_rope"],
-                    spatial_sequence_length=latents_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    traced=traced,
+                velocity_preds.append(
+                    tracer(
+                        cfg_enabled=self._cfg_enabled,
+                        submesh_idx=idx,
+                        latents=latents[idx],
+                        prompt=context[idx] if i == 0 else tracer.inputs["prompt"],
+                        timestep=timestep,
+                        spatial_rope=(latents_rope_cos[idx], latents_rope_sin[idx])
+                        if i == 0
+                        else tracer.inputs["spatial_rope"],
+                        prompt_rope=(prompt_rope_cos[idx], prompt_rope_sin[idx])
+                        if i == 0
+                        else tracer.inputs["prompt_rope"],
+                        spatial_sequence_length=latents_sequence_length,
+                        prompt_sequence_length=prompt_sequence_length,
+                        traced=traced,
+                        tracer_blocking_execution=False,
+                    )
                 )
 
                 # latents can be overwritten by trace execution, use the captured input instead,
                 # which is safe.
                 latents[idx] = tracer.inputs["latents"]
 
-                if self._cfg_enabled:
-                    velocity_pred = self._cfg_combiner.combine(velocity_pred, cfg_scale)
+            if self._cfg_enabled:
+                velocity_preds = self._cfg_combiner.combine(velocity_preds, cfg_scale)
 
-                latents[idx] = self._solvers[idx].step(step=i, latent=latents[idx], velocity_pred=velocity_pred)
+            latents = [
+                solver.step(step=i, latent=latents[idx], velocity_pred=velocity_preds[idx])
+                for idx, solver in enumerate(self._solvers)
+            ]
 
             self.synchronize_devices()
 

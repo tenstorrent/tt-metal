@@ -66,19 +66,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(buf_desc_id_a, 1);
+    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(buf_desc_id_a, ckernel::DEFAULT_TENSOR_SHAPE, 1);
     for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
     {
-        _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i);
+        _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 
     constexpr std::uint32_t buf_desc_id_phase2 = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? buf_desc_id_a : buf_desc_id_b;
     // Phase 2: unpack the other operand. DEST_TO_SRCA → SrcB from buffer B (UNP_B); DEST_TO_SRCB → SrcA from buffer A (UNP_A).
     constexpr std::uint32_t unp_sel_phase2 = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-    _llk_unpack_unary_operand_init_<unp_sel_phase2, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(buf_desc_id_phase2, 1, params.num_faces);
+    _llk_unpack_unary_operand_init_<unp_sel_phase2, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(buf_desc_id_phase2, ckernel::DEFAULT_TENSOR_SHAPE, 1);
     for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
     {
-        _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i);
+        _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 }
 
@@ -165,7 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, 1);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
     const int output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const int output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
@@ -175,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (int tile = 0; tile < output_tiles_in_block; tile++)
         {
             int res_tile_idx = (block * output_tiles_in_block) + tile;
-            _llk_pack_(res_tile_idx, res_tile_idx);
+            _llk_pack_(res_tile_idx, res_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
         }
         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

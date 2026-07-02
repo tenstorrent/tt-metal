@@ -1,0 +1,53 @@
+name: Run with log
+description: >-
+  Run a bash script like a normal `run:` step, tee its combined output to a
+  .log file, and append a completion marker as the final line. The marker is a
+  generic end-of-run sentinel: its absence means the shell was killed before
+  finishing (e.g. GitHub timeout-minutes), which downstream tooling can detect.
+
+inputs:
+  run:
+    description: "Bash script to run, exactly as a `run:` step body (multi-line)."
+    required: true
+  log-file:
+    description: "Path for the .log, relative to working-directory. Parent dirs are created."
+    required: true
+  working-directory:
+    description: >-
+      Directory to run in. Defaults to /work (Tenstorrent container jobs).
+      Override per call as you would on a run: step. Required because composite
+      steps do not inherit the job's defaults.run.working-directory.
+    required: false
+    default: "/work"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        # Via env so the script's quotes/specials reach the file verbatim.
+        RUN_WITH_LOG_SCRIPT: ${{ inputs.run }}
+        RUN_WITH_LOG_FILE: ${{ inputs.log-file }}
+      run: |
+        # errexit off for the wrapper so the markers are written even when the
+        # script fails — a failed run must stay a failure, not look like a kill.
+        set +e
+        mkdir -p "$(dirname "$RUN_WITH_LOG_FILE")"
+
+        # Start sentinel as the log's first line (truncates/creates the file).
+        # The parser treats a log that starts but never finishes as a
+        # timeout-minutes kill; logs without it are not tracked at all.
+        printf '[==tt-log-start-line==]\n' > "$RUN_WITH_LOG_FILE"
+
+        # Run as its own bash file, matching a normal run step (errexit +
+        # pipefail), so the script keeps full fidelity and its own exit code.
+        script=$(mktemp)
+        printf '%s\n' "$RUN_WITH_LOG_SCRIPT" > "$script"
+        bash --noprofile --norc -eo pipefail "$script" 2>&1 | tee -a "$RUN_WITH_LOG_FILE"
+        rc=${PIPESTATUS[0]}
+        rm -f "$script"
+
+        # Leading \n so the marker isn't glued to a newline-less final line.
+        printf '\n[==tt-log-finish-line==] exit_code=%s\n' "$rc" >> "$RUN_WITH_LOG_FILE"
+        exit $rc

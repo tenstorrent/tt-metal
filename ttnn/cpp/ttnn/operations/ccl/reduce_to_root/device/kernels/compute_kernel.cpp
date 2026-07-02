@@ -14,6 +14,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
@@ -128,7 +129,8 @@ void kernel_main() {
     // out = l / s
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    mm_init(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
+    matmul_init(cb_out_accumulate_im, cb_out_accumulate_im);
 
     OutputCBs output_cbs = reduce_fct<scale_fp32, Sq_chunk_t, vDHt>(
         cb_out_o,

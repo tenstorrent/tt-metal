@@ -12,28 +12,28 @@ models:
 # Python Models
   - name: "NanoGPT Shakespeare"
     filename: "nanogpt_shakespeare"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml"
       - "--track_memory"
 
   - name: "NanoLlama3 Shakespeare"
     filename: "nanollama_shakespeare"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3_char.yaml"
       - "--track_memory"
 
   - name: "Nano Deepseek (Char) Shakespeare"
     filename: "nano_deepseek_char_shakespeare"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nano_deepseek_char.yaml"
       - "--track_memory"
 
   - name: "TinyLlama Shakespeare"
     filename: "tinyllama_shakespeare"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
       - "--track_memory"
@@ -55,7 +55,7 @@ models:
 
   - name: "Qwen 3 1.7B Shakespeare"
     filename: "qwen3_1.7b_shakespeare"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_17b.yaml"
       - "--max_steps 500"
@@ -71,7 +71,7 @@ models:
 
   - name: "Tiny Deepseek (Char) Shakespeare"
     filename: "tiny_deepseek_char_shakespeare"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char.yaml"
       - "--max_steps 1000"

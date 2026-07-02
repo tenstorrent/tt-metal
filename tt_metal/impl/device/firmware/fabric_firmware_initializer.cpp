@@ -314,6 +314,12 @@ void FabricFirmwareInitializer::init(
 }
 
 void FabricFirmwareInitializer::configure() {
+    // Mock: skip router sync (init() skips fabric; sync would fatal on uninitialized builder state).
+    if (descriptor_->is_mock_device()) {
+        log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock devices");
+        initialized_.test_and_set();
+        return;
+    }
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
     }

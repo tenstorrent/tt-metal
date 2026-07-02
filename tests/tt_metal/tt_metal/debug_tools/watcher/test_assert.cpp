@@ -171,7 +171,8 @@ static void RunTest(
                 log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            logical_core = {0, 0};
+            // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+            logical_core = {0, 1};
             virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "drisc";

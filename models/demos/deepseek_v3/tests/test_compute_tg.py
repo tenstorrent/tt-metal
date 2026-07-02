@@ -24,6 +24,8 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
+    auto_output_width_shard_dim,
+    effective_matmul_ring_size,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
     prepare_w0_w1_tensor_for_moe_compute,
@@ -59,7 +61,6 @@ def run_moe_compute_test(
     N,
     hidden_size,
     output_height_shard_dim,
-    output_width_shard_dim,
     dtype,
     enable_trace,
 ):
@@ -100,11 +101,26 @@ def run_moe_compute_test(
     # CREATE CONSTANT TENSORS
     #########################################
 
-    # Drain tilize core where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
-
     # Mux cores for combine operation (fabric communication)
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 3))])
+
+    # Drain tilize core where indices and scores are sharded
+    matmul_ring_size = effective_matmul_ring_size(mesh_device)
+    drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size, matmul_ring_size=matmul_ring_size),
+        hidden_size,
+        mux_core_range_set=combine_mux_cores,
+    )
+    tilize_drain_core = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(drain_core_coord.x, drain_core_coord.y),
+                ttnn.CoreCoord(drain_core_coord.x, drain_core_coord.y),
+            )
+        }
+    )
 
     # Expert mapping - replicated on all devices
     expert_mapping = gen_expert_mapping(
@@ -423,7 +439,6 @@ def run_moe_compute_test(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [False])  # Trace mode disabled due to L1 memory constraints
 @pytest.mark.parametrize("output_height_shard_dim", [4])
-@pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_compute_correctness(
     mesh_device,
     mesh_shape,
@@ -436,7 +451,6 @@ def test_compute_correctness(
     N,
     hidden_size,
     output_height_shard_dim,
-    output_width_shard_dim,
     dtype,
     enable_trace,
 ):
@@ -453,7 +467,6 @@ def test_compute_correctness(
         N,
         hidden_size,
         output_height_shard_dim,
-        output_width_shard_dim,
         dtype,
         enable_trace,
     )

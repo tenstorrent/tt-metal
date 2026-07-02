@@ -300,9 +300,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
-    std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                             : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                             : 1;
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 

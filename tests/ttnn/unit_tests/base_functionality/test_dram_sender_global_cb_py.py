@@ -12,10 +12,12 @@ pytestmark = run_for_blackhole("DramSenderGCB requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
-def _require_dram_core_prefetcher(device):
+def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
-        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
+        pytest.skip(
+            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
+        )
 
 
 def _single_recv(x: int, y: int) -> ttnn.CoreRangeSet:

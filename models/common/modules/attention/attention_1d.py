@@ -1468,6 +1468,18 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
     num_devices = mesh_device.get_num_devices()
 
+    if num_devices > 1:
+        if n_heads % num_devices != 0:
+            raise ValueError(
+                f"n_heads ({n_heads}) must be divisible by mesh device count ({num_devices}) "
+                "for Attention1D tensor-parallel sharding."
+            )
+        if n_kv_heads % num_devices != 0:
+            raise ValueError(
+                f"n_kv_heads ({n_kv_heads}) must be divisible by mesh device count ({num_devices}) "
+                "for Attention1D tensor-parallel sharding."
+            )
+
     # Derive tt_ccl
     if config.tt_ccl is None and num_devices > 1:
         to_set["tt_ccl"] = get_tt_ccl(mesh_device)

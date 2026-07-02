@@ -43,7 +43,11 @@ void kernel_main() {
     CircularBuffer cb_one_obj(cb_one);
     CircularBuffer cb_decimal_obj(cb_decimal);
     CircularBuffer cb_mask_w_obj(cb_mask_w);
+    CircularBuffer cb_y_obj(cb_y);
     CircularBuffer cb_xabs_obj(cb_xabs);
+    CircularBuffer cb_xpow_obj(cb_xpow);
+    CircularBuffer cb_logx_obj(cb_logx);
+    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
 
     cb_one_obj.wait_front(onetile);
     cb_decimal_obj.wait_front(onetile);
@@ -61,11 +65,11 @@ void kernel_main() {
             cb_x_obj.wait_front(onetile);
             cb_xabs_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(cb_x);
+            copy_tile_init_with_dt(cb_x_obj);
             copy_tile(cb_x, 0, dst0);
 
             if (do_mask_w && (col_idx == Wt - 1)) {
-                copy_tile_init_with_dt(cb_mask_w);
+                copy_tile_init_with_dt(cb_mask_w_obj);
                 copy_tile(cb_mask_w, 0, dst1);
 
                 mask_tile_init();
@@ -77,13 +81,14 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_xabs);
+            pack_tile_with_dt(dst0, cb_xabs_obj);
             tile_regs_release();
 
             cb_x_obj.pop_front(onetile);
             cb_xabs_obj.push_back(onetile);
 
-            power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
+            power_tile_to_cb(
+                cb_xabs_obj, cb_xpow_obj, cb_logx_obj, cb_decimal_obj, cb_exp_lxmd_obj, cb_y_obj, p, p_is_negative);
         }
     }
 

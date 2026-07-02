@@ -105,7 +105,7 @@ void kernel_main() {
     }
 
     // Send eps, mask, gamma, and beta to the compute kernel
-    generate_bcast_col_scalar(cb_eps_id, eps_val);
+    generate_bcast_col_scalar(CircularBuffer(cb_eps_id), eps_val);
 
     cb_input_mask.reserve_back(block_w * num_groups_per_core);
     uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();

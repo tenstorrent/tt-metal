@@ -97,6 +97,7 @@ FORCE_INLINE void scatter_along_chunk(
 }  // namespace
 
 void kernel_main() {
+    Noc noc;
     constexpr auto ctas{get_ctas()};
 
     const uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
@@ -143,6 +144,7 @@ void kernel_main() {
 
             // first phase: copy input data to output
             load_to_cb(
+                noc,
                 ctas.input_cb,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
@@ -165,6 +167,7 @@ void kernel_main() {
                         std::min(ctas.source_stick_size - source_offset, source_chunk_size);
 
                     load_to_cb(
+                        noc,
                         ctas.index_cb,
                         index_addr_gtor,
                         index_offset * sizeof(index_std_type),
@@ -173,6 +176,7 @@ void kernel_main() {
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
                     load_to_cb(
+                        noc,
                         ctas.source_cb,
                         source_addr_gtor,
                         source_offset * sizeof(input_std_type),

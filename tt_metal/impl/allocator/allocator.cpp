@@ -18,6 +18,7 @@
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
 #include "impl/allocator/allocator_types.hpp"
+#include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -36,7 +37,19 @@ void AllocatorImpl::validate_bank_assignments() const {
 
 void AllocatorImpl::init_one_bank_per_channel() {
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - config_->trace_region_size;
+    // trace_region_size is the TOTAL trace budget across all DRAM banks (not per-bank). Trace buffers are
+    // interleaved evenly across banks, so each bank reserves ceil(trace_region_size / num_banks). This is
+    // rounded up to a whole multiple of the max trace buffer page size (rather than just dram_alignment) so
+    // that the per-bank reservation always holds a whole number of trace pages: a trace whose total size fits
+    // the budget but whose pages skew onto a subset of banks (interleaving biases the leading pages toward the
+    // low banks) still fits per-bank. The aggregate reserved capacity (per_bank_trace_size * num_banks) is
+    // therefore >= trace_region_size.
+    DeviceAddr per_bank_trace_size = 0;
+    if (config_->trace_region_size > 0) {
+        per_bank_trace_size = round_up(
+            div_up(config_->trace_region_size, static_cast<size_t>(config_->num_dram_channels)), kMaxTraceBufPageSize);
+    }
+    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - per_bank_trace_size;
     std::vector<int64_t> bank_offsets(config_->num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < config_->num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(config_->dram_bank_offsets.at(channel_id));
@@ -60,7 +73,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
     trace_buffer_manager_ = std::make_unique<BankManager>(
         BufferType::TRACE,
         bank_offsets,
-        config_->trace_region_size,
+        per_bank_trace_size,
         config_->dram_alignment,
         config_->dram_alignment,
         dram_bank_size + config_->dram_unreserved_base,

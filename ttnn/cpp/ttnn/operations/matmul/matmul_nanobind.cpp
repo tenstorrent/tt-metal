@@ -673,9 +673,11 @@ void py_module(nb::module_& mod) {
           then the second input is broadcasted to align appropriately with the first
           input.
 
-        - Matrix multiplication will not work if the first input has batch
-          dimensions that are all of size 1 and the second input has batch dimensions
-          that are not all of size 1.
+        - If the first input has batch dimensions that are all of size 1 and the
+          second input has batch dimensions that are not all of size 1, the first
+          input is reused across all batches of the second input. Both inputs must
+          be rank 3 or higher with matching ranks, interleaved (L1 or DRAM), and
+          non-sharded.
 
         - Note: In general, the number of dimensions between the two inputs should
           match. There may be cases where they don't. In that case, if the inputs

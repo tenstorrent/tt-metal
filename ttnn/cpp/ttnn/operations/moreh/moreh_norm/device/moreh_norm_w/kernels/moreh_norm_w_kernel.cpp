@@ -30,6 +30,7 @@ void kernel_main() {
 
     std::uint8_t output_id{tt::CBIndex::c_16};
     const auto cb_y = output_id++;  // output
+    CircularBuffer cb_y_obj(cb_y);
 
     std::uint8_t intermed_id{tt::CBIndex::c_24};
     const auto cb_tmp0 = intermed_id++;
@@ -43,13 +44,17 @@ void kernel_main() {
     const auto cb_xabs = cb_tmp0;
     CircularBuffer cb_xabs_obj(cb_xabs);   // |x|
     const auto cb_xpow = cb_tmp1;          // |x|^p
+    CircularBuffer cb_xpow_obj(cb_xpow);
     const auto cb_logx = cb_tmp2;          // log(|x|)
+    CircularBuffer cb_logx_obj(cb_logx);
     const auto cb_exp_lxmd = cb_tmp3;      // exp(log(|x|) * decimal)
+    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
     const auto cb_correct_xpow = cb_tmp4;
     CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
     const auto cb_xpowadd = cb_tmp5;
     CircularBuffer cb_xpowadd_obj(cb_xpowadd);  // Add(|x + decimal|^p)
     const auto cb_xpowsum = cb_tmp6;       // Sum(|x + decimal|^p)
+    CircularBuffer cb_xpowsum_obj(cb_xpowsum);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -76,11 +81,11 @@ void kernel_main() {
             cb_x_obj.wait_front(onetile);  // comes from the reader
             cb_xabs_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(cb_x);
+            copy_tile_init_with_dt(cb_x_obj);
             copy_tile(cb_x, 0, dst0);
 
             if (do_mask_w && (col_idx == Wt - 1)) {
-                copy_tile_init_with_dt(cb_mask_w);
+                copy_tile_init_with_dt(cb_mask_w_obj);
                 copy_tile(cb_mask_w, 0, dst1);
 
                 mask_tile_init();
@@ -92,13 +97,21 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_xabs);
+            pack_tile_with_dt(dst0, cb_xabs_obj);
             tile_regs_release();
 
             cb_x_obj.pop_front(onetile);
             cb_xabs_obj.push_back(onetile);
 
-            power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
+            power_tile_to_cb(
+                cb_xabs_obj,
+                cb_xpow_obj,
+                cb_logx_obj,
+                cb_decimal_obj,
+                cb_exp_lxmd_obj,
+                cb_correct_xpow_obj,
+                p,
+                p_is_negative);
 
             // Add(|x|^p)
             if (col_idx == 0) {
@@ -106,12 +119,12 @@ void kernel_main() {
                 cb_correct_xpow_obj.wait_front(onetile);
                 cb_xpowadd_obj.reserve_back(onetile);
 
-                copy_tile_init_with_dt(cb_correct_xpow);
+                copy_tile_init_with_dt(cb_correct_xpow_obj);
                 copy_tile(cb_correct_xpow, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_xpowadd);
+                pack_tile_with_dt(dst0, cb_xpowadd_obj);
                 tile_regs_release();
 
                 cb_correct_xpow_obj.pop_front(onetile);
@@ -122,12 +135,12 @@ void kernel_main() {
                 cb_xpowadd_obj.wait_front(onetile);
                 cb_xpowadd_obj.reserve_back(onetile);
 
-                add_tiles_init_with_dt(cb_correct_xpow, cb_xpowadd);
+                add_tiles_init_with_dt(cb_correct_xpow_obj, cb_xpowadd_obj);
                 add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_xpowadd);
+                pack_tile_with_dt(dst0, cb_xpowadd_obj);
                 tile_regs_release();
 
                 cb_correct_xpow_obj.pop_front(onetile);
@@ -139,7 +152,15 @@ void kernel_main() {
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_xpowsum>(
             compute_kernel_lib::ReduceInputBlockShape::single());
 
-        power_tile_to_cb(cb_xpowsum, cb_tmp0, cb_tmp1, cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative);
+        power_tile_to_cb(
+            cb_xpowsum_obj,
+            cb_xabs_obj,
+            cb_xpow_obj,
+            cb_recip_p_decimal_obj,
+            cb_logx_obj,
+            cb_y_obj,
+            recip_p,
+            recip_p_is_negative);
     }
 
     cb_one_obj.pop_front(onetile);

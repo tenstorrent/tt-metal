@@ -86,17 +86,17 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 std::shared_ptr<Program> initialize_dummy_program(CoreCoord worker_grid_size) {
@@ -215,13 +215,15 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
     // Single-core no-op program for submesh
     Program submesh_program = CreateProgram();
     CoreCoord single_core = {0, 0};
-    CreateKernel(submesh_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    CreateKernel(
+        submesh_program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", single_core, ComputeConfig{});
     MeshWorkload submesh_workload;
     submesh_workload.add_program(MeshCoordinateRange(submesh->shape()), std::move(submesh_program));
 
     // Single-core no-op program for parent mesh
     Program parent_program = CreateProgram();
-    CreateKernel(parent_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    CreateKernel(
+        parent_program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", single_core, ComputeConfig{});
     MeshWorkload parent_workload;
     parent_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(parent_program));
 

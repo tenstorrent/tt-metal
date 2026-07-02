@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     DataflowBuffer dfb_out(dfb::in);
     uint32_t tile_bytes = dfb_out.get_entry_size();
-    const auto s = TensorAccessor(ta::dst_tensor);
+    const auto s = TensorAccessor(tensor::dst_tensor);
 
     Noc noc;
 

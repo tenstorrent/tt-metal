@@ -178,19 +178,19 @@ class LogProbsCalculator:
 
         num_devices = self.mesh_device.get_num_devices()
 
-        # Determine the TP dimension: for 2D meshes, logits are sharded across
-        # the larger dimension (TP). For 1D or single-device, use all devices.
-        if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
-            # 2D mesh: TP axis is the larger dimension
-            tp_axis = 0 if self.cluster_shape[0] >= self.cluster_shape[1] else 1
+        # Determine the TP dimension: logits are sharded across the mesh axis that
+        # holds multiple devices. Handles 2D (e.g. 8×4), 1×N (T3K), and N×1 meshes.
+        if num_devices > 1:
+            if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
+                tp_axis = 0 if self.cluster_shape[0] >= self.cluster_shape[1] else 1
+            elif self.cluster_shape[0] > 1:
+                tp_axis = 0
+            else:
+                # num_devices > 1 implies at least one dim > 1; here dim0 == 1 → 1×N (T3K)
+                tp_axis = 1
             num_devices_for_sharding = self.cluster_shape[tp_axis]
             self._all_gather_cluster_axis = tp_axis
-        elif num_devices > 1:
-            # 1D mesh
-            num_devices_for_sharding = num_devices
-            self._all_gather_cluster_axis = None
         else:
-            # Single device
             num_devices_for_sharding = num_devices
             self._all_gather_cluster_axis = None
 
@@ -228,11 +228,9 @@ class LogProbsCalculator:
                 torch.arange(num_devices_for_sharding).unsqueeze(1).expand(num_devices_for_sharding, batch_size)
             )
 
-            if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
+            if self._all_gather_cluster_axis is not None:
                 dims = (0, None) if self._all_gather_cluster_axis == 0 else (None, 0)
                 mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-            elif num_devices > 1:
-                mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 

@@ -95,6 +95,7 @@ void kernel_main() {
          */
         tile_regs_acquire();
         cb_reserve_back(cb_ex, 1 * onetile);
+        reconfig_data_format(cb_scaler, cb_x);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
@@ -161,6 +162,7 @@ void kernel_main() {
          * TODO(AP): can save space here by reusing CB
          */
         cb_reserve_back(cb_ex2, 1);
+        reconfig_data_format(cb_scaler, cb_xmm2);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, cb_ex2);
         tile_regs_acquire();
         cb_wait_front(cb_xmm2, Wt);

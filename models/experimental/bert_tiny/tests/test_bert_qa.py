@@ -25,6 +25,7 @@ def test_bert_qa_inference(
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
+    # NOTE(transformers-5.x): `torchscript=` was removed from transformers configs in 5.x; drop it (a default no-op) when running this experimental model under 5.x.
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     tokenizer_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
@@ -40,6 +41,8 @@ def test_bert_qa_inference(
     pytorch_output_model = hugging_face_reference_model
 
     question = ["What discipline did Winkelmann create?"]
+    # NOTE(transformers-5.x): tokenizer.batch_encode_plus was removed in transformers 5.x; call the
+    # tokenizer directly (text=..., text_pair=...). Experimental, not run on CI, so left as-is.
     bert_input = tokenizer.batch_encode_plus(
         zip(question, context),
         max_length=128,

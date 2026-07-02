@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_set>
 
 #include <tt-metalium/device.hpp>
@@ -106,7 +107,6 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;
 
@@ -164,8 +164,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
-
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
 
     bool is_mmio_capable() const override;
@@ -193,8 +191,6 @@ private:
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
@@ -254,6 +250,10 @@ private:
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
+    // Cached assignment is NOC-specific (DRAM endpoints differ per NOC) and compute-grid-specific
+    // (dispatch axis / harvesting change logical worker bounds).
+    std::optional<std::uint8_t> optimal_dram_bank_to_logical_worker_assignment_noc_;
+    std::optional<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_grid_size_;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;

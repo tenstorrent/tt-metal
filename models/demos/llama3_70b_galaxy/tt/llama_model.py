@@ -608,7 +608,7 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
 
-            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
             toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[output_device_idx]).float()[0, 0, 0, :1]

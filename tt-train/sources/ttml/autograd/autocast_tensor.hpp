@@ -9,11 +9,14 @@
 
 namespace ttml::autograd {
 
-enum class PreferredPrecision : uint8_t { HALF = 0, FULL = 1 };
+// HALF/FULL coerce to bf16/float32 (autocast compute precision). NATIVE returns the value as stored,
+// with no typecast and no second copy cached.
+enum class PreferredPrecision : uint8_t { HALF = 0, FULL = 1, NATIVE = 2 };
 
 class AutocastTensor {
     mutable tt::tt_metal::Tensor m_half_precision_tensor{};
     mutable tt::tt_metal::Tensor m_full_precision_tensor{};
+    PreferredPrecision m_native_precision{PreferredPrecision::FULL};
 
 public:
     AutocastTensor() = default;

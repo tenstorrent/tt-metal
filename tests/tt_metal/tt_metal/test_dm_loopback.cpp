@@ -38,9 +38,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
-    // These addresses have been randomly chosen
-    uint32_t l1_address = 1000 * 1024;
-    uint32_t dram_address = 30000 * 1024;
+    uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint32_t dram_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     std::vector<uint32_t> value = {0x12345678};
 
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);

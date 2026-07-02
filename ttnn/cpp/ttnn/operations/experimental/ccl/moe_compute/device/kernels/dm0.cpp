@@ -29,10 +29,12 @@ void kernel_main() {
     constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
-    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
-
-    // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
+
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     // Number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on. WH=12 (1:1
     // with ring N=12). BH=8 always; ring N can be 8, 12, or 16. When N exceeds num_banks
@@ -253,6 +255,14 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
 
+        // Shared experts are TP-split on the intermediate dim and front-packed (real TpNt slice at
+        // the front of each core's full-Nt shard, zeros after -- add_shared_expert_weights). Read
+        // only the real prefix: W0/W1 layout is Nt-outer, so the prefix is a contiguous shortened
+        // read. The compute kernel zero-fills the produced in2 gap so the full W2 walk stays correct.
+        const bool is_shared_expert = expert_id >= num_experts - num_shared_experts;
+        const uint32_t w0_w1_blocks_this_expert =
+            is_shared_expert ? Cfg::w0_w1_blocks_per_shared_expert : Cfg::w0_w1_blocks_per_expert;
+
         // Per-expert slice's first GLOBAL page id (in the FULL flat tensor across all banks).
         const uint32_t w0_w1_slice_first_global_page =
             w0_w1_ring_core_first_global_page + expert_id * w0_w1_pages_per_logical_shard;
@@ -274,7 +284,7 @@ void kernel_main() {
             // [0, num_banks); we translate to the chip bank id via shard_to_bank[].
             uint32_t w0_w1_global_page = w0_w1_slice_first_global_page;
 
-            for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_expert; ++block_id) {
+            for (uint32_t block_id = 0; block_id < w0_w1_blocks_this_expert; ++block_id) {
                 // Set trid (persists in NOC_PACKET_TAG cmd_buf; subsequent fast_reads inherit it).
                 noc_async_read_set_trid(trid_to_issue);
 
@@ -341,6 +351,9 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w2_global_page = w2_slice_first_global_page;
 
+            // Read the FULL Nt-tall W2 for every expert, including shared experts. Shared-expert W2
+            // is zero-padded to full Nt height (add_shared_expert_weights); the zero rows are inert
+            // under the full contraction the compute kernel performs.
             for (uint32_t block_id = 0; block_id < Cfg::w2_blocks_per_expert; ++block_id) {
                 noc_async_read_set_trid(trid_to_issue);
 

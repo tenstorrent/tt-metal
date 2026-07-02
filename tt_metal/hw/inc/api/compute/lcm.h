@@ -31,12 +31,13 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void lcm_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_lcm, idst0, idst1, odst, VectorMode::RC)));
+    MATH((SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_lcm, idst0, idst1, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lcm_tile_init() { MATH((SFPU_BINARY_INIT_FN(lcm, sfpu::calculate_sfpu_lcm_init))); }
+ALWI void lcm_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(lcm, sfpu::calculate_sfpu_lcm_init))); }
 
 }  // namespace ckernel

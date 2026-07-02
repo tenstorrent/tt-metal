@@ -92,11 +92,13 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     }
 
     int num_elements_in_dword = 4;
-    uint32_t size_bytes = bfp8_tiles.size() * num_elements_in_dword;  // each uint32_t contains 4 BFP8 values
+    // 64-bit: counts/indices below overflow uint32 for tensors > 4 GB.
+    uint64_t size_bytes =
+        static_cast<uint64_t>(bfp8_tiles.size()) * num_elements_in_dword;  // each uint32_t contains 4 BFP8 values
     uint32_t single_bfp8_tile_size =
         tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp8_b) : tile_size(tt::DataFormat::Bfp8_b);
     TT_ASSERT(size_bytes % single_bfp8_tile_size == 0);
-    uint32_t num_tiles = size_bytes / single_bfp8_tile_size;
+    uint64_t num_tiles = size_bytes / single_bfp8_tile_size;
 
     int data_index;
     int subtile_r;
@@ -113,10 +115,10 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     uint32_t exp_word, sub_word_index;
 
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
-    uint32_t fp32_element_index = 0;
+    uint64_t fp32_element_index = 0;
     std::vector<float> float_vec;
     float_vec.resize(num_tiles * num_float_in_tile);
-    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
+    for (uint64_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
@@ -126,15 +128,15 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                         data_index =
                             (tr * (subtiles_in_tile_col * face_HW / 4) + tc * (face_HW / 4) + i * (face_W / 4) +
                              j / 4);  // Each uint32_t contains 4 BFP8 values. Divide data index by 4.
-                        int tile_and_data_index = data_index + (num_bfp8_in_tile * tile_index);
+                        int64_t tile_and_data_index = data_index + (num_bfp8_in_tile * tile_index);
 
-                        int exponent_index = (data_index >> 4) + (num_bfp8_in_tile * tile_index);
+                        int64_t exponent_index = (data_index >> 4) + (num_bfp8_in_tile * tile_index);
 
                         // Extract the uint32_t value that stores the shared exponent for this set
                         // of data. Each 32 bit word is shared amongst 64 datums
                         exp_word = bfp8_tiles[exponent_index];
 
-                        int num_exponent_words_skip = tile_index * num_exp_words;
+                        int64_t num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) &
                                          exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
                                                         // byte is shared amongst 16 datums.
@@ -203,7 +205,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                         // Zero out lanes where mask_denormal is true
                         man = simde_mm256_blendv_epi8(man, simde_mm256_setzero_si256(), mask_denormal);
 
-                        uint32_t float_data_index;
+                        uint64_t float_data_index;
                         if (row_major_output) {
                             float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
                         } else {

@@ -15,16 +15,21 @@ inline uint32_t prng_next(uint32_t n) {
 }
 
 inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val) {
-    tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);
+    tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES / 4 - 1);
     for (uint32_t i = 0; i < num_words; i++) {
         *addr = start_val++;
-        addr += (PACKET_WORD_SIZE_BYTES/4);
+        addr += (PACKET_WORD_SIZE_BYTES / 4);
     }
 }
 
-inline bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val,
-                              uint32_t& mismatch_addr, uint32_t& mismatch_val, uint32_t& expected_val) {
-    tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);
+inline bool check_packet_data(
+    tt_l1_ptr uint32_t* start_addr,
+    uint32_t num_words,
+    uint32_t start_val,
+    uint32_t& mismatch_addr,
+    uint32_t& mismatch_val,
+    uint32_t& expected_val) {
+    tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES / 4 - 1);
     invalidate_l1_cache();
     for (uint32_t i = 0; i < num_words; i++) {
         if (*addr != start_val) {
@@ -34,7 +39,7 @@ inline bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words
             return false;
         }
         start_val++;
-        addr += (PACKET_WORD_SIZE_BYTES/4);
+        addr += (PACKET_WORD_SIZE_BYTES / 4);
     }
     return true;
 }

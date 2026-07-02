@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -22,6 +23,7 @@ std::array<Tensor, 2> moe_grouped_topk(
     float route_scale = 1.0f,
     float epsilon = 1e-20f,
     bool stable_sort = false,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& padding_config = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk

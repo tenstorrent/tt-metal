@@ -266,10 +266,10 @@ bool send_over_eth(
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance().get_firmware_binary_path(
-        sender_device->build_id(), active_eth_index, 0, 0);
-    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance().get_firmware_binary_path(
-        receiver_device->build_id(), active_eth_index, 0, 0);
+    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance(extract_context_id(sender_device))
+                                    .get_firmware_binary_path(sender_device->build_id(), active_eth_index, 0, 0);
+    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance(extract_context_id(receiver_device))
+                                      .get_firmware_binary_path(receiver_device->build_id(), active_eth_index, 0, 0);
     const ll_api::memory& binary_mem_send = llrt::get_risc_binary(sender_firmware_path);
     const ll_api::memory& binary_mem_receive = llrt::get_risc_binary(receiver_firmware_path);
 

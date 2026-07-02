@@ -34,7 +34,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
             // Restored native sharded multi-page split (see common.hpp helper).
             tt::data_movement::common::noc_async_write_sharded(
-                cb_read_ptr + l1_read_offset, s, i_stick, 0, stick_size_bytes);
+                noc, cb_read_ptr + l1_read_offset, s, i_stick, 0, stick_size_bytes);
             l1_read_offset += stick_size_bytes;
             i_stick += 1;
         }

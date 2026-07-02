@@ -188,8 +188,7 @@ void kernel_main() {
     // global reduce, cb_ex <-- cb_ex_external2_id, cb_ex_partial2_id
     if constexpr (is_allgather_worker) {
         cb_scaler_global.wait_front(1);
-        reconfig_data_format_srca(cb_x2_id, cb_ex_external2_id);
-        reconfig_data_format_srcb(cb_scaler_id, cb_scaler_global_id);
+        reconfig_data_format(cb_scaler_global_id, cb_ex_external2_id);
         pack_reconfig_data_format(cb_reduction_out);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2_id, cb_scaler_global_id, cb_reduction_out);
         CircularBuffer(cb_reduction_out)

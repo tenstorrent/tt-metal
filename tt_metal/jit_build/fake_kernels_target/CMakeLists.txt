@@ -1,9 +1,14 @@
 set(ALL_KERNEL_FILES "")
-# Direct recursive searches for tt_metal directories
-file(
-    GLOB_RECURSE TT_METAL_KERNELS
-    "${CMAKE_SOURCE_DIR}/tt_metal/kernels/*.cpp"
-    "${CMAKE_SOURCE_DIR}/tt_metal/kernels/*.cc"
+# Legacy test kernels moved from tt_metal/kernels/ to tests/tt_metal/tt_metal/test_kernels/
+set(TT_METAL_LEGACY_TEST_KERNELS
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_1.cpp"
 )
 file(
     GLOB_RECURSE TT_METAL_DISPATCH_KERNELS
@@ -27,7 +32,7 @@ file(
 # Filter to only include files from kernel directories
 set(TTNN_OPERATION_KERNELS "")
 foreach(file ${ALL_TTNN_FILES})
-    if(file MATCHES ".*/kernels/|.*/kernels_ng/")
+    if(file MATCHES ".*/kernels/|.*/kernels_ng/|.*/kernels_dfb/")
         list(APPEND TTNN_OPERATION_KERNELS ${file})
     endif()
 endforeach()
@@ -35,7 +40,7 @@ endforeach()
 list(
     APPEND
     ALL_KERNEL_FILES
-    ${TT_METAL_KERNELS}
+    ${TT_METAL_LEGACY_TEST_KERNELS}
     ${TT_METAL_DISPATCH_KERNELS}
     ${TT_METAL_FABRIC_KERNELS}
     ${TTNN_OPERATION_KERNELS}

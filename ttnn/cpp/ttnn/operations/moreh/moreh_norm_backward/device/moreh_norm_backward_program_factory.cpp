@@ -249,18 +249,20 @@ ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
         }
 
         // reader
-        KernelDescriptor::CoreRuntimeArgs reader_rt_args{
-            input.buffer()->address(),
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
-            *reinterpret_cast<uint32_t*>(&decimal),
-            num_tiles_per_core,
-            tile_offset};
-        reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
-        reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
+        // Pass tensor base addresses as Buffer* (not raw ->address()) so the program-cache fast
+        // hit path patches them when these tensors are reallocated across calls.
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(input.buffer());
+        reader_rt_args.push_back(output.buffer());
+        reader_rt_args.push_back(output_grad.buffer());
+        reader_rt_args.push_back(*reinterpret_cast<uint32_t*>(&decimal));
+        reader_rt_args.push_back(num_tiles_per_core);
+        reader_rt_args.push_back(tile_offset);
+        reader_rt_args.append(std::vector<uint32_t>(output_grad_dim.begin(), output_grad_dim.end()));
+        reader_rt_args.append(std::vector<uint32_t>(input_grad_dim.begin(), input_grad_dim.end()));
+        reader_rt_args.append(std::vector<uint32_t>(need_bcast_dim.begin(), need_bcast_dim.end()));
 
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+        reader_desc.emplace_runtime_args(core, reader_rt_args);
 
         // writer
         writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});

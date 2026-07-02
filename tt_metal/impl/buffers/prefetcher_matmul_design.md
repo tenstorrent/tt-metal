@@ -2,14 +2,14 @@
 
 This document describes the contract between the gather-in0 matmul receiver
 and the two DRAM prefetcher implementations that feed it: the worker-core
-prefetcher (`ttnn.dram_prefetcher`) and the DRAM-core prefetcher
-(`ttnn.experimental.start_dram_core_prefetcher`). It exists so that a future maintainer
+prefetcher (`ttnn.dram_prefetcher`) and the Tensor prefetcher
+(`ttnn.experimental.start_tensor_prefetcher`). It exists so that a future maintainer
 touching either side can read one file and learn what is invariant across the
 two paths, without having to reverse-engineer the kernels.
 
 If you change the kernel structure or the per-tensor RTA layout in either
 prefetcher — or the receiver matmul's wait/pop contract — update this doc in
-the same commit. The DRAM-core prefetcher includes a sync-check pass
+the same commit. The Tensor prefetcher includes a sync-check pass
 specifically to catch such drift.
 
 ## 1. Overview
@@ -27,7 +27,7 @@ Two prefetcher variants exist:
   to each DRAM bank, with a triple-buffered local CB sitting in worker L1.
   Most flexible (handles heterogeneous shapes/dtypes per launch), and has
   ~1.5 MB of worker L1 to play with for the local CB.
-- **DRAM-core** (`ttnn.experimental.start_dram_core_prefetcher`, `tt_metal/distributed/`):
+- **DRAM-core** (`ttnn.experimental.start_tensor_prefetcher`, `tt_metal/distributed/`):
   runs a single kernel on a DRISC core (i.e. on the DRAM core itself), doing
   GDDR DMA and NoC push from the same RISC. Closer to the GDDR controller and
   can run at higher throughput on production shapes, but its DRISC L1 working
@@ -227,13 +227,13 @@ single compile-time arg.
 Worker L1 has ~1.5 MB of CB space, so even a `3 * max_block_size` reader CB
 fits comfortably for production shapes.
 
-## 6. DRAM-core prefetcher
+## 6. Tensor prefetcher
 
 ### Architecture
 
 ```
 For each DRAM bank b in [0, num_senders):
-  one DRISC core, one kernel: dram_core_prefetcher.cpp
+  one DRISC core, one kernel: tensor_prefetcher.cpp
     do GDDR DMA into a ping-pong stage in DRISC L1
     NoC push from stage to GCB remote
   no local reader_cb; stage IS the working buffer.
@@ -329,7 +329,7 @@ collapses to `rows_per_sub = 1` before allowing `M > 1`.
 
 ### Per-tensor derivations
 
-Computed by `compute_tensor_geom` in `dram_core_prefetcher_manager.cpp` (the
+Computed by `compute_tensor_geom` in `tensor_prefetcher_manager.cpp` (the
 DRAM-core analogue of the worker-core's per-tensor derivations in §5):
 
 - `(coalesced_page_size[t], coalesced_num_pages[t])` — same `pick_page_size`
@@ -490,9 +490,9 @@ Whoever changes prefetcher or receiver code must preserve these:
 - Worker-core prefetcher:
   `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_program_factory.cpp`,
   `kernels/reader_dram.cpp`, `kernels/writer_l1.cpp`.
-- DRAM-core prefetcher:
-  `tt_metal/impl/buffers/dram_core_prefetcher_manager.cpp`,
-  `tt_metal/impl/buffers/kernels/dram_core_prefetcher.cpp`.
+- Tensor prefetcher:
+  `tt_metal/impl/buffers/tensor_prefetcher_manager.cpp`,
+  `tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp`.
 - GCB / remote CB API:
   `tt_metal/hw/inc/api/remote_circular_buffer.h`,
   `tt_metal/impl/buffers/global_circular_buffer.cpp`.

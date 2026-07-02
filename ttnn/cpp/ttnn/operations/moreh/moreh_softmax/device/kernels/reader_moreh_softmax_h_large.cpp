@@ -38,10 +38,11 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 
     // Generate mask tile
+    CircularBuffer cb_mask_obj(cb_mask);
     if (is_fp32) {
-        generate_mask_h<uint32_t>(cb_mask, mask_h);
+        generate_mask_h<uint32_t>(cb_mask_obj, mask_h);
     } else {
-        generate_mask_h<uint16_t>(cb_mask, mask_h);
+        generate_mask_h<uint16_t>(cb_mask_obj, mask_h);
     }
 
     Noc noc;

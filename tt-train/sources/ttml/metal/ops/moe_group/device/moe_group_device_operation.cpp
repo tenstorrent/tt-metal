@@ -132,12 +132,6 @@ tensor_return_value_t MoeGroupDeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t MoeGroupDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
-    return tt::tt_metal::operation::hash_operation<MoeGroupDeviceOperation>(
-        attrs, args.dispatched.dtype(), args.dispatched.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::moe_group::device
 
 namespace ttnn::prim {

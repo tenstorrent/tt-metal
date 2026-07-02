@@ -31,14 +31,18 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::INT32, "Expert dispatch table must be INT32!");
     TT_FATAL(expert_mask.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Expert dispatch table must be ROW_MAJOR!");
     const auto& mask_shape = expert_mask.padded_shape();
-    bool valid_1d = mask_shape.size() == 1 && mask_shape[0] == args.n_routed_experts;
-    bool valid_2d = mask_shape.size() == 2 && mask_shape[0] == 1 && mask_shape[1] == args.n_routed_experts;
+    // Allow a wider table than n_routed_experts (e.g. a trailing sentinel column at index
+    // n_routed_experts, always -1): the kernel only reads mask entries at index < n_routed_experts,
+    // so padded tokens (sentinel index == n_routed_experts) are skipped and never counted.
+    bool valid_1d = mask_shape.size() == 1 && mask_shape[0] >= args.n_routed_experts;
+    bool valid_2d = mask_shape.size() == 2 && mask_shape[0] == 1 && mask_shape[1] >= args.n_routed_experts;
     TT_FATAL(
         valid_1d || valid_2d,
-        "Expert dispatch table must have shape [{}] or [1, {}], got {}D tensor",
+        "Expert dispatch table must have shape [>={}] or [1, >={}], got {}D tensor with last dim {}",
         args.n_routed_experts,
         args.n_routed_experts,
-        mask_shape.size());
+        mask_shape.size(),
+        mask_shape[mask_shape.size() - 1]);
 }
 
 MaskedBincountDeviceOperation::spec_return_value_t MaskedBincountDeviceOperation::compute_output_specs(
@@ -50,14 +54,6 @@ MaskedBincountDeviceOperation::spec_return_value_t MaskedBincountDeviceOperation
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-}
-
-tt::stl::hash::hash_t MaskedBincountDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_shape = tensor_args.input_tensor.padded_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<MaskedBincountDeviceOperation>(
-        args, tensor_args.input_tensor.dtype(), tensor_args.input_tensor.memory_config(), input_shape);
-    return hash;
 }
 
 MaskedBincountDeviceOperation::tensor_return_value_t MaskedBincountDeviceOperation::create_output_tensors(

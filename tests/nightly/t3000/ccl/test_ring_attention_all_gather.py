@@ -350,7 +350,7 @@ def test_ring_attention_all_gather(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 3),
     ],
     ids=["check"],
 )
@@ -383,36 +383,28 @@ def test_ring_attention_all_gather_program_cache(
 ):
     submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
-    dummy_tensors = []
-    for i in range(3):
-        dummy_tensors.append(
-            ttnn.from_torch(
-                torch.rand(ag_output_shape),
-                device=submesh_device,
-                layout=layout,
-                dtype=ag_input_dtype,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    submesh_device, mesh_shape=tuple(submesh_device.shape), dims=[None, None]
-                ),
-            )
-        )
-        run_ring_attention_all_gather_impl(
-            submesh_device,
-            ag_output_shape,
-            ag_num_inputs,
-            rp_axis,
-            rp_factor,
-            up_factor,
-            num_links,
-            ag_input_dtype,
-            layout,
-            mem_config_input,
-            mem_config_ag,
-            all_gather_topology=all_gather_topology,
-            enable_trace=enable_trace,
-            num_iters=num_iters,
-            pcc_threshold=pcc_threshold,
-        )
-        ttnn.synchronize_device(submesh_device)
+    # Run the op num_iters (>1) times within a SINGLE run_ring_attention_all_gather_impl invocation. The op
+    # must be exercised under one sub-device-manager lifetime: run_ring_attention_all_gather_impl loads a
+    # sub-device manager on entry, which clears the program cache (mesh_device.cpp clear_program_cache on
+    # manager switch), so looping the whole helper would clear the cache between calls and defeat the reuse
+    # check. The impl's internal loop runs the op num_iters times with distinct per-iter persistent buffers
+    # and global semaphores, so cache reuse is still validated against address variation.
+    run_ring_attention_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        ag_num_inputs,
+        rp_axis,
+        rp_factor,
+        up_factor,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        pcc_threshold=pcc_threshold,
+    )
 
     assert submesh_device.cache_entries_counter.total == 1

@@ -129,15 +129,15 @@ distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<dist
     const CoreCoord stress_core{0, 0};
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         stress_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         stress_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", stress_core, ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", stress_core, ComputeConfig{});
 
     program.set_runtime_id(static_cast<uint64_t>(kStressRuntimeId));
 

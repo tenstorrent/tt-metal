@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
@@ -15,11 +18,15 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<1>();
     const auto input_addrg = TensorAccessor(input_args, input_addr);
 
+    const uint32_t page_bytes = get_local_cb_interface(in_cb_id).fifo_page_size;
+
+    Noc noc;
+    CircularBuffer cb_in(in_cb_id);
+
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_reserve_back(in_cb_id, 1);
-        uint32_t in_cb_write_ptr = get_write_ptr(in_cb_id);
-        noc_async_read_page(i, input_addrg, in_cb_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(in_cb_id, 1);
+        cb_in.reserve_back(1);
+        noc.async_read(input_addrg, cb_in, page_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in.push_back(1);
     }
 }

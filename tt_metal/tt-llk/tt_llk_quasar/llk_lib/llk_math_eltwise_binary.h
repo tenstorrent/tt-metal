@@ -109,7 +109,7 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
     constexpr std::uint8_t addrmod_fid    = high_fidelity ? ADDR_MOD_2 : ADDR_MOD_0;
     const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, addrmod_fid>(EN_DST_ACC);
 
-    const std::uint32_t MOP_OUTER_LOOP     = (rows_per_mop_run >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t MOP_OUTER_LOOP     = (rows_per_mop_run >> rows_log2(ELTWISE_MATH_ROWS));
     constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
 
     const std::uint32_t eltwise_binary_op_clr_valid =
@@ -143,7 +143,7 @@ template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDE
 inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     const std::uint32_t total_num_rows_per_tile = tensor_shape.total_num_faces() * tensor_shape.face_r_dim;
-    const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> rows_log2(ELTWISE_MATH_ROWS));
     const std::uint32_t MOP_INNER_LOOP          = to_underlying(MATH_FIDELITY_TYPE) + 1;
     constexpr bool high_fidelity                = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");

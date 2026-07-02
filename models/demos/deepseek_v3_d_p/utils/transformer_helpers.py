@@ -23,7 +23,15 @@ import psutil
 import torch
 from loguru import logger
 from transformers import DynamicCache
-from transformers.modeling_utils import no_init_weights
+
+from models.common.utility_functions import hf_cache_layer_kv
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 
@@ -61,17 +69,30 @@ ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
 ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
 ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
 LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
+LONGBOOK_QA_ENG_5120 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_5120_nopad"
+LONGBOOK_QA_ENG_56320 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_56320_nopad"
 
-# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
+# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path, where
+# isl_total is the trace's NATIVE (generated) sequence length.
 # Traces are only used when use_pretrained=True and n_routed_experts=256, since they
 # were generated from the full pretrained model.
+# A test may request an isl that is not a native trace length: find_trace_dir() falls
+# back to the smallest native trace with the same (input_source, padding_side) whose
+# length is >= the requested isl, and the caller slices it (see slice_debug_trace).
 TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
     ("json_prompts", 1024, "right"): ILLIAD_1024_TRACE,
     ("json_prompts", 25600, "right"): ILLIAD_25024_TRACE,
     ("abc_1k", 1024, "right"): ABC_1K_PAD_RIGHT_1024,
     ("abc_1k", 1024, "left"): ABC_1K_PAD_LEFT_1024,
+    ("longbook_qa_eng", 5120, "right"): LONGBOOK_QA_ENG_5120,
     ("longbook_qa_eng", 25600, "right"): LONGBOOK_QA_ENG_25600,
+    ("longbook_qa_eng", 56320, "right"): LONGBOOK_QA_ENG_56320,
 }
+
+
+def _trace_dir_ready(path: Path) -> bool:
+    """A trace dir is usable only if it exists and carries a metadata.json."""
+    return path.exists() and (path / "metadata.json").exists()
 
 
 def find_trace_dir(
@@ -80,21 +101,41 @@ def find_trace_dir(
     padding_side: str,
     use_pretrained: bool,
     n_routed_experts: int,
-) -> Path | None:
-    """Return the trace directory for an exact test configuration, or None.
+) -> tuple[Path, int] | None:
+    """Return ``(trace_dir, trace_isl)`` for a test configuration, or ``None``.
+
+    ``trace_isl`` is the trace's NATIVE sequence length. When it is larger than the
+    requested ``isl_total`` the caller must slice the trace down to ``isl_total``
+    (see :func:`slice_debug_trace`) — valid for causal, nopad prefill traces.
 
     A trace is eligible only when:
     - the model uses pretrained weights with 256 experts (traces were generated from
       the full pretrained DeepSeek-R1 model)
-    - (input_source, isl_total, padding_side) match a known trace exactly
     - the directory exists and contains a metadata.json
+
+    Resolution order:
+    1. Exact ``(input_source, isl_total, padding_side)`` match (no slicing).
+    2. Otherwise the smallest ready trace with the same ``(input_source, padding_side)``
+       whose native isl is ``>= isl_total`` (caller slices the first ``isl_total`` tokens).
     """
     if not use_pretrained or n_routed_experts != 256:
         return None
 
-    path = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
-    if path is not None and path.exists() and (path / "metadata.json").exists():
-        return path
+    # 1. Exact native-length match — preferred, no slicing needed.
+    exact = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
+    if exact is not None and _trace_dir_ready(exact):
+        return exact, isl_total
+
+    # 2. Fall back to the smallest ready trace that is at least as long as requested,
+    #    with matching input_source + padding_side.
+    candidates = sorted(
+        (trace_isl, path)
+        for (src, trace_isl, pad), path in TRACE_LOOKUP.items()
+        if src == input_source and pad == padding_side and trace_isl >= isl_total and _trace_dir_ready(path)
+    )
+    if candidates:
+        trace_isl, path = candidates[0]
+        return path, trace_isl
     return None
 
 
@@ -163,9 +204,19 @@ INFINITEBENCH_SUBSETS = {
     "longbook_qa_eng": "longbook_qa_eng.jsonl",
 }
 
-INFINITEBENCH_CACHE_DIR = Path(
-    os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE", "/tmp/deepseek_v3_transformer_inputs")
-)
+
+def _default_infinitebench_cache_dir() -> str:
+    # Prefer a test-specific override, then HF_HOME/infinitebench, then a temp dir.
+    explicit = os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE")
+    if explicit:
+        return explicit
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return os.path.join(hf_home, "infinitebench")
+    return "/tmp/deepseek_v3_transformer_inputs"
+
+
+INFINITEBENCH_CACHE_DIR = Path(_default_infinitebench_cache_dir())
 
 
 # --- HF model helpers ---
@@ -638,7 +689,7 @@ def load_and_compute_layer_by_layer(
 
     # Extract KVPE if computed reference
     if compute_reference:
-        ref_kvpe_list = [ref_cache.key_cache[i] for i in range(num_layers)]
+        ref_kvpe_list = [hf_cache_layer_kv(ref_cache, i)[0] for i in range(num_layers)]
 
     # --- Process Norm ---
     logger.info("Processing norm...")
@@ -1020,3 +1071,97 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
         logits=logits,
         metadata=metadata,
     )
+
+
+def slice_debug_trace(trace: DebugTraceData, isl_total: int) -> DebugTraceData:
+    """Slice a debug trace down to its first ``isl_total`` sequence positions.
+
+    This is exact for causal (autoregressive) prefill traces generated WITHOUT padding
+    (the ``*_nopad`` traces): a transformer's per-layer decoder output and KV-cache entry
+    at position ``i`` depend only on positions ``0..i`` (causal attention + absolute-position
+    RoPE), so they are identical whether the full sequence or only its first ``isl_total``
+    tokens are prefilled.
+
+    The stored ``logits`` / ``next_token_id`` are the FULL sequence's final-position
+    products and are meaningless for the shorter prefill, so ``logits`` is dropped
+    (set to ``None``); callers must skip the logits / first-token checks for a sliced
+    trace (``metadata`` is left untouched, so ``next_token_id`` must not be trusted).
+
+    Args:
+        trace: Trace to slice (typically longer than the requested isl).
+        isl_total: Target sequence length; must be <= the trace's native length.
+
+    Returns:
+        A new :class:`DebugTraceData` truncated along the sequence dimension.
+    """
+    trace_len = trace.token_ids.shape[1]
+    if isl_total > trace_len:
+        raise ValueError(f"Cannot slice trace of length {trace_len} up to isl_total={isl_total}")
+    return DebugTraceData(
+        token_ids=trace.token_ids[:, :isl_total],
+        ref_snapshots={label: snap[:, :isl_total, :] for label, snap in trace.ref_snapshots.items()},
+        ref_kvpe_list=[kv[:, :, :isl_total, :] for kv in trace.ref_kvpe_list],
+        logits=None,  # full-sequence final-position logits are invalid after slicing
+        metadata=trace.metadata,
+    )
+
+
+# Golden bit_sculpt prefill trace (DeepSeek-R1-0528, 256 experts, hidden_dim 7168).
+# Layer 3 is the first MoE layer (metadata moe_layer_offset == 3).
+GOLDEN_LONGBOOK_TRACE = Path("/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad")
+
+
+def load_trace_gate_input(
+    trace_dir: Path,
+    layer_idx: int,
+    max_seq_len: int,
+    dim: int,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor | None:
+    """Load the MoE/gate block input from a bit_sculpt golden trace.
+
+    The trace stores ``post_attn_norm_layer_{i}`` per layer — the post-attention
+    RMSNorm output, which is exactly the tensor fed into the gate + experts at
+    layer ``i`` (unlike ``decoder_output_layer_{i}``, the unnormalized residual
+    stream). Returns ``[max_seq_len, dim]`` (tiled if the trace is shorter than
+    ``max_seq_len``), or ``None`` if the trace/key is unavailable or ``dim``
+    exceeds the trace hidden dim.
+
+    A sliced read is used so only the requested ``[max_seq_len, dim]`` block is
+    materialized rather than the full (seq, hidden_dim) tensor.
+    """
+    from safetensors import safe_open
+
+    layer_path = Path(trace_dir) / "hidden_states" / f"layer_{layer_idx}.safetensors"
+    if not layer_path.exists():
+        logger.warning(f"Trace file not found: {layer_path}. Falling back to synthetic input.")
+        return None
+
+    key = f"post_attn_norm_layer_{layer_idx}"
+    try:
+        with safe_open(layer_path, framework="pt") as f:
+            if key not in f.keys():
+                logger.warning(f"{key} not in {layer_path}. Falling back to synthetic input.")
+                return None
+            sl = f.get_slice(key)
+            seq_total, hidden_dim = sl.get_shape()
+            if dim > hidden_dim:
+                logger.warning(
+                    f"Requested dim {dim} > trace hidden_dim {hidden_dim} ({key}). Falling back to synthetic input."
+                )
+                return None
+            n = min(max_seq_len, seq_total)
+            hidden = sl[:n, :dim].to(dtype)
+    except Exception as e:  # safetensors / IO errors — fall back to synthetic
+        logger.warning(f"Could not load {key} from {layer_path}: {e}. Falling back to synthetic input.")
+        return None
+
+    if hidden.shape[0] < max_seq_len:
+        repeats = (max_seq_len + hidden.shape[0] - 1) // hidden.shape[0]
+        hidden = hidden.repeat(repeats, 1)[:max_seq_len]
+
+    logger.info(
+        f"Loaded gate input from {Path(trace_dir).name} {key} "
+        f"(trace {seq_total}x{hidden_dim}, sliced to {tuple(hidden.shape)})"
+    )
+    return hidden

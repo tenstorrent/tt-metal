@@ -1,0 +1,149 @@
+# Multi-operation test exercising tiny tile shapes across different op types.
+# Each operation uses a different tile shape with non-standard block sizes.
+# Op 0: Datacopy 16x32 tiles with SFPU exp → block [48, 32] = 3 tiles
+# Op 1: Elwadd 16x16 tiles → block [16, 48] = 3 tiles
+# Op 2: Reduce row 16x32 tiles → block [48, 32] = 3 tiles
+# Op 3: Elwmul 4x32 tiles with broadcast scalar → block [12, 32] = 3 tiles
+# Op 4: Matmul (in0: 16x32, in1: 32x32 → 16x32) + Elwadd 16x32 tiles
+
+# dest_acc: true
+
+operands:
+  - name: "datacopy_in_A"
+    dims: [48, 128]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "datacopy_in_B"
+    dims: [48, 128]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "datacopy_out"
+    dims: [48, 128]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "elwadd_in_A"
+    dims: [48, 48]
+    format: "Float16_b"
+    tile_dims: [16, 16]
+  - name: "elwadd_in_B"
+    dims: [48, 48]
+    format: "Float16_b"
+    tile_dims: [16, 16]
+  - name: "elwadd_out"
+    dims: [48, 48]
+    format: "Float16_b"
+    tile_dims: [16, 16]
+  - name: "reduce_in_A"
+    dims: [48, 128]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "reduce_in_B"
+    dims: [48, 128]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+    const_value: 1.0
+  - name: "reduce_out"
+    dims: [48, 128]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "elwmul_in_A"
+    dims: [12, 64]
+    format: "Float16_b"
+    tile_dims: [4, 32]
+  - name: "elwmul_in_B"
+    dims: [12, 64]
+    format: "Float16_b"
+    tile_dims: [4, 32]
+  - name: "elwmul_out"
+    dims: [12, 64]
+    format: "Float16_b"
+    tile_dims: [4, 32]
+  - name: "matmul_in_A"
+    dims: [48, 64]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "matmul_in_B"
+    dims: [64, 64]
+    format: "Float16_b"
+    tile_dims: [32, 32]
+  - name: "elwadd_fused_in_A"
+    dims: [48, 64]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "elwadd_fused_in_B"
+    dims: [48, 64]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "matmul_elwadd_out"
+    dims: [48, 64]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "datacopy_in_A"
+        src_b: "datacopy_in_B"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 16
+    block_size: [48, 32]
+    pack:
+      - output: "datacopy_out"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        src_a: "elwadd_in_A"
+        src_b: "elwadd_in_B"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [16, 48]
+    pack:
+      - output: "elwadd_out"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        src_a: "reduce_in_A"
+        src_b: "reduce_in_B"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "SUM"
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [48, 32]
+    pack:
+      - output: "reduce_out"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        src_a: "elwmul_in_A"
+        src_b: "elwmul_in_B"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [12, 32]
+    pack:
+      - output: "elwmul_out"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        src_a: "matmul_in_A"
+        src_b: "matmul_in_B"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+      - type: "Fpu"
+        src_a: "elwadd_fused_in_A"
+        src_b: "elwadd_fused_in_B"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [48, 64]
+    pack:
+      - output: "matmul_elwadd_out"
+        packer: "Packer"

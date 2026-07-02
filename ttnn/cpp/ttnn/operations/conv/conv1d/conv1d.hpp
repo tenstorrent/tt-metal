@@ -15,6 +15,7 @@
 namespace ttnn {
 
 using Conv1dConfig = ttnn::prim::Conv2dConfig;
+using Conv1dSliceConfig = ttnn::prim::Conv2dSliceConfig;
 
 using OutputLength = uint32_t;
 using Conv1dResult = std::variant<
@@ -44,6 +45,7 @@ Conv1dResult conv1d(
     const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<const Conv1dSliceConfig>& slice_config = std::nullopt,
     bool return_output_dim = true,
     bool return_weights_and_bias = true);
 

@@ -23,7 +23,7 @@ namespace ckernel {
  * ClearStats (default): Clears the previous mean and M2 values stored in the registers. Use for a
  *     fresh Welford pass.
  * PreserveStats: Leaves the running mean and M2 accumulators (LREG4/5) intact. Use when re-arming
- *     the SFPU replay buffer mid-pass after another op (e.g. `transpose_wh_tile` on the
+ *     the SFPU replay buffer mid-pass after another op (e.g. `transpose_tile` on the
  *     unpack-to-DEST fp32 path) has clobbered the welford recurrence slots.
  */
 enum class WelfordInitMode : uint8_t {

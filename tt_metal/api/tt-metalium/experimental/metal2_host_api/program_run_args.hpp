@@ -96,7 +96,8 @@ struct ProgramRunArgs {
 
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
-        // If unset, the ProgramSpec value is used.
+        // These overrides are stateful across executions: if unset, the DFB keeps its current size
+        // (initially the ProgramSpec value; a prior override persists until changed).
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
@@ -123,56 +124,5 @@ inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {
 ProgramRunArgs MergeProgramRunArgs(
     ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation = false);
 // Invocation: auto full = MergeProgramRunArgs(std::move(base_run_args), {appended_run_args});
-
-//------------------------------------------------
-// ProgramRunArgsView (for advanced users)
-//------------------------------------------------
-//
-// NOTE: ProgramRunArgsView is not yet supported! It is included here as a sketch only.
-//
-// Non-owning view into a Program's command buffers.
-// Enables in-place modification of mutable Program parameters.
-//
-// STATEFULNESS: Program command buffers are stateful.
-//   Parameters retain their previously specified value unless modified.
-//
-// LIFETIME: This view is valid for the lifetime of the Program.
-//   Accessing the view after the Program is destroyed is undefined behavior.
-//
-// THREAD SAFETY: Modifications through this view are not synchronized;
-//   the caller must ensure exclusive access when modifying.
-//
-struct ProgramRunArgsView {
-    struct KernelRunArgsView {
-        KernelSpecName kernel;
-
-        // Direct views into per-node vararg runtime args
-        Table<NodeCoord, std::span<uint32_t>> runtime_varargs;
-
-        // Direct view into common vararg runtime args
-        std::span<uint32_t> common_runtime_varargs;
-    };
-    // TODO: Better to just expose the multi-dim dispatch vectors directly?
-    //       Would eliminate the lookup indirection.
-    //       ...But would mess up all the implicit RTAs....
-    //       Look into this when implementing.
-    Group<KernelRunArgsView> kernel_run_args;
-
-    struct DFBRunOverridesView {
-        DFBSpecName dfb;
-
-        // DFB size overrides
-        // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
-        // (This is seldom used in practice)
-        uint32_t* entry_size;   // points to the value that will be used to allocate DFB ephemeral memory
-        uint32_t* num_entries;  // always set to non-null location
-
-        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
-        // the corresponding tensor_arg.
-    };
-    Group<DFBRunOverridesView> dfb_run_overrides;
-};
-
-// TODO: Consider a const version of the view object, for debug/test use?
 
 }  // namespace tt::tt_metal::experimental

@@ -36,10 +36,18 @@ inline void llk_math_matmul_init(
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
+    LLK_ASSERT(
+        is_2x_format(srcA_format) == is_2x_format(srcB_format),
+        "SrcA and SrcB must both be 2x formats or both non-2x formats");
 
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
-    _llk_math_matmul_init_<math_fidelity>(ct_dim, rt_dim);
+    const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
+    if (src_2x) {
+        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(ct_dim, rt_dim);
+    } else {
+        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(ct_dim, rt_dim);
+    }
 }
 
 /**

@@ -33,7 +33,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dram_core_prefetcher_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
@@ -49,6 +49,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp6.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
@@ -145,4 +146,16 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
 )
+
+if(TT_METAL_USE_EMULE)
+    list(
+        APPEND
+        IMPL_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
+    )
+endif()

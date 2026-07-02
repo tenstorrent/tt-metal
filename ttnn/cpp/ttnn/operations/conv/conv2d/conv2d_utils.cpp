@@ -874,9 +874,10 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                     // In case we need to run Interleaved2Sharded, adjust the shard spec,
                     // in order to get smaller allocation size of sharded buffer.
                     const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
-                    input_tensor_sharded_memory_config_to_layout =
-                        input_tensor_sharded_memory_config_to_layout.with_shard_spec(
-                            tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
+                    input_tensor_sharded_memory_config_to_layout = tt::tt_metal::MemoryConfig(
+                        input_tensor_sharded_memory_config_to_layout.memory_layout(),
+                        input_tensor_sharded_memory_config_to_layout.buffer_type(),
+                        tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
                     alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
                 }
                 Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(

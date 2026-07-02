@@ -1,0 +1,27 @@
+[
+    {
+        "prompt": "Based on the text above, provide a brief summary of the major themes and plot points in this excerpt from Frankenstein.",
+        "context": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+        "max_length": 70000
+    },
+    {
+        "prompt": "Based on the text above, provide a brief summary of the major themes and plot points in this excerpt from Frankenstein.",
+        "context": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+        "max_length": 140000
+    },
+    {
+        "prompt": "Based on the text above, provide a brief summary of the major themes and plot points in this excerpt from Frankenstein.",
+        "context": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+        "max_length": 300000
+    },
+    {
+        "prompt": "Based on the text above, provide a brief summary of the major themes and plot points in this excerpt from Frankenstein.",
+        "context": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+        "max_length": 500000
+    },
+    {
+        "prompt": "Based on the text above, provide a brief summary of the major themes and plot points in this excerpt.",
+        "context": "https://www.gutenberg.org/cache/epub/2600/pg2600.txt",
+        "max_length": 1200000
+    }
+]

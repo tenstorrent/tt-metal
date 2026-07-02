@@ -288,7 +288,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
-    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_wh_tile
+    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_tile
     // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
     // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
     // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
@@ -855,8 +855,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode):
-    // c_0 (input) has two consumers in the welford kernel: transpose_wh_tile during the
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode):
+    // c_0 (input) has two consumers in the welford kernel: transpose_tile during the
     //   welford intake (non-TILIZE_IN branch) and sub_tiles_bcast_scalar during the final
     //   (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set on
     //   c_0 directly. Instead we register c_19 as a second buffer index pointing to the same
@@ -865,7 +865,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     //   23-bit mantissa into DEST, which the SFPU welford then consumes) and via c_0 for the
     //   final-stage FPU sub.
     // c_29 is the tilized-input CB used by the welford TILIZE_IN path; its only consumer is
-    //   transpose_wh_tile (final normalization reads c_0, not c_29). Pure unary-only path,
+    //   transpose_tile (final normalization reads c_0, not c_29). Pure unary-only path,
     //   so the flag is safe.
     //
     // Other FP32 CBs were considered and rejected because, even though they pass through an

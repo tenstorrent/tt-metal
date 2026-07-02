@@ -56,7 +56,7 @@ void kernel_main() {
         }
         cb.wait_front(1);
         uint32_t l1_read_addr = cb.get_read_ptr();
-        tt::data_movement::common::noc_async_write_sharded(l1_read_addr, s0, dest_linear_idx, 0, page_size);
+        tt::data_movement::common::noc_async_write_sharded(noc, l1_read_addr, s0, dest_linear_idx, 0, page_size);
         noc.async_write_barrier();
         cb.pop_front(1);
     }

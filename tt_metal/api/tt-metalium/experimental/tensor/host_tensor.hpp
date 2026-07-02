@@ -53,17 +53,6 @@ public:
 
     HostTensor() = delete;
 
-    /**
-     * Constructs a host tensor from a distributed host buffer.
-     */
-    explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
-
-    /**
-     * Constructs a host tensor from a single device host storage.
-     * The buffer is occupies the 0x0 shard of the distributed host buffer.
-     */
-    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
-
     ~HostTensor();
 
     /**
@@ -103,6 +92,17 @@ public:
     // End special member functions
 
     // Factory methods for creating an Engaged HostTensor.
+
+    /**
+     * Constructs a host tensor from a distributed host buffer.
+     */
+    static HostTensor from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
+    /**
+     * Constructs a host tensor from a single device host buffer.
+     * The buffer occupies the 0x0 shard of the distributed host buffer.
+     */
+    static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     /**
      * Converts a buffer of elements of type `T` to a `Tensor`.
@@ -208,6 +208,9 @@ public:
     const HostTensorImpl& impl() const;
 
 private:
+    // Internal constructors. Use the from_buffer factories to build a HostTensor from a backing buffer.
+    explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
     // impl_ could be a nullptr if HostTensor is in a moved-from state.
     // Avoid using impl_ pointer directly, use the impl() accessor instead.
     // Otherwise, please add manual TT_FATAL checks for nullptr.

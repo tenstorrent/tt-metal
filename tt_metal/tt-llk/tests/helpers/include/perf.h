@@ -9,11 +9,27 @@
 
 #include "ckernel.h"
 
+// === L1 layout for perf tests ===
+//
+// Stimuli generator buffers and the perf-counter region are kept in this header
+// so that the disjoint ranges are visible side-by-side and any future allocation
+// has to be reconciled against both. The perf-counter macros are only defined in
+// the WC build (counter machinery in counters.h is gated by the same flag).
+
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
 constexpr std::uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
 constexpr std::uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
 constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
+
+#ifdef PERF_COUNTERS_COMPILED
+// Perf-counter shared config + per-zone data. Region ends at 0x16AFF4 (profiler boundary,
+// asserted in counters.h). Must not overlap the stimuli buffers above.
+#define PERF_COUNTERS_BASE_ADDR         0x169000
+#define PERF_COUNTERS_CONFIG_WORDS      200
+#define PERF_COUNTERS_DATA_WORDS        200
+#define PERF_COUNTERS_BANK_CYCLES_WORDS 5
+#endif // PERF_COUNTERS_COMPILED
 
 constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
 {

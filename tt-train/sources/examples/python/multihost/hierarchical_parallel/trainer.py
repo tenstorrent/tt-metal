@@ -15,8 +15,8 @@ from time import time
 import numpy as np
 import ttnn
 import ttml
-from ttml.common.data import get_batch, build_causal_mask
-from ttml.common.utils import no_grad, PerformanceMeter
+from ttml.common.data import get_batch
+from ttml.common.utils import no_grad, PerformanceMeter, build_causal_mask
 
 
 def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):

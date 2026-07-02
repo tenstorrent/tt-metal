@@ -8,6 +8,7 @@
 #define BCAST_DIM BroadcastType::ROW
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -27,7 +28,8 @@ void kernel_main() {
     CircularBuffer cb1(tt::CBIndex::c_1);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     for (uint32_t b = 0; b < block_cnt; ++b) {
         cb0.wait_front(in0_block_tile_cnt);
         cb1.wait_front(in1_block_tile_cnt);

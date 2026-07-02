@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+#include <numbers>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -51,7 +52,7 @@ std::vector<Tensor> _min_or_max_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_scale_grad = ttnn::multiply(grad, 0.5, std::nullopt, output_mem_config);
+    Tensor t_scale_grad = ttnn::multiply(grad, 0.5f, std::nullopt, output_mem_config);
     Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
     Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
     Tensor t_sub_eqz = ttnn::eqz(t_sub, output_mem_config);
@@ -342,10 +343,13 @@ std::vector<Tensor> ldexp_bw(
     std::vector<Tensor> grad;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor tpow_o =
-        ttnn::multiply(grad_tensor, ttnn::rpow(other, 2.0, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, ttnn::rpow(other, 2.0f, output_memory_config), std::nullopt, output_memory_config);
     grad.emplace_back(tpow_o);
     Tensor result = ttnn::multiply(
-        input_a, ttnn::multiply(tpow_o, M_LN2, std::nullopt, output_memory_config), std::nullopt, output_memory_config);
+        input_a,
+        ttnn::multiply(tpow_o, std::numbers::ln2_v<float>, std::nullopt, output_memory_config),
+        std::nullopt,
+        output_memory_config);
     grad.emplace_back(result);
     return grad;
 }
@@ -523,10 +527,10 @@ std::vector<std::optional<Tensor>> concat_bw(
     if (are_required_outputs[0]) {
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {
-            input_tensor_a_arg.padded_shape()[0],
-            input_tensor_a_arg.padded_shape()[1],
-            input_tensor_a_arg.padded_shape()[2],
-            input_tensor_a_arg.padded_shape()[3]};
+            input_tensor_a_arg.logical_shape()[0],
+            input_tensor_a_arg.logical_shape()[1],
+            input_tensor_a_arg.logical_shape()[2],
+            input_tensor_a_arg.logical_shape()[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
@@ -535,19 +539,19 @@ std::vector<std::optional<Tensor>> concat_bw(
     if (are_required_outputs[1]) {
         ttnn::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
         if (dim == 0) {
-            start_index_2 = {input_tensor_a_arg.padded_shape()[0], 0, 0, 0};
+            start_index_2 = {input_tensor_a_arg.logical_shape()[0], 0, 0, 0};
         } else if (dim == 1) {
-            start_index_2 = {0, input_tensor_a_arg.padded_shape()[1], 0, 0};
+            start_index_2 = {0, input_tensor_a_arg.logical_shape()[1], 0, 0};
         } else if (dim == 2) {
-            start_index_2 = {0, 0, input_tensor_a_arg.padded_shape()[2], 0};
+            start_index_2 = {0, 0, input_tensor_a_arg.logical_shape()[2], 0};
         } else if (dim == 3) {
-            start_index_2 = {0, 0, 0, input_tensor_a_arg.padded_shape()[3]};
+            start_index_2 = {0, 0, 0, input_tensor_a_arg.logical_shape()[3]};
         }
         ttnn::SmallVector<uint32_t> end_index_2 = {
-            grad_tensor_arg.padded_shape()[0],
-            grad_tensor_arg.padded_shape()[1],
-            grad_tensor_arg.padded_shape()[2],
-            grad_tensor_arg.padded_shape()[3]};
+            grad_tensor_arg.logical_shape()[0],
+            grad_tensor_arg.logical_shape()[1],
+            grad_tensor_arg.logical_shape()[2],
+            grad_tensor_arg.logical_shape()[3]};
         ttnn::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
@@ -648,7 +652,7 @@ std::vector<std::optional<Tensor>> div_bw(
 
     if (rounding_mode == std::nullopt) {
         float t_inf = std::numeric_limits<float>::infinity();
-        if (scalar == 0.0) {
+        if (scalar == 0.0f) {
             float t_nan = std::nanf("");
             where(
                 ttnn::eqz(grad_tensor, output_mem_config),

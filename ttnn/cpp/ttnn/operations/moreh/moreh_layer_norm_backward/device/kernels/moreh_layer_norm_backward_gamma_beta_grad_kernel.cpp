@@ -100,11 +100,11 @@ void kernel_main() {
             cb_dy_obj.wait_front(onetile);  // comes from the reader
             cb_dycopy_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(cb_dy);
+            copy_tile_init_with_dt(cb_dy_obj);
             copy_tile(cb_dy, 0, dst0);
 
             if (do_mask_h && ((h_idx + 1) % origin_Ht == 0)) {
-                copy_tile_init_with_dt(cb_mask_h);
+                copy_tile_init_with_dt(cb_mask_h_obj);
                 copy_tile(cb_mask_h, 0, dst1);
 
                 mask_tile_init();
@@ -112,7 +112,7 @@ void kernel_main() {
             }
 
             if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
-                copy_tile_init_with_dt(cb_mask_w);
+                copy_tile_init_with_dt(cb_mask_w_obj);
                 copy_tile(cb_mask_w, 0, dst1);
 
                 mask_tile_init();
@@ -121,7 +121,7 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_dycopy);
+            pack_tile_with_dt(dst0, cb_dycopy_obj);
 
             cb_dy_obj.pop_front(onetile);
             cb_dycopy_obj.push_back(onetile);
@@ -134,12 +134,12 @@ void kernel_main() {
                     tile_regs_acquire();
                     cb_dyadd_obj.reserve_back(onetile);
 
-                    copy_tile_init_with_dt(cb_dycopy);
+                    copy_tile_init_with_dt(cb_dycopy_obj);
                     copy_tile(cb_dycopy, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile_with_dt(dst0, cb_dyadd);
+                    pack_tile_with_dt(dst0, cb_dyadd_obj);
 
                     cb_dyadd_obj.push_back(onetile);
                     tile_regs_release();
@@ -148,12 +148,12 @@ void kernel_main() {
                     cb_dyadd_obj.wait_front(onetile);
                     cb_dyadd_obj.reserve_back(onetile);
 
-                    add_tiles_init_with_dt(cb_dyadd, cb_dycopy);
+                    add_tiles_init_with_dt(cb_dyadd_obj, cb_dycopy_obj);
                     add_tiles(cb_dyadd, cb_dycopy, 0, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile_with_dt(dst0, cb_dyadd);
+                    pack_tile_with_dt(dst0, cb_dyadd_obj);
 
                     cb_dyadd_obj.pop_front(onetile);
                     cb_dyadd_obj.push_back(onetile);
@@ -171,15 +171,15 @@ void kernel_main() {
                 cb_xmm_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
-                    sub_bcast_cols_init_short_with_dt(cb_x, cb_mean);
+                    sub_bcast_cols_init_short_with_dt(cb_x_obj, cb_mean_obj);
                     sub_tiles_bcast_cols(cb_x, cb_mean, 0, 0, dst0);
                 } else {
-                    sub_tiles_bcast_scalar_init_short_with_dt(cb_x, cb_mean);
+                    sub_tiles_bcast_scalar_init_short_with_dt(cb_x_obj, cb_mean_obj);
                     sub_tiles_bcast_scalar(cb_x, cb_mean, 0, 0, dst0);
                 }
 
                 if (do_mask_h && ((h_idx + 1) % origin_Ht == 0)) {
-                    copy_tile_init_with_dt(cb_mask_h);
+                    copy_tile_init_with_dt(cb_mask_h_obj);
                     copy_tile(cb_mask_h, 0, dst1);
 
                     mask_tile_init();
@@ -187,7 +187,7 @@ void kernel_main() {
                 }
 
                 if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
-                    copy_tile_init_with_dt(cb_mask_w);
+                    copy_tile_init_with_dt(cb_mask_w_obj);
                     copy_tile(cb_mask_w, 0, dst1);
 
                     mask_tile_init();
@@ -196,7 +196,7 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_xmm);
+                pack_tile_with_dt(dst0, cb_xmm_obj);
 
                 cb_x_obj.pop_front(onetile);
                 cb_mean_obj.pop_front(onetile);
@@ -211,16 +211,16 @@ void kernel_main() {
                 cb_y_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short_with_dt(cb_xmm, cb_rstd);
+                    mul_bcast_cols_init_short_with_dt(cb_xmm_obj, cb_rstd_obj);
                     mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
                 } else {
-                    mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_rstd);
+                    mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm_obj, cb_rstd_obj);
                     mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
                 }
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_y);
+                pack_tile_with_dt(dst0, cb_y_obj);
 
                 cb_xmm_obj.pop_front(onetile);
                 cb_rstd_obj.pop_front(onetile);
@@ -232,12 +232,12 @@ void kernel_main() {
                 cb_y_obj.wait_front(onetile);
                 cb_ydy_obj.reserve_back(onetile);
 
-                mul_tiles_init_with_dt(cb_y, cb_dycopy);
+                mul_tiles_init_with_dt(cb_y_obj, cb_dycopy_obj);
                 mul_tiles(cb_y, cb_dycopy, 0, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_ydy);
+                pack_tile_with_dt(dst0, cb_ydy_obj);
 
                 cb_y_obj.pop_front(onetile);
                 cb_ydy_obj.push_back(onetile);
@@ -249,12 +249,12 @@ void kernel_main() {
                     cb_ydy_obj.wait_front(onetile);
                     cb_ydyadd_obj.reserve_back(onetile);
 
-                    copy_tile_init_with_dt(cb_ydy);
+                    copy_tile_init_with_dt(cb_ydy_obj);
                     copy_tile(cb_ydy, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile_with_dt(dst0, cb_ydyadd);
+                    pack_tile_with_dt(dst0, cb_ydyadd_obj);
 
                     cb_ydy_obj.pop_front(onetile);
                     cb_ydyadd_obj.push_back(onetile);
@@ -265,12 +265,12 @@ void kernel_main() {
                     cb_ydyadd_obj.wait_front(onetile);
                     cb_ydyadd_obj.reserve_back(onetile);
 
-                    add_tiles_init_with_dt(cb_ydyadd, cb_ydy);
+                    add_tiles_init_with_dt(cb_ydyadd_obj, cb_ydy_obj);
                     add_tiles(cb_ydyadd, cb_ydy, 0, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile_with_dt(dst0, cb_ydyadd);
+                    pack_tile_with_dt(dst0, cb_ydyadd_obj);
 
                     cb_ydy_obj.pop_front(onetile);
                     cb_ydyadd_obj.pop_front(onetile);
@@ -294,12 +294,12 @@ void kernel_main() {
                 cb_ydyadd_obj.wait_front(onetile);
                 cb_dgamma_obj.reserve_back(onetile);
 
-                copy_tile_init_with_dt(cb_ydyadd);
+                copy_tile_init_with_dt(cb_ydyadd_obj);
                 copy_tile(cb_ydyadd, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_dgamma);
+                pack_tile_with_dt(dst0, cb_dgamma_obj);
 
                 cb_ydyadd_obj.pop_front(onetile);
                 cb_dgamma_obj.push_back(onetile);
@@ -319,12 +319,12 @@ void kernel_main() {
                 cb_dyadd_obj.wait_front(onetile);
                 cb_dbeta_obj.reserve_back(onetile);
 
-                copy_tile_init_with_dt(cb_dyadd);
+                copy_tile_init_with_dt(cb_dyadd_obj);
                 copy_tile(cb_dyadd, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_dbeta);
+                pack_tile_with_dt(dst0, cb_dbeta_obj);
 
                 cb_dyadd_obj.pop_front(onetile);
                 cb_dbeta_obj.push_back(onetile);

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <string>
 #include <unordered_map>
 
 #include <tt-metalium/program.hpp>
@@ -103,15 +104,45 @@ struct CachedProgramFactory {
         cached_program{std::move(cached_workload)}, program_factory_index{program_factory_index} {}
 };
 
+// Program-cache key: the 64-bit hash PLUS an exact, collision-free canonical encoding of the key
+// material (see ttsl::hash::canonical_key). std::unordered_map uses the hash to pick a bucket and
+// operator== to confirm the match -- so a 64-bit hash collision lands two distinct keys in the
+// same bucket and is resolved by exact comparison instead of producing a wrong cache hit
+// (issue #45821). `canonical` always carries at least an op-identity prefix, so distinct ops can
+// never alias on a hash collision.
+struct ProgramCacheKey {
+    uint64_t hash = 0;
+    std::string canonical;
+
+    bool operator==(const ProgramCacheKey& other) const {
+        return hash == other.hash && canonical == other.canonical;
+    }
+
+    // Custom operator<=> for strong ordering in collections that need it; std::unordered_map only needs operator== and
+    // the hasher.
+    std::strong_ordering operator<=>(const ProgramCacheKey& other) const {
+        if (const auto cmp = hash <=> other.hash; cmp != std::strong_ordering::equal) {
+            return cmp;
+        }
+        return canonical <=> other.canonical;
+    }
+};
+
+// Custom hasher for ProgramCacheKey that uses the precomputed hash value.
+// Other member(s) ignored since std::unordered_map will use operator== to resolve collisions within buckets.
+struct ProgramCacheKeyHasher {
+    std::size_t operator()(const ProgramCacheKey& key) const { return static_cast<std::size_t>(key.hash); }
+};
+
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from
 // TT-Metal and TT-Eager using tt::stl::concepts::unique_any.
 struct ProgramCache {
-    bool contains(uint64_t program_hash) const { return this->cache_.contains(program_hash); }
+    bool contains(const ProgramCacheKey& program_key) const { return this->cache_.contains(program_key); }
 
-    CachedProgramFactory& get(uint64_t program_hash) { return this->cache_.at(program_hash); }
+    CachedProgramFactory& get(const ProgramCacheKey& program_key) { return this->cache_.at(program_key); }
 
-    void insert(uint64_t program_hash, CachedProgramFactory&& program) {
-        this->cache_.insert({program_hash, std::move(program)});
+    void insert(const ProgramCacheKey& program_key, CachedProgramFactory&& program) {
+        this->cache_.insert({program_key, std::move(program)});
     }
 
     void enable() { is_enabled_ = true; }
@@ -130,7 +161,7 @@ struct ProgramCache {
 private:
     bool is_enabled_ = true;
     bool allow_cache_misses_ = true;
-    std::unordered_map<uint64_t, CachedProgramFactory> cache_;
+    std::unordered_map<ProgramCacheKey, CachedProgramFactory, ProgramCacheKeyHasher> cache_;
 };
 
 }  // namespace tt::tt_metal::program_cache::detail

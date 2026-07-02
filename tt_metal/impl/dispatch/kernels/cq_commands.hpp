@@ -59,7 +59,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
-    CQ_DISPATCH_CMD_MAX_COUNT,                        // for checking legal IDs
+    CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 19,
+    CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -311,7 +312,7 @@ get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cm
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds *
                                                    sizeof(CQDispatchWritePackedUnicastSubCmd) /
                                                    sizeof(CQDispatchWritePackedMulticastSubCmd);
-    return packed_write_max_multicast_sub_cmds;
+    return packed_write_max_multicast_sub_cmds < 1 ? 1 : packed_write_max_multicast_sub_cmds;
 }
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
@@ -357,10 +358,12 @@ constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH = 0x02;
 // Wait for a count value on memory.
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY = 0x04;
-// Wait for a count value on a stream
-constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x08;
+// Clear a count value in memory.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY = 0x08;
+// Wait for a count value on a stream.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x10;
 // Clear a count value on a stream.
-constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x10;
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x20;
 
 struct CQDispatchWaitCmd {
     uint8_t flags;    // see above
@@ -420,6 +423,12 @@ struct CQDispatchSetGoSignalNocDataCmd {
     uint32_t num_words;
 } __attribute__((packed));
 
+struct CQDispatchSetSubDeviceWorkerCountsCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t num_sub_devices;
+} __attribute__((packed));
+
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
@@ -438,6 +447,7 @@ struct CQDispatchCmd {
         CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
+        CQDispatchSetSubDeviceWorkerCountsCmd set_sub_device_worker_counts;
     } __attribute__((packed));
 };
 

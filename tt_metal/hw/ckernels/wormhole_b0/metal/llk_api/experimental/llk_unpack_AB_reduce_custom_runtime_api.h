@@ -72,7 +72,8 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
     const std::uint32_t row_start_index,
-    bool respect_trigger = false) {
+    bool respect_trigger = false,
+    bool overlap_first_half = false) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -80,7 +81,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger);
+    _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger, overlap_first_half);
 }
 
 /**
@@ -103,6 +104,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use standard LLK cleanup procedures for general-purpose operations.
  */
-inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(bool respect_trigger = false) {
-    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger);
+inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(
+    bool respect_trigger = false, bool overlap_first_half = false) {
+    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger, overlap_first_half);
 }

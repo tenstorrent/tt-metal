@@ -57,7 +57,7 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
 // - Allocated: actively holding a MeshTensor.
 // - Deallocated: the MeshTensor was deallocated by any of the DeviceStorage instances.
 //
-// To ease transition, we keep a tombstone of the MeshTensor's spec, topology, and buffer when the MeshTensor is
+// To ease transition, we keep a tombstone of the MeshTensor's spec and topology when the MeshTensor is
 // deallocated.
 struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedDefaultConstructed {};
@@ -69,10 +69,6 @@ struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedTombStone {
         TensorSpec tensor_spec_;
         TensorTopology tensor_topology_;
-        // Deallocated buffer kept so device() stays valid without dangling MeshDevice.
-        // Remove once post-deallocation mesh_device access is no longer needed.
-        // See: get_device_bypass_deallocate_check
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
     };
 
     using States = std::variant<DeallocatedDefaultConstructed, Allocated, DeallocatedTombStone>;
@@ -88,18 +84,10 @@ struct DeviceStorage::MeshTensorHolder {
 
     void deallocate() {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
-            // We should favor letting MeshTensor go out of scope instead of explicitly calling the underlying
-            // MeshBuffer. Calling deallocate is currently needed as we keep the MeshBuffer object alive in the
-            // DeallocatedTombStone state.
-            // Calling mesh_buffer_invariant_breaking() as we wish to get a mutable pointer to the MeshBuffer,
-            // and this is breaking the invariant of MeshTensor (Device memory is allocated when the MeshTensor object
-            // is alive).
-            allocated->mesh_tensor_.mesh_buffer_invariant_breaking()->deallocate();
-            // MeshTensor goes out of scope at this assignment:
-            state_ = DeallocatedTombStone{
-                allocated->mesh_tensor_.tensor_spec(),
-                allocated->mesh_tensor_.tensor_topology(),
-                allocated->mesh_tensor_.mesh_buffer_invariant_breaking()};
+            // Capture spec/topology, then replace the Allocated state. The MeshTensor is destroyed by this
+            // assignment, and its destructor releases the underlying device memory.
+            state_ =
+                DeallocatedTombStone{allocated->mesh_tensor_.tensor_spec(), allocated->mesh_tensor_.tensor_topology()};
         }
     }
 };
@@ -178,24 +166,21 @@ const MeshTensor& DeviceStorage::get_mesh_tensor() const {
         mesh_tensor_holder_->state_);
 }
 
+MeshTensor DeviceStorage::release_mesh_tensor() {
+    auto result = std::visit(
+        ttsl::overloaded{
+            [](MeshTensorHolder::Allocated& allocated) -> MeshTensor { return std::move(allocated.mesh_tensor_); },
+            [](const auto&) -> MeshTensor { TT_THROW("Tensor is not allocated"); }},
+        mesh_tensor_holder_->state_);
+    mesh_tensor_holder_->state_ = MeshTensorHolder::DeallocatedDefaultConstructed{};
+    return result;
+}
+
 MeshTensor& DeviceStorage::get_mesh_tensor() {
     return std::visit(
         ttsl::overloaded{
             [](MeshTensorHolder::Allocated& allocated) -> MeshTensor& { return allocated.mesh_tensor_; },
             [](const auto&) -> MeshTensor& { TT_THROW("Tensor is not allocated"); }},
-        mesh_tensor_holder_->state_);
-}
-
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
-    return std::visit(
-        ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) -> std::shared_ptr<distributed::MeshBuffer> {
-                return allocated.mesh_tensor_.mesh_buffer_invariant_breaking();
-            },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> std::shared_ptr<distributed::MeshBuffer> {
-                return tombstone.mesh_buffer_;
-            },
-            [](const auto&) -> std::shared_ptr<distributed::MeshBuffer> { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
 }
 
@@ -214,29 +199,10 @@ void DeviceStorage::deallocate() {
 
 bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
 
-distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
-    return std::visit(
-        ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) -> distributed::MeshDevice* {
-                return &allocated.mesh_tensor_.mutable_device();
-            },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> distributed::MeshDevice* {
-                return tombstone.mesh_buffer_->device();
-            },
-            [](const auto&) -> distributed::MeshDevice* { TT_THROW("Tensor is not allocated"); }},
-        mesh_tensor_holder_->state_);
-}
-
-bool DeviceStorage::is_uniform_storage() const {
-    if (!is_allocated()) {
-        return true;
-    }
-    return coords_.size() == get_device_bypass_deallocate_check()->num_devices();
-}
+bool DeviceStorage::is_uniform_storage() const { return coords_.size() == get_mesh_tensor().device().num_devices(); }
 
 std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
-    // Conv breaks if we keep the assert here.
-    // TT_FATAL(is_allocated(), "Device memory is not allocated");
+    TT_FATAL(is_allocated(), "DeviceStorage is not allocated");
     return coords_;
 }
 

@@ -57,7 +57,7 @@ void kernel_main() {
     uint32_t end_id = start_id + num_units_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         uint32_t target_noc_id = i;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(cb_target_obj, addrg_target, target_noc_id);
 
         cb_output_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);
@@ -76,7 +76,7 @@ void kernel_main() {
 
                         uint32_t noc_id = target_idx / TILE_WIDTH;
                         uint32_t weight_tilized_idx = get_tilized_idx(0, target_idx);
-                        read_value(cb_weight, addrg_weight, noc_id, weight_tilized_idx);
+                        read_value(cb_weight_obj, addrg_weight, noc_id, weight_tilized_idx);
 
                         cb_weight_obj.wait_front(onetile);
                         CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());

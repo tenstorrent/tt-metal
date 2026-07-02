@@ -195,6 +195,7 @@ def create_mesh_device(
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
     dispatch_core_axis=None,
+    prefer_eth: bool = True,
 ) -> ttnn.MeshDevice:
     """
     Create a mesh device with the specified shape.
@@ -220,7 +221,65 @@ def create_mesh_device(
          op's masters all need the same axis.
       3. Default to COL.
     """
-    # 0. Explicit per-vector axis override.
+    # Blackhole does not support the WORKER ROW/COL dispatch-core axes that the
+    # wormhole logic below selects: opening with one raises "ROW dispatch core
+    # axis is not supported for blackhole arch unless fabric tensix MUX is
+    # enabled" (~all blackhole p100a/p150b/p300a model_traced fails were this).
+    # The whole ROW/COL/ETH selection dance is wormhole-specific (Galaxy 8x9 /
+    # 7x10 grids); on blackhole just open with the default dispatch core config
+    # — which blackhole supports — and skip it entirely. This also overrides any
+    # explicit dispatch_core_axis a caller passes, since blackhole can't honor it.
+    _arch = os.environ.get("ARCH_NAME", "").lower()
+    if not _arch:
+        try:
+            _arch = ttnn.get_arch_name().lower()
+        except Exception:
+            _arch = ""
+    if "blackhole" in _arch:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(),
+        )
+
+    # Prefer ETH dispatch on single-host clusters, for EVERY caller (explicit
+    # axis or auto-detect). On a single Wormhole chip, WORKER dispatch (either
+    # axis) reserves a worker row/col and leaves only 8x7 / 7x8 = 56 compute
+    # cores; many traced configs need the full 8x8 (64-core) grid and otherwise
+    # crash with "compute_with_storage_grid_size must fit within (8,7)",
+    # "num_shards (64) <= num_compute_banks (56)", "num_cores <= grid.x*grid.y",
+    # or "not on_dispatch_core". ETH frees the full 8x8 grid (verified:
+    # WORKER->56, ETH->64) and is a strict superset of both WORKER axes, so it
+    # hosts every config either axis could plus the full-grid ones. This must run
+    # even when dispatch_core_axis is None: ops whose grid nominally fits a WORKER
+    # axis (so they pass axis=None) still need the 8th row/col that only ETH frees
+    # (e.g. a (5,8) matmul grid needs y=8, which WORKER ROW's 8x7 lacks).
+    #
+    # Gate to single-host clusters (N150=1, N300=2, T3K=8). ETH dispatch (incl.
+    # with FABRIC_1D) is validated on T3K: it frees the full 8x8 (64-bank) grid
+    # per chip and closes cleanly. On large multi-host Galaxy clusters (32 chips)
+    # ETH dispatch cores can't be allocated and a failed ETH open re-inits
+    # MetalContext and wedges the command queue, so leave those on WORKER.
+    try:
+        _single_host = ttnn.get_num_devices() <= 8
+    except Exception:
+        _single_host = False
+    # prefer_eth=False lets a caller opt out of ETH dispatch. conv2d needs WORKER
+    # ROW dispatch aligned with its mesh-row distribution + FABRIC_1D, otherwise
+    # the distributed DRAM-sliced convs hang in synchronize_device; ETH dispatch
+    # (not row-aligned) wedges those, so conv2d forces WORKER.
+    if _single_host and prefer_eth:
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+            )
+        except Exception:
+            # ETH dispatch unavailable here — fall back to the logic below.
+            pass
+
+    # 0. Explicit per-vector axis override (WORKER on the requested axis).
     if dispatch_core_axis is not None:
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
@@ -439,6 +498,32 @@ def get_mesh_composer(mesh_device, tensor_placement: Optional[Dict] = None):
         return None
 
 
+def was_replicated_for_validation(mesh_device, tensor_placement: Optional[Dict] = None) -> bool:
+    """True when create_tensor_on_mesh stored a shard-placement tensor as a full
+    per-chip replica (replicate_with_topology / ReplicateTensorToMesh) rather than
+    truly splitting it.
+
+    On this trace-validation path a sharded placement is ALWAYS materialized
+    replicated: when the device mesh fits the traced mesh, create_tensor_on_mesh
+    returns replicate_with_topology; when it doesn't, it falls back to
+    ReplicateTensorToMesh. Either way each chip holds the FULL tensor and the op
+    runs SPMD producing the FULL result per chip. The output must then be read
+    from a single device — concatenating via a Shard composer would multiply the
+    shard dim by the mesh factor (e.g. a head_dim-Shard(3) SDPA output read back
+    as [.,256] instead of [.,128]).
+    """
+    if not tensor_placement:
+        return False
+    placement_str = str(tensor_placement.get("placement", ""))
+    if "PlacementShard" not in placement_str:
+        return False
+    try:
+        num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
+    except Exception:
+        num_devices = 1
+    return num_devices > 1
+
+
 def _restore_topology(
     tensor: ttnn.Tensor,
     placement_entries: list,
@@ -577,13 +662,23 @@ def replicate_with_topology(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        try:
-            tensor = ttnn.to_memory_config(tensor, memory_config)
-        except Exception:
-            # Best-effort upcast to the requested memory_config (e.g. L1
-            # sharded). On failure we keep the DRAM-resident tensor — sweeps
-            # tolerate the placement difference and the kernel still runs.
-            pass
+        # Upcast DRAM -> requested (often L1-sharded) memory_config. This reshard
+        # is sensitive to transient L1 pressure when one device is reused across
+        # many vectors (the worker alloc can momentarily land on a dispatch core
+        # -> "not on_dispatch_core"); a device sync + retry clears it. Without the
+        # retry the failure is silently swallowed, leaving the tensor DRAM-
+        # interleaved — a flaky memory_config mismatch vs the master trace.
+        for _attempt in range(4):
+            try:
+                tensor = ttnn.to_memory_config(tensor, memory_config)
+                break
+            except Exception:
+                try:
+                    ttnn.synchronize_device(mesh_device)
+                except Exception:
+                    # best-effort sync; ignore and continue the retry loop
+                    pass
+            # last attempt failing leaves the DRAM-resident tensor (best-effort)
     else:
         tensor = ttnn.from_torch(
             torch_tensor,

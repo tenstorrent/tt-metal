@@ -37,7 +37,7 @@ void kernel_main() {
     cb_divisor_obj.wait_front(onetile);
 
     tile_regs_acquire();
-    copy_tile_init_with_dt(cb_divisor);
+    copy_tile_init_with_dt(cb_divisor_obj);
     copy_tile(cb_divisor, 0, dst0);
     recip_tile_init();
     recip_tile(dst0);
@@ -46,7 +46,7 @@ void kernel_main() {
     cb_divisor_obj.pop_front(onetile);
     cb_divisor_recip_obj.reserve_back(onetile);
     tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_divisor_recip);
+    pack_tile_with_dt(dst0, cb_divisor_recip_obj);
     tile_regs_release();
     cb_divisor_recip_obj.push_back(onetile);
 #endif
@@ -55,7 +55,7 @@ void kernel_main() {
         cb_tmp_input_obj.wait_front(onetile);
 
         tile_regs_acquire();
-        copy_tile_init_with_dt(cb_tmp_input);
+        copy_tile_init_with_dt(cb_tmp_input_obj);
         copy_tile(cb_tmp_input, 0, dst0);
 
         negative_tile_init();
@@ -67,7 +67,7 @@ void kernel_main() {
 #if defined(WEIGHT)
         cb_tmp1_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1_obj);
         tile_regs_release();
         cb_tmp1_obj.push_back(onetile);
 
@@ -76,7 +76,7 @@ void kernel_main() {
         cb_tmp_weight_obj.wait_front(onetile);
 
         tile_regs_acquire();
-        mul_tiles_init_with_dt(cb_tmp1, cb_tmp_weight);
+        mul_tiles_init_with_dt(cb_tmp1_obj, cb_tmp_weight_obj);
         mul_tiles(cb_tmp1, cb_tmp_weight, 0, 0, dst0);
         tile_regs_commit();
 
@@ -86,7 +86,7 @@ void kernel_main() {
 #if defined(DIVISOR)
         cb_tmp3_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp3);
+        pack_tile_with_dt(dst0, cb_tmp3_obj);
         tile_regs_release();
         cb_tmp3_obj.push_back(onetile);
 
@@ -103,13 +103,13 @@ void kernel_main() {
 
         cb_output_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
+        pack_tile_with_dt(dst0, cb_output_obj);
         tile_regs_release();
         cb_output_obj.push_back(onetile);
 #else
         cb_output_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
+        pack_tile_with_dt(dst0, cb_output_obj);
         tile_regs_release();
         cb_output_obj.push_back(onetile);
 #endif
@@ -117,7 +117,7 @@ void kernel_main() {
 #if defined(DIVISOR)
         cb_tmp1_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1_obj);
         tile_regs_release();
         cb_tmp1_obj.push_back(onetile);
 
@@ -136,13 +136,13 @@ void kernel_main() {
 
         cb_output_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
+        pack_tile_with_dt(dst0, cb_output_obj);
         tile_regs_release();
         cb_output_obj.push_back(onetile);
 #else
         cb_output_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
+        pack_tile_with_dt(dst0, cb_output_obj);
         tile_regs_release();
         cb_output_obj.push_back(onetile);
 #endif

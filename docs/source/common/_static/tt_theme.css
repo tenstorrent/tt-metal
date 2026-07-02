@@ -469,3 +469,31 @@ https://github.com/readthedocs/sphinx_rtd_theme/issues/1301
 .py.property {
   display: block !important;
 }
+
+/* Version warning banner for old docs */
+#tt-version-warning {
+  background-color: #fff3cd;
+  border-bottom: 2px solid #ffc107;
+  color: #664d03;
+  padding: 0.75rem 1.25rem;
+  font-family: var(--font-main);
+  font-size: 0.95rem;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+#tt-version-warning a {
+  color: #664d03;
+  font-weight: bold;
+  text-decoration: underline;
+}
+
+#tt-version-warning a:hover {
+  color: #332600;
+}
+
+#tt-version-warning strong {
+  font-weight: bold;
+}

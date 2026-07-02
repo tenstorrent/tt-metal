@@ -115,7 +115,7 @@ void kernel_main() {
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint64_t addr_offset = base_addr_offset + x * X_stride;
             tt::data_movement::common::noc_async_read_sharded(
-                src_buffer_l1_addr + page_offset, s0, addr_offset, w_offset, w_read_size_bytes);
+                noc, src_buffer_l1_addr + page_offset, s0, addr_offset, w_offset, w_read_size_bytes);
 
             // Advance output pointer by one page size for next row
             page_offset += input_cb_page_size;

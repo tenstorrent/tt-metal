@@ -716,7 +716,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_co
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
 inline void configure_unpack_AB(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
@@ -749,12 +749,8 @@ inline void configure_unpack_AB(
     // Get pointer to registers for current state ID
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
-    std::uint32_t unpA_ch1_x_stride = (unpA_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpA_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                      : 1;
-    std::uint32_t unpB_ch1_x_stride = (unpB_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpB_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                      : 1;
+    std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpA_dst_format);
+    std::uint32_t unpB_ch1_x_stride = datum_size_in_bytes(unpB_dst_format);
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     std::uint32_t unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
     std::uint32_t exp_width         = (unpA_dst_format >> 2) & 0x1; // 0=5-bit, 1=8-bit
@@ -801,11 +797,6 @@ inline void configure_unpack_AB(
     constexpr std::uint32_t alu_mask = alu_format_mask | alu_stoch_rnd_mask;
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
-
-    // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
-    bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<std::uint32_t>(unpA_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16)) ||
-                                     (static_cast<std::uint32_t>(unpB_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16));
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     t6_mutex_release(mutex::REG_RMW);
 
@@ -956,9 +947,7 @@ inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint3
     std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId));  // Apply fixed offset of 4*16 to dest address
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                          // Disable address bit swizzle
     TTI_RDCFG(p_gpr_unpack::UNPACK_STRIDE, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Save current stride
-    std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                        : 1;
+    std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride

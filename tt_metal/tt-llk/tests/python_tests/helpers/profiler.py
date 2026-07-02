@@ -182,11 +182,30 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
     columns += [f"{stat}({col})" for col in timings for stat in ["mean", "std"]]
 
     result.columns = columns
+
+    # std is undefined for a single sample, so with the default run_count=1 every
+    # marker has one observation and the std(...) columns come back entirely NaN.
+    # Drop those all-empty std(...) columns so single-run reports don't carry
+    # structurally empty data; tests that repeat measurements (run_count>=2) keep
+    # their populated std columns untouched.
+    empty_std_columns = [
+        col
+        for col in result.columns
+        if col.startswith("std(") and result[col].isna().all()
+    ]
+    if empty_std_columns:
+        result = result.drop(columns=empty_std_columns)
+
     return result
 
 
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
+
+    # WC build (PERF_COUNTERS_COMPILED) emits no ZONE_START/ZONE_END events because
+    # ZONE_SCOPED is muted; only HW counter values are produced. Skip wall_clock stats.
+    if raw_data.empty:
+        return pd.DataFrame()
 
     # Validate that run_index has been explicitly set
     if raw_data["run_index"].isna().any():
@@ -235,6 +254,10 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
 
 
 def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
+    # WC build emits no zone events — skip wall_clock stats, counters provide values instead.
+    if raw_thread.empty:
+        return pd.DataFrame()
+
     start_entries = raw_thread[(raw_thread["type"] == "ZONE_START")].reset_index(
         drop=True
     )
@@ -276,7 +299,13 @@ def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
         f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()
     )
 
-    return pd.merge(unpack_stats, pack_stats, on="marker", how="outer", validate="1:1")
+    frames = [df for df in (unpack_stats, pack_stats) if not df.empty]
+    if not frames:
+        return pd.DataFrame()
+    result = frames[0]
+    for df in frames[1:]:
+        result = pd.merge(result, df, on="marker", how="outer", validate="1:1")
+    return result
 
 
 class EntryType(Enum):

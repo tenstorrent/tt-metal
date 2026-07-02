@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/dataflow/circular_buffer.h"
+
 constexpr uint32_t ONE_TILE{1};
 constexpr uint32_t FIRST_TILE{0};
 constexpr uint32_t WORKING_REG{0};
@@ -77,8 +79,8 @@ class ReadCBGuard {
     uint32_t tiles;
 
 public:
-    ReadCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { cb_wait_front(cb, tiles); }
-    ~ReadCBGuard() { cb_pop_front(cb, tiles); }
+    ReadCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { CircularBuffer(cb).wait_front(tiles); }
+    ~ReadCBGuard() { CircularBuffer(cb).pop_front(tiles); }
 
     ReadCBGuard(const ReadCBGuard&) = delete;  // can not allow to touch the object anyhow
     ReadCBGuard(ReadCBGuard&&) = delete;
@@ -117,8 +119,8 @@ class WriteCBGuard {
     uint32_t tiles;
 
 public:
-    WriteCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { cb_reserve_back(cb, tiles); }
-    ~WriteCBGuard() { cb_push_back(cb, tiles); }
+    WriteCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { CircularBuffer(cb).reserve_back(tiles); }
+    ~WriteCBGuard() { CircularBuffer(cb).push_back(tiles); }
 
     WriteCBGuard(const WriteCBGuard&) = delete;  // can not allow to touch the object anyhow
     WriteCBGuard(WriteCBGuard&&) = delete;

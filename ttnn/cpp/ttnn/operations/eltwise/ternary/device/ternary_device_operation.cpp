@@ -715,7 +715,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_dtype = input_a.dtype(),
         .worker_grid = ttnn::operations::ternary::get_worker_grid(
             input_a, &input_b, &input_c, optional_output_tensor, memory_config, sub_core_grids, mem_config_actual),
-        .dtype = output_dtype.value_or(input_b.dtype()),
+        .dtype = op_type == ttnn::operations::ternary::TernaryOpType::WHERE ? output_dtype.value_or(input_b.dtype())
+                                                                            : output_dtype.value_or(input_a.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = std::nullopt,
@@ -764,7 +765,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_dtype = input_a.dtype(),
         .worker_grid = ttnn::operations::ternary::get_worker_grid(
             input_a, &input_b, &input_c, optional_output_tensor, memory_config, sub_core_grids, mem_config_actual),
-        .dtype = output_dtype.value_or(input_b.dtype()),
+        .dtype = op_type == ttnn::operations::ternary::TernaryOpType::WHERE ? output_dtype.value_or(input_b.dtype())
+                                                                            : output_dtype.value_or(input_a.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar,

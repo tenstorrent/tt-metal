@@ -199,9 +199,9 @@ def test_linear_split_core_grid(device, core_grid):
 
 
 # Constraint validation tests
-def test_invalid_chunks(device):
+def test_invalid_chunks(device, expect_error):
     """Should fail: chunks < 1"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "minimal_matmul_split requires chunks >= 1"):
         M, K, N = 256, 256, 512
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)
@@ -210,9 +210,9 @@ def test_invalid_chunks(device):
         ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=0, dim=-1)
 
 
-def test_invalid_dim(device):
+def test_invalid_dim(device, expect_error):
     """Should fail: dim != -1"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "minimal_matmul_split currently only supports dim=-1"):
         M, K, N = 256, 256, 768
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)
@@ -221,9 +221,9 @@ def test_invalid_dim(device):
         ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=3, dim=0)
 
 
-def test_non_divisible_n(device):
+def test_non_divisible_n(device, expect_error):
     """Should fail: N not divisible by 3"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "must be divisible by chunks"):
         M, K, N = 256, 256, 256  # 256 not divisible by 3
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)
@@ -232,9 +232,9 @@ def test_non_divisible_n(device):
         ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=3, dim=-1)
 
 
-def test_non_tile_aligned_chunk(device):
+def test_non_tile_aligned_chunk(device, expect_error):
     """Should fail: N/chunks not tile-aligned"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "must be a multiple of TILE_WIDTH"):
         M, K, N = 256, 256, 99  # 99/3 = 33, not tile-aligned (not multiple of 32)
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)

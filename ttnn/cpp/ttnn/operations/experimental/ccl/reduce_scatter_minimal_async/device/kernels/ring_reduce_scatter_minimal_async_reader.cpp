@@ -6,6 +6,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -183,17 +184,13 @@ void kernel_main() {
                 /**
                  * Interleave forward and backward ring reads
                  * forward handles even chunks, backward handles odd chunks (1 chunk = tile_granularity tiles)
-                 * after ring_size-1 steps, we've transferred all tiles
+                 * after ring_size-1 steps, we've transferred all tiles.
+                 *
+                 * Chunk forward/backward parity is fixed, independent of chunk count or distribution to workers
                  */
-                bool is_even_chunk = true;
                 while (tiles_read < total_tiles_to_read) {
-                    uint32_t tiles_to_read = 0;
-                    uint32_t tiles_remaining = total_tiles_to_read - tiles_read;
-                    if (is_even_chunk) {
-                        tiles_to_read = std::min(tiles_remaining / 2, tile_granularity);
-                    } else {
-                        tiles_to_read = std::min(tiles_remaining, tile_granularity);
-                    }
+                    const auto [is_even_chunk, tiles_to_read] =
+                        reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
 
                     if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
                         // Skip this chunk
@@ -271,8 +268,6 @@ void kernel_main() {
                             }
                         }
                     }  // if skip or process
-
-                    is_even_chunk = !is_even_chunk;
                 }  // while total_tiles_to_read
 
                 input_tile_id_start += input_channel_num_pages;

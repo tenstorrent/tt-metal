@@ -10,8 +10,8 @@ import torch
 from PIL import Image
 from pydantic import BaseModel, validator
 
-# ``AutoModelForVision2Seq`` was removed in transformers 5.x (use
-# ``AutoModelForImageTextToText`` going forward). It's only consumed by
+# ``AutoModelForImageTextToText`` (the replacement for ``AutoModelForVision2Seq``,
+# which was removed in transformers 5.x) is only consumed by the
 # ``GeneratorChat``/``GeneratorText`` constructors below — defer the imports
 # so loading this module doesn't break every downstream import chain
 # (e.g. ``tt_transformers.tt.generator``, used by every TT vLLM bridge)
@@ -192,10 +192,10 @@ class GeneratorChat:
 
 class GeneratorText:
     def __init__(self, model_name):
-        from transformers import AutoModelForVision2Seq, AutoProcessor
+        from transformers import AutoModelForImageTextToText, AutoProcessor
 
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name)
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name)
 
     def text_completion(
         self,

@@ -49,7 +49,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_non_zero_per_device; ++i) {
         const uint32_t offset = local_weights_idxs_ptr[i] * weight_datum_size_bytes;
         tt_memmove<false, false, false, weight_datum_size_bytes>(
-            local_weights_l1_addr + offset, routing_weights_addr + offset, weight_datum_size_bytes);
+            noc, local_weights_l1_addr + offset, routing_weights_addr + offset, weight_datum_size_bytes);
     }
     noc.async_write_barrier();
 

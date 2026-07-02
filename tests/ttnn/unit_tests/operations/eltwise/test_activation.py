@@ -237,6 +237,60 @@ def test_tanhshrink(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.tanhshrink, pcc_check=True)
 
 
+def test_tanhshrink_ulp(device):
+    """ULP regression guard for the dedicated tanhshrink SFPU op (issue #45520).
+
+    tanhshrink(x) = x - tanh(x) ~= x^3/3 for small |x|, where the subtractive form
+    cancels in bf16 (the original kernel returned 0 -> Max ULP ~254) even though the
+    true value is a normal bf16 number. torch's golden cancels there too, so use an
+    mpmath reference. Points span the cancellation region, the |x|~1 crossover, and
+    saturation. The dedicated op measures Max ULP = 1; gate at 2. (test_tanhshrink
+    above stays on PCC because its torch golden cancels near zero.)
+    """
+    from mpmath import mp, tanh as mp_tanh
+
+    mp.prec = 200
+    xs = torch.tensor(
+        [
+            [
+                0.0,
+                1e-4,
+                1e-3,
+                0.01,
+                0.05,
+                0.1,
+                0.25,
+                0.5,
+                0.9,
+                1.0,
+                1.1,
+                2.0,
+                5.0,
+                50.0,
+                100.0,
+                -1e-3,
+                -0.05,
+                -0.25,
+                -0.9,
+                -1.0,
+                -1.1,
+                -5.0,
+                -50.0,
+            ]
+        ],
+        dtype=torch.bfloat16,
+    )
+    golden = torch.tensor(
+        [[float(mp.mpf(v) - mp_tanh(mp.mpf(v))) for v in xs.flatten().tolist()]],
+        dtype=torch.float32,
+    )
+
+    input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.tanhshrink(input_tensor))
+
+    assert_with_ulp(golden, output_tensor, ulp_threshold=2)
+
+
 def run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn_function, ulp=2, pcc_check=False, pcc=0.99):
     torch.manual_seed(0)
 

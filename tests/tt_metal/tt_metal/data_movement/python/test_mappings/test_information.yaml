@@ -526,6 +526,9 @@ tests:
   308:
     name: "All to All Custom"
 
+  309:
+    name: "All to All Packet Sizes 2.0"
+
   310:
     name: "All from All Directed Ideal"
 

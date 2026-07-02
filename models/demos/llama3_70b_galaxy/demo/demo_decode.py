@@ -24,6 +24,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.common.sampling.tt_sampling import TTSampling
 
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
@@ -777,7 +778,7 @@ def run_llama3_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 23887872,
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy-decode",
             "worker_l1_size": 1345000,
             "fabric_config": True,
         }

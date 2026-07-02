@@ -117,6 +117,12 @@ inline void assert_trisc_reset() {
     uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
     uint32_t trisc_reset_mask = T6_DEBUG_REGS_SOFT_RESET_0_RISC_CONTROL_SOFT_RESET_MASK;
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 | trisc_reset_mask);
+    soft_reset_0 = READ_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 | trisc_reset_mask);
+    soft_reset_0 = READ_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 | trisc_reset_mask);
+    soft_reset_0 = READ_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 | trisc_reset_mask);
 }
 
 inline void deassert_trisc_reset() {
@@ -198,7 +204,7 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 // Writes back dirty data to L2 and invalidates the line.
 inline __attribute__((always_inline)) void flush_l1_dcache(uintptr_t addr) {
     if (addr) {
-        __asm__ __volatile__("tt.cache.cflush.d.l1 %0" :: "r"(addr) : "memory");
+        __asm__ __volatile__("tt.cache.cflush.d.l1 %0" ::"r"(addr) : "memory");
     } else {
         __asm__ __volatile__("tt.cache.cflush.d.l1 x0" ::: "memory");
     }
@@ -209,7 +215,7 @@ inline __attribute__((always_inline)) void flush_l1_dcache(uintptr_t addr) {
 // Discards dirty data - use only when data is known to be stale.
 inline __attribute__((always_inline)) void invalidate_l1_dcache(uintptr_t addr) {
     if (addr) {
-        __asm__ __volatile__("tt.cache.cdiscard.d.l1 %0" :: "r"(addr) : "memory");
+        __asm__ __volatile__("tt.cache.cdiscard.d.l1 %0" ::"r"(addr) : "memory");
     } else {
         __asm__ __volatile__("tt.cache.cdiscard.d.l1 x0" ::: "memory");
     }
@@ -222,9 +228,7 @@ inline __attribute__((always_inline)) void invalidate_l1_dcache(uintptr_t addr) 
 
 // Invalidate entire L1 I$ using FENCE.I instruction.
 // Required after modifying instruction memory before jumping to new code.
-inline __attribute__((always_inline)) void invalidate_l1_icache() {
-    __asm__ __volatile__("fence.i" ::: "memory");
-}
+inline __attribute__((always_inline)) void invalidate_l1_icache() { __asm__ __volatile__("fence.i" ::: "memory"); }
 
 // -----------------------------------------------------------------------------
 // L2 Cache Operations
@@ -304,8 +308,7 @@ inline void invalidate_l2_cache(uint32_t hartid) {
 // No-op for Quasar DM cores. The data movement cores are completely coherent with each other.
 // Most cases that previous architectures invalidated the l1 cache either do not need
 // invalidation for Quasar or should invalidate the l2 cache instead.
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-}
+inline __attribute__((always_inline)) void invalidate_l1_cache() {}
 
 // Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.
 // Must be called from all DM cores for proper synchronization.
@@ -376,24 +379,62 @@ inline void risc_init() {
     }
 }
 
-inline __attribute__((interrupt, hot)) void handle_interrupt() {
+inline __attribute__((interrupt, hot)) void synchronous_exception_handler() {
     uint64_t mcause;
     asm volatile("csrr %0, mcause" : "=r"(mcause));
-    if ((mcause & 0x8000000000000000) == 0) {  // this is HW exception
-        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+    ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
 #if !defined(WATCHER_ENABLED)  // hang anyway
-        while (1) {
-            ;
-        }
-#endif
-    } else {  // otherwise it's DFB sync interrupt
-        dfb_implicit_sync_handler();
+    while (1) {
+        ;
     }
+#endif
+}
+
+constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                  // synchronized interrupts index
+constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;    // machine external interrupt offset
+constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;                 // rocc interrupt index
+
+// Encodes a 21-bit byte offset into a RISC-V J-type immediate field
+inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset) {
+    // 1. Jumps must be 2-byte aligned (even numbers)
+    // Shift right by 1 to discard the implicit 0-bit
+    uint32_t imm = static_cast<uint32_t>(offset >> 1);
+
+    // 2. Extract specific bit slices using masks
+    uint32_t bit_20 = (imm >> 19) & 0x1;       // Sign bit (imm[20])
+    uint32_t bits_10_1 = (imm >> 0) & 0x3FF;   // imm[10:1]
+    uint32_t bit_11 = (imm >> 10) & 0x1;       // imm[11]
+    uint32_t bits_19_12 = (imm >> 11) & 0xFF;  // imm[19:12]
+
+    // 3. Reconstruct into the J-type instruction layout positions
+    uint32_t instruction_bits = 0;
+    instruction_bits |= (bit_20 << 31);      // Position 31
+    instruction_bits |= (bits_10_1 << 21);   // Positions 30:21
+    instruction_bits |= (bit_11 << 20);      // Position 20
+    instruction_bits |= (bits_19_12 << 12);  // Positions 19:12
+
+    return instruction_bits;
+}
+
+inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32_t interrupt_index, void(*handler)()) {
+    uint64_t isr_address = reinterpret_cast<uint64_t>(handler);
+    uint32_t encoded_offset = encode_j_immediate(int32_t(isr_address) - int32_t(MEM_INTERRUPT_TABLE_BASE + interrupt_index * sizeof(uint32_t)));
+    uint32_t instruction = 0x0000006f | encoded_offset; // create a jump instruction to the handler
+    *((uint32_t*)(MEM_INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
 }
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
-    uint64_t isr_address = reinterpret_cast<uint64_t>(handle_interrupt);
-    asm volatile("csrw mtvec, %0" : : "r"(isr_address));  // set the interrupt handler
+    // Register handlers for interrupts in the interrupt table
+    register_handler_for_interrupt(SYNC_INTERRUPT_INDEX, synchronous_exception_handler);
+    register_handler_for_interrupt(ROCC_INTERRUPT_INDEX, dfb_implicit_sync_handler);
+    // point mtvec to the interrupt table and verify it
+    asm volatile("csrw mtvec, %0" : : "r"(MEM_INTERRUPT_TABLE_BASE | 1));
+    uintptr_t check;
+    __asm__ volatile("csrr %0, mtvec" : "=r"(check));
+    if ((check & ~0x3UL) != MEM_INTERRUPT_TABLE_BASE || (check & 0x3UL) != 0x1) {
+        /* BASE wasn't 256-aligned, or MODE was rejected. Halt. */
+        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+    }
 }
 
 inline __attribute__((always_inline)) void enable_dfb_tile_isr() {

@@ -204,7 +204,13 @@ class TtPlanningHeadSingleMode:
                 ),
             ]
 
-    def __call__(self, bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command=None):
+    def _prepare_traced_inputs(self, bev_embed, bev_pos, sdc_traj_query, sdc_track_query):
+        """Non-trace-friendly prep: mlp_fuser + bev_adapter (Conv2d).
+
+        Returns the (plan_query, bev_feat) pair that feeds the trace-friendly
+        inner forward. Kept outside the trace because Conv2d in bev_adapter
+        triggers host reads that begin_trace_capture rejects.
+        """
         sdc_traj_query = sdc_traj_query[-1]
         P = sdc_traj_query.shape[1]
         sdc_track_query = ttnn.unsqueeze(sdc_track_query, 1)
@@ -258,6 +264,16 @@ class TtPlanningHeadSingleMode:
             bev_feat = ttnn.permute(bev_feat, (1, 2, 0, 3))
             bev_feat = ttnn.reshape(bev_feat, (out_h * out_w, bev_feat.shape[2], bev_feat.shape[-1]))
 
+        return plan_query, bev_feat
+
+    def _traced_forward(self, plan_query, bev_feat):
+        """Trace-friendly inner forward: attn_module (3 transformer layers) +
+        reg_branch + cumsum/bivariate post.
+
+        This is the heaviest portion (matmul-dominated) and contains no
+        host reads or event syncs, so it can be captured by
+        ttnn.begin_trace_capture and replayed via ttnn.execute_trace.
+        """
         pos_embed = ttnn.unsqueeze(self.pos_embed, 0)
         plan_query = plan_query + pos_embed  # [1, 1, 256]
 
@@ -278,13 +294,24 @@ class TtPlanningHeadSingleMode:
 
         sdc_traj_all = bivariate_gaussian_activation_plan_head(sdc_traj_all[0])
         sdc_traj_all = ttnn.unsqueeze(sdc_traj_all, 0)
+        return sdc_traj_all
+
+    def forward_device(self, bev_embed, bev_pos, sdc_traj_query, sdc_track_query):
+        """Full device-only forward: prep + traced inner forward."""
+        plan_query, bev_feat = self._prepare_traced_inputs(bev_embed, bev_pos, sdc_traj_query, sdc_track_query)
+        return self._traced_forward(plan_query, bev_feat)
+
+    def __call__(self, bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command=None):
+        sdc_traj_all = self.forward_device(bev_embed, bev_pos, sdc_traj_query, sdc_track_query)
 
         sdc_traj_all = ttnn.to_torch(sdc_traj_all, dtype=torch.float32)
-        occ_mask = ttnn.to_torch(occ_mask, dtype=torch.float32)
 
         if self.use_col_optim and not self.training:
-            # post process, only used when testing
+            # post process, only used when testing. occ_mask is consumed
+            # only here, so pull it back to host inside the guard rather
+            # than on every call.
             assert occ_mask is not None
+            occ_mask = ttnn.to_torch(occ_mask, dtype=torch.float32)
             sdc_traj_all = self.collision_optimization(sdc_traj_all, occ_mask)
 
         return dict(

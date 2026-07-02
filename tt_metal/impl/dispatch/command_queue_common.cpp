@@ -161,15 +161,4 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
     return progress;
 }
 
-uint32_t calculate_expected_workers_to_finish(
-    const tt::tt_metal::IDevice* device,
-    const SubDeviceId& sub_device_id,
-    tt::tt_metal::HalProgrammableCoreType core_type) {
-    // Sub Device manager state must be correct (from device init)
-    // If core type is active ethernet, it does not include fabric routers which were created using slow dispatch
-    // Not managed by fast dispatch
-    const auto num_workers = device->num_worker_cores(core_type, sub_device_id);
-    return num_workers;
-}
-
 }  // namespace tt::tt_metal

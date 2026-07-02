@@ -52,60 +52,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         TT_FATAL(logical_shape[3] == legacy_shape[3], "Padding is not supported on the head_dim dimension");
     };
 
-    auto validate_regular_mode = [&]() {
-        TT_FATAL(
-            !(attrs.is_causal && tensors.attn_mask.has_value()),
-            "is_causal and attn_mask cannot both be present. Got is_causal: {}, attn_mask: {}",
-            attrs.is_causal,
-            tensors.attn_mask.has_value());
-
-        // A user-provided dense mask runs on the streaming compute kernel, which applies the mask
-        // and the structured sliding-window stamp through the same L1-accumulate slot and treats
-        // them as mutually exclusive (static_assert in sdpa_standard_v2). Sliding-window masking is
-        // expected to be baked into the provided mask instead. Reject the combination here so the
-        // caller gets a clear error rather than a kernel build failure.
-        TT_FATAL(
-            !(attrs.sliding_window_size.value_or(0) > 0 && tensors.attn_mask.has_value()),
-            "sliding_window_size and attn_mask cannot both be present; bake the sliding-window mask "
-            "into attn_mask. Got sliding_window_size: {}, attn_mask: {}",
-            attrs.sliding_window_size.value_or(0),
-            tensors.attn_mask.has_value());
-
-        const auto& mask_option = tensors.attn_mask;
-        if (mask_option.has_value()) {
-            const auto& mask = mask_option.value();
-            TT_FATAL(
-                mask.storage_type() == StorageType::DEVICE,
-                "When mask is provided to SDPA, the tensor must be on device");
-            TT_FATAL(
-                q.device() == mask.device(),
-                "When mask is provided to SDPA, it must be on the same device as the input tensors");
-            TT_FATAL(mask.layout() == Layout::TILE, "When mask is provided to SDPA, it must be tilized");
-            TT_FATAL(
-                mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
-                    mask.dtype() == DataType::BFLOAT4_B,
-                "When mask is provided to SDPA, it must be in BF16, BFP8, or BFP4 dataformat");
-
-            TT_FATAL(
-                mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-                "When mask is provided to SDPA, it must be in DRAM");
-
-            const auto& mask_shape = mask.logical_shape();
-            const auto q_shape = q.logical_shape();
-            const auto k_shape = k.logical_shape();
-
-            TT_FATAL(
-                mask_shape[0] == 1 || mask_shape[0] == q_shape[0],
-                "Mask batch dim must either be 1 (to be broadcasted across all batches) or must match Q batch "
-                "dimension");
-            TT_FATAL(
-                mask_shape[1] == 1 || mask_shape[1] == q_shape[1],
-                "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");
-            TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
-            TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
-        }
-
-        // Shape checks
+    // Q/K/V shape agreement + chunk-size checks shared by regular and windowed modes.
+    auto validate_shapes_and_chunks = [&]() {
         const auto q_shape = q.logical_shape();
         const auto k_shape = k.logical_shape();
         const auto v_shape = v.logical_shape();
@@ -167,6 +115,62 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
         }
+    };
+
+    auto validate_regular_mode = [&]() {
+        TT_FATAL(
+            !(attrs.is_causal && tensors.attn_mask.has_value()),
+            "is_causal and attn_mask cannot both be present. Got is_causal: {}, attn_mask: {}",
+            attrs.is_causal,
+            tensors.attn_mask.has_value());
+
+        // A user-provided dense mask runs on the streaming compute kernel, which applies the mask
+        // and the structured sliding-window stamp through the same L1-accumulate slot and treats
+        // them as mutually exclusive (static_assert in sdpa_standard_v2). Sliding-window masking is
+        // expected to be baked into the provided mask instead. Reject the combination here so the
+        // caller gets a clear error rather than a kernel build failure.
+        TT_FATAL(
+            !(attrs.sliding_window_size.value_or(0) > 0 && tensors.attn_mask.has_value()),
+            "sliding_window_size and attn_mask cannot both be present; bake the sliding-window mask "
+            "into attn_mask. Got sliding_window_size: {}, attn_mask: {}",
+            attrs.sliding_window_size.value_or(0),
+            tensors.attn_mask.has_value());
+
+        const auto& mask_option = tensors.attn_mask;
+        if (mask_option.has_value()) {
+            const auto& mask = mask_option.value();
+            TT_FATAL(
+                mask.storage_type() == StorageType::DEVICE,
+                "When mask is provided to SDPA, the tensor must be on device");
+            TT_FATAL(
+                q.device() == mask.device(),
+                "When mask is provided to SDPA, it must be on the same device as the input tensors");
+            TT_FATAL(mask.layout() == Layout::TILE, "When mask is provided to SDPA, it must be tilized");
+            TT_FATAL(
+                mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
+                    mask.dtype() == DataType::BFLOAT4_B,
+                "When mask is provided to SDPA, it must be in BF16, BFP8, or BFP4 dataformat");
+
+            TT_FATAL(
+                mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "When mask is provided to SDPA, it must be in DRAM");
+
+            const auto& mask_shape = mask.logical_shape();
+            const auto q_shape = q.logical_shape();
+            const auto k_shape = k.logical_shape();
+
+            TT_FATAL(
+                mask_shape[0] == 1 || mask_shape[0] == q_shape[0],
+                "Mask batch dim must either be 1 (to be broadcasted across all batches) or must match Q batch "
+                "dimension");
+            TT_FATAL(
+                mask_shape[1] == 1 || mask_shape[1] == q_shape[1],
+                "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");
+            TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
+            TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
+        }
+
+        validate_shapes_and_chunks();
     };
 
     auto validate_chunked_mode = [&]() {
@@ -355,10 +359,54 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
     };
 
+    auto validate_windowed_mode = [&]() {
+        TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
+        TT_FATAL(!attrs.is_causal, "Windowed SDPA is non-causal; is_causal must be false.");
+        TT_FATAL(
+            !tensors.attn_mask.has_value(),
+            "Windowed SDPA builds its mask from cu_window_seqlens; attn_mask must not be provided.");
+        TT_FATAL(!attrs.use_mla, "Windowed SDPA does not support MLA.");
+        TT_FATAL(
+            !(attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value()),
+            "Windowed SDPA does not support chunked/paged mode.");
+        TT_FATAL(attrs.sliding_window_size.value_or(0) == 0, "Windowed SDPA does not support sliding_window_size.");
+        TT_FATAL(!tensors.attention_sink.has_value(), "Windowed SDPA does not support attention_sink.");
+
+        // Windowed attention is otherwise plain non-causal SDPA, so apply the same Q/K/V shape and
+        // chunk-size validation as the regular path.
+        validate_shapes_and_chunks();
+
+        const auto& cu = tensors.cu_window_seqlens.value();
+        TT_FATAL(cu.storage_type() == StorageType::DEVICE, "cu_window_seqlens must be on device.");
+        TT_FATAL(cu.buffer() != nullptr, "cu_window_seqlens must be allocated on device.");
+        TT_FATAL(q.device() == cu.device(), "cu_window_seqlens must be on the same device as Q/K/V.");
+        TT_FATAL(
+            cu.dtype() == DataType::INT32 || cu.dtype() == DataType::UINT32,
+            "cu_window_seqlens must be INT32/UINT32, got {}.",
+            cu.dtype());
+        TT_FATAL(cu.layout() == Layout::ROW_MAJOR, "cu_window_seqlens must be ROW_MAJOR.");
+        // Must be a 1-D tensor of cumulative boundaries [0, w1, ..., S]: the writer reads it as a flat
+        // array and indexes up to (num_elements - 1), so at least two entries are required.
+        const auto& cu_shape = cu.logical_shape();
+        TT_FATAL(cu_shape.rank() == 1, "cu_window_seqlens must be 1-D, got rank {}.", cu_shape.rank());
+        const auto cu_eles = cu_shape[-1];
+        // The writer loads cu_window_seqlens into a single CB tile and the generator indexes the whole
+        // array from it, so the element count is bounded by one uint32 tile (TILE_HW entries). Supporting
+        // more would require a multi-tile load in writer_interleaved.cpp / windowed_mask_gen.hpp.
+        constexpr uint32_t max_cu_window_seqlens = tt::constants::TILE_HW;  // 1024 uint32 per tile
+        TT_FATAL(
+            cu_eles >= 2 && cu_eles <= max_cu_window_seqlens,
+            "cu_window_seqlens must have between 2 and {} elements, got {}.",
+            max_cu_window_seqlens,
+            cu_eles);
+    };
+
     check_conditions();
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
-    if (is_chunked_mode) {
+    if (attrs.is_windowed) {
+        validate_windowed_mode();
+    } else if (is_chunked_mode) {
         validate_chunked_mode();
     } else {
         validate_regular_mode();
@@ -386,37 +434,6 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
 SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
     const SDPAParams& attrs, const SDPAInputs& tensors) {
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
-}
-
-ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
-    bool is_chunked_prefill = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
-    bool flexible_chunked = attrs.chunk_start_idx_tensor.has_value();
-
-    const Tensor& q = tensors.q;
-    const Tensor& k = tensors.k;
-    const Tensor& v = tensors.v.value_or(tensors.k);
-
-    const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
-    const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
-    operation::Hash hash = operation::hash_operation<SDPAOperation>(
-        attrs.head_dim_v,
-        attrs.scale,
-        attrs.sliding_window_size,
-        attrs.output_mem_config,
-        attrs.program_config,
-        attrs.is_causal,
-        is_chunked_prefill,
-        flexible_chunked,
-        chunk_start_idx_for_hash,
-        attrs.compute_kernel_config,
-        q,
-        k,
-        v,
-        tensors.attn_mask,
-        page_table_for_hash,
-        tensors.attention_sink,
-        attrs.use_mla);
-    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>
@@ -517,7 +534,8 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& cu_window_seqlens) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -531,6 +549,7 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
+            .is_windowed = cu_window_seqlens.has_value(),
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,
@@ -540,6 +559,7 @@ Tensor sdpa(
             .page_table = page_table_tensor,
             .chunk_start_idx_tensor = chunk_start_idx_tensor,
             .attention_sink = attention_sink,
+            .cu_window_seqlens = cu_window_seqlens,
         });
 }
 }  // namespace ttnn::prim

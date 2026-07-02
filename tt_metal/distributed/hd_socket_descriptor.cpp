@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_context.hpp"
+#include <umd/device/pcie/pci_device.hpp>
 
 #include <cerrno>
 #include <chrono>
@@ -33,7 +34,20 @@ void HDSocketDescriptor::populate_from_owner(
     data_offset = 0;
     fifo_size = fifo_size_arg;
     config_buffer_address = config_buffer_address_arg;
-    device_id = static_cast<uint32_t>(mesh_device->get_device(core.device_coord)->id());
+    // Resolve to the *physical* PCIe device number (/dev/tenstorrent/N) rather than
+    // the UMD logical chip id. The logical id is an index into the (possibly
+    // TT_VISIBLE_DEVICES-filtered) device enumeration and is therefore not stable
+    // across processes: an owner that sets TT_VISIBLE_DEVICES and a connector that
+    // does not would disagree on what a given logical id refers to. The physical
+    // device number is identical in every process on the host, so the connector can
+    // translate it back to its own local logical id (see PCIeCoreWriter).
+    uint32_t logical_device_id = static_cast<uint32_t>(mesh_device->get_device(core.device_coord)->id());
+    auto physical_device_num = tt::umd::PCIDevice::get_pci_device_id(static_cast<int>(logical_device_id));
+    TT_FATAL(
+        physical_device_num.has_value(),
+        "Failed to resolve physical PCIe device for logical chip id {} while exporting H2D socket descriptor.",
+        logical_device_id);
+    device_id = static_cast<uint32_t>(physical_device_num.value());
     core_x = core.core_coord.x;
     core_y = core.core_coord.y;
     mesh_coord.assign(core.device_coord.coords().begin(), core.device_coord.coords().end());

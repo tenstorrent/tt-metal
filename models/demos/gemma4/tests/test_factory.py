@@ -126,6 +126,8 @@ def _model_key_candidates():
         is_moe = bool(getattr(tc, "enable_moe_block", False))
         if hidden == 5376 and not is_moe:
             candidates.append("gemma-4-31B-it")
+        elif hidden == 3840 and not is_moe:
+            candidates.append("gemma-4-12B-it")
         elif is_moe:
             candidates.append("gemma-4-26B-A4B-it")
     except Exception:
@@ -165,11 +167,13 @@ def get_pcc_threshold(request, default=0.99):
     table = _load_pcc_thresholds()
     node_name = request.node.name
     mesh_key = _mesh_key_from_node_name(node_name)
-    model_entry = _lookup_model_entry(table, _model_key())
-    mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
-    return mesh_entry.get(node_name, default)
+    # Try each candidate model key (HF_MODEL basename first, then the canonical
+    # names inferred from the loaded config) so a HF_MODEL that drops the "-it"
+    # suffix (e.g. google/gemma-4-26B-A4B) or points at a hashed cache snapshot
+    # still resolves to the right entry instead of falling back to 0.99.
+    # _lookup_model_entry matches case-insensitively.
     for model_key in _model_key_candidates():
-        model_entry = table.get(model_key, {})
+        model_entry = _lookup_model_entry(table, model_key)
         mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
         if node_name in mesh_entry:
             return mesh_entry[node_name]
@@ -180,7 +184,21 @@ def is_moe_model():
     """Check if the current model has MoE enabled."""
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    try:
+        config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    except Exception as e:
+        # IMPORTANT: this helper is evaluated at import time (see skip_if_not_moe),
+        # so any failure here breaks *collection* for the whole Gemma4 unit-test suite.
+        #
+        # In environments where the HF checkpoint's `model_type="gemma4"` is not
+        # recognized by the installed Transformers version (or where the model's
+        # remote code isn't available offline), default to "not MoE" so only the
+        # MoE-specific tests are skipped rather than crashing collection.
+        import warnings
+
+        warnings.warn(f"Unable to load HF config for is_moe_model(): {e}. Treating model as non-MoE.")
+        return False
+
     tc = getattr(config, "text_config", config)
     return getattr(tc, "enable_moe_block", False)
 
@@ -323,6 +341,33 @@ class TestFactory:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+        )
+        return cos_tt, sin_tt
+
+    @staticmethod
+    def create_tt_rope_cache_2d(device, hf_text_config, max_seq_len, layer_idx):
+        """Create the 2D cos/sin cache used by the decode embedding-lookup RoPE path.
+
+        Returns (cos_cache, sin_cache) each [max_seq_len, head_dim] on device,
+        matching the layout of ``Gemma4Model.rope_caches_2d``. Decode attention
+        detects the 2D shape and gathers per-user cos/sin via ``ttnn.embedding``
+        (one row per user position), which is the path true batched decode takes.
+        """
+        from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+        rope = Gemma4TextRotaryEmbedding(hf_text_config)
+        x_dummy = torch.randn(1, max_seq_len, hf_text_config.hidden_size)
+        pos_ids = torch.arange(max_seq_len).unsqueeze(0)
+        layer_type = hf_text_config.layer_types[layer_idx]
+        cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)  # [1, max_seq_len, head_dim]
+
+        is_mesh = hasattr(device, "shape")
+        replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+        cos_tt = ttnn.from_torch(
+            cos.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
+        sin_tt = ttnn.from_torch(
+            sin.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
         )
         return cos_tt, sin_tt
 

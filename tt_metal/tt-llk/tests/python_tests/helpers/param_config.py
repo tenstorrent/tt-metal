@@ -7,6 +7,7 @@ from itertools import product
 from typing import Iterator, List, Tuple
 
 import pytest
+from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
 from .data_format_inference import is_format_combination_outlier
@@ -386,11 +387,16 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
 
 
 def is_invalid_quasar_sfpu_format_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
+    fmt: FormatConfig, dest_acc: DestAccumulation, unpack_to_dest: bool = False
 ) -> bool:
     """
     Check if a Quasar SFPU (input_format, output_format, dest_acc) combination
     is unsupported by the hardware and should be skipped by the parametrize sweep.
+
+    ``unpack_to_dest`` relaxes the sub-32-bit-integer-input guard: when the input is written
+    straight to a 32-bit Dest via UNPACR_DEST the narrow datum lands fine (the all-zeros failure
+    is specific to the FPU datacopy path), so the guard only fires when not unpacking to Dest.
+    Mirrors the ``not unpacking_to_dest`` gate in data_format_inference.
     """
     in_fmt = fmt.input_format
     out_fmt = fmt.output_format
@@ -408,6 +414,17 @@ def is_invalid_quasar_sfpu_format_combination(
         in_fmt == DataFormat.Float32
         and out_fmt == DataFormat.Float16
         and dest_acc == DestAccumulation.No
+    ):
+        return True
+
+    # Sub-32-bit integer input cannot use a 32-bit dest through the FPU datacopy: the packer input
+    # format must stay at the narrow width (UInt16 collapses to Int16). Mirrors the
+    # data_format_inference guard, which only rejects this on the non-unpack-to-Dest path — so a
+    # 32-bit-Dest case that unpacks straight to Dest is exempt.
+    if (
+        not unpack_to_dest
+        and in_fmt in (DataFormat.Int16, DataFormat.UInt16)
+        and dest_acc == DestAccumulation.Yes
     ):
         return True
 
@@ -497,7 +514,7 @@ def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) ->
     return max(max_tiles - result_tiles, 0)
 
 
-def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half):
+def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
     """Generate all possible input dimensions for unary operations.
     These dimensions are determined by the number of tiles that can fit into dest, which is determined by dest_sync and dest_acc.
     The generated input dimensions should ensure that all of the data fits into dest without any overflow when running unary operations.
@@ -517,8 +534,11 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half):
     capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
     max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
-    num_tile_rows = 32
-    num_tile_cols = 32
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    num_tile_rows = tile_shape.total_row_dim()
+    num_tile_cols = tile_shape.total_col_dim()
 
     return [
         [row * num_tile_rows, column * num_tile_cols]

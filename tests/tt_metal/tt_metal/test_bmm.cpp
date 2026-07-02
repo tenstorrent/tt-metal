@@ -275,6 +275,10 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 // when running a multi-neo emu/sim build. Otherwise its the same test with batch split across nodes.
 TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     auto& mesh_device = *devices_[0];
+    if (mesh_device.compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "This test requires at least 2 worker nodes.";
+    }
+
     IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;

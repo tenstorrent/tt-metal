@@ -38,6 +38,7 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
+    const uint32_t single_tile_size_bytes = cb_in0.get_tile_size();
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;

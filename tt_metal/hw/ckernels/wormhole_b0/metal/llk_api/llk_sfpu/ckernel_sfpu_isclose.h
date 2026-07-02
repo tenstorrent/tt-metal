@@ -48,8 +48,8 @@ inline void calculate_sfpu_isclose(
         // both the |b| computation for the tolerance and the merged Inf/NaN
         // fix-up branch below, so computing them once avoids any duplicated
         // bit-mask work.
-        sfpi::vInt a_bits = sfpi::reinterpret<sfpi::vInt>(a);
-        sfpi::vInt b_bits = sfpi::reinterpret<sfpi::vInt>(b);
+        sfpi::vInt a_bits = sfpi::as<sfpi::vInt>(a);
+        sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
         sfpi::vFloat a_abs = sfpi::abs(a);
         sfpi::vFloat b_abs = sfpi::abs(b);
 
@@ -65,8 +65,8 @@ inline void calculate_sfpu_isclose(
         // tolerance formula yields inf<=inf=true even for mismatched signs,
         // and for NaN inputs the hardware comparison can be unreliable; both
         // are corrected in the single fix-up branch below.
-        sfpi::vFloat result = sfpi::vConst0;
-        v_if(abs_diff <= tol) { result = sfpi::vConst1; }
+        sfpi::vFloat result = 0.0f;
+        v_if(abs_diff <= tol) { result = 1.0f; }
         v_endif;
 
         // Single fix-up branch covering every "special" lane (Inf or NaN).
@@ -79,11 +79,11 @@ inline void calculate_sfpu_isclose(
         // Folding both old fix-ups into one v_if removes two predicate-stack
         // push/pop pairs from the hot loop.
         v_if(a_abs >= inf_bits || b_abs >= inf_bits) {
-            result = sfpi::vConst0;
-            v_if(a_abs == inf_bits && a_bits == b_bits) { result = sfpi::vConst1; }
+            result = 0.0f;
+            v_if(a_abs == inf_bits && a_bits == b_bits) { result = 1.0f; }
             v_endif;
             if constexpr (EQUAL_NAN) {
-                v_if(a_abs > inf_bits && b_abs > inf_bits) { result = sfpi::vConst1; }
+                v_if(a_abs > inf_bits && b_abs > inf_bits) { result = 1.0f; }
                 v_endif;
             }
         }

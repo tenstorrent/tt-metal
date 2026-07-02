@@ -925,7 +925,7 @@ void add_kernel_descriptors(
     // Default mode so the post-welford FPU eltwise (sub_tiles_bcast_cols) keeps reading via
     // SrcA TF32.
     //
-    // cb_ex_global (c_15) was considered and rejected. Its only consumer is transpose_wh_tile,
+    // cb_ex_global (c_15) was considered and rejected. Its only consumer is transpose_tile,
     // which would benefit from UnpackToDestFp32 in isolation, but the transpose result is then
     // packed into cb_transpose and the downstream consumers (sub_tiles_bcast_cols /
     // mul_tiles_bcast_cols) read cb_transpose via SrcA, truncating to TF32.

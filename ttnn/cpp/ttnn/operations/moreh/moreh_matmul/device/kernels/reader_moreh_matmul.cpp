@@ -99,13 +99,15 @@ void kernel_main() {
     bool need_input_mask_w = (input_mask_w != 32);
 
     if (need_input_mask_h || need_input_mask_w) {
-        generate_mask_tiles(cb_id_in2, input_mask_h, input_mask_w);
+        CircularBuffer cb_in2(cb_id_in2);
+        generate_mask_tiles(cb_in2, input_mask_h, input_mask_w);
     }
 
     bool need_other_mask_h = (other_mask_h != 32);
     bool need_other_mask_w = (other_mask_w != 32);
     if (need_other_mask_h || need_other_mask_w) {
-        generate_mask_tiles(cb_id_in3, other_mask_h, other_mask_w);
+        CircularBuffer cb_in3(cb_id_in3);
+        generate_mask_tiles(cb_in3, other_mask_h, other_mask_w);
     }
 
     uint32_t output_tidx = output_tile_start_idx;

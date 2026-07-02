@@ -97,7 +97,7 @@ def run(
 
     # Check if device is mesh device
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config, device=device)
 
     # build_op_kwargs strips None values, but clamp needs min/max passed explicitly
     # even when None (the master trace records them). Re-inject from kwargs.

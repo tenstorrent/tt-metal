@@ -7,7 +7,8 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_add_rsqrt.h"
+#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_add_rsqrt.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -16,7 +17,7 @@ namespace ckernel {
  * Initialize for add + rsqrt operation: result = rsqrt(x + addend)
  * Useful for operations like RMSNorm: rsqrt(variance + epsilon)
  */
-ALWI void add_rsqrt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_add_rsqrt_init<APPROX>())); }
+ALWI void add_rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_add_rsqrt, (APPROX))); }
 
 /**
  * Perform add + rsqrt operation: result = rsqrt(x + addend)
@@ -26,8 +27,14 @@ ALWI void add_rsqrt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_add_rsqrt_in
  */
 template <bool fast_and_approx = false, VectorMode vec_mode = VectorMode::RC, int ITERATIONS = 8>
 ALWI void add_rsqrt_tile(uint32_t idst, uint32_t addend) {
-    MATH((llk_math_eltwise_unary_sfpu_add_rsqrt<APPROX, DST_ACCUM_MODE, fast_and_approx, ITERATIONS>(
-        idst, addend, vec_mode)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_add_rsqrt,
+        (APPROX, ITERATIONS, DST_ACCUM_MODE, fast_and_approx),
+        idst,
+        vec_mode,
+        addend));
 }
 
 }  // namespace ckernel

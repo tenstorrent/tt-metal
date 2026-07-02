@@ -1,3 +1,5 @@
+# Row reduce that sums across columns.
+
 operands:
   - name: "input_A"
     dims: [256, 256]
@@ -11,8 +13,7 @@ operands:
     format: "Float16_b"
 
 operations:
-  - output: "reduce_row_out"
-    math:
+  - math:
       - type: "Fpu"
         src_a: "input_A"
         src_b: "input_B"
@@ -21,5 +22,7 @@ operations:
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
-    packer: "Packer"
     block_size: [64, 128]
+    pack:
+      - output: "reduce_row_out"
+        packer: "Packer"

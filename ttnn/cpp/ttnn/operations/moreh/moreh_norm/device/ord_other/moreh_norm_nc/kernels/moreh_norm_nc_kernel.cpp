@@ -43,7 +43,7 @@ void kernel_main() {
             cb_x_obj.wait_front(onetile);  // comes from the reader
             cb_val_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(cb_x);
+            copy_tile_init_with_dt(cb_x_obj);
             copy_tile(cb_x, 0, dst0);
 #ifdef IS_ZERO
             unary_ne_tile_init();
@@ -60,7 +60,7 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_val);
+            pack_tile_with_dt(dst0, cb_val_obj);
             tile_regs_release();
 
             cb_x_obj.pop_front(onetile);
@@ -72,12 +72,12 @@ void kernel_main() {
                 cb_val_obj.wait_front(onetile);
                 cb_cal_obj.reserve_back(onetile);
 
-                copy_tile_init_with_dt(cb_val);
+                copy_tile_init_with_dt(cb_val_obj);
                 copy_tile(cb_val, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
+                pack_tile_with_dt(dst0, cb_cal_obj);
                 tile_regs_release();
 
                 cb_val_obj.pop_front(onetile);
@@ -89,13 +89,13 @@ void kernel_main() {
                 cb_cal_obj.wait_front(onetile);
                 cb_cal_obj.reserve_back(onetile);
 #ifdef IS_ZERO
-                add_tiles_init_with_dt(cb_val, cb_cal);
+                add_tiles_init_with_dt(cb_val_obj, cb_cal_obj);
                 add_tiles(cb_val, cb_cal, 0, 0, dst0);
 #else
-                copy_tile_init_with_dt(cb_val);
+                copy_tile_init_with_dt(cb_val_obj);
                 copy_tile(cb_val, 0, dst0);
 
-                copy_tile_init_with_dt(cb_cal);
+                copy_tile_init_with_dt(cb_cal_obj);
                 copy_tile(cb_cal, 0, dst1);
 
                 binary_max_tile_init();
@@ -104,7 +104,7 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
+                pack_tile_with_dt(dst0, cb_cal_obj);
                 tile_regs_release();
 
                 cb_val_obj.pop_front(onetile);
@@ -119,7 +119,7 @@ void kernel_main() {
         cb_cal_obj.wait_front(onetile);
         cb_y_obj.reserve_back(onetile);
 
-        copy_tile_init_with_dt(cb_cal);
+        copy_tile_init_with_dt(cb_cal_obj);
         copy_tile(cb_cal, 0, dst0);
 #ifdef MINUS_INF
         negative_tile_init();
@@ -128,7 +128,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_y);
+        pack_tile_with_dt(dst0, cb_y_obj);
         tile_regs_release();
 
         cb_cal_obj.pop_front(onetile);

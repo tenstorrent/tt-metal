@@ -13,6 +13,8 @@ Tests prefill and decode for both sliding and global layers, across all TP facto
     pytest -k "decode"           # decode only
 """
 
+import os
+
 import pytest
 import torch
 
@@ -336,4 +338,224 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     assert passing, (
         f"Attention paged decode (layer={layer_idx}, cache_len={cache_len}, "
         f"sliding_window={sliding_window}) PCC too low: {pcc_msg}"
+    )
+
+
+# ── Batched Decode PCC Test (paged attention, batch > 1) ─────────────────
+
+
+def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, tp, num_devices):
+    """Send a [1, num_kv_heads, seq, head_dim] KV tensor to the mesh in the same
+    layout production's K_proj weight sharding produces (mirrors the helper in
+    test_vllm_parity._kv_torch_to_tt).
+
+    * Single device: bare from_torch.
+    * Sharded (num_kv_heads >= tp): ShardTensorToMesh(dim=1).
+    * GQA-replicated (num_kv_heads < tp): one GQA-assigned KV head per device.
+    """
+    if num_devices <= 1:
+        return ttnn.from_torch(
+            k_torch.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+    if num_kv_heads >= tp:
+        return ttnn.from_torch(
+            k_torch.to(torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
+    q_per_device = num_attention_heads // tp
+    per_device_slices = []
+    for dev_i in range(num_devices):
+        kv_idx = (dev_i * q_per_device) * num_kv_heads // num_attention_heads
+        per_device_slices.append(k_torch[:, kv_idx : kv_idx + 1, :, :])
+    stacked = torch.cat(per_device_slices, dim=0)
+    return ttnn.from_torch(
+        stacked.to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
+)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
+    """True batched decode (batch > 1 single forward) with paged KV cache.
+
+    Each user gets independent random K/V, an independent query, and a distinct
+    position ``cache_len - b`` so the per-user RoPE path (apply_rope_decode_peruser
+    on [1, batch, 1, head_dim]) is exercised — a single broadcast position would
+    not catch a per-user-position bug. Compares each user's TT output against an HF
+    reference computed per user. Uses the 2D embedding-lookup RoPE cache (the path
+    real decode takes); the 4D legacy cache cannot represent per-user positions.
+
+    Skipped in CI (slow — runs across every gemma4 variant's unit job); run
+    locally for batched-decode coverage.
+    """
+    from transformers.cache_utils import DynamicCache
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+    from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    hf_text_config = TestFactory.create_hf_text_config()
+    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
+    hf_attn = hf_layer.self_attn
+    config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
+    _skip_if_l1_overflow(config, mesh_device)
+
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
+    is_mesh = num_devices > 1
+
+    state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
+
+    # Per-user positions (distinct → distinct RoPE). cache_len is the fill length
+    # for every user; each user attends to its first L_b = cache_len - b entries.
+    positions = [cache_len - b for b in range(batch)]
+
+    # Paged cache: each user gets its own contiguous block range.
+    block_size = 64
+    blocks_per_user = (cache_len + block_size) // block_size + 1
+    max_num_blocks = blocks_per_user * batch
+    max_seq_len = blocks_per_user * block_size
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    kv_cache = init_kv_cache(
+        mesh_device=mesh_device, config=config, paged_attention_config=paged_attention_config, cache_dtype=ttnn.bfloat16
+    )
+
+    tt_attn = Gemma4Attention(
+        mesh_device=mesh_device,
+        config=config,
+        state_dict=state_dict,
+        ccl_manager=ccl_manager,
+        mesh_config=mesh_config,
+        program_config=None,
+        layer_idx=layer_idx,
+    )
+    tt_attn.kv_cache = kv_cache
+
+    # Page table [batch, max_num_blocks]: user b owns blocks [b*bpu, (b+1)*bpu).
+    page_table = torch.zeros(batch, max_num_blocks, dtype=torch.int32)
+    for b in range(batch):
+        page_table[b, :blocks_per_user] = torch.arange(
+            b * blocks_per_user, (b + 1) * blocks_per_user, dtype=torch.int32
+        )
+    page_table_tt = ttnn.from_torch(
+        page_table,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
+
+    # Per-user random K/V + query; fill each user's cache and run HF reference.
+    k_cache_tt, v_cache_tt = kv_cache
+    sliding_window = config.sliding_window if config.is_sliding else None
+    x_users = []
+    ref_outputs = []
+    for b in range(batch):
+        k_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
+        v_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
+        k_fill = _kv_fill_to_tt(
+            k_data,
+            mesh_device,
+            num_kv_heads=config.num_key_value_heads,
+            num_attention_heads=config.num_attention_heads,
+            tp=tp,
+            num_devices=num_devices,
+        )
+        v_fill = _kv_fill_to_tt(
+            v_data,
+            mesh_device,
+            num_kv_heads=config.num_key_value_heads,
+            num_attention_heads=config.num_attention_heads,
+            tp=tp,
+            num_devices=num_devices,
+        )
+        ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, page_table_tt, batch_idx=b)
+        ttnn.experimental.paged_fill_cache(v_cache_tt, v_fill, page_table_tt, batch_idx=b)
+
+        # HF reference: this user attends to its first L_b cache entries.
+        pos = positions[b]
+        x_b = torch.randn(1, 1, config.hidden_size, dtype=torch.float32)
+        x_users.append(x_b)
+        hf_cache = DynamicCache()
+        hf_cache.update(k_data[:, :, :pos, :].clone(), v_data[:, :, :pos, :].clone(), layer_idx=layer_idx)
+        rope = Gemma4TextRotaryEmbedding(hf_text_config)
+        layer_type = hf_text_config.layer_types[layer_idx]
+        cos, sin = rope(x_b, torch.tensor([[pos]]), layer_type=layer_type)
+        mask = _build_sliding_window_mask(pos, sliding_window)
+        with torch.no_grad():
+            ref_b, _ = hf_attn(
+                x_b,
+                position_embeddings=(cos, sin),
+                past_key_values=hf_cache,
+                attention_mask=mask,
+                shared_kv_states=None,
+            )
+        ref_outputs.append(ref_b.reshape(config.hidden_size))
+
+    # Batched TT decode input: [1, 1, batch, hidden_size], users on dim 2.
+    x_torch = torch.cat([x.reshape(1, 1, 1, config.hidden_size) for x in x_users], dim=2)
+    x_tt = ttnn.from_torch(
+        x_torch.to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
+
+    # 2D embedding-lookup RoPE cache (real decode path). position_idx packs the
+    # B per-user positions into the first B slots of a [1, 32] uint32 tensor;
+    # position_idx_cache carries the [B] int32 positions for cache update + SDPA.
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache_2d(
+        mesh_device, hf_text_config, max(cache_len + 32, 128), layer_idx
+    )
+    pos_padded = torch.zeros(1, 32, dtype=torch.int32)
+    pos_padded[0, :batch] = torch.tensor(positions, dtype=torch.int32)
+    position_idx_tt = ttnn.from_torch(
+        pos_padded,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
+    position_idx_cache_tt = ttnn.from_torch(
+        torch.tensor(positions, dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
+
+    tt_output = tt_attn(
+        x_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=position_idx_tt,
+        is_decode=True,
+        page_table=page_table_tt,
+        position_idx_cache=position_idx_cache_tt,
+    )
+    # tt_output: [1, 1, batch_padded(32), hidden_size] — the decode batch dim is
+    # tile-padded; production slices [:, :, :B] in process_output_decode.
+    tt_output_torch = _from_device(tt_output, mesh_device)[:, :, :batch, :].reshape(batch, config.hidden_size).float()
+
+    ref_stacked = torch.stack(ref_outputs, dim=0)  # [batch, hidden_size]
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_stacked, pcc_threshold=get_pcc_threshold(request))
+    assert passing, (
+        f"Batched decode (layer={layer_idx}, batch={batch}, cache_len={cache_len}, "
+        f"tp={tp}, sliding_window={sliding_window}) PCC too low: {pcc_msg}"
     )

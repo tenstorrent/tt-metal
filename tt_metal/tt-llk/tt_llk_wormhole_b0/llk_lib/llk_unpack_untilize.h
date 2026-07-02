@@ -19,6 +19,7 @@
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
+#include "sanitizer/api.h"
 #include "sfpi.h"
 
 using namespace ckernel;
@@ -76,6 +77,18 @@ inline void _llk_unpack_untilize_mop_config_()
  */
 inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        unpack_dst_format,
+        llk::san::IGNORE,
+        face_r_dim,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE);
+    llk::san::operation_init<llk::san::Operation::UnpackUntilize>();
+
     // Disable transpose when unused
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -86,9 +99,7 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
               THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);                                              // Save tile x dim per context
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1); // Save descriptor 1
 
-    const std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                            : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                              : 1;
+    const std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
     const std::uint32_t unpA_ch1_y_stride = FACE_R_DIM * unpA_ch1_x_stride;
 
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
@@ -125,6 +136,8 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
 template <bool first_pass = true>
 inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const std::uint32_t block_tile_cols)
 {
+    llk::san::operation_check<llk::san::Operation::UnpackUntilize>();
+
     std::uint32_t rem_blocks_in_row = block_tile_cols;
 
     // Program srcA and srcB base addresses
@@ -243,6 +256,8 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
  */
 inline void _llk_unpack_untilize_uninit_()
 {
+    llk::san::operation_uninit<llk::san::Operation::UnpackUntilize>();
+
     // Check that unpacker is done (all contexts freed up) before starting hw configuration
     wait_for_idle();
 

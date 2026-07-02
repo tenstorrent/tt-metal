@@ -1,0 +1,297 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cfloat>
+#include <cstdint>
+
+#include "api/compute/pack_untilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tilize.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/add_int_sfpu.h"
+#include "api/compute/copy_dest_values.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
+#define DEBUG_PRINT 0
+
+#if DEBUG_PRINT == 1
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
+#include "api/debug/dprint_tensix.h"
+#include "tools/profiler/kernel_profiler.hpp"
+#endif
+
+#define ALWI inline __attribute__((always_inline))
+
+#define FACE_HEIGHT 16
+#define FACE_WIDTH 16
+#define TILE_HEIGHT 32
+#define TILE_WIDTH 32
+
+#define MPWI_TILES_PER_REDUCTION 1
+
+void kernel_main() {
+    // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
+    // kernel is called
+    constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
+    constexpr uint32_t window_size_hw = get_arg(args::window_size_hw);
+
+    constexpr uint32_t max_out_sticks_per_core = get_arg(args::max_out_sticks_per_core);
+    constexpr uint32_t in_c = get_arg(args::in_c);
+    constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
+    constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
+
+    // CB ids are Metal 2.0 DFB tokens (dfb::<name> converts implicitly to uint32_t). Legacy
+    // variable names are preserved so the rest of the kernel is unchanged.
+    constexpr auto in_cb_id_0 = dfb::in_cb_0;
+    constexpr auto in_scalar_cb_id_0 = dfb::in_scalar_cb_0;
+    constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
+    // MPWI-specific args start here
+    constexpr auto in_idx_cb_id = dfb::in_idx_cb;
+    constexpr auto pack_tmp_cb_id = dfb::pack_tmp_cb;
+    constexpr auto pack_idx_tmp_cb_id = dfb::pack_idx_tmp_cb;
+    constexpr auto right_inc_cb_id = dfb::right_inc_cb;
+    constexpr auto down_left_wrap_inc_cb_id = dfb::down_left_wrap_inc_cb;
+    constexpr auto up_left_wrap_inc_cb_id = dfb::up_left_wrap_inc_cb;
+    constexpr uint32_t stride_h = get_arg(args::stride_h);
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t in_h_padded = get_arg(args::in_h_padded);
+    constexpr uint32_t in_w_padded = get_arg(args::in_w_padded);
+    constexpr uint32_t eff_kernel_h = get_arg(args::eff_kernel_h);
+    constexpr uint32_t eff_kernel_w = get_arg(args::eff_kernel_w);
+    constexpr uint32_t pad_l = get_arg(args::pad_l);
+    constexpr auto intra_kernel_right_inc_cb_id = dfb::intra_kernel_right_inc_cb;
+    constexpr auto intra_kernel_down_left_wrap_inc_cb_id = dfb::intra_kernel_down_left_wrap_inc_cb;
+    constexpr auto compute_tmp_idx_cb_id = dfb::compute_tmp_idx_cb;
+    constexpr auto clear_value_cb_id = dfb::clear_value_cb;
+    constexpr uint32_t kernel_h = get_arg(args::kernel_h);
+    constexpr uint32_t kernel_w = get_arg(args::kernel_w);
+    constexpr uint32_t indexes_32_bit = get_arg(args::indexes_32_bit);
+
+    // DataflowBuffer wrappers for CB operations
+    DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
+    DataflowBuffer in_idx_cb(in_idx_cb_id);
+    DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    DataflowBuffer right_inc_cb(right_inc_cb_id);
+    DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+    DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+    DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+    DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+    DataflowBuffer compute_tmp_idx_cb(compute_tmp_idx_cb_id);
+    DataflowBuffer clear_value_cb(clear_value_cb_id);
+    DataflowBuffer in_cb_0(in_cb_id_0);
+
+    constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
+
+    constexpr uint32_t mpwi_cb_tile_idx = 0;
+    constexpr uint32_t data_dst_idx = 0;
+    constexpr uint32_t data_accum_dst_idx = 1;
+    constexpr uint32_t index_dst_idx = 2;
+    constexpr uint32_t index_accum_dst_idx = 3;
+    constexpr uint32_t inc_dst_idx = 4;
+    constexpr uint32_t index_scratch_out_dst_idx = 6;
+    constexpr uint32_t index_temp_dst_idx = 5;  // only used for large kernels
+
+    constexpr uint32_t face_r_dim = FACE_HEIGHT;
+    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
+    constexpr uint32_t num_faces_in_input_tile = 4;
+    constexpr uint32_t num_faces_in_output_tile = 2;
+    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+    constexpr uint32_t num_out_sticks = 1;
+
+    // MPWI requires 1 tile at a time for max reduction with indices
+    constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
+    constexpr uint32_t max_tiles_per_iter =
+        in_ntiles_c < MPWI_TILES_PER_REDUCTION ? in_ntiles_c : MPWI_TILES_PER_REDUCTION;
+    constexpr uint32_t partial_iter_output_tiles =
+        in_ntiles_c % MPWI_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MPWI_TILES_PER_REDUCTION;
+
+    static_assert(REDUCE_OP == PoolType::MAX, "MPWI only supports REDUCE_OP = MAX");
+
+    constexpr uint32_t w_chunks = kernel_w % max_sticks_for_reduction == 0 ? kernel_w / max_sticks_for_reduction
+                                                                           : kernel_w / max_sticks_for_reduction + 1;
+    constexpr uint32_t interm_reduction_chunks = is_large_kernel ? w_chunks * kernel_h : 1;
+
+    in_scalar_cb.wait_front(1);
+
+    uint32_t current_idx_col;
+    uint32_t current_idx_row;
+    const uint32_t start_row = get_arg(args::start_row);
+    const uint32_t start_col = get_arg(args::start_col);
+    current_idx_col = start_col;
+    current_idx_row = start_row;
+
+    constexpr uint32_t sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
+    right_inc_cb.wait_front(1);
+    down_left_wrap_inc_cb.wait_front(1);
+    up_left_wrap_inc_cb.wait_front(1);
+    if constexpr (is_large_kernel) {
+        intra_kernel_right_inc_cb.wait_front(1);
+        intra_kernel_down_left_wrap_inc_cb.wait_front(1);
+        clear_value_cb.wait_front(1);
+    }
+
+    unary_op_init_common(in_cb_id_0, in_cb_id_0);
+    max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
+
+    // if max out sticks is non-zero then this will be used as the number of out sticks for every core
+    // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
+    // runtime args are used while for grid sample the max out sticks is set
+    uint32_t num_out_sticks_this_core =
+        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
+
+    bool first_iteration = true;
+    for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
+        for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
+            const bool last_c_block = c_i == in_nblocks_c - 1;
+
+            tile_regs_acquire();
+            uint32_t intra_kernel_h = 0;
+            uint32_t intra_kernel_w = 0;
+            reconfig_data_format_srca(compute_tmp_idx_cb_id);
+            copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
+            if (first_iteration) {  // move the initial indexes from the reader to DST
+                in_idx_cb.wait_front(1);
+                copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
+                in_idx_cb.pop_front(1);
+                first_iteration = false;
+            } else {  // move incremented indexes from compute back to DST
+                compute_tmp_idx_cb.wait_front(1);
+                copy_tile(compute_tmp_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
+                compute_tmp_idx_cb.pop_front(1);
+            }
+            if constexpr (is_large_kernel) {
+                // clear the accumulation tiles since they will contain garbage data which is partially loaded
+                // since max SFPU offset if 62 DST rows, but 4 rows are loaded each time so we load 2 rows of
+                // DST tiles 1 and 3 during the reduction of tiles 0 and 2
+                reconfig_data_format_srca(clear_value_cb_id);
+                copy_tile_to_dst_init_short(clear_value_cb_id);
+                copy_tile(clear_value_cb_id, mpwi_cb_tile_idx, data_accum_dst_idx);
+
+                // make a copy of the initial indexes to be used for restoring between C blocks
+                copy_dest_values<copy_format>(index_dst_idx, index_temp_dst_idx);
+            }
+
+            for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
+                bool last_chunk = chunk == interm_reduction_chunks - 1;
+
+                in_cb_0.wait_front(1);
+                reconfig_data_format_srca(in_cb_id_0);
+                copy_tile_to_dst_init_short(in_cb_id_0);
+                copy_tile(in_cb_id_0, mpwi_cb_tile_idx, data_dst_idx);
+
+                // increments happen between every chunk within a C block, and between C blocks
+                bool increment_needed = false;
+                if (last_c_block && last_chunk) {  // increment for the next kernel position
+                    increment_needed = true;
+                    reconfig_data_format_srca(compute_tmp_idx_cb_id);
+                    copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
+                    // update the current index column
+                    if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
+                        // we reached the right edge, wrap down and to the left
+                        current_idx_col = 0;
+                        if (current_idx_row + stride_h + eff_kernel_h > in_h_padded) {
+                            // we reached the bottom right corner, wrap to the top and to the left
+                            current_idx_row = 0;
+                            copy_tile(up_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        } else {
+                            current_idx_row += stride_h;
+                            copy_tile(down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        }
+                    } else {
+                        // we are still in the same row, move to the right
+                        current_idx_col += stride_w;
+                        copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                    }
+                } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
+                    if (!last_chunk) {         // increment for the next chunk within the same C block
+                        increment_needed = true;
+                        reconfig_data_format_srca(compute_tmp_idx_cb_id);
+                        copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
+                        if (intra_kernel_w + sticks_per_chunk < kernel_w) {  // move right in this row
+                            intra_kernel_w += sticks_per_chunk;
+                            copy_tile(intra_kernel_right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        } else {  // move down to the next row
+                            intra_kernel_w = 0;
+                            intra_kernel_h += 1;
+                            copy_tile(intra_kernel_down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        }
+                    }
+                }
+                if (!increment_needed) {
+                    copy_dest_values<copy_format>(index_dst_idx, index_scratch_out_dst_idx);
+                } else {
+                    // we allow overflow here for negative values as this only occurs in padding regions
+                    add_int_tile_init();
+                    add_int_tile<copy_format>(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                    max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
+                }
+
+                // TODO implement accumulation for <=9 MPWI SFPU so we can use this version for large kernels as well
+                constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
+                max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR, is_large_kernel>(
+                    data_dst_idx, index_dst_idx, chunk);
+
+                if constexpr (is_large_kernel) {
+                    if (!last_chunk) {
+                        copy_dest_values<copy_format>(index_scratch_out_dst_idx, index_dst_idx);
+                    }
+                }
+
+                in_cb_0.pop_front(1);
+            }
+
+            // After all chunks: if not last C block, restore base indices for next C block
+            if constexpr (is_large_kernel) {
+                if (!last_c_block) {
+                    copy_dest_values<copy_format>(index_temp_dst_idx, index_scratch_out_dst_idx);
+                }
+            }
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            pack_tmp_cb.reserve_back(1);
+            pack_reconfig_data_format(pack_tmp_cb_id);
+            pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output data)
+            pack_tmp_cb.push_back(1);
+
+            pack_idx_tmp_cb.reserve_back(1);
+            pack_reconfig_data_format(pack_idx_tmp_cb_id);
+            pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output indexes)
+            pack_idx_tmp_cb.push_back(1);
+
+            // Only push to compute_tmp_idx_cb_id if there's a next iteration that will consume it
+            // This prevents leaving stale data in the CB between program runs when using caching
+            bool is_last_iteration = (n == num_out_sticks_this_core - 1) && last_c_block;
+            if (!is_last_iteration) {
+                compute_tmp_idx_cb.reserve_back(1);
+                pack_reconfig_data_format(compute_tmp_idx_cb_id);
+                pack_tile<true>(
+                    index_scratch_out_dst_idx,
+                    compute_tmp_idx_cb_id,
+                    mpwi_cb_tile_idx);  // for compute (incremented indexes)
+                compute_tmp_idx_cb.push_back(1);
+            }
+
+            tile_regs_release();
+        }
+    }
+
+    // This prevents leaving stale data in the CB between program runs when using caching
+    in_scalar_cb.pop_front(1);
+    right_inc_cb.pop_front(1);
+    down_left_wrap_inc_cb.pop_front(1);
+    up_left_wrap_inc_cb.pop_front(1);
+    if constexpr (is_large_kernel) {
+        intra_kernel_right_inc_cb.pop_front(1);
+        intra_kernel_down_left_wrap_inc_cb.pop_front(1);
+        clear_value_cb.pop_front(1);
+    }
+}

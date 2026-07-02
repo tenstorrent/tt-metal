@@ -41,7 +41,7 @@ void kernel_main() {
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(0);
-    generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
+    generate_bcast_unary_scalar(CircularBuffer(cb_fused_scale), pre_scale);
 
 #if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
 

@@ -302,6 +302,11 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, d
       "weight_only" – weight only, bias=None
       "bias_only"   – bias only, weight=None
     """
+    if is_blackhole() and use_welford and w == 4096:
+        # The large-tensor Welford layer_norm kernels produce nondeterministic FP32 output on
+        # Blackhole (back-to-back runs differ; failure disappears under watcher), so the
+        # determinism check in ttnn_layer_norm trips. Tracked in issue #46523.
+        pytest.skip("Blackhole large-tensor Welford layer_norm is nondeterministic (FP32); see #46523")
     torch.manual_seed(0)
     torch_input_tensor = _make_ln_input(h, w, torch.float32, distribution)
     torch_weight = torch.rand((w,), dtype=torch.float32) if wb_mode in ("wb", "weight_only") else None

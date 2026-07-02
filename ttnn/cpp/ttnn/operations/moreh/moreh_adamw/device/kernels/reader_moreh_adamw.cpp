@@ -59,19 +59,23 @@ void kernel_main() {
     const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
 #endif
 
-    fill_cb_with_value(cb_scalar_args, lr);
-    fill_cb_with_value(cb_scalar_args, beta1);
-    fill_cb_with_value(cb_scalar_args, beta2);
-    fill_cb_with_value(cb_scalar_args, eps);
-    fill_cb_with_value(cb_scalar_args, weight_decay);
-    fill_cb_with_value(cb_beta1_exponent, beta1_exponent);
-    fill_cb_with_value(cb_beta2_exponent, beta2_exponent);
+    CircularBuffer cb_scalar(cb_scalar_args);
+    CircularBuffer cb_beta1_exp(cb_beta1_exponent);
+    CircularBuffer cb_beta2_exp(cb_beta2_exponent);
+    CircularBuffer cb_one(cb_id_one);
+    fill_cb_with_value(cb_scalar, lr);
+    fill_cb_with_value(cb_scalar, beta1);
+    fill_cb_with_value(cb_scalar, beta2);
+    fill_cb_with_value(cb_scalar, eps);
+    fill_cb_with_value(cb_scalar, weight_decay);
+    fill_cb_with_value(cb_beta1_exp, beta1_exponent);
+    fill_cb_with_value(cb_beta2_exp, beta2_exponent);
     union {
         float f;
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_one, scaler.u);
+    fill_cb_with_value(cb_one, scaler.u);
 
     Noc noc;
     CircularBuffer cb_param(cb_id_param);

@@ -48,7 +48,7 @@ ALWI void process_tile(
     CircularBuffer exp_cb_post_other(CB_POST_OTHER);
 
     binary_op_init_common(cb_left, cb_right, cb_out);
-    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
@@ -72,7 +72,7 @@ ALWI void process_tile(
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 #endif
 
-        PREPROCESS(OTHER_OP, cb_llk_post, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);

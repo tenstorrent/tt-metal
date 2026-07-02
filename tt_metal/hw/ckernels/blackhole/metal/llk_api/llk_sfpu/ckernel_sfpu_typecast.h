@@ -19,7 +19,17 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+// Mask that keeps the low 16 bits (the UInt16 value) of a 32-bit dest word and clears the garbage high bits.
+constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
+
+// SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
+// lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
+constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
+
+// SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
+constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
 inline void calculate_typecast_fp32_to_uint16() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
@@ -27,30 +37,52 @@ inline void calculate_typecast_fp32_to_uint16() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        if (DST_ACCUM_MODE) {
+            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
+        } else {
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        }
     }
 #else
-    // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple            | MAD | Round            | Store   |
-    // - | ---- | ----------------- | --- | ---------------- | ------- |
-    // 0 | [v]  |                   |     |                  |         |
-    // 1 | nop  | [v] = max(v, 0.0) |     |                  |         |
-    // 0 | ...  | (must be idle)    |     | (must be idle)   |         |
-    // 1 | ...  |                   |     | [v] L16 = rnd(v) |         |
-    // 0 | ...  |                   |     |                  | [v] L16 |
+    if constexpr (!DST_ACCUM_MODE) {
+        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 2 cycles per input row.
+        //
+        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+        //
+        // t | Load | Simple            | MAD | Round            | Store   |
+        // - | ---- | ----------------- | --- | ---------------- | ------- |
+        // 0 | [v]  |                   |     |                  |         |
+        // 1 | nop  | [v] = max(v, 0.0) |     |                  |         |
+        // 0 | ...  | (must be idle)    |     | (must be idle)   |         |
+        // 1 | ...  |                   |     | [v] L16 = rnd(v) |         |
+        // 0 | ...  |                   |     |                  | [v] L16 |
 
+        // SFPLOADMACRO operand encoding: operand0 = (macro_select << 2) | (VD & 3) and the
+        // trailing operand = VD >> 2, so the hardware reconstructs the value-register index
+        // VD = (trailing << 2) | (operand0 & 3) -- a 3-bit index spanning LREG0..LREG7 -- while
+        // operand0[3:2] selects which armed macro fires. Here VD is 0/1 and macro_select 0, so
+        // the mask/shift are no-ops, but the same idiom addresses VD >= 4 elsewhere (e.g.
+        // calculate_typecast_uint32_to_fp32 fires macro 2 with VD = LREG7).
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, v >> 2);
+        for (int d = 0; d < ITERATIONS; d++) {
+            int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+            TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, v >> 2);
+            TTI_SFPNOP;
+        }
         TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    } else {
+        // 32-bit Dest: the swap-hi-lo16 store cannot be expressed by the init-time macro store
+        // mode, so this case uses the plain loop instead of SFPLOADMACRO.
+#pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+            TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
+        }
     }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
 #endif
 }
 
@@ -135,7 +167,7 @@ inline void calculate_typecast_int32_to_fp16b() {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_6, v >> 2);
         TT_SFPABS(0, v, t, 0);
-        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
     TTI_SFPNOP;
@@ -212,7 +244,10 @@ inline void calculate_typecast_fp32_to_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_fp16b() {
-#ifdef DISABLE_SFPLOADMACRO
+    // Kept as a plain loop (no SFPLOADMACRO): #46231 rewrote this to round, mask off the
+    // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
+    // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
+    // so it is not equivalent and is not restored here. See #46751.
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
@@ -220,70 +255,54 @@ inline void calculate_typecast_fp32_to_fp16b() {
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                            // lreg[0] &= 1
         TTI_SFPIADD(0, p_sfpu::LREG13, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[1] += 0x7FFF
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);   // lreg[1] += lreg[0]
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_6, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);                            // lreg[1] &= 0xFFFF0000
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
     }
-#else
-    // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple          | MAD | Round      | Store   |
-    // - | ---- | --------------- | --- | ---------- | ------- |
-    // 0 |  [a] |                 |     |            |         |
-    // 1 |  [b] |                 |     | [a] >>= 16 |         |
-    // 2 |      | a &= 1          |     |            |         |
-    // 0 |  ... | [b] += 0x7fff   |     |            |         |
-    // 1 |  ... | [a] L16 = a + b |     |            | [a]     |
-    // 2 |  ... |                 |     |            | [b] L16 |
-    //
-    // Note that [a] schedules a 32-bit store, writing all zeros except for the
-    // LSB, which may be 0 or 1.  Then, [b] schedules a 16-bit store with
-    // MOD0_FMT_BF16.  The zeros mean that even if rounding is applied by
-    // packers, the result will be truncated.
-
-    constexpr int b = p_sfpu::LREG2;
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), 0, ADDR_MOD_7, a >> 2);
-        TTI_SFPLOADMACRO((1 << 2) | (b & 3), 0, ADDR_MOD_6, b >> 2);
-        TT_SFPAND(0, p_sfpu::LREG12, a, 0);
-    }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-#endif
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
 inline void calculate_typecast_uint16_to_fp32() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
     }
 #else
-    // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple            | MAD | Round | Store   |
-    // - | ---- | ----------------- | --- | ----- | ------- |
-    // 0 | [v]  |                   |     |       |         |
-    // 0 | ...  | [v] L16 = cast(v) |     |       |         |
-    // 0 | ...  |                   |     |       | [v] L16 |
+    if constexpr (!DST_ACCUM_MODE) {
+        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
+        // keeps only the low 16 bits (the UInt16 value), so casting it matches the plain loop's
+        // INT32 load + 0xFFFF mask + cast.
+        //
+        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+        //
+        // t | Load | Simple            | MAD | Round | Store   |
+        // - | ---- | ----------------- | --- | ----- | ------- |
+        // 0 | [v]  |                   |     |       |         |
+        // 0 | ...  | [v] L16 = cast(v) |     |       |         |
+        // 0 | ...  |                   |     |       | [v] L16 |
 
-    constexpr int v = p_sfpu::LREG0;
+        constexpr int v = p_sfpu::LREG0;
 
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::LO16, ADDR_MOD_6, v >> 2);
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::LO16, ADDR_MOD_6, v >> 2);
+        }
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    } else {
+        // 32-bit Dest: the macro's LO16 load cannot reproduce the INT32 + 0xFFFF mask path, so
+        // this case uses the plain loop instead of SFPLOADMACRO.
+#pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
+        }
     }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
 #endif
 }
 
@@ -333,7 +352,7 @@ inline void calculate_typecast_int32_to_fp32() {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_6, v >> 2);
         TT_SFPABS(0, v, t, 0);
-        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
     TTI_SFPNOP;
@@ -355,7 +374,7 @@ inline void calculate_typecast_uint32_to_fp16b() {
         TTI_SFPADDI(0x4f00, p_sfpu::LREG1, 0);  // 2^31
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
@@ -386,7 +405,7 @@ inline void calculate_typecast_uint32_to_fp16b() {
     for (int d = 0; d < ITERATIONS; d++) {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_6, v >> 2);
-        TT_SFPSHFT2(v, p_sfpu::LREG12, p_sfpu::LREG7, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+        TT_SFPSHFT2(v, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TT_SFPSETSGN(0, v, v, 1);
     }
     TTI_SFPNOP;
@@ -451,68 +470,63 @@ inline void calculate_typecast_uint32_to_fp32() {
 #endif
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
 inline void calculate_typecast_uint16_to_uint32() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 #else
-    // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple | MAD | Round | Store |
-    // - | ---- | ------ | --- | ----- | ----- |
-    // 0 | [v]  |        |     |       |       |
-    // 0 | ...  |        |     |       | [v]   |
+    if constexpr (!DST_ACCUM_MODE) {
+        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
+        // keeps only the low 16 bits (the UInt16 value) and zero-extends them, so the INT32 store
+        // matches the plain loop's INT32 load + 0xFFFF mask.
+        //
+        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+        //
+        // t | Load | Simple | MAD | Round | Store |
+        // - | ---- | ------ | --- | ----- | ----- |
+        // 0 | [v]  |        |     |       |       |
+        // 0 | ...  |        |     |       | [v]   |
+
+        constexpr int v = p_sfpu::LREG0;
 
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::LO16, ADDR_MOD_6, v >> 2);
+        }
+        TTI_SFPNOP;
+    } else {
+        // 32-bit Dest: the macro's LO16 load cannot reproduce the INT32 + 0xFFFF mask path, so
+        // this case uses the plain loop instead of SFPLOADMACRO.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        }
     }
-    TTI_SFPNOP;
 #endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint16() {
-#ifdef DISABLE_SFPLOADMACRO
+    // Kept as a plain loop (no SFPLOADMACRO): #46231 rewrote this to shift the value right by 16
+    // and saturate via SFPGT on the *high* bits before the swap-hi-lo16 store. The historical
+    // macro tested the low 16 bits instead and computes a different result, so it is not
+    // equivalent and is not restored here. See #46751.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
-        TTI_SFPIADD(
-            0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPGT_MOD1_SET_ALL_ONES);  // Set LREG0 = -1 if greater than 0
+        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // Leaves garbage in high bits, but packer will ignore it
+        TTI_SFPSTORE(p_sfpu::LREG1, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);  // Swap hi and low 16 before write
     }
-#else
-    // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple             | MAD | Round | Store   |
-    // - | ---- | ------------------ | --- | ----- | ------- |
-    // 0 | [a]  |                    |     |       |         |
-    // 1 | [b]  | [a] = a>0 ? -1 : 0 |     |       |         |
-    // 0 | ...  | [b] |= a           |     |       |         |
-    // 1 | ...  |                    |     |       | [b]     |
-
-    constexpr int a = p_sfpu::LREG0;
-    constexpr int b = p_sfpu::LREG1;
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::LO16, ADDR_MOD_7, a >> 2);
-        TTI_SFPLOADMACRO((1 << 2) | (b & 3), InstrModLoadStore::INT32, ADDR_MOD_6, b >> 2);
-    }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -524,7 +538,7 @@ inline void calculate_typecast_int32_to_uint16() {
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
@@ -538,14 +552,15 @@ inline void calculate_typecast_int32_to_uint16() {
     // 2 | nop  | [a] = max(0.0, a) |     |                  |         |
     // 0 | ...  | (must be idle)    |     |                  |         |
     // 1 | ...  |                   |     | [a] L16 = rnd(a) |         |
-    // 2 | ...  |                   |     |                  | [a] L16 |
+    // 2 | ...  |                   |     |                  | [a] swap|
     //
     // Simple/Round sub-units can be used simultaneously if one has VD=16 and
     // the other VD!=16.  The following steps clamp the input value to 0-65535:
     //
     // a = cast_fp32(a); this allows us to use SFPSTOCHRND later to convert to uint16, clamping to 65535.
     // swap_minmax(0.0, a); since SFPSTOCHRND takes the absolute value before clamping, we use SFPSWAP to clamp negative
-    // values to 0.0. L16 = rnd(a); finally, we use SFPSTOCHRND to clamp large values to 65535, using VD=16.
+    // values to 0.0. L16 = rnd(a); finally, we use SFPSTOCHRND to clamp large values to 65535, using VD=16. The macro
+    // Store uses SFPSTORE_MODE_SWAP_HI_LO16, matching the plain-loop store that lands the uint16 in the high 16 bits.
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -564,55 +579,21 @@ template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_fp16b() {
     sfpi::vConstIntPrgm0 = 1;
     sfpi::vConstIntPrgm1 = 0x7fff;
-
-#ifndef DISABLE_SFPLOADMACRO
-    constexpr int b = p_sfpu::LREG2;
-
-    // InstructionTemplate[0]
-    TTI_SFPSHFT2(-16 & 0xfff, 0, 12, 6);  // SFPSHFT2_MOD1_SHFT_IMM
-
-    // InstructionTemplate[1]
-    TTI_SFPIADD(0, p_sfpu::LREG13, 13, sfpi::SFPIADD_MOD1_CC_NONE);
-
-    // InstructionTemplate[2]
-    TTI_SFPIADD(0, b, 14, sfpi::SFPIADD_MOD1_CC_NONE);
-
-    // Macro 0: [a]
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x40 | (3 << 3) | (4 + 2);
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
-
-    // Macro 1: [b]
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 1, 0);
-    }
-
-    // Misc: {
-    //   StoreMod0: FP16B,
-    //   UsesLoadMod0ForStore: {1,0},
-    //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
-    // }
-    TTI_SFPCONFIG(0x310 | InstrModLoadStore::FP16B, 8, 1);
-#endif
+    sfpi::vConstIntPrgm2 = 0xffff0000;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_uint32() {
-#ifndef DISABLE_SFPLOADMACRO
+#ifdef DISABLE_SFPLOADMACRO
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
+#else
+    // The 32-bit Dest (DST_ACCUM_MODE) path of calculate_typecast_uint16_to_uint32 falls
+    // back to the plain loop, which masks the loaded word with LREG1. Load the mask here
+    // so that path is correct; the macro-programming below only targets LREG0, so LREG1
+    // survives. The 16-bit Dest macro path does not read LREG1.
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
+
+    // Macro 0: store only (the LO16 load already zero-extends the UInt16 value).
     {
         constexpr std::uint32_t simple_bits = 0;
         constexpr std::uint32_t mad_bits = 0;
@@ -633,13 +614,16 @@ inline void init_typecast_uint16_to_uint32() {
 #endif
 }
 
+// SFPCAST interprets its input as sign-magnitude, so bit 31 of the source flags the case
+// that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is preloaded with -31 -- the shift
+// amount the int/uint -> float macro inits (init_typecast_{uint32,int32}_to_fp32 / _to_fp16b)
+// use to extract that bit.
+inline void preload_sign_magnitude_cast_fixup() { sfpi::vConstIntPrgm0 = -31; }
+
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp32() {
 #ifndef DISABLE_SFPLOADMACRO
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     constexpr int a = p_sfpu::LREG2;
 
@@ -650,7 +634,7 @@ inline void init_typecast_uint32_to_fp32() {
     TTI_SFPCAST(a, 13, 0);
 
     // InstructionTemplate[2]
-    TTI_SFPSHFT2(0, p_sfpu::LREG12, 14, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+    TTI_SFPSHFT2(0, p_sfpu::LREG12, 14, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
 
     // InstructionTemplate[3]
     TTI_SFPMAD(0, p_sfpu::LCONST_1, 0, 15, 4);  // SFPMAD_MOD1_INDIRECT_VA
@@ -695,10 +679,7 @@ inline void init_typecast_int32_to_fp32() {
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
 
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     // InstructionTemplate[0]
     TTI_SFPSETSGN(0, t, 12, 0);
@@ -732,10 +713,7 @@ inline void init_typecast_int32_to_fp16b() {
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
 
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     // InstructionTemplate[0]
     TTI_SFPSETSGN(0, t, 12, 0);
@@ -769,7 +747,15 @@ inline void init_typecast_int32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp32() {
-#ifndef DISABLE_SFPLOADMACRO
+#ifdef DISABLE_SFPLOADMACRO
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
+#else
+    // The 32-bit Dest (DST_ACCUM_MODE) path of calculate_typecast_uint16_to_fp32 falls
+    // back to the plain loop, which masks the loaded word with LREG1. Load the mask here
+    // so that path is correct; the macro-programming below only targets LREG0, so LREG1
+    // survives. The 16-bit Dest macro path does not read LREG1.
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
+
     // InstructionTemplate[0]
     TTI_SFPCAST(0, 12, 0);
 
@@ -827,10 +813,7 @@ inline void init_typecast_uint16_to_fp16b() {
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp16b() {
 #ifndef DISABLE_SFPLOADMACRO
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     // InstructionTemplate[0]
     TTI_SFPCAST(0, 12, 0);
@@ -854,17 +837,20 @@ inline void init_typecast_uint32_to_fp16b() {
     }
 
     // Misc: {
-    //   StoreMod0: DEFAULT,
+    //   StoreMod0: FP32,
     //   UsesLoadMod0ForStore: {0},
     //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
     // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::DEFAULT, 8, 1);
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::FP32, 8, 1);
 #endif
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint16() {
 #ifndef DISABLE_SFPLOADMACRO
+    // Programs the macro used by the 16-bit Dest (LO16 store) path of
+    // calculate_typecast_fp32_to_uint16. The 32-bit Dest path uses the plain loop.
+
     // InstructionTemplate[0]
     TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
 
@@ -893,44 +879,7 @@ inline void init_typecast_fp32_to_uint16() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void init_typecast_uint32_to_uint16() {
-#ifndef DISABLE_SFPLOADMACRO
-    constexpr int a = p_sfpu::LREG0;
-
-    // InstructionTemplate[0]
-    TTI_SFPGT(0, p_sfpu::LCONST_0, 12, 8);  // SFPGT_MOD1_SET_VD
-
-    // InstructionTemplate[1]
-    TTI_SFPOR(0, a, 13, 0);
-
-    // Macro 0
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0;
-
-        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 0, 1);
-    }
-
-    // Macro 1
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 1);
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (1 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 1, 0);
-    }
-
-    // Misc: {
-    //   StoreMod0: LO16,
-    //   UsesLoadMod0ForStore: {0},
-    //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
-    // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::LO16, 8, 1);
-#endif
-}
+inline void init_typecast_uint32_to_uint16() {}
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int32_to_uint16() {
@@ -954,11 +903,11 @@ inline void init_typecast_int32_to_uint16() {
     }
 
     // Misc: {
-    //   StoreMod0: LO16,
+    //   StoreMod0: SFPSTORE_MODE_SWAP_HI_LO16 (swap hi/lo 16 before write),
     //   UsesLoadMod0ForStore: {0},
     //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
     // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::LO16, 8, 1);
+    TTI_SFPCONFIG(0x100 | SFPSTORE_MODE_SWAP_HI_LO16, 8, 1);
 #endif
 }
 
@@ -999,7 +948,8 @@ inline void calculate_typecast_uint_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
         if constexpr (u16) {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
         } else {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         }
@@ -1017,6 +967,7 @@ inline void init_typecast_fp32_to_uint8() {
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint_to_uint8() {
     sfpi::vConstIntPrgm0 = 0xFF;
+    sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }
 
 }  // namespace sfpu

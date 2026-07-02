@@ -4,8 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
@@ -16,17 +22,19 @@ void kernel_main() {
     const uint32_t output_tile_bytes = get_tile_size(output_cb_id);
     const auto s = TensorAccessor(dst_args, dst_addr, output_tile_bytes);
 
+    CircularBuffer cb_output(output_cb_id);
+
     uint32_t output_curr_id = start_id;
 
 #ifdef OUT_SHARDED
-    cb_wait_front(output_cb_id, num_tiles);
+    cb_output.wait_front(num_tiles);
 #else
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_wait_front(output_cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(output_cb_id);
-        noc_async_write_page(output_curr_id, s, l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(output_cb_id, 1);
+        cb_output.wait_front(1);
+        uint32_t l1_read_addr = cb_output.get_read_ptr();
+        noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), s, output_tile_bytes, {}, {.page_id = output_curr_id});
+        noc.async_write_barrier();
+        cb_output.pop_front(1);
         output_curr_id++;
     }
 #endif

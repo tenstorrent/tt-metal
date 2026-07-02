@@ -495,14 +495,13 @@ void kernel_main() {
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
 
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Needed when any K/joint dimension has padding, or when causal/chunked masking is active.
@@ -743,7 +742,7 @@ void kernel_main() {
                 // Skip the intra-ring prefetch when this Q is on the normalize-only path
                 // (balanced_skip_q + is_last_ring_iter): normalize produces cb_out incrementally
                 // and blocks on cb_out space; cb_out can't drain until the writer reaches
-                // write_out below. A cb_reserve_back(cb_prev_out) here would block until
+                // write_out below. Reserving space in cb_prev_out here would block until
                 // normalize finishes, creating a cycle with cb_out. Deferred prefetch below
                 // runs after write_out to break the cycle.
                 const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;

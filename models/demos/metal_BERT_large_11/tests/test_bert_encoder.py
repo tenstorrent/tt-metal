@@ -28,7 +28,7 @@ def run_bert_encoder_inference(
 ):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
     config = hugging_face_reference_model.config
 
     tt_bert_encoder_model = TtBertEncoder(

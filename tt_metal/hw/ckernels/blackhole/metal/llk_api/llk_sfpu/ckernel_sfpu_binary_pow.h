@@ -58,7 +58,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Convert exponent to float
     auto exp = sfpi::convert<sfpi::vSMag>(sfpi::exexp(base));
-    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
@@ -94,29 +94,29 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
-    sfpi::vInt zif = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x007fffff in paper
+    sfpi::vInt zii = exexp(sfpi::as<sfpi::vFloat>(z));        // Note: z & 0x7f800000 in paper
+    sfpi::vInt zif = sfpi::exman(sfpi::as<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
     sfpi::vFloat d2 =
-        sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0xf94ee7) + zif), sfpi::RoundMode::NearestEven);
+        sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0xf94ee7) + zif), sfpi::RoundMode::Nearest);
     sfpi::vFloat d3 =
-        sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0x560e) + zif), sfpi::RoundMode::NearestEven);
+        sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0x560e) + zif), sfpi::RoundMode::Nearest);
 
     d2 = d1 * d2;
     zif = _float_to_int32_positive_(d2 * d3);
 
     // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
+    zii = sfpi::as<sfpi::vInt>(sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii));
 
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
     auto pow_int = sfpi::convert<sfpi::vSMag16>(
-        pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
-    auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::NearestEven);
+        pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+    auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN
     v_if((absbase == 0.f) && pow < 0.f) {
@@ -141,8 +141,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
-        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest.
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
     }
 
     return y;
@@ -170,11 +170,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_endif;
 
     // Transform to z = (m - 1) / (m + 1)
-    sfpi::vFloat m_plus_1 = m + sfpi::vConst1;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
+    sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
+    sfpi::vFloat m_minus_1 = m - 1.0f;
     // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
     // t*y).
-    sfpi::vFloat recip = sfpi::vConst1 - 0.2426406871192851f * m_plus_1;
+    sfpi::vFloat recip = 1.0f - 0.2426406871192851f * m_plus_1;
     recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
     recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR for float32
     sfpi::vFloat z = m_minus_1 * recip;
@@ -183,10 +183,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat z2 = z * z;
     // Polynomial approximation using odd powers
     sfpi::vFloat p = PolynomialEvaluator::eval(
-        z2, sfpi::vConst1, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
+        z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
     sfpi::vFloat ln_m = 2.0f * (z * p);
 
-    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::NearestEven);
+    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
 
     // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2)
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
@@ -210,8 +210,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
         auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
-        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::NearestEven);
+            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive

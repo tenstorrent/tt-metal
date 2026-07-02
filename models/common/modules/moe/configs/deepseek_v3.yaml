@@ -8,6 +8,14 @@ num_routed_experts: 256
 num_shared_experts: 1
 has_bias: false
 
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8)
+n_group: 8
+score_func: sigmoid
+routed_scaling_factor: 2.5
+# noaux_tc score-correction bias (e_score_correction_bias): added to the sigmoid scores for SELECTION only
+# (output weights stay unbiased). Explicit per-model flag (not inferred from score_func).
+score_correction_bias: true
+
 compute:
   intermediate_size: 2048
   activation_type: SILU

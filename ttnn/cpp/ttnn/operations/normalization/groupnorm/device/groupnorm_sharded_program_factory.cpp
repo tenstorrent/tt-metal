@@ -732,9 +732,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode).
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode).
     // The welford_groupnorm_sharded_v2 kernel feeds both c_0 (non-TILIZE_IN) and c_1
-    // (TILIZE_IN) through both transpose_wh_tile (welford intake) and sub_tiles_bcast_scalar
+    // (TILIZE_IN) through both transpose_tile (welford intake) and sub_tiles_bcast_scalar
     // (final (x - mean) normalization). The FPU consumer means neither CB can carry the flag
     // directly. The workaround is the multi-buffer-index aliasing pattern: register
     // c_29 as a second buffer index on c_0's SRAM and c_31 on c_1's, set

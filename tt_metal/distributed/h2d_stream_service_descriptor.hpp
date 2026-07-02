@@ -44,7 +44,13 @@ struct H2DStreamServiceDescriptor {
     uint32_t metadata_size_bytes = 0;
 
     BufferType socket_buffer_type = BufferType::L1;
-    H2DMode socket_mode = H2DMode::DEVICE_PULL;
+
+    // Shared writer-completion counters for cross-process barrier semantics.
+    std::string completion_shm_name;
+    uint64_t completion_shm_size = 0;
+    uint32_t completion_issued_offset = 0;
+    uint32_t completion_completed_offset = 0;
+    uint32_t completion_completed_stride = sizeof(uint32_t);
 
     // One entry per participating mesh coord, passed directly to H2DSocket::connect_from_descriptor.
     std::vector<std::pair<MeshCoordinate, HDSocketDescriptor>> per_coord_entries;

@@ -80,32 +80,20 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #endif
 
-#if SFPU_OP_BITWISE_XOR_INCLUDE
-#include "api/compute/eltwise_unary/bitwise_xor.h"
+#if SFPU_OP_BITWISE_INCLUDE
+#include "api/compute/eltwise_unary/bitwise.h"
 #endif
 
 #if SFPU_OP_BITWISE_NOT_INCLUDE
 #include "api/compute/eltwise_unary/bitwise_not.h"
 #endif
 
-#if SFPU_OP_RIGHT_SHIFT_INCLUDE
-#include "api/compute/eltwise_unary/right_shift.h"
-#endif
-
-#if SFPU_OP_BITWISE_AND_INCLUDE
-#include "api/compute/eltwise_unary/bitwise_and.h"
-#endif
-
-#if SFPU_OP_BITWISE_OR_INCLUDE
-#include "api/compute/eltwise_unary/bitwise_or.h"
+#if SFPU_OP_SHIFT_INCLUDE
+#include "api/compute/eltwise_unary/shift.h"
 #endif
 
 #if SFPU_OP_ROUND_FAMILY_INCLUDE
 #include "api/compute/eltwise_unary/rounding.h"
-#endif
-
-#if SFPU_OP_LEFT_SHIFT_INCLUDE
-#include "api/compute/eltwise_unary/left_shift.h"
 #endif
 
 #if SFPU_OP_REMAINDER_INCLUDE
@@ -190,6 +178,10 @@
 
 #if SFPU_OP_DIGAMMA_INCLUDE
 #include "api/compute/eltwise_unary/digamma.h"
+#endif
+
+#if SFPU_OP_TANHSHRINK_INCLUDE
+#include "api/compute/eltwise_unary/tanhshrink.h"
 #endif
 
 #if SFPU_OP_POLYGAMMA_INCLUDE

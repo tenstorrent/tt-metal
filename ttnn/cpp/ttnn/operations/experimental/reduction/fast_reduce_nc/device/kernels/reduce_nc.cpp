@@ -52,4 +52,7 @@ void kernel_main() {
         tile_regs_release();
         cb_out0_obj.push_back(onetile);
     }
+    // cb_in1 holds a single broadcast tile waited once and reused across all output tiles;
+    // pop it at the end so the CB is left balanced.
+    cb_in1_obj.pop_front(onetile);
 }

@@ -37,7 +37,8 @@ namespace ckernel {
 // clang-format on
 template <bool APPROXIMATION_MODE>
 ALWI void mish_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mish, (APPROXIMATION_MODE, DST_ACCUM_MODE), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mish, (APPROXIMATION_MODE, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
@@ -45,7 +46,7 @@ ALWI void mish_tile(uint32_t idst) {
  */
 template <bool APPROXIMATION_MODE>
 ALWI void mish_tile_init() {
-    MATH(SFPU_INIT_CB(mish, sfpu::mish_init, (APPROXIMATION_MODE, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(mish, sfpu::mish_init, (APPROXIMATION_MODE, DST_ACCUM_MODE)));
 }
 
 }  // namespace ckernel

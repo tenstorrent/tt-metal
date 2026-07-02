@@ -70,6 +70,25 @@ from models.experimental.ops.descriptors.fusion.common import (
 
 
 # =============================================================================
+# Production-readiness guard
+# =============================================================================
+
+# Sequential/Parallel fusion is not yet production-ready: it requires ProgramSpec
+# to be exposed to Python before general use. Until then, construction is gated
+# behind an opt-in environment variable so accidental callers fail loudly rather
+# than silently depending on unfinished infrastructure.
+_ENABLE_ENV_VAR = "TT_METAL_ENABLE_PARALLEL_SEQUENTIAL"
+_ENABLE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _check_fusion_enabled() -> None:
+    if os.environ.get(_ENABLE_ENV_VAR, "").strip().lower() not in _ENABLE_TRUTHY_VALUES:
+        raise RuntimeError(
+            f"Sequential/Parallel fusion is disabled until ProgramSpec is exposed to Python. Set {_ENABLE_ENV_VAR}=1 to opt in."
+        )
+
+
+# =============================================================================
 # Fusion Build Cache — LRU-bounded
 # =============================================================================
 
@@ -870,6 +889,7 @@ class Sequential:
     """
 
     def __init__(self, *items, **named_items):
+        _check_fusion_enabled()
         all_items = list(items)
         for item in named_items.values():
             all_items.append(item)
@@ -1043,6 +1063,7 @@ class Parallel:
     """
 
     def __init__(self, *items, **named_items):
+        _check_fusion_enabled()
         all_items = list(items)
         for item in named_items.values():
             all_items.append(item)

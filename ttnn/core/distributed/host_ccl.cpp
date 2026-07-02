@@ -104,7 +104,7 @@ Tensor all_gather(const Tensor& tensor) {
         }
     }
 
-    return Tensor(
-        tt::tt_metal::HostTensor(std::move(all_gather_buffer), tensor.tensor_spec(), tensor.tensor_topology()));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+        std::move(all_gather_buffer), tensor.tensor_spec(), tensor.tensor_topology()));
 }
 }  // namespace ttnn::distributed::host_ccl

@@ -14,6 +14,8 @@ This is observational/diagnostic — no PCC threshold assertions.
 
 import matplotlib
 
+from models.common.utility_functions import hf_cache_layer_kv
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -23,12 +25,12 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
+from models.demos.common.prefill.adapter import get_adapter
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
@@ -43,6 +45,8 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     tokenize_prompt_to_isl,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
+
+DSV3 = get_adapter("deepseek_v3_d_p")
 
 PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 
@@ -561,7 +565,7 @@ def test_prefill_block_loop(
             tt_kvpe_cache, mesh_device, sp_axis=sp_axis
         )  # [1, 1, seq_total, head_dim]
         tt_kvpe_host = tt_kvpe_host.squeeze(0).float()  # [1, seq_total, head_dim]
-        torch_kvpe = ref_cache.key_cache[real_layer_idx].float()  # [1, 1, seq, head_dim]
+        torch_kvpe = hf_cache_layer_kv(ref_cache, real_layer_idx)[0].float()  # [1, 1, seq, head_dim]
         torch_kvpe = torch_kvpe.squeeze(1)  # [1, seq, head_dim]
 
         # Split into KV (nope) and PE (rope)

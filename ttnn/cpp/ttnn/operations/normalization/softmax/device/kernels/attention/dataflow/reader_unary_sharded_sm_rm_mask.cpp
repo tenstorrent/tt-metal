@@ -27,7 +27,7 @@ void kernel_main() {
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(0);
-    generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
+    generate_bcast_unary_scalar(CircularBuffer(cb_fused_scale), pre_scale);
 
     constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE ? 64 : 32;

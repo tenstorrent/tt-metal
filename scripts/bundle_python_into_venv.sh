@@ -125,12 +125,23 @@ if [[ ! -d "$CPYTHON_DIR/lib" ]]; then
     exit 1
 fi
 
-# Remove Python symlinks in venv/bin/ (they point to the external managed install)
-echo "  Removing external Python symlinks from $VENV_DIR/bin/..."
+# Copy CPython into a temporary location first. This is necessary because on a
+# --force re-run against an already-bundled venv, bin/python is a relative symlink
+# (../_python/bin/python) that readlink -f resolves to $VENV_DIR/_python/bin/python,
+# making CPYTHON_DIR == BUNDLED_PYTHON_DIR. Copying to a temp dir before removing
+# anything means the source is always intact when the copy runs.
+echo "  Copying Python interpreter into $BUNDLED_PYTHON_DIR/..."
+TMP_DIR="${BUNDLED_PYTHON_DIR}.tmp"
+rm -rf "$TMP_DIR"
+mkdir -p "$TMP_DIR"
+cp -r "$CPYTHON_DIR"/* "$TMP_DIR/"
+
+# Remove Python symlinks in venv/bin/ (they point to either the external managed
+# install or, on re-bundle, into the _python/ dir that is about to be replaced).
+echo "  Removing Python symlinks from $VENV_DIR/bin/..."
 rm -f "$VENV_DIR/bin/python"*
 
-# Copy CPython into a _python/ subdirectory within the venv.
-#
+# Atomically replace _python/ with the new copy.
 # We deliberately do NOT copy into the venv root. If we did, base_prefix would
 # equal prefix ($VENV_DIR), which causes Python, uv, and pip to conclude that
 # this is NOT a virtual environment — the same symptom as the bug we are fixing.
@@ -138,10 +149,8 @@ rm -f "$VENV_DIR/bin/python"*
 #   base_prefix = $VENV_DIR/_python   (derived from pyvenv.cfg.home)
 #   prefix      = $VENV_DIR
 #   base_prefix != prefix  =>  venv is correctly recognised.
-echo "  Copying Python interpreter into $BUNDLED_PYTHON_DIR/..."
-[[ "$FORCE_BUNDLE" == "--force" ]] && rm -rf "$BUNDLED_PYTHON_DIR"
-mkdir -p "$BUNDLED_PYTHON_DIR"
-cp -r "$CPYTHON_DIR"/* "$BUNDLED_PYTHON_DIR/"
+rm -rf "$BUNDLED_PYTHON_DIR"
+mv "$TMP_DIR" "$BUNDLED_PYTHON_DIR"
 
 # Create relative symlinks in venv/bin/ that point to the bundled interpreter.
 # Relative symlinks remain valid when the venv is mounted at any NFS path —

@@ -22,8 +22,9 @@
 // uint32_t 'val'. Ex: two bfloat16 vals in upper 16 bits and lower 16 bits.
 template <uint32_t val_size>
 FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
-    static_assert(val_size == 2 || val_size == 4, "Unsupported val_size");
-    using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
+    static_assert(val_size == 1 || val_size == 2 || val_size == 4, "Unsupported val_size");
+    using IntType =
+        std::conditional_t<(val_size == 1), uint8_t, std::conditional_t<(val_size == 2), uint16_t, uint32_t>>;
 
     uint32_t end_addr = start_addr + n_bytes;
     uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;  // ceil(address aligned to 4Bytes)

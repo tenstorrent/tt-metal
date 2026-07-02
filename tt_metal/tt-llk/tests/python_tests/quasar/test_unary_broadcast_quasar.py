@@ -30,6 +30,8 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -156,6 +158,8 @@ def test_unary_broadcast_quasar(
                 output_num_blocks=output_num_blocks,
             ),
             TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim),
         ],
         variant_stimuli=StimuliConfig(
             src_A,

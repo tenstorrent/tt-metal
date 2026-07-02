@@ -468,7 +468,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,

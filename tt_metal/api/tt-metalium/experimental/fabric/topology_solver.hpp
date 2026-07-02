@@ -490,9 +490,10 @@ private:
     // and that they are satisfiable together
     bool validate_cardinality_constraints() const;
 
-    // Same-rank: there must exist an injective assignment of non-empty target groups to distinct
-    // non-empty global groups such that each target in a group has some allowed mapping into that
-    // group's assigned global partition (forbidden + valid_mappings / staged rules).
+    // Same-rank feasibility: every non-empty logical target group must have at least one physical
+    // host partition where all members still allow a mapping (forbidden + valid_mappings / staged
+    // rules). Multiple target groups may share the same partition (e.g. several mesh_host_ranks
+    // carved from one galaxy host); partitions are not required to be distinct.
     bool validate_same_rank_groups_feasible() const;
 };
 

@@ -1859,7 +1859,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
         ([1.0,2.0,3.0],[3.0,4.0,5.0])
     ])
 # fmt: on
-def test_matmul_same_shape_but_invalid(device, input_a, input_b):
+def test_matmul_same_shape_but_invalid(device, input_a, input_b, expect_error):
     torch.manual_seed(0)
     # pad the lists with zeros to make it 32 so that it fits nicely on the device.
     input_a += [0.0] * (32 - len(input_a))
@@ -1868,18 +1868,17 @@ def test_matmul_same_shape_but_invalid(device, input_a, input_b):
     torch_input_tensor_a = torch.as_tensor(input_a, dtype=torch.bfloat16).reshape((1, 1, 1, len(input_a)))
     torch_input_tensor_b = torch.as_tensor(input_b, dtype=torch.bfloat16).reshape((1, 1, 1, len(input_b)))
 
-    with pytest.raises(RuntimeError) as exception:
+    with expect_error(
+        RuntimeError,
+        "Expected size for first two dimensions of batch2 tensor to be: \\[1, 32\\] but got: \\[1, 1\\]\\.",
+    ):
         torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
-    assert "Expected size for first two dimensions of batch2 tensor to be: [1, 32] but got: [1, 1]." in str(
-        exception.value
-    )
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as exception:
+    with expect_error(RuntimeError, "The width of the first tensor must be equal to the height of the second tensor"):
         ttnn.matmul(input_tensor_a, input_tensor_b)
-    assert "The width of the first tensor must be equal to the height of the second tensor" in str(exception.value)
 
 
 def test_tutorial_matmul(device):
@@ -3606,26 +3605,26 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         assert_numeric_metrics(result_conv, result_col, pcc_threshold=0.99)
 
 
-def test_from_torch_col_tilize_validation():
+def test_from_torch_col_tilize_validation(expect_error):
     torch.manual_seed(0)
     torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
     torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
 
     # col_tilize requires BFP dtype
-    with pytest.raises(RuntimeError, match="col_tilize=True requires BFP dtype"):
+    with expect_error(RuntimeError, "col_tilize=True requires BFP dtype"):
         ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat16, col_tilize=True)
 
     # col_tilize requires ndim >= 2
-    with pytest.raises(RuntimeError, match="col_tilize=True requires tensor.ndim >= 2"):
+    with expect_error(RuntimeError, "col_tilize=True requires tensor.ndim >= 2"):
         ttnn.from_torch(torch_tensor_1d, dtype=ttnn.bfloat8_b, col_tilize=True)
 
     # col_tilize not supported with spec
     spec = ttnn.TensorSpec((32, 64), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
-    with pytest.raises(RuntimeError, match="col_tilize=True is not supported with spec"):
+    with expect_error(RuntimeError, "col_tilize=True is not supported with spec"):
         ttnn.from_torch(torch_tensor_2d, spec=spec, col_tilize=True)
 
     # col_tilize requires tile layout
-    with pytest.raises(RuntimeError, match="col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT"):
+    with expect_error(RuntimeError, "col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT"):
         ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat8_b, layout=ttnn.ROW_MAJOR_LAYOUT, col_tilize=True)
 
 
@@ -3915,3 +3914,26 @@ def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits
     # Same weight, same matmul program; only in1's DRAM layout differs, so the ND
     # read must reproduce the interleaved read bit-for-bit.
     assert_equal(out_interleaved, out_nd)
+
+
+def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
+    """Kt (K / tile_width) must be divisible by in0_block_w — error message must include both values."""
+    torch.manual_seed(0)
+    m, k, n = 64, 128, 64
+    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=3,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    with expect_error(RuntimeError, r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
+        ttnn.matmul(in0, in1, program_config=program_config)

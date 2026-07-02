@@ -15,6 +15,11 @@ from models.demos.vision.classification.vit.blackhole.tt import (
     ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit,
 )
 from models.demos.vision.classification.vit.common.common import load_torch_model
+from models.demos.vision.classification.vit.common.vit_compat import (
+    run_vit_encoder_reference,
+    vit_encoder_layer,
+    vit_encoder_module,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -290,10 +295,13 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 
     config = transformers.ViTConfig.from_pretrained(model_name)
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
+    model = vit_encoder_layer(load_torch_model(model_location_generator, embedding=True))
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    # transformers 5.x ViTLayer.forward returns a Tensor (4.x returned a tuple); unwrap only when it is
+    # a tuple (otherwise `*_` unpacking slices off the batch dim). Matches the wormhole twin.
+    _layer_out = model(torch_hidden_states)
+    torch_output = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -337,13 +345,13 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 def test_vit_encoder(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    model = load_torch_model(model_location_generator, embedding=True)
-    config = model.config
-    model = model.vit.encoder
-    model = model.to(torch.float32)
+    full_model = load_torch_model(model_location_generator, embedding=True).to(torch.float32)
+    config = full_model.config
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output = model(torch_hidden_states).last_hidden_state
+    # transformers 5.x removed ViTEncoder; reconstruct the encoder reference version-tolerantly.
+    torch_output = run_vit_encoder_reference(full_model, torch_hidden_states)
+    model = vit_encoder_module(full_model)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,

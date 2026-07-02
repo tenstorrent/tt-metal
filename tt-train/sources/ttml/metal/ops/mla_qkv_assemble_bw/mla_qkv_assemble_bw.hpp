@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <tuple>
+
+#include "metal/ttnn_all_includes.hpp"
+
+namespace ttml::metal {
+
+// Backward kernel for ``mla_qkv_assemble_fw``.
+//
+// Inverts the forward op's tile routing:
+//   - dq_pre  ← head-major dQ packed flat  (reverse of head-split).
+//   - dkv_up  ← head-major [dK_nope | dV] packed flat per head.
+//   - dk_pe   ← Σ_h dK[..., qk_nope:]  (head-axis sum, runs in compute kernel).
+//
+// Shapes (TILE layout, INTERLEAVED memory):
+//   dQ      : [B, n_heads, S, qk_nope_dim + qk_rope_dim]
+//   dK      : [B, n_heads, S, qk_nope_dim + qk_rope_dim]
+//   dV      : [B, n_heads, S, v_dim]
+//   dq_pre  : [B, 1, S, n_heads * (qk_nope_dim + qk_rope_dim)]   (output)
+//   dkv_up  : [B, 1, S, n_heads * (qk_nope_dim + v_dim)]         (output)
+//   dk_pe   : [B, 1, S, qk_rope_dim]                             (output)
+//
+// Per-head dims and S must be tile-aligned.
+//
+// Returns: {dq_pre, dkv_up, dk_pe}
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> mla_qkv_assemble_bw(
+    const ttnn::Tensor& dQ,
+    const ttnn::Tensor& dK,
+    const ttnn::Tensor& dV,
+    uint32_t n_heads,
+    uint32_t qk_nope_dim,
+    uint32_t qk_rope_dim,
+    uint32_t v_dim);
+
+}  // namespace ttml::metal

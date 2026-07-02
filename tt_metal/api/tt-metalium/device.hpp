@@ -167,10 +167,6 @@ public:
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
     virtual HalMemType get_mem_type_of_core(CoreCoord virtual_core) const = 0;
 
-    virtual bool has_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
-    virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
-    virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const = 0;
-
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
@@ -186,7 +182,6 @@ public:
     virtual void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
-    virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
 
     virtual bool is_mmio_capable() const = 0;
 

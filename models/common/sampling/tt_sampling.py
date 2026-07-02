@@ -15,6 +15,11 @@ from models.common.sampling._utils import is_default_value, is_llama33_70b_model
 from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
 from models.common.sampling._utils import upper_power_of_2
 from models.common.sampling.tt_log_probs import LogProbsCalculator
+from models.common.sampling.vocab_padding import (
+    build_invalid_vocab_mask,
+    build_tail_invalid_vocab_mask,
+    get_vocab_shard_dims,
+)
 
 
 class TTSampling(LightweightModule):
@@ -223,6 +228,7 @@ class TTSampling(LightweightModule):
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
+        self._create_invalid_vocab_mask()
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
         self.log_probs_calculator = LogProbsCalculator(
@@ -254,23 +260,21 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _get_num_sampling_shards(self):
+        if self.multi_step_reduction:
+            return 2
+        if 1 in self.cluster_shape:
+            return max(self.cluster_shape[0], self.cluster_shape[1])
+
+        if self.sampling_all_gather_axis not in (0, 1):
+            raise ValueError(
+                f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
+            )
+        return self.cluster_shape[self.sampling_all_gather_axis]
+
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
-        # Create indices tensor for device offsets
-        # For multi-step reduction, we use reduce over 2 steps in a single device
-        if self.multi_step_reduction:
-            num_devices_in_mesh = 2
-        else:
-            # If the mesh is effectively 1D, use the non-singleton dimension.
-            # If the mesh is 2D, use the configured gather axis.
-            if 1 in self.cluster_shape:
-                num_devices_in_mesh = max(self.cluster_shape[0], self.cluster_shape[1])
-            else:
-                assert self.sampling_all_gather_axis in (
-                    0,
-                    1,
-                ), f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
-                num_devices_in_mesh = self.cluster_shape[self.sampling_all_gather_axis]
+        num_devices_in_mesh = self._get_num_sampling_shards()
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
@@ -313,6 +317,138 @@ class TTSampling(LightweightModule):
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _create_invalid_vocab_mask(self):
+        self.tt_invalid_vocab_mask = None
+        self.tt_invalid_vocab_tail_mask = None
+        self._invalid_vocab_tail_width = 0
+
+        vocab_shard_dims = get_vocab_shard_dims(self.cluster_shape, self.sampling_all_gather_axis)
+        tail_mask = build_tail_invalid_vocab_mask(
+            self.vocab_size,
+            self.padded_vocab_size,
+            self.max_batch_size,
+            self.cluster_shape,
+            self.sampling_all_gather_axis,
+            tile_size=ttnn.TILE_SIZE,
+        )
+        if tail_mask is not None:
+            self._invalid_vocab_tail_width = tail_mask.tail_width
+            self.tt_invalid_vocab_tail_mask = ttnn.from_torch(
+                tail_mask.mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=vocab_shard_dims,
+                    mesh_shape=self.cluster_shape,
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return
+
+        invalid_vocab_mask = build_invalid_vocab_mask(
+            self.vocab_size,
+            self.padded_vocab_size,
+            self.max_batch_size,
+        )
+        if invalid_vocab_mask is None:
+            return
+
+        self.tt_invalid_vocab_mask = ttnn.from_torch(
+            invalid_vocab_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=vocab_shard_dims,
+                mesh_shape=self.cluster_shape,
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _mask_invalid_vocab_logits(self, logits):
+        if self.tt_invalid_vocab_tail_mask is not None:
+            return self._mask_invalid_vocab_tail_logits(logits)
+        if self.tt_invalid_vocab_mask is None:
+            return logits
+        return ttnn.add(
+            logits,
+            self.tt_invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
+
+    def _mask_invalid_vocab_tail_logits(self, logits):
+        tail_width = self._invalid_vocab_tail_width
+        local_width = logits.shape[-1]
+        valid_width = local_width - tail_width
+        if tail_width <= 0 or valid_width < 0:
+            return self._mask_invalid_vocab_logits_fallback(logits)
+        if valid_width == 0:
+            return ttnn.add(
+                logits,
+                self.tt_invalid_vocab_tail_mask,
+                memory_config=logits.memory_config(),
+                sub_core_grids=self.sub_core_grids,
+            )
+
+        valid_logits = ttnn.slice(
+            logits,
+            [0, 0, 0, 0],
+            [logits.shape[0], logits.shape[1], logits.shape[2], valid_width],
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
+        tail_logits = ttnn.slice(
+            logits,
+            [0, 0, 0, valid_width],
+            [logits.shape[0], logits.shape[1], logits.shape[2], local_width],
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
+        masked_tail_logits = ttnn.add(
+            tail_logits,
+            self.tt_invalid_vocab_tail_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
+        masked_logits = ttnn.concat(
+            [valid_logits, masked_tail_logits],
+            dim=3,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(valid_logits)
+        ttnn.deallocate(tail_logits)
+        ttnn.deallocate(masked_tail_logits)
+        return masked_logits
+
+    def _mask_invalid_vocab_logits_fallback(self, logits):
+        if self.tt_invalid_vocab_mask is None:
+            return logits
+        return ttnn.add(
+            logits,
+            self.tt_invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
+
+    def _can_slice_valid_vocab_for_argmax(self):
+        return self.vocab_size < self.padded_vocab_size and self.vocab_size % ttnn.TILE_SIZE == 0
+
+    def _slice_valid_vocab_for_argmax(self, logits):
+        if not self._can_slice_valid_vocab_for_argmax() or logits.shape[-1] != self.padded_vocab_size:
+            return logits
+        return ttnn.slice(
+            logits,
+            [0, 0, 0, 0],
+            [logits.shape[0], logits.shape[1], logits.shape[2], self.vocab_size],
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
         )
 
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
@@ -460,6 +596,9 @@ class TTSampling(LightweightModule):
         )
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
+            slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
+            if not slice_valid_vocab:
+                x = self._mask_invalid_vocab_logits(x)
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
@@ -483,13 +622,14 @@ class TTSampling(LightweightModule):
                     num_workers_per_link=self.argmax_num_workers_per_link,
                     num_buffers_per_channel=2,
                 )
+            if slice_valid_vocab:
+                x = self._slice_valid_vocab_for_argmax(x)
             x_untilized = ttnn.untilize(x, use_multicore=True)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
                 output_tensor=tt_out_tok,
                 keepdim=False,
-                use_multicore=True,
             )
             # Argmax path: logprobs not supported (force-argmax is disabled
             # when logprobs are enabled via format_sampling_params guard).
@@ -498,6 +638,7 @@ class TTSampling(LightweightModule):
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)

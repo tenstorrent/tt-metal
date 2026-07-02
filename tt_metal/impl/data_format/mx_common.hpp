@@ -38,6 +38,14 @@ struct FormatParams {
     uint32_t elem_sat_neg_bits = 0;
     InfNanRepresentation inf_rep = InfNanRepresentation::NotRepresentable;
     InfNanRepresentation nan_rep = InfNanRepresentation::NotRepresentable;
+    // MX integer-format (MxInt2/4/8) parameters. Unused by the floating-point MX
+    // formats (which leave is_integer=false). When is_integer is true the element
+    // is a signed two's-complement integer of width elem_width_bits with an
+    // implicit scale of 1/elem_int_scale; the shared block scale (E8M0) is applied
+    // on top. elem_int_max is the symmetric clamp magnitude.
+    bool is_integer = false;
+    uint32_t elem_int_scale = 0;  // round(scaled * elem_int_scale): 64 (MxInt8), 4 (MxInt4), 1 (MxInt2)
+    int elem_int_max = 0;         // symmetric clamp: 127 (MxInt8), 7 (MxInt4), 1 (MxInt2)
 };
 
 struct RoundResult {
@@ -73,7 +81,7 @@ inline float pow2_f32(int k) {
 
 // Inlined so that call sites passing a constexpr FormatParams (e.g.
 // kMxFp6RParams) can constant-propagate field accesses, mask widths, and
-// inf/nan/sat branches. convert_to_mx_elem_bits inlines this on the per-
+// inf/nan/sat branches. convert_to_mxfp_elem_bits inlines this on the per-
 // element hot path.
 constexpr RoundResult round_ties_even(uint32_t input_mantissa, int output_width, int input_width = 23) {
     if (output_width < 0) {
@@ -143,7 +151,7 @@ inline BlockScaleResult finalize_block_scale(
 
 TileWordCounts compute_tile_word_counts(uint32_t elem_count, const FormatParams& params);
 
-inline uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params) {
+inline uint32_t convert_to_mxfp_elem_bits(float datum, const FormatParams& params) {
     uint32_t ui32 = std::bit_cast<uint32_t>(datum);
     uint8_t sign = static_cast<uint8_t>((ui32 >> 31) & 0x1u);
     uint32_t fp32_exp_biased = (ui32 >> 23) & 0xFFu;
@@ -235,7 +243,7 @@ inline uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params)
     return elem_bits;
 }
 
-inline float convert_from_mx_elem_bits(uint32_t elem_bits, uint8_t scale_exp_biased, const FormatParams& params) {
+inline float convert_from_mxfp_elem_bits(uint32_t elem_bits, uint8_t scale_exp_biased, const FormatParams& params) {
     if (scale_exp_biased == 0xFF) {
         return std::numeric_limits<float>::quiet_NaN();
     }
@@ -280,6 +288,82 @@ inline float convert_from_mx_elem_bits(uint32_t elem_bits, uint8_t scale_exp_bia
     float man_f = static_cast<float>(elem_man_with_int_bit) / static_cast<float>(elem_man_one);
 
     return sign_f * exp_f * man_f;
+}
+
+// Round to nearest, ties to even, computed purely from the value so the result
+// is deterministic regardless of the ambient FP rounding mode (the MX packer is
+// the reference the device output is compared against). Used by the integer MX
+// element quantizer below.
+inline float rint_ties_even(float x) {
+    const float floor_x = std::floor(x);
+    const float frac = x - floor_x;
+    if (frac < 0.5f) {
+        return floor_x;
+    }
+    if (frac > 0.5f) {
+        return floor_x + 1.0f;
+    }
+    // Exact tie: round to the even neighbour. floor_x is integral; its low bit
+    // is its parity (true for both signs under two's complement). The int cast
+    // is safe because callers only pass finite, block-scaled magnitudes
+    // (|x| <= ~128: scaled in [-2, 2) times elem_int_scale <= 64; NaN/Inf are
+    // handled before this helper), so floor_x fits in int.
+    const int floor_i = static_cast<int>(floor_x);
+    return (floor_i & 1) == 0 ? floor_x : floor_x + 1.0f;
+}
+
+// Quantize a single (already block-scaled) value into an MxInt element: a signed
+// two's-complement integer of width `params.elem_width_bits`, returned masked
+// into the low bits. Mirrors the validated tt-llk golden
+// (_mxint_block_scale_and_quantize):
+//   - NaN element -> 0 (MxInt has no NaN representation)
+//   - +/-Inf element -> saturate to +/-elem_int_max
+//   - otherwise int = clamp(rint_ties_even(scaled * elem_int_scale), +/-elem_int_max)
+// `scaled` is the input value already divided by the block scale (2^shared_exp).
+inline uint32_t convert_to_mxint_elem_bits(float scaled, const FormatParams& params) {
+    const uint32_t elem_mask = (params.elem_width_bits >= 32) ? 0xFFFFFFFFu : ((1u << params.elem_width_bits) - 1u);
+    const int elem_max = params.elem_int_max;
+
+    uint32_t bits = std::bit_cast<uint32_t>(scaled);
+    uint32_t abs_bits = bits & 0x7FFFFFFFu;
+    uint32_t exp_field = abs_bits >> 23;
+    uint32_t mant_field = abs_bits & 0x7FFFFFu;
+    bool is_nan = (exp_field == 0xFFu) && (mant_field != 0);
+    bool is_inf = (exp_field == 0xFFu) && (mant_field == 0);
+
+    int int_val;
+    if (is_nan) {
+        int_val = 0;
+    } else if (is_inf) {
+        int_val = (bits >> 31) ? -elem_max : elem_max;
+    } else {
+        float q = rint_ties_even(scaled * static_cast<float>(params.elem_int_scale));
+        if (q > static_cast<float>(elem_max)) {
+            int_val = elem_max;
+        } else if (q < static_cast<float>(-elem_max)) {
+            int_val = -elem_max;
+        } else {
+            int_val = static_cast<int>(q);
+        }
+    }
+
+    return static_cast<uint32_t>(int_val) & elem_mask;
+}
+
+// Decode a single MxInt element field (width `params.elem_width_bits`, two's
+// complement) into the value before the block scale is applied:
+// int_val / elem_int_scale. The caller multiplies by the block scale
+// 2^(scale-bias). Unlike the floating-point decoder this takes no scale byte:
+// the NaN block scale (0xFF) is handled by the caller (zeros the block), so a
+// 0 * 2^(0xFF-bias) = 0 * inf = NaN trap never reaches here.
+inline float convert_from_mxint_elem_bits(uint32_t elem_bits, const FormatParams& params) {
+    const uint32_t width = params.elem_width_bits;
+    const uint32_t sign_bit = 1u << (width - 1);
+    int int_val = static_cast<int>(elem_bits & ((1u << width) - 1u));
+    if (elem_bits & sign_bit) {
+        int_val -= static_cast<int>(1u << width);  // sign-extend two's complement
+    }
+    return static_cast<float>(int_val) / static_cast<float>(params.elem_int_scale);
 }
 
 }  // namespace tt::tt_metal::mx

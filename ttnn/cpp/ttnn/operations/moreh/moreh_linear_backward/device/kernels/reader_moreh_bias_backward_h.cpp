@@ -28,7 +28,8 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 
     if (do_mask_h || do_mask_w) {
-        generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
+        CircularBuffer cb_mask_h_w(cb_id_mask_h_w);
+        generate_mask_h_w(cb_mask_h_w, mask_h, mask_w);
     }
 
     const auto s0 = TensorAccessor(src0_args, src0_addr);

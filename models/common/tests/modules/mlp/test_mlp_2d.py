@@ -17,7 +17,13 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.modeling_utils import no_init_weights
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.modules.lazy_weight import LazyWeight

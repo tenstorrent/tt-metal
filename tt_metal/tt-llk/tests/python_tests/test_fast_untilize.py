@@ -29,9 +29,9 @@ from fast_untilize_common import (
     fast_untilize_formats,
 )
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import PerfRunType, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -107,14 +107,9 @@ def make_fast_untilize_test_config(
     )
 
 
-@parametrize(
-    formats=fast_untilize_formats(),
-    dest_acc=fast_untilize_dest_acc_modes,
-    dimensions=FAST_UNTILIZE_DIMS,
-    dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    stimulus_kind=["row_id", "random"],
-)
-def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
+def _run_fast_untilize_correctness(
+    formats, dest_acc, dimensions, dest_sync, stimulus_kind, allocate_src_b=True
+):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -139,6 +134,9 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
         src_A = generate_tile_face_row_ids(
             tile_count, dtype=format_dict[formats.input_format]
         )
+    if not allocate_src_b:
+        src_B = torch.empty(0, dtype=format_dict[formats.input_format_B])
+        tile_cnt_B = 0
 
     generate_golden = get_golden_generator(UntilizeGolden)
     golden_tensor = generate_golden(
@@ -202,6 +200,71 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
             f"result_context={res_tensor[context_start:context_end].tolist()} "
             f"golden_context={golden_tensor[context_start:context_end].tolist()}"
         )
+
+
+@parametrize(
+    formats=fast_untilize_formats(),
+    dest_acc=fast_untilize_dest_acc_modes,
+    dimensions=FAST_UNTILIZE_DIMS,
+    dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
+    stimulus_kind=["row_id", "random"],
+)
+def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
+    _run_fast_untilize_correctness(
+        formats, dest_acc, dimensions, dest_sync, stimulus_kind
+    )
+
+
+def test_fast_untilize_wide_full_ct_dim_133_bf16():
+    _run_fast_untilize_correctness(
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        (1, 133),
+        DestSync.Half,
+        "row_id",
+        allocate_src_b=False,
+    )
+
+
+def test_fast_untilize_wide_full_ct_dim_256_bf16():
+    _run_fast_untilize_correctness(
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        (1, 256),
+        DestSync.Half,
+        "row_id",
+        allocate_src_b=False,
+    )
+
+
+# fp32 output doubles the byte row-stride vs bf16, so the carried output-Y
+# window (256 KiB) is reached at half the row width. The phase-2 rebase fires at
+# ct >= 67; the row still fits inside a single 16-row phase (15 * stride < window)
+# up to ct = 136, so this width is in the rebase-fixable band.
+def test_fast_untilize_wide_full_ct_dim_133_fp32():
+    _run_fast_untilize_correctness(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+        (1, 133),
+        DestSync.Half,
+        "row_id",
+        allocate_src_b=False,
+    )
+
+
+# At ct = 137 a single 16-row phase overflows the carried output-Y window
+# (15 * output_row_stride >= 256 KiB), so the strided pack splits each phase into
+# sub-runs (rows_per_run = 8 here) and rebases the L1 base per sub-run. Without
+# the sub-run rebase this corrupts on silicon (golden 8768 vs 13073.57).
+def test_fast_untilize_wide_full_ct_dim_137_fp32():
+    _run_fast_untilize_correctness(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+        (1, 137),
+        DestSync.Half,
+        "row_id",
+        allocate_src_b=False,
+    )
 
 
 @parametrize(

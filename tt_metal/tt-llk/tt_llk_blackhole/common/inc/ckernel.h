@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ckernel_common_ops.h"
+#include "ckernel_fence.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "internal/risc_attribs.h"
@@ -43,6 +44,8 @@
 #endif
 
 #define TT_ALWAYS_INLINE inline __attribute__((always_inline))
+#define NOINLINE         __attribute__((noinline))
+#define NOCLONE          __attribute__((noclone))
 
 #include <cstdint>
 
@@ -924,15 +927,6 @@ inline void store_force(T &ref, U &&val)
     // "m" input constraint: tells compiler this asm reads from ref
     // Effect: compiler must flush any pending write to ref before this point
     asm volatile("" : : "m"(ref));
-}
-
-/**
- * @brief Compiler-only barrier: prevents reordering of memory accesses across this point.
- * @note Does not enforce CPU or system memory ordering by itself.
- */
-inline void fence_compiler()
-{
-    asm volatile("" ::: "memory");
 }
 
 /**
