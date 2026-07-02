@@ -390,6 +390,24 @@ def test_generate_blocks_rejects_bad_prompt_position_span(prompt_len, message):
         )
 
 
+def test_generate_blocks_rejects_committed_span_beyond_model_context_before_init_canvas():
+    class _Model:
+        max_seq_len = 37
+
+    def fail_init(*args, **kwargs):
+        raise AssertionError("init_canvas_fn should not run for an impossible context span")
+
+    with pytest.raises(ValueError, match="context window"):
+        generate_blocks(
+            _Model(),
+            "logits",
+            prompt_len=32,
+            num_blocks=2,
+            config=DiffusionConfig(canvas_length=3),
+            init_canvas_fn=fail_init,
+        )
+
+
 def test_generate_blocks_allows_zero_blocks_without_init_canvas():
     out = generate_blocks(
         "model",
@@ -751,6 +769,58 @@ def test_generate_from_prompt_tokens_rejects_prefill_cache_len_shorter_than_prom
             prefill_fn=lambda *args, **kwargs: PromptPrefill(prompt_len=4, cache_len=3),
             blocks_fn=fail_blocks,
         )
+
+
+def test_generate_from_prompt_tokens_rejects_context_overrun_after_prefill_before_blocks():
+    class _Model:
+        max_seq_len = 5
+
+    prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+
+    def fail_builder(*args, **kwargs):
+        raise AssertionError("logits builder should not run for an impossible context span")
+
+    def fail_blocks(*args, **kwargs):
+        raise AssertionError("blocks should not run for an impossible context span")
+
+    with pytest.raises(ValueError, match="context window"):
+        generate_from_prompt_tokens(
+            _Model(),
+            None,
+            prompt_tokens,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            logits_fn_builder=fail_builder,
+            prefill_fn=lambda *args, **kwargs: PromptPrefill(prompt_len=4, cache_len=4),
+            blocks_fn=fail_blocks,
+        )
+
+
+def test_generate_from_prompt_tokens_allows_exact_256k_context_boundary():
+    class _Model:
+        max_seq_len = 262144
+
+    prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.zeros((1, 32), dtype=torch.long),
+        prompt_len=262112,
+        next_pos=262144,
+        trajectories=[],
+    )
+
+    out = generate_from_prompt_tokens(
+        _Model(),
+        "logits",
+        prompt_tokens,
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=32),
+        init_canvas_fn="init",
+        prefill_fn=lambda *args, **kwargs: PromptPrefill(prompt_len=4, cache_len=262112),
+        blocks_fn=lambda *args, **kwargs: generation,
+    )
+
+    assert out is generation
 
 
 @pytest.mark.parametrize("prompt_len", [4.0, True])

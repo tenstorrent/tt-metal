@@ -619,6 +619,56 @@ def _validate_max_new_tokens_capacity(num_blocks: int, canvas_length: int, max_n
     return max_new_tokens
 
 
+def _positive_int_attr(value) -> int | None:
+    if value is None or isinstance(value, bool) or not isinstance(value, Integral):
+        return None
+    value = int(value)
+    return value if value > 0 else None
+
+
+def _infer_context_limit(tt_model) -> int | None:
+    """Best-effort current context window for this TT model instance.
+
+    Prefer ``tt_model.max_seq_len`` because that is the allocated cache/RoPE span
+    for the current run. Fall back to HF config fields when tests or wrappers only
+    expose the model's declared context length.
+    """
+    candidates = []
+    for attr in ("max_seq_len", "max_context_len", "max_position_embeddings", "max_context"):
+        candidates.append(getattr(tt_model, attr, None))
+
+    hf_config = getattr(tt_model, "hf_config", None)
+    text_config = getattr(hf_config, "text_config", hf_config)
+    for cfg in (hf_config, text_config):
+        if cfg is None:
+            continue
+        for attr in ("max_seq_len", "max_context_len", "max_position_embeddings", "max_context"):
+            candidates.append(getattr(cfg, attr, None))
+
+    for value in candidates:
+        limit = _positive_int_attr(value)
+        if limit is not None:
+            return limit
+    return None
+
+
+def _validate_generation_context_capacity(tt_model, prompt_len: int, num_blocks: int, config: DiffusionConfig) -> None:
+    """Validate the physical committed-token span against the context window."""
+    generated_len = num_blocks * config.canvas_length
+    _validate_position_span(prompt_len, generated_len, name="prompt_len")
+    if generated_len == 0:
+        return
+    limit = _infer_context_limit(tt_model)
+    if limit is None:
+        return
+    end_pos = prompt_len + generated_len
+    if end_pos > limit:
+        raise ValueError(
+            "prompt cache plus committed canvas blocks exceeds model context window: "
+            f"{prompt_len} + {generated_len} = {end_pos} > {limit}"
+        )
+
+
 def _validate_batch_size(batch_size: int) -> None:
     if isinstance(batch_size, bool) or not isinstance(batch_size, Integral):
         raise ValueError("batch_size must be an integer")
@@ -730,7 +780,7 @@ def generate_blocks(
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
     _validate_batch_size(batch_size)
-    _validate_position_span(prompt_len, num_blocks * config.canvas_length, name="prompt_len")
+    _validate_generation_context_capacity(tt_model, prompt_len, num_blocks, config)
     init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []
@@ -813,6 +863,7 @@ def generate_from_prompt_tokens(
         page_tables_per_layer=page_tables_per_layer,
     )
     prefill = _validate_prefill_result(prompt_len, raw_prompt_len=prompt_tokens.shape[1])
+    _validate_generation_context_capacity(tt_model, prefill.cache_len, num_blocks, config)
     logits_fn = _resolve_generation_logits_fn(
         tt_model,
         logits_fn,
