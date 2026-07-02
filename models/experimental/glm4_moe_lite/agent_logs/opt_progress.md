@@ -136,6 +136,37 @@ Implications:
   (`GLM4_MOE_LITE_EXPERTS_TT_DTYPE=bf16 GLM4_MOE_LITE_MOE_FP32_ACC=1 TP=0 ATTN_DP=0`) — expect ~0.97
   (one-time weight-cache regen). If production distribution fidelity matters, consider bf8 experts.
 
+## PCC investigation (user priority: "no optimization until PCC passing")
+Root-caused why WH prefill-logits PCC vs HF was 0.65. Full ladder (ISL-128, cached HF ref via
+`scripts/pcc_vs_hf.py`; per-vocab-shard probe shows the error is UNIFORM, not an lm_head assembly bug):
+
+| config | PCC | note |
+|---|---|---|
+| TP=1 / bf4 (production) | 0.653 | baseline |
+| TP=1 / bf8 (clean) | 0.656 | dtype barely matters |
+| TP=1 / lm_head=bf16 | 0.662 | lm_head not the cause |
+| **TP=0 / bf4** | **0.935** | TP=0 fixes it |
+| **TP=0 / bf8 + MOE_FP32_ACC** | **0.954** | best WH-fitting |
+| TP=0 / bf16 experts (the 0.97 config) | OOM | Blackhole-only |
+| TP=1 / ATTN_DP=0 | 0.652 | **ATTN_DP not the cause** |
+
+**ROOT CAUSE: the TP=1 (tensor-parallel) path is the accuracy bug** — TP=0 gives 0.935, TP=1 gives
+0.65 at identical dtype, and disabling ATTN_DP doesn't help. The error is uniform across vocab and
+compounds over layers → it's in the TP-sharded transformer body (sharded q_b/kv_b/w_o + shared-MLP
+matmuls and their AllGather/ReduceScatter combination), NOT quantization, NOT lm_head, NOT ATTN_DP.
+
+Also: precision knobs `MOE_SPARSE_FP32_ACC` / `MOE_SPARSE_FIDELITY=hifi4` / `MOE_SPARSE_APPROX=0`
+REGRESS PCC (0.954→0.54) → those paths are buggy too.
+
+**Deliverables:** WH PCC test `tests/pipeline_tests/test_text_prefill_logits_wh.py` (gate 0.95,
+PASSES at 0.9516, TP=0/bf8) + `apply_wh_correctness_env`. bf16 experts OOM WH (~7GB/chip) so 0.97
+is Blackhole-only; 0.95 is the WH ceiling.
+
+**Next (P0 correctness): localize the TP=1 bug** — run single-layer PCC (test_tt_decoder_layer0 =
+attention+dense MLP; test_tt_moe_layer1 = MoE) at TP=1 vs torch to find which sharded op diverges,
+then fix the sharded-matmul partition or the CCL combine. Production needs TP=1 for perf, so this
+gates all optimization work.
+
 ## Reality note
 Each remaining iteration is deep fused-op code surgery + 10-min reprofile + PCC verify. This is the
 long autonomous grind the PLAN is built for; it is not flag-flipping. Batches 8/16/32 repeat this
