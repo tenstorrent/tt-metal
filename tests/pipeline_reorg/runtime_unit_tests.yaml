@@ -176,25 +176,11 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# wh_llmbox runs the same distributed suite but excludes the multi-device workload/trace/event
-# EXECUTION tests that deadlock on the 8-device (2x4) LLMBox mesh. wh_llmbox is the only SKU here
-# large enough to actually run these suites (smaller SKUs skip them; 4x8/32-device suites skip
-# everywhere on an 8-device system), so this PR is the first to exercise them on this topology and
-# they hang the job to a 15-min timeout. Confirmed hangs: MeshEventsTestSuite (MultiCQNonBlockingReads,
-# AsyncWorkloadAndIO) and MeshTraceTest2x4 (EltwiseBinaryMeshTrace); the rest below share the same
-# full-mesh cross-device execution/sync path. These are genuine hangs, not slowness (e.g.
-# ReplicatedAsyncIO completes in <1s), so a larger timeout does not help. Device-management, buffer,
-# view, reshape, and generic single-CQ mesh suites (e.g. MeshTraceTestSuite, which passes) still run.
-# Kept as a separate entry rather than an in-cmd branch because the container only exposes ARCH_NAME,
-# which cannot distinguish wh_llmbox from other wormhole_b0 boards. Re-enable once the deadlock is fixed.
-# TODO(tracking-issue): re-enable the multi-device execution suites on wh_llmbox once the LLMBox mesh event/trace-sync deadlock is resolved.
-- name: runtime_distributed
-  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='-MeshEventsTestSuite.*:MeshEventsTest2x4.*:MeshTraceTest2x4.*:MeshTraceSweepTest2x4*:MeshWorkloadTest2x4.*:MeshEndToEnd2x4Tests.*:MeshEndToEnd2x4TraceTests.*'
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
+# NOTE: wh_llmbox is intentionally NOT listed here. The full distributed_unit_tests suite already
+# runs on wh_llmbox (the T3000 8-device box) via the scaleout-owned t3k_ttmetal_tests job
+# (tests/scripts/t3000/run_t3000_unit_tests.sh), which budgets 40 min for it. Adding a second
+# runtime_distributed run on wh_llmbox with the 15-min unit budget was redundant and could not
+# complete in time on 8 devices. Smaller SKUs above skip the multi-device (2x4/4x8) suites.
 
 # --- IOMMU PinnedMemory Tests (SD + FD) ---
 - name: runtime_iommu_pinned_memory
