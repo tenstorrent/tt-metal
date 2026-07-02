@@ -95,6 +95,7 @@ class DecodeTraceState:
     start_pos_host: torch.Tensor | None = None
     batch_size: int = 0
     page_table_generation: int = 0
+    page_table_identity: int | None = None
     counters: dict[str, int] = field(
         default_factory=lambda: {
             "trace_replays": 0,
@@ -289,10 +290,14 @@ class Qwen3FullModel(LightweightModule):
 
     def _lm_head_output_memory_config(self, seq_or_batch: int) -> ttnn.MemoryConfig:
         grid = self.mesh_device.compute_with_storage_grid_size()
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        n_tiles = self.vocab_per_device // 32
+        num_cores = grid.x * grid.y
+        per_core_n = math.ceil(n_tiles / num_cores)
+        active_cores = math.ceil(n_tiles / per_core_n)
+        shard_grid = _core_range_set_for_row_major_cores(active_cores, grid)
         shard_shape = [
             max(32, _pad_to(seq_or_batch, 32)),
-            _pad_to(self.vocab_per_device, 32 * grid.x * grid.y) // (grid.x * grid.y),
+            per_core_n * 32,
         ]
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -311,7 +316,11 @@ class Qwen3FullModel(LightweightModule):
         )
 
     def _decode_tokens_to_device(self, tokens: torch.Tensor) -> ttnn.Tensor:
-        tokens = tokens.to(torch.uint32).reshape(1, 1, tokens.shape[0], 1).contiguous()
+        tokens = tokens.to(torch.uint32)
+        if int(tokens.shape[0]) == 1:
+            tokens = tokens.reshape(1, 1, 1, 1).contiguous()
+        else:
+            tokens = tokens.reshape(tokens.shape[0], -1).contiguous()
         return ttnn.from_torch(
             tokens,
             dtype=ttnn.uint32,
@@ -455,7 +464,7 @@ class Qwen3FullModel(LightweightModule):
             )
         return hidden
 
-    def apply_final_norm_and_lm_head(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
+    def apply_final_norm_and_lm_head(self, hidden: ttnn.Tensor, *, output_tile=None) -> ttnn.Tensor:
         normed = ttnn.rms_norm(
             hidden,
             epsilon=RMS_NORM_EPS,
@@ -469,6 +478,7 @@ class Qwen3FullModel(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_lofi,
+            output_tile=output_tile,
         )
         return logits
 
@@ -643,6 +653,7 @@ class Qwen3FullModel(LightweightModule):
             start_pos_host=start_pos.to(torch.int32).contiguous().clone(),
             batch_size=int(token_input.shape[0]),
             page_table_generation=self.trace_state.page_table_generation + 1,
+            page_table_identity=id(page_table),
         )
         return self.trace_state
 
@@ -705,6 +716,22 @@ class Qwen3FullModel(LightweightModule):
         ttnn.execute_trace(self.mesh_device, state.trace_id, cq_id=0, blocking=False)
         state.counters["trace_replays"] += 1
         return state.logits
+
+    def refresh_trace_page_table(self, page_table: ttnn.Tensor, *, generation: int | None = None) -> None:
+        state = self.trace_state
+        if state.page_table is None:
+            raise RuntimeError("decode trace page table is not initialized")
+        if page_table is state.page_table or id(page_table) == state.page_table_identity:
+            if generation is not None:
+                state.page_table_generation = generation
+            return
+        ttnn.copy(page_table, state.page_table)
+        state.page_table_identity = id(page_table)
+        if generation is not None:
+            state.page_table_generation = generation
+        else:
+            state.page_table_generation += 1
+        state.counters["page_table_host_refreshes"] += 1
 
     def write_trace_token_from_host(self, token: int) -> None:
         state = self.trace_state

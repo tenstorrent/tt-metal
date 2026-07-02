@@ -1,0 +1,434 @@
+2026-07-02 21:55:00.810 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-02 21:55:00.891 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 21:55:00.891 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 21:55:00.891 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 21:55:00.891 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 21:55:00.892 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 21:55:00.892 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 21:55:00.896 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 21:55:01.063 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 21:55:01.063 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 21:55:01.063 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 21:55:01.063 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 21:55:01.066 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 21:55:01.300 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 21:55:01.902 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 21:55:01.902 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 21:55:01.903 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 21:55:01.903 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 21:55:01.904 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 21:55:01.904 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 21:55:01.987 | info     |       LLRuntime | Watcher log file: /home/ubuntu/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-02 21:55:01.987 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-02 21:55:01.987 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-02 21:55:01.987 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-02 21:55:01.987 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-02 21:55:01.987 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-02 21:55:01.987 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:01.992 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:01.997 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:02.002 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:02.002 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 21:55:02.110 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 21:55:02.113 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 21:55:02.114 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 21:55:02.116 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 21:55:02.116 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 21:55:02.116 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 21:55:02.285 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 21:55:02.285 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 21:55:02.285 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 21:55:02.285 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 21:55:02.857 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=185669090852 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 21:55:02.869 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=185248856191 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 21:55:02.869 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=185075724005 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 21:55:02.869 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=185330391355 cycles (realtime_profiler_manager.cpp:1127)
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 8915.71it/s]
+2026-07-02 21:55:10.842 | info     |           Metal | Pinned source memory start address 0x7fa6c42eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 21:55:10.842 | info     |           Metal | Pinned source memory start address 0x7fa6c42eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 21:55:10.842 | info     |           Metal | Pinned source memory start address 0x7fa6c42eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 21:55:10.842 | info     |           Metal | Pinned source memory start address 0x7fa6c42eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 21:55:12.089 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:12.094 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:12.099 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:12.104 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:22.116 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:22.121 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:22.126 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:22.131 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:32.142 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:32.147 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:32.152 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:32.157 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:42.168 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:42.174 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:42.179 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:42.183 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:52.195 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:52.200 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:52.205 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:55:52.210 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:02.222 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:02.227 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:02.232 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:02.237 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:12.248 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:12.254 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:12.259 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:12.264 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:22.276 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:22.281 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:22.286 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:22.291 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:32.302 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:32.307 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:32.312 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:32.317 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:42.329 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:42.334 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:42.339 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:42.344 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:52.355 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:52.360 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:52.365 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:52.370 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-02 21:56:55.723 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.871 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.871 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.874 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.874 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.876 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.877 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.879 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.879 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.881 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.881 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.884 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.884 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.886 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.886 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.888 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.888 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.890 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.890 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.893 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.893 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.895 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.895 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.897 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.897 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.899 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.899 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.901 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.902 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.904 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.904 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.906 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.906 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.908 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.908 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.910 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.910 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.912 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.913 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.915 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.915 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.917 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.917 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.919 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.919 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.921 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.921 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.924 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.924 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.926 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.926 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.928 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.928 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.930 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.930 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.932 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.932 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.934 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.934 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.936 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.937 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.939 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.939 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.941 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.941 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.943 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.943 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.945 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.945 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.947 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:55.947 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 21:56:55.950 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 21:56:56.216 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.325 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.325 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.328 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.328 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.331 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.331 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.334 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.334 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.337 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.337 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.339 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.340 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.342 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.342 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.345 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.345 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.348 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.348 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.351 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.351 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.353 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.354 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.356 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.356 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.359 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.359 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.362 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.362 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.365 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.365 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.367 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.368 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.370 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.371 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.373 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.373 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.376 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.376 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.379 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.379 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.382 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.382 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.384 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.384 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.387 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.387 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.390 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.390 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.393 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.393 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.395 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.396 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.398 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.398 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.401 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.401 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.404 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.404 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.407 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.407 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.409 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.409 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.412 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.412 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.415 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.415 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.418 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.418 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.420 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:56:56.420 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:56:56.423 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.433 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.436 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.436 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.439 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.439 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.442 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.442 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.445 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.445 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.448 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.448 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.451 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.451 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.454 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.454 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.457 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.457 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.460 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.460 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.463 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.463 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.466 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.466 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.468 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.469 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.471 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.472 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.474 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.474 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.477 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.477 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.480 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.480 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.483 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.483 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.486 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.486 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.488 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.489 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.491 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.492 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.494 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.494 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.497 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.497 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.500 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.500 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.503 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.503 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.506 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.506 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.508 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.509 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.511 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.511 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.514 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.514 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.517 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.517 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.520 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.520 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.523 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.523 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.526 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.526 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.529 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.529 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.531 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.531 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.534 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.534 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.537 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.551 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.556 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.556 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.558 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.558 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.561 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.561 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.563 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.563 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.565 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.565 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.568 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.568 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.570 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.570 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.572 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.573 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.575 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.575 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.577 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.577 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.579 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.580 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.582 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.582 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.584 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.584 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.586 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.587 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.589 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.589 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.591 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.591 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.593 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.594 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.596 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.596 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.598 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.598 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.601 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.601 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.603 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.603 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.605 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.605 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.607 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.608 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.610 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.610 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.612 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.612 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.614 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.615 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.617 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.617 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.619 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.619 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.621 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.622 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.624 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.624 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.626 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.626 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.628 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.629 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.631 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.631 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.633 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.633 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.635 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:00.635 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 21:57:00.637 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 21:57:02.382 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:57:02.387 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:57:02.392 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:57:02.397 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+entry[0]             top1=0.940 (94/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=6336.98ms  decode=6.21 t/s/u  e2e=4.49 t/s/u
+AGGREGATE            top1=0.940 (94/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=6336.98ms  decode=6.21 t/s/u  e2e=4.49 t/s/u
+2026-07-02 21:57:12.409 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-02 21:57:12.414 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-02 21:57:12.419 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-02 21:57:12.424 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+nanobind: leaked 2 instances!
+ - leaked instance 0x7fcab55101f8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7fcab54000a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 35 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function "RegisterProgramRealtimeProfilerCallback"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "remove_sub_device_manager"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 21:57:13.301 | info     |    BuildKernels | JIT cache stats: 282/300 hits (94.0%) [282 cached, 181 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 21:57:13.301 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 21:57:13.303 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-02 21:57:13.304 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-02 21:57:13.304 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-02 21:57:13.304 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-02 21:57:13.304 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-02 21:57:13.327 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 21:57:13.327 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 21:57:14.023 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 21:57:14.024 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 21:57:14.024 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

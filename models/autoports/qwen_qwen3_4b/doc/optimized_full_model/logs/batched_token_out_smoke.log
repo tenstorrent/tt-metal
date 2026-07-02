@@ -1,0 +1,95 @@
+2026-07-02 22:34:08.971 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-02 22:34:11.789 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 22:34:11.789 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 22:34:11.790 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 22:34:11.790 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 22:34:11.791 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 22:34:11.791 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 22:34:11.794 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 22:34:11.961 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 22:34:11.962 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 22:34:11.962 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 22:34:11.962 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 22:34:11.965 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 22:34:12.233 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 22:34:12.834 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 22:34:12.834 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 22:34:12.835 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 22:34:12.835 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 22:34:12.835 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 22:34:12.836 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 22:34:12.850 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:34:12.850 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:34:12.850 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:34:12.850 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:34:12.908 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 22:34:12.995 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 22:34:13.000 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 22:34:13.001 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 22:34:13.003 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 22:34:13.003 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 22:34:13.003 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 22:34:13.055 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:34:13.055 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:34:13.055 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:34:13.055 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:34:13.628 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=2450163281227 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 22:34:13.628 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=2448647252301 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 22:34:13.638 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=2452232316663 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 22:34:13.639 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=2450358285948 cycles (realtime_profiler_manager.cpp:1127)
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 9307.58it/s]
+2026-07-02 22:34:21.441 | info     |           Metal | Pinned source memory start address 0x7f64ac2eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:34:21.441 | info     |           Metal | Pinned source memory start address 0x7f64ac2eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:34:21.441 | info     |           Metal | Pinned source memory start address 0x7f64ac2eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:34:21.441 | info     |           Metal | Pinned source memory start address 0x7f64ac2eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:34:32.097 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 22:34:32.238 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 22:34:32.353 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 22:34:32.356 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 22:34:32.472 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 22:34:32.576 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 22:34:33.062 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 22:34:33.065 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+2026-07-02 22:34:33.067 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 22:34:33.071 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE_END
+BATCH_SMOKE_FIRST_TOKENS [102624, 49826]
+BATCH_SMOKE_CAPTURED [102624, 49826]
+BATCH_SMOKE_NEXT [102624, 49826]
+BATCH_SMOKE_TRACE_COUNTERS {'trace_replays': 1, 'token_host_refreshes': 0, 'position_host_refreshes': 2, 'page_table_host_refreshes': 0, 'syncs': 2, 'readbacks': 2}
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f88af2b60b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f88af1d6148 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 35 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function "is_per_core_allocated"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "compute_output_specs"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 22:34:34.201 | info     |    BuildKernels | JIT cache stats: 294/295 hits (99.7%) [294 cached, 177 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 22:34:34.201 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 22:34:34.224 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 22:34:34.224 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 22:34:34.946 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 22:34:34.946 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 22:34:34.946 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

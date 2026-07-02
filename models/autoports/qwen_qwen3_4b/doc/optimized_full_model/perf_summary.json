@@ -1,0 +1,43 @@
+{
+  "stage": "optimized-full-model",
+  "model": "Qwen/Qwen3-4B",
+  "mesh": "P150_X4 FABRIC_1D_RING",
+  "ttft_ms": 338.98349571973085,
+  "token_out_decode_tps_per_user_including_prepare": 41.40574692024547,
+  "token_out_prepare_decode_ms": 1379.7581121325493,
+  "token_out_steady_decode_tps_per_user": 96.91318318966302,
+  "token_out_steady_ms_per_token": 10.318513558674333,
+  "token_out_steady_tokens": 98,
+  "token_out_e2e_tps_per_user": 36.630627793298004,
+  "token_out_decode_tokens": 99,
+  "decoder_layer_lower_bound_ms_per_layer": 0.279089,
+  "decoder_stack_lower_bound_ms_per_token": 10.047204,
+  "reduced_final_path_device_time_ms_per_token": 0.689535,
+  "trace_counters": {
+    "trace_replays": 98,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 2,
+    "page_table_host_refreshes": 0,
+    "syncs": 2,
+    "readbacks": 0
+  },
+  "accuracy": {
+    "prefill_top1": "93/100",
+    "prefill_top5": "100/100",
+    "prefill_top100": "100/100",
+    "teacher_forcing_top1": "94/100",
+    "teacher_forcing_top5": "100/100",
+    "teacher_forcing_top100": "100/100",
+    "teacher_forcing_ttft_ms": 837.89,
+    "teacher_forcing_decode_tps_per_user": 63.95,
+    "teacher_forcing_e2e_tps_per_user": 41.91
+  },
+  "artifacts": {
+    "token_out_benchmark": "token_out_no_readback_custom_sampler_batched_kernel_benchmark.json",
+    "reduced_perf_json": "reduced_full_model_custom_sampler_batched_kernel.json",
+    "tt_perf_report_text": "tracy/reduced_full_model_custom_sampler_batched_kernel/tt_perf_report_token_out_steady.txt",
+    "tt_perf_report_csv": "tracy/reduced_full_model_custom_sampler_batched_kernel/tt_perf_report_token_out_steady.csv",
+    "tt_perf_report_summary_csv": "tracy/reduced_full_model_custom_sampler_batched_kernel/tt_perf_report_token_out_steady_by_op_stacked.csv",
+    "ops_perf_csv_gz": "tracy/reduced_full_model_custom_sampler_batched_kernel/reports/qwen3_4b_custom_sampler_batched_kernel_reduced_steady/2026_07_02_22_44_51/ops_perf_results_qwen3_4b_custom_sampler_batched_kernel_reduced_steady_2026_07_02_22_44_51.csv.gz"
+  }
+}

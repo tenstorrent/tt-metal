@@ -1,0 +1,135 @@
+2026-07-02 22:35:49.137 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-02 22:35:51.970 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-02 22:35:51.970 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-02 22:35:51.971 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-02 22:35:51.971 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-02 22:35:51.972 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-02 22:35:51.972 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-02 22:35:51.975 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-02 22:35:52.143 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-02 22:35:52.143 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-02 22:35:52.143 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-02 22:35:52.143 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-02 22:35:52.146 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-02 22:35:52.347 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-02 22:35:52.950 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-02 22:35:52.950 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-02 22:35:52.951 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-02 22:35:52.951 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-02 22:35:52.952 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-02 22:35:52.952 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-02 22:35:52.966 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:35:52.966 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:35:52.966 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:35:52.966 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-02 22:35:53.025 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-02 22:35:53.074 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-02 22:35:53.090 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-02 22:35:53.091 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-02 22:35:53.093 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-02 22:35:53.093 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-02 22:35:53.093 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-02 22:35:53.146 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:35:53.146 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:35:53.146 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:35:53.146 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-02 22:35:53.717 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=2554488017113 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 22:35:53.717 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=2552468740581 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 22:35:53.729 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349978 GHz, device_time_at_sync=2554285076244 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-02 22:35:53.730 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=2556717640034 cycles (realtime_profiler_manager.cpp:1127)
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 9140.27it/s]
+2026-07-02 22:36:01.494 | info     |           Metal | Pinned source memory start address 0x7ee8d82eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:36:01.494 | info     |           Metal | Pinned source memory start address 0x7ee8d82eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:36:01.495 | info     |           Metal | Pinned source memory start address 0x7ee8d82eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:36:01.495 | info     |           Metal | Pinned source memory start address 0x7ee8d82eae28 must be aligned 64 B (dispatch.cpp:1180)
+2026-07-02 22:36:12.214 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 22:36:12.822 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 22:36:12.932 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL
+2026-07-02 22:36:12.935 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_PREFILL_END
+2026-07-02 22:36:13.054 | INFO     | tracy:signpost:49 - PERF_MULTICHIP_DECODE
+2026-07-02 22:36:13.084 | critical |          Always | TT_FATAL: Batch size between page_table and input_tensor must match (assert.hpp:104)
+Traceback (most recent call last):
+  File "<stdin>", line 21, in <module>
+  File "/home/ubuntu/tt-metal/models/autoports/qwen_qwen3_4b/tt/generator.py", line 583, in prepare_token_out_decode
+    warm_logits = self.model.decode_forward_device_state(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/tt-metal/models/autoports/qwen_qwen3_4b/tt/model.py", line 616, in decode_forward_device_state
+    hidden = self.decode_hidden(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/tt-metal/models/autoports/qwen_qwen3_4b/tt/model.py", line 457, in decode_hidden
+    hidden = layer.decode_forward(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/tt-metal/models/autoports/qwen_qwen3_4b/tt/multichip_decoder.py", line 972, in decode_forward
+    ttnn.experimental.paged_update_cache(
+  File "/home/ubuntu/tt-metal/ttnn/ttnn/decorators.py", line 473, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache/paged_update_cache_device_operation.cpp:172: page_table_val.padded_shape()[0] == input_tensor.padded_shape()[1]
+info:
+Batch size between page_table and input_tensor must match
+backtrace:
+ --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(+0x7c2dc9) [0x7f0d52daedc9]
+ --- ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::PagedUpdateCacheParams const&, ttnn::experimental::prim::PagedUpdateCacheInputs const&)
+ --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim31PagedUpdateCacheDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x184) [0x7f0d53955124]
+ --- /home/ubuntu/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim31PagedUpdateCacheDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2ba) [0x7f0d53952dba]
+ --- ttnn::prim::paged_update_cache(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::vector<unsigned int, std::allocator<unsigned int> > const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<bool>, std::optional<tt::tt_metal::Tensor const> const&, unsigned int, std::optional<ttnn::ComputeKernelConfig const>, std::optional<std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>, std::allocator<tt::tt_metal::distributed::MeshCoordinate> > const> const&, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
+ --- ttnn::experimental::paged_update_cache(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::vector<unsigned int, std::allocator<unsigned int> > const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<bool>, std::optional<tt::tt_metal::Tensor const> const&, unsigned int, std::optional<ttnn::ComputeKernelConfig const>, std::optional<std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>, std::allocator<tt::tt_metal::distributed::MeshCoordinate> > const> const&, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
+ --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x52ec51) [0x7f0d5498fc51]
+ --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x310535) [0x7f0d54771535]
+ --- python() [0x1ac2cf8]
+ --- python() [0x1890366]
+ --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- python() [0x1ac2cf8]
+ --- python() [0x1890366]
+ --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- python() [0x18bb609]
+ --- python() [0x19f8885]
+ --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- python(PyRun_AnyFileExFlags+0x3a) [0x4858fa]
+ --- python() [0x490d8d]
+ --- python() [0x1bf9807]
+ --- python() [0x1972218]
+ --- python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f0dbfaf3d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f0dbfaf3e40]
+ --- python(_start+0x29) [0x19bf069]
+
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f0cdd34a1a8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7f0cdd2261d8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 35 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function "SetRootDir"
+ - leaked function "get_submeshes"
+ - leaked function "terminate_fast_dispatch"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - leaked function "reshape"
+ - leaked function "from_json"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-02 22:36:14.217 | info     |    BuildKernels | JIT cache stats: 211/212 hits (99.5%) [211 cached, 130 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-02 22:36:14.217 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-02 22:36:14.239 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-02 22:36:14.239 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-02 22:36:14.955 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-02 22:36:14.955 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-02 22:36:14.955 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
