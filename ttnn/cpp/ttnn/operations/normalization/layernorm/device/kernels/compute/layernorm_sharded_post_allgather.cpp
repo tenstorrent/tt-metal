@@ -151,7 +151,7 @@ void kernel_main() {
             pack_tile(dst1, cb_ex2);
 #endif
             tile_regs_release();
-            reduce_uninit();
+            reduce_uninit<FLOAT32_REDUCTION>();
 #ifdef RMSNORM
             cb_var_obj.push_back(stats_tiles);
 #else
