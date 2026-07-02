@@ -315,15 +315,15 @@ Key flags: `--backend {ttnn | ttnn_1x8 | pytorch}` · `--steps-sweep 5` (our pat
 
 ### LIBERO success rate (upstream pi05_libero, 100 episodes/suite × 4 suites, N=5)
 
-Measured on the 1×8 mesh (trace+2CQ):
+Measured on the 1×8 mesh (trace+2CQ, kv_sdpa denoise):
 
 | suite | success |
 |---|---|
-| libero_spatial | 99/100 |
-| libero_object | 98/100 |
+| libero_spatial | 100/100 |
+| libero_object | 99/100 |
 | libero_goal | 95/100 |
 | libero_10 | 94/100 |
-| **GRAND TOTAL** | **386/400 (96.5%)** |
+| **GRAND TOTAL** | **388/400 (97.0%)** |
 
 
 ---
