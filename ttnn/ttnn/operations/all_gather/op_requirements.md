@@ -79,7 +79,7 @@ single-device compute precision, in-kernel layouts, interleaved multi-core, and
 L1 budget — none cover CCL fabric axis expansions), so all three are
 verifier-authored with full goal + done-when.
 
-### [ ] Refinement 1 — bfloat8_b dtype
+### [x] Refinement 1 — bfloat8_b dtype
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`. all_gather is pure byte
 movement (it copies physical pages verbatim, never tilizes), so a `bf8b` TILE

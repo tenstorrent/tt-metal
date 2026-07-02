@@ -63,3 +63,33 @@
   topology. Every `TARGET − SUPPORTED` pair is covered; `bf8b × ROW_MAJOR` is
   INVALID. No implementation-skill applies (CCL fabric axis expansions are
   outside the current skill inventory) — all three are verifier-authored.
+
+## Refinement 1 — bfloat8_b dtype
+
+- **Date**: 2026-07-02
+- **What was done**: Added `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`. **No kernel
+  or program-descriptor change** — all_gather copies physical pages verbatim
+  (never tilizes), so a bf8b TILE page (a 1088 B block-float tile) is gathered
+  bit-for-bit exactly like a bf16/f32 tile. The `data_format = input.dtype`
+  descriptor path already flowed bf8b through the CBs and the fabric writer; the
+  16B-page invariant in `validate()` holds (1088 % 16 == 0). `validate()` is
+  generic (iterates SUPPORTED), so no gate change was needed beyond the list.
+- **Accuracy achieved**: bf8b PCC ≥ 0.99 (golden tolerance 0.999 also passed).
+  Precision baseline (`test_all_gather_precision_baseline.py`, WH sim): bf8b
+  `max_abs = 0.03125`, `mean_abs ≈ 0.006`, `rel_rms ≈ 0.0077` on shards
+  {(1,1,64,128),(1,1,96,64),(1,1,256,256),(1,1,32,32)} — this is purely the
+  shared-exponent quantization applied at `from_torch`; the gather itself adds
+  zero error. bf16/f32 remain bit-exact (`max_abs = mean_abs = rel_rms = 0`),
+  confirming no regression.
+- **Golden progress (WH sim)**: the 8 `bf8b × TILE × Linear × gather_dim=-4`
+  golden cells (one per `feature_spec.INPUTS` shape) moved from xfail-strict to
+  **PASSING** (8/8, 119.78s). The remaining 56 non-INVALID bf8b cells stay xfail
+  (multi-gap: `gather_dim ∈ {-3,-2,-1}` needs R2, `Ring` needs R3); the 64
+  `bf8b × ROW_MAJOR` cells stay INVALID-skipped. supported_pass 32 → 40.
+- **Issues encountered**: None. Trivial as the verifier predicted; no EXCLUSIONS
+  added.
+- **Tests added/updated**: extended
+  `tests/ttnn/unit_tests/operations/all_gather/test_all_gather_precision_baseline.py`
+  — added `ttnn.bfloat8_b` to `DTYPES` + `PCC[bfloat8_b] = 0.99`, and taught
+  `_torch_dtype` to reference bf8b in torch.bfloat16 (no native torch bf8b). Full
+  suite 12/12 green on the WH sim.

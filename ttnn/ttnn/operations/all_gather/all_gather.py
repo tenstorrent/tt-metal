@@ -63,9 +63,12 @@ def tag_alignment(inputs, axes):
 INPUT_TAGGERS: dict = {"alignment": tag_alignment}
 
 SUPPORTED = {
-    # Pure data movement: every fixed-width dtype is correct in principle. The
-    # proven primary set is bfloat16 + float32 (the acceptance-test dtypes).
-    "dtype": [ttnn.bfloat16, ttnn.float32],
+    # Pure data movement: every fixed-width dtype is correct in principle. The op
+    # copies physical pages verbatim (never tilizes), so a bfloat8_b TILE page (a
+    # 1088 B block-float tile: 64×16 mantissa + 4×16 exponent) is gathered exactly
+    # like a bf16/f32 tile — no kernel change needed for bf8b (Refinement 1). The
+    # 16B-page invariant in validate() holds (1088 % 16 == 0).
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     # Ring is a noted extension (kernel selects it via the slice-walk modulo math);
     # Linear is the proven primary topology.

@@ -40,6 +40,7 @@ from ttnn.operations.all_gather import all_gather
 PCC = {
     ttnn.float32: 0.9999,
     ttnn.bfloat16: 0.999,
+    ttnn.bfloat8_b: 0.99,  # block-float: shared-exponent quantization at from_torch
 }
 
 # small / multi-tile / non-square / one larger — per-device SHARD shapes.
@@ -50,13 +51,15 @@ SHARD_SHAPES = [
     (1, 1, 256, 256),  # larger
 ]
 
-DTYPES = [ttnn.bfloat16, ttnn.float32]
+DTYPES = [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b]
 
 LINEAR = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear)
 
 
 def _torch_dtype(dtype):
-    return torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    # bf8b has no native torch dtype; reference it in bf16 (from_torch quantizes to
+    # block-float). f32 references in f32; bf16/bf8b in bf16.
+    return torch.float32 if dtype == ttnn.float32 else torch.bfloat16
 
 
 def _make_sharded_input(mesh_device, shard_shape, dtype):
