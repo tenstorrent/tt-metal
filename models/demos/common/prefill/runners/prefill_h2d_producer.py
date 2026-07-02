@@ -183,13 +183,14 @@ def main() -> None:
 
     # Optionally close the stream with the shutdown sentinel (all -1 PrefillMetadata) so the runner
     # exits its request loop and shuts down gracefully instead of blocking to SIGKILL. In production the
-    # scheduler owns this; here it is opt-in (PREFILL_SEND_SHUTDOWN=1) for shutdown testing. The payload
-    # is ignored by the runner — reuse the last chunk buffer so its size still matches the service.
+    # scheduler owns this; here it is opt-in (PREFILL_SEND_SHUTDOWN=1) for shutdown testing.
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         sentinel = struct.pack("<iii", -1, -1, -1)
         assert len(sentinel) == _METADATA_SIZE_BYTES, f"sentinel {len(sentinel)}B != {_METADATA_SIZE_BYTES}B"
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        service.forward_to_tensor_bytes(host_tokens, metadata=sentinel)
+        # The runner ignores the sentinel payload, but the service still requires a correctly-sized
+        # buffer; build a fresh one so shutdown works with no prior push (n_chunks=0, sentinel-only).
+        service.forward_to_tensor_bytes(_chunk_to_host_array([1] * CHUNK_SIZE), metadata=sentinel)
 
     # Final barrier so the descriptor isn't released before the last push has
     # been drained by the service core. (`connect`-side `barrier` is supported.)
