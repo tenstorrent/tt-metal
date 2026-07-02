@@ -377,6 +377,23 @@ class Ideogram4Pipeline:
     ):
         return cls(mesh_device=mesh_device, weights_dir=weights_dir, **kw)
 
+    def _tokenize(self, prompt: str):
+        """Apply the chat template + tokenize -> [1, n_text] input ids. Single source of truth
+        for token counting so ``count_text_tokens`` (pre-flight validation) and ``_encode``
+        (the MAX_TEXT_TOKENS guard) always agree."""
+        text = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        return self.tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"]
+
+    def count_text_tokens(self, prompt: str) -> int:
+        """Number of text tokens the prompt produces, for pre-flight validation BEFORE a job is
+        enqueued (so a server can reject an over-length prompt with an error code instead of
+        letting _encode raise mid-generation). Same tokenization _encode uses."""
+        return int(self._tokenize(prompt).shape[1])
+
     def _encode(self, prompt: str):
         """Tokenize + run the device encoder -> real interleaved llm_features (host) + n_text.
 
@@ -387,12 +404,7 @@ class Ideogram4Pipeline:
         and we pass attention_mask=None), so the real rows [0:n_text] are unaffected by the
         trailing pad. We slice the taps back to [:, :n_text] and return the real-length feats.
         """
-        text = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-        ids = self.tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"]
+        ids = self._tokenize(prompt)
         n_text = ids.shape[1]
         if n_text > MAX_TEXT_TOKENS:
             raise ValueError(
