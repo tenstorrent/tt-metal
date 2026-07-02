@@ -61,6 +61,36 @@ def test_generation_success_summary_reports_blocks_and_text_chars():
     )
 
 
+def test_parse_success_summary_returns_integer_fields():
+    fields = text_demo._parse_success_summary(
+        "DG_TEXT_DEMO_SUCCESS "
+        "generated_tokens=512 "
+        "blocks=2 "
+        "prompt_len=32 "
+        "next_pos=544 "
+        "sequence_len=530 "
+        "text_count=1 "
+        "text_chars=1409"
+    )
+
+    assert fields == {
+        "generated_tokens": 512,
+        "blocks": 2,
+        "prompt_len": 32,
+        "next_pos": 544,
+        "sequence_len": 530,
+        "text_count": 1,
+        "text_chars": 1409,
+    }
+
+
+def test_parse_success_summary_rejects_malformed_summary():
+    with pytest.raises(ValueError, match="must start"):
+        text_demo._parse_success_summary("DG_TEXT_DEMO_FAILURE mode=generate")
+    with pytest.raises(ValueError, match="malformed"):
+        text_demo._parse_success_summary("DG_TEXT_DEMO_SUCCESS blocks")
+
+
 def test_run_mode_reports_selected_smoke_mode():
     parser = text_demo.build_arg_parser()
 

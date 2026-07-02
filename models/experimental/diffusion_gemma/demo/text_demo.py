@@ -171,6 +171,19 @@ def _generation_success_summary(generation) -> str:
     )
 
 
+def _parse_success_summary(summary: str) -> dict[str, int]:
+    prefix = "DG_TEXT_DEMO_SUCCESS "
+    if not summary.startswith(prefix):
+        raise ValueError(f"success summary must start with {prefix!r}")
+    fields: dict[str, int] = {}
+    for item in summary[len(prefix) :].split():
+        key, sep, value = item.partition("=")
+        if sep != "=" or not key:
+            raise ValueError(f"malformed success summary field {item!r}")
+        fields[key] = int(value)
+    return fields
+
+
 def _run_mode(args) -> str:
     if args.build_only:
         return "build-only"

@@ -82,7 +82,8 @@ def test_short_prompt_two_block_run_exits_clean(monkeypatch):
     assert text_demo.main(argv) == 0
     success_lines = [line for line in info_lines if line.startswith("DG_TEXT_DEMO_SUCCESS ")]
     assert len(success_lines) == 1
-    assert "generated_tokens=512" in success_lines[0]
-    assert "blocks=2" in success_lines[0]
-    assert "prompt_len=32" in success_lines[0]
-    assert "next_pos=544" in success_lines[0]
+    summary = text_demo._parse_success_summary(success_lines[0])
+    assert summary["generated_tokens"] == 512
+    assert summary["blocks"] == 2
+    assert summary["prompt_len"] == 32
+    assert summary["next_pos"] == 544
