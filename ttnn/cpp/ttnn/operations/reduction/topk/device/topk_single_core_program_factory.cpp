@@ -25,9 +25,12 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const auto& value_tensor = std::get<0>(output_tensors);
     const auto& index_tensor = std::get<1>(output_tensors);
 
-    // Determine index output format based on dimension size constraints
+    // Determine index output width from the actual index tensor dtype. UINT16 uses 16-bit indices;
+    // UINT32/INT32 use 32-bit indices (both share the same 4-byte tile layout). Deriving this from the
+    // tensor dtype (rather than the dimension size) keeps index generation and the CB data format in
+    // sync for preallocated 32-bit outputs, regardless of the dimension size.
     const ttnn::Shape input_shape = input_tensor.padded_shape();
-    const bool uint16_output = (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
+    const bool uint16_output = (index_tensor.dtype() == DataType::UINT16);
 
     tt::tt_metal::Program program{};
 
@@ -35,8 +38,13 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat output_val_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
-    const tt::DataFormat output_ind_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
+    // The on-device sort datapath handles 32-bit indices as UInt32. INT32 shares the same 4-byte
+    // little-endian layout for the non-negative positions TopK produces, so run the compute in UInt32
+    // and let the writer copy the raw tile bytes into the (INT32-typed) output buffer unchanged.
+    tt::DataFormat output_ind_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
+    if (output_ind_cb_data_format == tt::DataFormat::Int32) {
+        output_ind_cb_data_format = tt::DataFormat::UInt32;
+    }
 
     // Calculate tile sizes for memory allocation
     const uint32_t input_tile_size = tile_size(input_cb_data_format);

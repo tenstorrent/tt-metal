@@ -76,7 +76,8 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
     const tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
-    const bool is32_bit_data = index_cb_data_format == tt::DataFormat::UInt32;
+    const bool is32_bit_data =
+        index_cb_data_format == tt::DataFormat::UInt32 || index_cb_data_format == tt::DataFormat::Int32;
 
     // Core grid and tile size calculations
     const auto first_core_range = args.sub_core_grids.ranges().at(0);

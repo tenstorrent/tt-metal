@@ -75,6 +75,14 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     // Apply requirement #3: K value limitation for multi-core optimization
     multicore_supported &= (args.k <= 64);
 
+    // The multi-core sort datapath only supports 16-bit (UInt16) indices. Multi-core is only reached for
+    // dimensions < 65536, where UInt16 indices always suffice, so this constraint is not otherwise limiting.
+    // A user-requested 32-bit (UINT32/INT32) index output must therefore run on the single-core path.
+    if (tensor_args.preallocated_outputs.has_value()) {
+        const auto preallocated_index_dtype = std::get<1>(tensor_args.preallocated_outputs.value()).dtype();
+        multicore_supported &= (preallocated_index_dtype == DataType::UINT16);
+    }
+
     // Check requirement #4: Memory and core availability constraints
     // Only perform expensive verification if basic requirements are met
     if (multicore_supported) {
@@ -149,8 +157,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     if (indices_tensor.has_value()) {
         const auto indices_tensor_dtype = indices_tensor->dtype();
         TT_FATAL(
-            indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32,
-            "Optional input tensor must be UINT16, or UINT32, got: {}",
+            indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32 ||
+                indices_tensor_dtype == DataType::INT32,
+            "Optional input tensor must be UINT16, UINT32, or INT32, got: {}",
             indices_tensor_dtype);
     }
 
@@ -163,8 +172,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             "Preallocated output tensor must be BFLOAT16 or BFLOAT8_B got: {}",
             output_tensor0_dtype);
         TT_FATAL(
-            output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32,
-            "Preallocated indices tensor must be UINT16 or UINT32 got: {}",
+            output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32 ||
+                output_tensor1_dtype == DataType::INT32,
+            "Preallocated indices tensor must be UINT16, UINT32, or INT32 got: {}",
             output_tensor1_dtype);
         TT_FATAL(
             output_tensor0_dtype == input_tensor_dtype,
