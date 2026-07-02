@@ -76,11 +76,14 @@ def _gn_hw_sharded(
 
 
 def _depth_to_space_bthwc_2x(x: ttnn.Tensor) -> ttnn.Tensor:
-    """``PixelShuffleND(dims=2)`` on a ``(B, T, H, W, 4C)`` BTHWC tensor."""
+    """``PixelShuffleND(dims=2)`` on a ``(B, T, H, W, 4C)`` BTHWC tensor.
+
+    Channel order is (1,2,2,C); the feeding conv reorders via depth_to_space_stride=(1,2,2).
+    """
     B, T, H, W, total_c = x.shape
     C = total_c // 4
-    x = ttnn.reshape(x, (B, T, H, W, C, 1, 2, 2))
-    x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
+    x = ttnn.reshape(x, (B, T, H, W, 1, 2, 2, C))
+    x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))
     return ttnn.reshape(x, (B, T, H * 2, W * 2, C))
 
 
@@ -146,15 +149,13 @@ class LTXUpsamplerResBlock(Module):
 def compute_upsampler_dims(
     *,
     input_hw: tuple[int, int],
-    num_frames: int | None,
+    num_frames: int,
     h_factor: int = 1,
     w_factor: int = 1,
-) -> tuple[ConvDims | None, ConvDims | None, ConvDims | None]:
+) -> tuple[ConvDims, ConvDims, ConvDims]:
     """``(pre_dims, ups_dims, post_dims)`` for the upsampler's three conv shape
     classes. T = cur_T + (kT-1); H/W are per-device shards of mesh-factor-padded
-    spatial. Returns ``(None, None, None)`` when ``num_frames`` is ``None``."""
-    if num_frames is None:
-        return None, None, None
+    spatial."""
     H_in, W_in = input_hw
     padded_h = ((H_in + h_factor - 1) // h_factor) * h_factor
     padded_w = ((W_in + w_factor - 1) // w_factor) * w_factor
@@ -238,7 +239,13 @@ class LTXLatentUpsampler(Module):
         )
 
         self.upsampler = LTXCausalConv3d(
-            mid_channels, 4 * mid_channels, kernel_size=(1, 3, 3), stride=1, conv_dims=ups_dims, **block_kwargs
+            mid_channels,
+            4 * mid_channels,
+            kernel_size=(1, 3, 3),
+            stride=1,
+            conv_dims=ups_dims,
+            depth_to_space_stride=(1, 2, 2),
+            **block_kwargs,
         )
 
         self.post_upsample_res_blocks = ModuleList(
