@@ -73,7 +73,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+        }
+        else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -82,10 +89,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
                 }
             }
-        }
-        else
-        {
-            // TODO: ndivnic implement remaining run types.
         }
 
         PROFILER_SYNC();
@@ -141,9 +144,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // TODO: ndivnic implement remaining run types.
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t i = 0; i < KT_DIM; i++)
+                {
+                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                }
+            }
         }
 
         PROFILER_SYNC();
@@ -166,6 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        set_ttsync_enables<TRACK_ALL>(ckernel::pack::TRISC_ID);
 
         tdma_descriptor_t tdma_desc_dst;
         tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_Res[0]);
@@ -193,9 +210,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            // TODO: ndivnic implement remaining run types.
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_pack_matmul_(0, 0);
+            }
         }
 
         PROFILER_SYNC();

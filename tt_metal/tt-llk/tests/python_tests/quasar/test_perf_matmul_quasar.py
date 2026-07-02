@@ -275,6 +275,11 @@ def test_perf_matmul_quasar(
         dimensions_dest_acc_dest_sync
     )
 
+    if format.input_format == DataFormat.Int8 and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            "Quasar packer does not support Int8 to Int32 conversion with 16-bit dest"
+        )
+
     src_A, tile_cnt_A, src_B, tile_cnt_B, tilized_A, tilized_B = _generate_stimuli(
         format, input_A_dimensions, input_B_dimensions
     )

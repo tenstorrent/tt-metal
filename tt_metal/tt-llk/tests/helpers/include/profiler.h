@@ -91,7 +91,7 @@ constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
 constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
 
 using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
-using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
+using buffer_ptr_t  = volatile std::uint32_t (*)[BUFFER_LENGTH];
 
 extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
@@ -125,7 +125,11 @@ __attribute__((always_inline)) inline void reset()
     write_idx     = 0;
     open_zone_cnt = 0;
 
-    memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
+    for (std::uint32_t i = 0; i < BUFFER_LENGTH; ++i)
+    {
+        buffer[TRISC_ID][i] = 0;
+    }
+    ckernel::invalidate_data_cache();
 }
 
 __attribute__((always_inline)) inline bool is_buffer_full()
@@ -137,6 +141,14 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
 }
 
+__attribute__((always_inline)) inline void write_buffer_word(std::uint32_t value)
+{
+    volatile std::uint32_t& word                      = buffer[TRISC_ID][write_idx++];
+    word                                              = value;
+    [[maybe_unused]] volatile std::uint32_t committed = word;
+    ckernel::invalidate_data_cache();
+}
+
 __attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
 {
     std::uint64_t timestamp      = ckernel::read_wall_clock();
@@ -145,14 +157,14 @@ __attribute__((always_inline)) inline void write_entry(EntryType type, std::uint
     std::uint32_t type_numeric = static_cast<std::uint32_t>(type);
     std::uint32_t meta         = (type_numeric << ENTRY_TYPE_SHAMT) | (static_cast<std::uint32_t>(id16) << ENTRY_ID_SHAMT);
 
-    buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
-    buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
+    write_buffer_word(meta | (timestamp_high & ~ENTRY_META_MASK));
+    write_buffer_word(static_cast<std::uint32_t>(timestamp));
 }
 
 __attribute__((always_inline)) inline void write_data(std::uint64_t data)
 {
-    buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data >> 32);
-    buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
+    write_buffer_word(static_cast<std::uint32_t>(data >> 32));
+    write_buffer_word(static_cast<std::uint32_t>(data));
 }
 
 template <std::uint16_t id16>

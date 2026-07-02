@@ -80,6 +80,52 @@ def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+_RAW_PROFILER_DUMP_PATHS: set[Path] = set()
+
+
+def _dump_raw_profiler_data(
+    test_name: str,
+    variant_id: str,
+    run_type: PerfRunType,
+    run_index: int,
+    frame: pd.DataFrame,
+):
+    if frame.empty:
+        return
+
+    if not TestConfig.PERF_DATA_DIR.exists():
+        TestConfig.PERF_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    output_path = TestConfig.PERF_DATA_DIR / f"{Path(test_name).stem}.profiler_raw.csv"
+    if output_path not in _RAW_PROFILER_DUMP_PATHS:
+        output_path.unlink(missing_ok=True)
+        _RAW_PROFILER_DUMP_PATHS.add(output_path)
+
+    raw = frame.copy()
+    raw.insert(0, "test_name", test_name)
+    raw.insert(1, "variant_id", variant_id)
+    raw.insert(2, "run_type", run_type.name)
+    raw["run_index"] = run_index
+
+    raw.to_csv(output_path, mode="a", header=not output_path.exists(), index=False)
+
+    print(f"\nRaw profiler timestamps dumped to: {output_path}")
+    print(
+        raw[
+            [
+                "run_type",
+                "run_index",
+                "thread",
+                "type",
+                "marker",
+                "timestamp",
+                "marker_id",
+                "line",
+            ]
+        ].to_string(index=False)
+    )
+
+
 class PerfReport:
     """
     Lazy evaluation container for performance benchmark data.
@@ -457,6 +503,13 @@ class PerfConfig(TestConfig):
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
+                _dump_raw_profiler_data(
+                    self.test_name,
+                    self.variant_id,
+                    run_type,
+                    run_index,
+                    profiler_data.df,
+                )
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]

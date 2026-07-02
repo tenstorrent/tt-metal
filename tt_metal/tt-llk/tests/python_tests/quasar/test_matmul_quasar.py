@@ -19,6 +19,7 @@ from helpers.llk_params import (
     DestSync,
     ImpliedMathFormat,
     MathFidelity,
+    PerfRunType,
     Transpose,
     format_dict,
 )
@@ -40,6 +41,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
+    PERF_RUN_TYPE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -256,6 +258,7 @@ def test_matmul(
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             LOOP_FACTOR(1),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             TILE_COUNT(matmul_dims.output_tile_cnt),
