@@ -196,6 +196,54 @@ jobs:
               sys.exit(0)
           PYEOF
 
+      - name: Test S3 write+readback
+        # Explicitly verify that S3 *writes* work — not just reads.
+        # The list_objects_v2 probe above only confirms read access; writes can silently fail
+        # (wrong IAM policy, bucket ACL, proxy stripping PUT, etc.) with no error surfaced during
+        # analysis. This step writes a sentinel object, reads it back to confirm integrity, then
+        # deletes it. Hard-fails so write breakage is caught immediately, not discovered days later.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          python3 - << 'PYEOF'
+          import boto3, botocore, os, sys
+
+          if os.environ.get("CTCACHE_S3_OK") != "1":
+              print("Skipping write test — S3 not configured or probe failed")
+              sys.exit(0)
+
+          s3 = boto3.client("s3",
+              endpoint_url=os.environ["AWS_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+              region_name=os.environ["AWS_DEFAULT_REGION"],
+              config=botocore.config.Config(s3={"addressing_style": "path"}),
+          )
+
+          folder = os.environ.get("CTCACHE_S3_FOLDER", "ct20")
+          run_id = os.environ.get("GITHUB_RUN_ID", "local")
+          attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+          key = f"{folder}/.write-test/{run_id}-{attempt}"
+          payload = b"ctcache-write-test-ok"
+
+          try:
+              s3.put_object(Bucket="ctcache", Key=key, Body=payload)
+              print(f"Wrote sentinel: s3://ctcache/{key}")
+
+              response = s3.get_object(Bucket="ctcache", Key=key)
+              body = response["Body"].read()
+              if body != payload:
+                  print(f"::error::S3 readback MISMATCH: expected {payload!r}, got {body!r}")
+                  sys.exit(1)
+              print("Readback: content matches ✓")
+
+              s3.delete_object(Bucket="ctcache", Key=key)
+              print("Sentinel deleted (cleanup)")
+          except Exception as e:
+              print(f"::error::ctcache S3 write+readback FAILED: {e}")
+              print("::error::Writes to Garage S3 are broken — ctcache will run but results will NOT be persisted")
+              sys.exit(1)
+          PYEOF
+
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache
