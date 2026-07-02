@@ -378,11 +378,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     buffer_address += COMBINE_DEBUG_BUFFER_SIZE;
 
     // [debug] Carve a second L1 scratch region for the receiver flow-control trace (ReceiverLog in the
-    // kernel): a ring-buffer-free append log of {ts_delta, iter, ready, ack, wr_sent, wr_flush, completion}
-    // records, one appended per change of the receiver channel's flow-control state during a combine window.
-    // 4096 B holds >100 of the 28-byte records; total debug carve (combine + receiver) is 5 KiB, which must
-    // stay well under the unused channel-buffer headroom (the allocator's TT_FATAL catches overflow).
-    constexpr std::size_t RECEIVER_LOG_BUFFER_SIZE = 4096;  // 1024 uint32 words
+    // kernel): a ring-buffer-free append log of delta-encoded {ts, iter, ready, ack, wr_sent, wr_flush,
+    // completion} records, one appended per change of the receiver channel's flow-control state during a
+    // combine window. Sized for a 16 B header + 500 * 8 B records = 4000 B (kept in sync with
+    // RECEIVER_LOG_CAPACITY in the kernel); the total debug carve (combine + receiver) must stay well under
+    // the unused channel-buffer headroom (the allocator's TT_FATAL catches overflow).
+    constexpr std::size_t RECEIVER_LOG_BUFFER_SIZE = 4096;  // 1024 uint32 words (>= 4096 B ReceiverLog)
     this->receiver_log_buffer_address = buffer_address;
     buffer_address += RECEIVER_LOG_BUFFER_SIZE;
 

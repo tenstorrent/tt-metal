@@ -582,20 +582,27 @@ bool combine_first_pkt_seen = false;
 //
 // Overlaid on the RECEIVER_LOG_BUFFER_ADDR region carved by the builder (4096 B). Records are 28 B, so the
 // region holds far more than the RECEIVER_LOG_CAPACITY cap below.
+// Packed to 8 bytes. Every field is a delta since the previous recorded row -- the reset snapshot is the
+// implicit zero (see reset_receiver_log / record_receiver_flow_state) -- except `ready`, which is an absolute
+// level. Deltas between consecutive recorded rows are tiny: the monotonic counters advance by at most one per
+// main-loop pass, and the window opens at data-send start (quiescent), so the counter deltas are 0/1 and never
+// saturate their byte. ts_delta/iter_delta can saturate across a long idle gap between records (documented in
+// record_receiver_flow_state); ts/iter are relative/approximate anyway, so a clamped gap is acceptable.
 struct ReceiverLogRecord {
-    uint32_t ts_delta;    // wall-clock cycles since the previous record (get_timestamp_32b domain)
-    uint32_t iter_index;  // monotonic main-loop pass index at capture time
-    uint32_t ready;       // to_receiver_pkts_sent doorbell (unconsumed arrivals)
-    uint32_t ack;         // ack_counter.counter (first-level ack; 0 when that path is disabled)
-    uint32_t wr_sent;     // wr_sent_counter.counter (forward NoC write issued)
-    uint32_t wr_flush;    // wr_flush_counter.counter (forward write flushed)
-    uint32_t completion;  // completion_counter.counter (completion credit returned)
+    uint16_t ts_delta;         // cycles since previous record (get_timestamp_32b domain), saturating at 0xFFFF
+    uint8_t iter_delta;        // main-loop passes since previous record, saturating at 0xFF
+    uint8_t ready;             // to_receiver_pkts_sent doorbell level, absolute (bounded by receiver slot count)
+    uint8_t ack_delta;         // ack_counter increments since previous record
+    uint8_t wr_sent_delta;     // wr_sent_counter increments since previous record
+    uint8_t wr_flush_delta;    // wr_flush_counter increments since previous record (always 0 in fused builds)
+    uint8_t completion_delta;  // completion_counter increments since previous record
 };
-static_assert(sizeof(ReceiverLogRecord) == 28, "ReceiverLogRecord must be 28 bytes");
+static_assert(sizeof(ReceiverLogRecord) == 8, "ReceiverLogRecord must be 8 bytes");
 
-// Cap the number of records so the dump is bounded and we never run past the carved region. 128 * 28 B of
-// records + 16 B header = 3600 B, comfortably under the 4096 B RECEIVER_LOG_BUFFER_SIZE.
-constexpr uint32_t RECEIVER_LOG_CAPACITY = 128;
+// Cap the number of records so the dump is bounded and we never run past the carved region. 500 * 8 B of
+// records + 16 B header = 4016 B; the builder carves RECEIVER_LOG_BUFFER_SIZE = 4096 B to hold it (keep the
+// two in sync).
+constexpr uint32_t RECEIVER_LOG_CAPACITY = 500;
 constexpr uint32_t RECEIVER_LOG_MAGIC = 0xC0FFEE02;
 
 struct ReceiverLog {
@@ -615,60 +622,92 @@ FORCE_INLINE volatile ReceiverLog* receiver_log() {
 
 // [debug] Last recorded state, kept in RISC RAM (not L1) so the change-detection compare is cheap and does
 // not re-read the log buffer. Seeded by reset_receiver_log() at the start marker.
+// Previous *recorded* row's absolute values -- the running baseline that record_receiver_flow_state diffs
+// against to produce the stored deltas. Seeded by reset_receiver_log() from a live snapshot at the start
+// marker, so the reconstructed counters read as 0-based within the window.
 uint32_t receiver_log_last_ts = 0;
-uint32_t receiver_log_last_ready = 0xFFFFFFFF;
-uint32_t receiver_log_last_ack = 0xFFFFFFFF;
-uint32_t receiver_log_last_wr_sent = 0xFFFFFFFF;
-uint32_t receiver_log_last_wr_flush = 0xFFFFFFFF;
-uint32_t receiver_log_last_completion = 0xFFFFFFFF;
+uint32_t receiver_log_last_iter = 0;
+uint32_t receiver_log_last_ready = 0;
+uint32_t receiver_log_last_ack = 0;
+uint32_t receiver_log_last_wr_sent = 0;
+uint32_t receiver_log_last_wr_flush = 0;
+uint32_t receiver_log_last_completion = 0;
 
-// [debug] Reset the receiver trace at the combine start marker: clear the log and prime the last-state so the
-// very first observed state during the window is always emitted (last_* set to an impossible sentinel).
-FORCE_INLINE void reset_receiver_log(uint32_t window_start_cycles) {
+// [debug] Reset the receiver trace at the combine start marker: clear the log and snapshot the current
+// flow-control state as the delta baseline. Every row in the window is stored as a delta against this
+// snapshot (see record_receiver_flow_state and the dump reconstruction), so reconstructed counters are
+// 0-based within the window. The window opens at data-send start (receiver quiescent), so the snapshot has
+// ack == wr_sent == completion and the reconstructed (ack - completion) is exactly the true slot occupancy.
+FORCE_INLINE void reset_receiver_log(
+    uint32_t window_start_cycles,
+    uint32_t iter,
+    uint32_t ready,
+    uint32_t ack,
+    uint32_t wr_sent,
+    uint32_t wr_flush,
+    uint32_t completion) {
     volatile ReceiverLog* log = receiver_log();
     log->magic = RECEIVER_LOG_MAGIC;
     log->count = 0;
     log->dropped = 0;
     log->spare = 0;
     receiver_log_last_ts = window_start_cycles;
-    receiver_log_last_ready = 0xFFFFFFFF;
-    receiver_log_last_ack = 0xFFFFFFFF;
-    receiver_log_last_wr_sent = 0xFFFFFFFF;
-    receiver_log_last_wr_flush = 0xFFFFFFFF;
-    receiver_log_last_completion = 0xFFFFFFFF;
+    receiver_log_last_iter = iter;
+    receiver_log_last_ready = ready;
+    receiver_log_last_ack = ack;
+    receiver_log_last_wr_sent = wr_sent;
+    receiver_log_last_wr_flush = wr_flush;
+    receiver_log_last_completion = completion;
 }
 
 // [debug] Append a record iff the flow-control state changed since the last recorded row. Gated by the caller
-// on combine_window_active. Cheap when nothing changed: 5 compares and an early return. `iter_index` is the
-// monotonic loop-pass counter; the counter values are the free-running ChannelCounter::counter fields.
+// on combine_window_active. Cheap when nothing changed: 5 compares and an early return. Everything is stored
+// as a delta against the previous recorded row (reset seeds the baseline): the monotonic counter deltas are
+// 0/1 per pass so they never overflow a byte; ts_delta/iter_delta saturate to their field width (only
+// reachable across a long idle gap, where ts/iter are approximate anyway); `ready` is stored absolute.
 FORCE_INLINE void record_receiver_flow_state(
-    uint32_t iter_index, uint32_t ready, uint32_t ack, uint32_t wr_sent, uint32_t wr_flush, uint32_t completion) {
+    uint32_t iter, uint32_t ready, uint32_t ack, uint32_t wr_sent, uint32_t wr_flush, uint32_t completion) {
     if (ready == receiver_log_last_ready && ack == receiver_log_last_ack && wr_sent == receiver_log_last_wr_sent &&
         wr_flush == receiver_log_last_wr_flush && completion == receiver_log_last_completion) {
         return;  // no change -> collapse
     }
+
+    volatile ReceiverLog* log = receiver_log();
+    uint32_t idx = log->count;
+    if (idx >= RECEIVER_LOG_CAPACITY) {
+        // Buffer full: count the drop for honest truncation reporting and leave last_* frozen so the stored
+        // rows keep a self-consistent delta chain (drops only happen after the 512 rows are already captured).
+        log->dropped++;
+        return;
+    }
+    uint32_t now = get_timestamp_32b();
+
+    // Deltas against the previous recorded row. Counters are monotonic so these are non-negative; clamp to the
+    // field width (only ts/iter can actually reach the clamp, across a long quiet stretch between records).
+    uint32_t ts_d = now - receiver_log_last_ts;
+    uint32_t iter_d = iter - receiver_log_last_iter;
+    uint32_t ack_d = ack - receiver_log_last_ack;
+    uint32_t wr_sent_d = wr_sent - receiver_log_last_wr_sent;
+    uint32_t wr_flush_d = wr_flush - receiver_log_last_wr_flush;
+    uint32_t completion_d = completion - receiver_log_last_completion;
+
+    volatile ReceiverLogRecord* rec = &log->records[idx];
+    rec->ts_delta = ts_d > 0xFFFF ? 0xFFFF : static_cast<uint16_t>(ts_d);
+    rec->iter_delta = iter_d > 0xFF ? 0xFF : static_cast<uint8_t>(iter_d);
+    rec->ready = ready > 0xFF ? 0xFF : static_cast<uint8_t>(ready);
+    rec->ack_delta = ack_d > 0xFF ? 0xFF : static_cast<uint8_t>(ack_d);
+    rec->wr_sent_delta = wr_sent_d > 0xFF ? 0xFF : static_cast<uint8_t>(wr_sent_d);
+    rec->wr_flush_delta = wr_flush_d > 0xFF ? 0xFF : static_cast<uint8_t>(wr_flush_d);
+    rec->completion_delta = completion_d > 0xFF ? 0xFF : static_cast<uint8_t>(completion_d);
+
+    receiver_log_last_ts = now;
+    receiver_log_last_iter = iter;
     receiver_log_last_ready = ready;
     receiver_log_last_ack = ack;
     receiver_log_last_wr_sent = wr_sent;
     receiver_log_last_wr_flush = wr_flush;
     receiver_log_last_completion = completion;
 
-    volatile ReceiverLog* log = receiver_log();
-    uint32_t idx = log->count;
-    if (idx >= RECEIVER_LOG_CAPACITY) {
-        log->dropped++;  // buffer full: keep counting drops so the dump can report truncation honestly
-        return;
-    }
-    uint32_t now = get_timestamp_32b();
-    volatile ReceiverLogRecord* rec = &log->records[idx];
-    rec->ts_delta = now - receiver_log_last_ts;
-    rec->iter_index = iter_index;
-    rec->ready = ready;
-    rec->ack = ack;
-    rec->wr_sent = wr_sent;
-    rec->wr_flush = wr_flush;
-    rec->completion = completion;
-    receiver_log_last_ts = now;
     log->count = idx + 1;
 }
 
@@ -2869,7 +2908,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         // Gated to the receiver eRisc: the buffer is shared across eRiscs, so letting the
                         // sender eRisc reset here would zero the receiver's buffer mid-window.
                         if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
-                            reset_receiver_log(d->window_start_cycles);
+                            reset_receiver_log(
+                                d->window_start_cycles,
+                                receiver_log_iter,
+                                static_cast<uint32_t>(
+                                    get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
+                                receiver_channel_pointers_ch0.ack_counter.counter,
+                                receiver_channel_pointers_ch0.wr_sent_counter.counter,
+                                receiver_channel_pointers_ch0.wr_flush_counter.counter,
+                                receiver_channel_pointers_ch0.completion_counter.counter);
                         }
                         combine_window_active = true;
                     } else {
@@ -2906,29 +2953,39 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         }
                         // [debug] Dump the receiver flow-control trace in capture order. This spins the eRisc
                         // for the duration of the prints, which is fine: the monitored window has just closed.
-                        // Columns: iter=loop pass, dt=cycles since prev record, rdy=doorbell, ack/wsent/wflush/
-                        // cmpl=the four ChannelCounter values. n=records captured, drop=records lost after fill.
+                        // Records are stored as deltas (see ReceiverLogRecord); we reconstruct 0-based cumulative
+                        // values as we walk. Columns: iter=loop pass (reconstructed), dt=cycles since prev record,
+                        // rdy=doorbell level, ack/wsent/wflush/cmpl=reconstructed counters, free=free receiver
+                        // slots. n=records captured, drop=records lost after fill, slots=receiver buffer depth.
                         if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
                             volatile ReceiverLog* rlog = receiver_log();
-                            // slots = the VC0 receiver channel's buffer-slot count (RECEIVER_NUM_BUFFERS),
-                            // logged once per dump so free-slot math (num_slots - rdy - (ack - cmpl)) has a
-                            // concrete denominator without needing the build config.
-                            DEVICE_PRINT(
-                                "[rxlog] n={} drop={} slots={}\n",
-                                rlog->count,
-                                rlog->dropped,
-                                static_cast<uint32_t>(RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]));
+                            uint32_t nslots = static_cast<uint32_t>(RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]);
+                            DEVICE_PRINT("[rxlog] n={} drop={} slots={}\n", rlog->count, rlog->dropped, nslots);
+                            // Running reconstruction of the delta-encoded fields (baseline 0 == reset snapshot).
+                            // free = slots - rdy - (ack - cmpl): rdy = arrived-but-not-acked, (ack - cmpl) =
+                            // acked-but-not-completed; their sum is the slots in use, remainder is free (>= 0
+                            // since the window opened quiescent). Assumes first-level ack, which holds here.
+                            uint32_t iter_acc = 0, ack_acc = 0, wsent_acc = 0, wflush_acc = 0, cmpl_acc = 0;
                             for (uint32_t r = 0; r < rlog->count; r++) {
                                 volatile ReceiverLogRecord* rec = &rlog->records[r];
+                                iter_acc += rec->iter_delta;
+                                ack_acc += rec->ack_delta;
+                                wsent_acc += rec->wr_sent_delta;
+                                wflush_acc += rec->wr_flush_delta;
+                                cmpl_acc += rec->completion_delta;
+                                uint32_t rdy = rec->ready;
+                                uint32_t occupied = rdy + (ack_acc - cmpl_acc);
+                                uint32_t free_slots = occupied <= nslots ? nslots - occupied : 0;
                                 DEVICE_PRINT(
-                                    "[rxlog] iter={} dt={} rdy={} ack={} wsent={} wflush={} cmpl={}\n",
-                                    rec->iter_index,
-                                    rec->ts_delta,
-                                    rec->ready,
-                                    rec->ack,
-                                    rec->wr_sent,
-                                    rec->wr_flush,
-                                    rec->completion);
+                                    "[rxlog] iter={} dt={} rdy={} ack={} wsent={} wflush={} cmpl={} free={}\n",
+                                    iter_acc,
+                                    static_cast<uint32_t>(rec->ts_delta),
+                                    rdy,
+                                    ack_acc,
+                                    wsent_acc,
+                                    wflush_acc,
+                                    cmpl_acc,
+                                    free_slots);
                             }
                         }
                     }
