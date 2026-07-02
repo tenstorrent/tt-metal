@@ -211,9 +211,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         } else if (w_bytes_per_link_dir > 4u * 1024u) {
             heuristic = 2;
         }
-        if (is_padding_zeros) {
-            num_w_workers = std::min(heuristic, MAX_VALIDATED_W_WORKERS);
-        }
+        // OPT-IN ONLY (TT_NP_W_WORKERS): the mux is PCC-verified at small scale but corrupts ~2% of sticks
+        // at production scale (T=147) — do not auto-engage until that scale bug is root-caused, else the
+        // shipping default would produce wrong data. Heuristic kept for when it's re-enabled.
+        (void)heuristic;
         if (const char* e = std::getenv("TT_NP_W_WORKERS")) {
             num_w_workers = std::max(1, atoi(e));
         }
@@ -417,10 +418,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                                                          num_sticks_per_halo_dim * page_size / num_links)
                                                       : 0;
     const uint32_t h_frames_per_link = (num_links > 0) ? (outer_dim_size / num_links) : 0;
+    // OPT-IN ONLY while the production-scale corruption is root-caused (see W gate above).
+    (void)h_bytes_per_link;
+    (void)h_frames_per_link;
     uint32_t num_h_workers = 1;
-    if (is_padding_zeros && h_coalesce_n > 0 && h_bytes_per_link > 4u * 1024u && h_frames_per_link >= 2u) {
-        num_h_workers = 2;
-    }
     if (const char* e = std::getenv("TT_NP_H_WORKERS")) {
         num_h_workers = std::max(1, atoi(e));
     }

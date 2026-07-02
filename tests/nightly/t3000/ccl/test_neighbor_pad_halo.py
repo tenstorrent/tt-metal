@@ -354,6 +354,19 @@ def test_neighbor_pad_halo_prod_perf(mesh_device, device_params, input_shape, sh
     )
 
 
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+def test_neighbor_pad_halo_prod_pcc(mesh_device, device_params, padding_mode, input_shape, shape_id):
+    # Byte-exact PCC of the compact halo buffer on the production LTX 2x4 shapes (the mux path for zeros).
+    run_neighbor_pad_halo_2d(
+        mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1,
+        padding_mode=padding_mode, num_links=2
+    )
+
+
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
