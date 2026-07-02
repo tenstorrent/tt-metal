@@ -985,49 +985,34 @@ def _run_auto_iterate_loop(
         return min(4, palette_bonus + gap_bonus)
 
     def _effective_attempt_cap(comp: str) -> int:
-        """Per-component cap on the consecutive-same-class counter.
+        """Delegates to the module-level pure rule (bringup_ladder) so the cc bring-up gate can reuse
+        the IDENTICAL cap arithmetic. Behavior unchanged: base + complexity bonus, PCC-stuck bonus,
+        clamped at the hard ceiling."""
+        from . import bringup_ladder
 
-        Three additive sources of cap:
-          1. `max_attempts_per_component` (base, e.g. 2)
-          2. Capability-5 complexity bonus from op-synth manifest
-             (0..4 extra attempts for big/novel components)
-          3. Tier-2 PCC-stuck bonus (+`PCC_STUCK_EXTRA_ATTEMPTS` when
-             last failure was PCC_ONLY with PCC >= 0.5 — structurally
-             correct, numerically close)
-
-        The total is clamped at `hard_total_attempt_cap` so the
-        absolute safety ceiling is never breached.
-        """
-        base = max_attempts_per_component
-        complexity = _component_complexity_bonus(comp)
-        base = base + complexity
-        last_class = last_failure_class_per_component.get(comp, "")
-        last_pcc = last_pcc_per_component.get(comp)
-        if last_class == "PCC_ONLY" and last_pcc is not None and last_pcc >= PCC_STUCK_THRESHOLD:
-            return min(base + PCC_STUCK_EXTRA_ATTEMPTS, hard_total_attempt_cap)
-
-        return min(base, hard_total_attempt_cap)
+        return bringup_ladder.effective_attempt_cap(
+            comp,
+            max_attempts_per_component=max_attempts_per_component,
+            hard_total_attempt_cap=hard_total_attempt_cap,
+            complexity_bonus=_component_complexity_bonus(comp),
+            last_failure_class=last_failure_class_per_component,
+            last_pcc=last_pcc_per_component,
+            pcc_stuck_threshold=PCC_STUCK_THRESHOLD,
+            pcc_stuck_extra_attempts=PCC_STUCK_EXTRA_ATTEMPTS,
+        )
 
     def _is_at_cap(comp: str) -> bool:
-        """Combined cap check used at every target-pick / fallback-on-exhaustion
-        site. A component is "at cap" when EITHER:
-          - it has accumulated `_effective_attempt_cap(comp)` consecutive
-            failures with the SAME failure class AND no PCC improvement
-            (i.e. the LLM is no longer making forward progress on it), OR
-          - the absolute total attempts have hit `hard_total_attempt_cap`
-            (safety net against runaway loops where the failure class
-            oscillates).
+        """Delegates to the module-level pure rule (bringup_ladder). Behavior unchanged: at cap when
+        total attempts hit the hard ceiling OR consecutive-same-class reaches the effective cap."""
+        from . import bringup_ladder
 
-        Pre-Tier-1#2 behavior was "total >= max_attempts_per_component"
-        (the consecutive-same-class counter equals total attempts when no
-        progress is ever detected, so the Tier-1#2 rule was a strict
-        relaxation). Tier-2 C further relaxes the per-component cap for
-        the structural-but-stuck PCC regime (PCC >= 0.5) — see
-        `_effective_attempt_cap` — while keeping the hard ceiling intact.
-        """
-        if attempts_per_component.get(comp, 0) >= hard_total_attempt_cap:
-            return True
-        return consecutive_same_class_attempts.get(comp, 0) >= _effective_attempt_cap(comp)
+        return bringup_ladder.is_at_cap(
+            comp,
+            attempts_per_component=attempts_per_component,
+            consecutive_same_class_attempts=consecutive_same_class_attempts,
+            effective_cap=_effective_attempt_cap(comp),
+            hard_total_attempt_cap=hard_total_attempt_cap,
+        )
 
     def _attempts_display(comp: str) -> str:
         """Return the "K/N (total=T)" string used in user-facing log lines.

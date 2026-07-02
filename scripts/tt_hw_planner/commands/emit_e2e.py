@@ -196,6 +196,76 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     return (len(reasons) == 0), reasons
 
 
+def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
+    """Per-round prompt for the emit-e2e cc engine. The gate is the sole authority; the agent works
+    exactly the failing gates it names and never weakens them."""
+    return (
+        f"You are finishing the end-to-end TTNN pipeline for {model_id} in {demo_dir} (required e2e "
+        f"PCC >= {pcc}).\n"
+        "LOOP every iteration: call mcp__e2e-mcp__termination_check FIRST. It is the SOLE authority on "
+        "whether you are done (can_stop=true) and returns next_target = the FAILING gates: G1 (stubs "
+        "must be native ttnn, not torch-delegating), G2/G3 (tests/e2e must PASS on device with measured "
+        "PCC >= threshold; xfail/skip/error is NOT acceptable), G4 (demo/ + tt/ + README structure).\n"
+        "Fix EXACTLY the failing gates by editing tests/e2e/, _stubs/, demo/, tt/ as needed. NEVER "
+        "weaken, xfail, skip, or assert-True a gate. Re-run termination_check after each fix. STOP only "
+        "when can_stop=true; if it is already true, do nothing."
+    )
+
+
+def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_rounds) -> int:
+    """emit-e2e cc engine: after the builder runs, drive the fix loop through the shared cc harness
+    against the e2e_mcp deterministic gate (which REUSES the same G1–G4 `_run_deterministic_gates` the
+    legacy loop uses). The gate is the sole stop authority. Returns 0 iff the gate reports can_stop."""
+    import json as _json
+    import os as _os
+
+    from .. import cc_harness
+
+    repo_root = Path(__file__).resolve().parents[3]
+    thp_dir = repo_root / "scripts" / "tt_hw_planner"
+    server_path = thp_dir / "e2e_mcp.py"
+    pybin = str(repo_root / "python_env" / "bin" / "python")
+    if not Path(pybin).is_file():
+        pybin = sys.executable
+    mcp_env = {
+        "E2E_MCP_DEMO_DIR": str(demo_dir),
+        "E2E_MCP_PCC": str(pcc),
+        "E2E_MCP_TIMEOUT": str(timeout_s),
+        "TT_METAL_HOME": str(repo_root),
+        "PYTHONPATH": str(repo_root),
+        "PATH": f"{repo_root / 'python_env' / 'bin'}{_os.pathsep}/usr/bin:/bin",
+    }
+    cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "e2e-mcp")
+    cfg_path = thp_dir / f".e2e_mcp_config_{re.sub(r'[^A-Za-z0-9._-]', '_', model_id)}.json"
+    cfg_path.write_text(_json.dumps(cfg, indent=2))
+    env = dict(_os.environ)
+    env["TT_METAL_HOME"] = str(repo_root)
+    env["PYTHONPATH"] = str(repo_root)
+
+    def gate_fn():
+        return cc_harness.gate_status(pybin, thp_dir, "e2e_mcp", mcp_env, repo_root)
+
+    prompt = _build_cc_fix_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
+    allowed = ["mcp__e2e-mcp__termination_check", "Read", "Edit", "Write", "Bash", "Grep", "Glob"]
+    print("\n  ===== PHASE 3 (cc engine): harness fix-loop on the e2e gate =====\n")
+    res = cc_harness.run_cc_loop(
+        prompt=prompt,
+        mcp_config_path=cfg_path,
+        allowed_tools=allowed,
+        cwd=repo_root,
+        env=env,
+        gate_fn=gate_fn,
+        max_rounds=max_rounds,
+        claude_bin=agent_bin,
+    )
+    final = gate_fn()
+    sep = "=" * 78
+    print("\n" + sep)
+    print(f"  cc engine: rounds={res['rounds']} can_stop={final.get('can_stop')} halted={res['halted']}")
+    print(sep)
+    return 0 if final.get("can_stop") else 1
+
+
 def cmd_emit_e2e(args) -> int:
     try:
         from ..cli import _quiet_framework_logging
@@ -246,6 +316,16 @@ def cmd_emit_e2e(args) -> int:
         print(f"\n  ✗ builder agent exited rc={rc_build}; skipping grade")
         return 1
     print("  ✓ builder finished (exit 0)")
+
+    if (getattr(args, "engine", "fsm") or "fsm") == "cc":
+        return _run_emit_e2e_cc(
+            model_id=model_id,
+            demo_dir=demo_dir,
+            pcc=pcc,
+            timeout_s=timeout_s,
+            agent_bin=agent_bin,
+            max_rounds=max_grade_rounds,
+        )
 
     if skip_grade:
         print("\n  (--no-grade) skipping independent grader phase.\n")
