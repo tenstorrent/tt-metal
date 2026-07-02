@@ -329,6 +329,14 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
     }
 }
 
+void Kernel::process_scratchpad_binding_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
+    const {
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
+    }
+}
+
 void Kernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
     // For FILE_PATH kernels, add the kernel source directory to the include path.
     // This enables relative includes (e.g., #include "foo.inc") to work when the kernel
@@ -545,6 +553,16 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+    }
+    // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
+    // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
+    // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
+    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.size_bytes));
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!

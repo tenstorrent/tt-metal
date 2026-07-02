@@ -436,6 +436,12 @@ struct Metal2BindingsSnapshot {
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
     };
+    // Scratchpad bindings, in insertion order (matches genfiles.cpp's vector).
+    struct ScratchEntry {
+        std::string name;
+        uint32_t size_bytes;
+        uint32_t addr_crta_word;
+    };
 
     bool is_metal2 = false;
     std::vector<std::string> runtime_arg_names;
@@ -443,6 +449,7 @@ struct Metal2BindingsSnapshot {
     std::map<std::string, uint32_t> dfb_accessors;
     std::map<std::string, uint16_t> sem_accessors;
     std::vector<TaEntry> ta_accessors;
+    std::vector<ScratchEntry> scratch_accessors;
 
     // Distinguishes kernels that share source/CTAs/defines but bind different
     // IDs — without this they collide on cache key and the second silently
@@ -458,6 +465,9 @@ struct Metal2BindingsSnapshot {
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
                  std::to_string(ta.addr_crta_offset);
+        }
+        for (const auto& sp : scratch_accessors) {
+            s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
         }
         for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
@@ -841,6 +851,10 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
                 num_rt_words);
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
+    kernel.process_scratchpad_binding_handles(
+        [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+            s.scratch_accessors.push_back({name, size_bytes, addr_crta_word});
+        });
     return s;
 }
 
@@ -865,6 +879,9 @@ static void emit_metal2_namespaces(
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
+    }
+    if (!s.scratch_accessors.empty()) {
+        f << "#include \"api/scratchpad.h\"\n";
     }
 
     if (has_args) {
@@ -911,15 +928,24 @@ static void emit_metal2_namespaces(
         }
         f << "}  // namespace tensor\n";
     }
+    if (!s.scratch_accessors.empty()) {
+        f << "namespace scratch {\n";
+        for (const auto& sp : s.scratch_accessors) {
+            f << "constexpr ScratchpadAccessor " << sp.name << "{" << sp.addr_crta_word << "u, " << sp.size_bytes
+              << "u};\n";
+        }
+        f << "}  // namespace scratch\n";
+    }
 
     // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors
     // genfiles.cpp). The CRTA buffer layout is [user-named CRTAs,
-    // TensorBinding addresses, varargs], so get_common_vararg's base skips
-    // past both the named CRTAs and the binding section.
+    // TensorBinding addresses, scratchpad addresses, varargs], so
+    // get_common_vararg's base skips past the named CRTAs, the binding
+    // section, and the scratchpad section.
     if (s.is_metal2) {
         const uint32_t named_rta_words = static_cast<uint32_t>(s.runtime_arg_names.size());
-        const uint32_t named_crta_words =
-            static_cast<uint32_t>(s.common_runtime_arg_names.size() + s.ta_accessors.size());
+        const uint32_t named_crta_words = static_cast<uint32_t>(
+            s.common_runtime_arg_names.size() + s.ta_accessors.size() + s.scratch_accessors.size());
         f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "
           << "return get_arg_val<uint32_t>(" << named_rta_words << " + idx); }\n";
         f << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { "

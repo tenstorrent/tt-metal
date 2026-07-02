@@ -1001,6 +1001,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         program.impl().validate_circular_buffer_core_ranges(validation_device);
         program.impl().validate_circular_buffer_region(validation_device);
         program.impl().allocate_dataflow_buffers(validation_device);
+        // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
+        // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
+        program.impl().allocate_scratchpads(validation_device);
         program.impl().validate_dataflow_buffer_region(validation_device);
 
         // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on
