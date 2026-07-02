@@ -255,10 +255,10 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         const uint32_t tensor_num_pages = device_tensor_.buffer()->num_pages();
         plan = derive_chunk_plan(tensor_page_size, tensor_num_pages, cfg_.scratch_cb_size_bytes);
     } else {
-        const uint32_t l1_align = hal::get_l1_alignment();
+        const uint32_t pcie_align = hal::get_pcie_alignment();
         plan = ChunkPlan{
             .socket_page_size = static_cast<uint32_t>(
-                tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align))),
+                tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(pcie_align))),
             .num_socket_pages = 0,
             .pages_per_chunk = 0,
         };
