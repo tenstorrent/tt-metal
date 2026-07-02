@@ -38,6 +38,9 @@ Output_tensor will have the same shape as index.
       dimension of interest.
     - Only the last dimension in the input tensor (the one that computation is done on) can be different in size than in
 the input_index_tensor.
+    - Memory layouts: input, index, and output buffers may be interleaved DRAM/L1, legacy 2D-sharded, or ND-sharded
+      TILE. Each page is one tile; page_id is the linear tile index in the padded 4D tensor (Ht/Wt rows), and
+      TensorAccessor (with compile-time args from the host) maps that logical page to the correct NoC address.
     - Wt_input represents the number of tiles in the last dimension of the input tensor.
     - Wt_index represents the number of tiles in the last dimension of the input index tensor.
     - A full row of tiles of input tensor (size `Wt_input`) is read from DRAM into L1 memory.
