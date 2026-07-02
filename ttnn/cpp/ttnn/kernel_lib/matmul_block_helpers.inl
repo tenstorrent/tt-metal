@@ -156,6 +156,59 @@ ALWI void matmul_block_finalize_copy(
     }
 }
 
+/**
+ * Finalize untilize: materialize row-major `out` from the fully-accumulated tile-format `interm`
+ * block via pack_untilize_dest (SubblockMajor, per subblock). Structural mirror of
+ * matmul_block_finalize_copy — same interm wait/pop + out reserve/push + per-subblock DST copy —
+ * but the pack is pack_untilize_dest instead of pack_tile_block.
+ *
+ * WHY this is a finalize transform (not fused in the K-loop): untilize is a layout transform on
+ * the FINISHED block. The old fused path (pack_untilize straight from the last K-block's DST) was
+ * only correct without accumulation — under packer_l1_acc it untilized a partial before the block
+ * was fully summed, corrupting the output. Running untilize here, after the K-loop has accumulated
+ * the whole block into interm, is correct for both l1_acc and the software-reload path.
+ *
+ * SubblockMajor-only: pack_untilize_dest packs a fixed block_ct_dim from DST offset 0 and can't
+ * express the row-major absolute-offset gather, so the accumulated interm must be subblock-major.
+ * (Multi-subblock-wide row-major untilize is the reblock_and_untilize helper's job — used as a
+ * downstream phase off an Interm target — see reblock_untilize_helpers.hpp.)
+ */
+template <uint32_t untilize_block_ct_dim, bool packer_l1_acc, typename Buf>
+ALWI void matmul_block_finalize_untilize(
+    Buf& interm_buf,
+    Buf& out_buf,
+    uint32_t out_block_num_tiles,
+    uint32_t out_num_tiles,
+    uint32_t prev_srca_cb_id) {
+    const uint32_t interm_cb_id = buf_id(interm_buf);
+    const uint32_t out_cb_id = buf_id(out_buf);
+
+    // srcA onto interm (see matmul_block_finalize_copy for why old_cbid must be the prior srcA
+    // operand, not interm); packer onto out's format + untilize mode; l1_acc off (this copy must
+    // not re-accumulate — the K-loop already summed the block into interm).
+    copy_tile_to_dst_init_short_with_dt(prev_srca_cb_id, interm_cb_id);
+    pack_untilize_dest_init<untilize_block_ct_dim>(out_cb_id);
+    PACK((pack_reconfig_data_format(out_cb_id)));
+    if constexpr (packer_l1_acc) {
+        PACK((llk_pack_reconfig_l1_acc(0)));
+    }
+
+    interm_buf.wait_front(out_block_num_tiles);
+    out_buf.reserve_back(out_block_num_tiles);
+    for (uint32_t off = 0; off < out_block_num_tiles; off += out_num_tiles) {
+        tile_regs_acquire();
+        copy_block_matmul_partials(interm_cb_id, off, 0, out_num_tiles);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_untilize_dest<untilize_block_ct_dim>(out_cb_id);
+        tile_regs_release();
+    }
+    out_buf.push_back(out_block_num_tiles);
+    interm_buf.pop_front(out_block_num_tiles);
+
+    pack_untilize_uninit(out_cb_id);
+}
+
 template <
     bool transpose,
     bool packer_l1_acc,
@@ -189,9 +242,10 @@ ALWI void matmul_block(
     In0SourceFn in0_source_fn,
     In1BaseOffsetFn in1_base_offset_fn) {
 
-    // OutWithUntilize needs SubblockMajor: pack_untilize_dest packs from DST offset 0 for a
-    // fixed block_ct_dim and can't compose with the per-tile absolute-offset row-major pack.
-    // Row-major untilize goes through Interm + reblock_and_untilize instead.
+    // OutWithUntilize accumulates SubblockMajor into interm, then the finalize untilizes it into out
+    // via pack_untilize_dest (which packs a fixed block_ct_dim from DST offset 0 and needs the
+    // subblock-major grouping). Multi-subblock-wide / TileRowMajor row-major untilize is the
+    // reblock_and_untilize helper's job, run as a downstream phase off an Interm target.
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || tile_order == OutputCBLayout::SubblockMajor,
         "OutWithUntilize requires tile_order == SubblockMajor; route row-major untilize via Interm + reblock_and_untilize");
@@ -235,20 +289,23 @@ ALWI void matmul_block(
     // accumulation the whole point; without it the accumulation path is a software spill+reload, which
     // does NOT accumulate in interm and must not take this path. Both layouts place each subblock
     // correctly via an absolute-offset pack: TileRowMajor row-strided (M-row-group base folded into the
-    // OOP offset), SubblockMajor contiguous (subblock_idx * out_num_tiles).
-    constexpr bool in_place = packer_l1_acc && !is_untilize;
+    // OOP offset), SubblockMajor contiguous (subblock_idx * out_num_tiles). OutWithUntilize accumulates
+    // in place too (SubblockMajor) — the untilize is a finalize transform on the finished block.
+    constexpr bool in_place = packer_l1_acc;
 
-    // pack_last_to_interm: land the FINAL K-block in interm (vs straight to out). Do this ONLY when
-    // something downstream reads it from interm: a downstream in-kernel op (Interm target), or the
-    // finalize that materializes an in-place-accumulated block into out (in_place). For the remaining
+    // pack_last_to_interm: land the FINAL K-block in interm (vs straight to out). Do this when
+    // something downstream reads it from interm: a downstream in-kernel op (Interm target), the
+    // finalize that materializes an in-place-accumulated block into out (in_place), or the untilize
+    // finalize (is_untilize — untilize is a post-accumulation layout transform, so the raw tile-format
+    // block must land in interm first, then be untilized into out; the fused in-K-loop pack_untilize it
+    // replaces corrupted the output under packer_l1_acc by untilizing a partial). For the remaining
     // case — the non-l1_acc software-reload Out/OutWithRelu path — the last block is already the
     // finished sum in DST, so it packs STRAIGHT TO OUT. Routing that path through interm would (a) add
     // a redundant full-block copy and, worse, (b) DEADLOCK: the last block reloads the prior spill from
     // interm while re-reserving a row-group in the SAME headroom-free interm CB (factory sizes interm0
     // == out_block), a classic reserve-before-pop circular wait (see the TileRowMajor row-group reserve
-    // below + docs/hangs.md "Compute-internal deadlock variant"). OutWithUntilize keeps its fused
-    // straight-to-out pack; is_untilize excludes it from in_place, so pack_last_to_interm is false for it.
-    constexpr bool pack_last_to_interm = target_is_interm || in_place;
+    // below + docs/hangs.md "Compute-internal deadlock variant").
+    constexpr bool pack_last_to_interm = target_is_interm || in_place || is_untilize;
 
     // activate_on_last_pack: the straight-to-out Out/OutWithRelu path (non-l1_acc, no interm round-trip)
     // has no finalize, so relu (finalize_relu) and the SFPU Activation apply HERE, on the last-block
@@ -499,13 +556,6 @@ ALWI void matmul_block(
                     if (last_out) {
                         post_compute(out_num_tiles);
 
-                        // OutWithUntilize: bracket the per-subblock pack with pack_untilize
-                        // init/uninit so later ops can resume their own packer config (init
-                        // before commit, uninit after release).
-                        if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
-                            pack_untilize_dest_init<untilize_block_ct_dim>(pack_target_id);
-                        }
-
                         tile_regs_commit();
                         if constexpr (tile_order == OutputCBLayout::SubblockMajor && !in_place) {
                             pack_target_buf.reserve_back(out_num_tiles);
@@ -572,8 +622,6 @@ ALWI void matmul_block(
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
-                        } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
-                            pack_untilize_dest<untilize_block_ct_dim>(pack_target_id);
                         } else {
                             pack_tile_block(0, pack_target_id, out_num_tiles);
                         }
@@ -582,9 +630,6 @@ ALWI void matmul_block(
                         // Restore a clean (non-relu) packer state for the next consumer/op.
                         if constexpr (activate_on_last_pack && finalize_relu) {
                             PACK((llk_pack_relu_config(ReluConfig::none())));
-                        }
-                        if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
-                            pack_untilize_uninit(pack_target_id);
                         }
                         if constexpr (tile_order == OutputCBLayout::SubblockMajor && !in_place) {
                             pack_target_buf.push_back(out_num_tiles);
@@ -723,24 +768,30 @@ ALWI void matmul_block(
         // when the K-loop actually landed the final block in interm (pack_last_to_interm) — i.e. the
         // in_place path — AND that interm isn't already out:
         //   Interm target        → downstream in-kernel op consumes interm → NO finalize.
-        //   OutWithUntilize       → legacy fused pack already wrote out in the K-loop → NO finalize
-        //                           (Stage 3 folds untilize into finalize).
+        //   OutWithUntilize       → untilize the fully-accumulated interm block into row-major out
+        //                           (matmul_block_finalize_untilize). Correct under packer_l1_acc,
+        //                           unlike the old fused in-K-loop pack_untilize that untilized a partial.
         //   Out / OutWithRelu, non-l1_acc → the last block packed STRAIGHT TO OUT (pack_last_to_interm
         //                           is false), relu/Activation already applied → NO finalize.
         //   Out / OutWithRelu, in_place   → needs_finalize = (out != interm). If false (aliased) the
         //                           accumulated block in interm IS out (same CB → same dtype /
         //                           layout / tile) → zero-copy skip. If true → copy interm→out with
         //                           dtype-convert + relu + Activation.
-        if constexpr (pack_last_to_interm && !target_is_interm && !is_untilize) {
+        if constexpr (pack_last_to_interm && !target_is_interm) {
             const bool needs_finalize = (out_cb_id != interm_cb_id);
             if (needs_finalize) {
-                matmul_block_finalize_copy<packer_l1_acc, finalize_relu, Activation>(
-                    interm_buf, out_buf, out_block_num_tiles, out_num_tiles, /*prev_srca_cb_id=*/in1_cb_id);
-                // The finalize copy left the unpacker in datacopy mode and the packer on out's
-                // format. If another batch's K-loop follows, restore matmul unpack/math state and
-                // point the packer back at interm so the next accumulation is correct. (Single-batch
-                // and Interm/OutWithUntilize targets don't reach here; the next helper invocation's
-                // own init restores state when init_mode != None.)
+                if constexpr (is_untilize) {
+                    matmul_block_finalize_untilize<untilize_block_ct_dim, packer_l1_acc>(
+                        interm_buf, out_buf, out_block_num_tiles, out_num_tiles, /*prev_srca_cb_id=*/in1_cb_id);
+                } else {
+                    matmul_block_finalize_copy<packer_l1_acc, finalize_relu, Activation>(
+                        interm_buf, out_buf, out_block_num_tiles, out_num_tiles, /*prev_srca_cb_id=*/in1_cb_id);
+                }
+                // The finalize left the unpacker in datacopy mode and the packer on out's format (and
+                // for untilize, in untilize mode — uninit'd). If another batch's K-loop follows, restore
+                // matmul unpack/math state and point the packer back at interm so the next accumulation
+                // is correct. (Interm target doesn't reach here; untilize callers use batch=1; the next
+                // helper invocation's own init restores state when init_mode != None.)
                 if (b + 1 < shape.batch) {
                     reconfig_data_format(in1_cb_id, in0_cb_id);
                     PACK((pack_reconfig_data_format(interm_cb_id)));
