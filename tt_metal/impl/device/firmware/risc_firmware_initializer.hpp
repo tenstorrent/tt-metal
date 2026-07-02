@@ -47,6 +47,9 @@ private:
     void clear_l1_state(tt::ChipId device_id);
     void clear_dram_state(tt::ChipId device_id);
     void clear_launch_messages_on_eth_cores(tt::ChipId device_id);
+    // Inactive ETH cores eligible for FW init.
+    // On BH, drops cores whose base FW reports a broken link, plus their SerDes-quad siblings.
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores_for_init(tt::ChipId device_id);
     // Take the cores out of reset state. This should be called after setting the correct program counter for execution.
     void reset_cores(tt::ChipId device_id);
 
