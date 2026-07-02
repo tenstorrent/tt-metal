@@ -508,8 +508,14 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
         return output_tensor.value();
     }
 
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
+    auto* device = tensor_args.input_tensor_a.device();
+    if (operation_attributes.sub_device_id.has_value()) {
+        return create_device_tensor(
+            compute_output_specs(operation_attributes, tensor_args),
+            device,
+            operation_attributes.sub_device_id.value());
+    }
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), device);
 }
 
 ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
