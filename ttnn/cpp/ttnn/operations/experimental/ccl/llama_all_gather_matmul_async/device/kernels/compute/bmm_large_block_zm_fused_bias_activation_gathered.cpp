@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -271,16 +272,20 @@ void kernel_main() {
     // (llama_1d_mm_fusion.cpp never sets it; the original kernel had `#if not
     // defined FUSE_BIAS` guards but no positive FUSE_BIAS branch), so the
     // FUSE_BIAS arm from the original migration plan is moot. Routes:
-    //   untilize_out → OutWithUntilize  (relu, when needed, lands in PreKBlockFn)
+    //   untilize_out → Interm + downstream reblock_and_untilize (see after the matmul call)
     //   PACK_RELU    → OutWithRelu      (helper's pack_relu mechanism)
     //   else         → Out
+    // untilize_out uses Interm (not the old fused OutWithUntilize): the matmul accumulates the
+    // fully-tiled block into interm, then a downstream reblock_and_untilize untilizes the
+    // FULLY-accumulated block into out. The fused pack_untilize untilized a partial before the
+    // block finished accumulating, corrupting under packer_l1_acc.
     constexpr LastBlockTarget last_block_target =
-        untilize_out ? LastBlockTarget::OutWithUntilize
+        untilize_out ? LastBlockTarget::Interm
                      : (pack_relu_defined ? LastBlockTarget::OutWithRelu : LastBlockTarget::Out);
 
-    // OutWithRelu's helper-side pack_relu config doesn't fire on the OutWithUntilize
-    // path, so the PreKBlockFn picks up the relu config when both untilize_out and
-    // PACK_RELU are set. The two routes are mutually exclusive at the helper level.
+    // LastBlockTarget::Interm does NOT auto-enable relu, and the downstream reblock does not apply
+    // activation, so keep the PreKBlockFn relu-on-last for the untilize path — relu still runs on
+    // the interm block before untilize (matches the pre-migration behavior).
     constexpr bool enable_relu_on_last_via_pre_k = pack_relu_defined && untilize_out;
 
     // in1_policy mirrors the pre-migration kernel's `if constexpr (in1_is_dram)`
@@ -423,6 +428,41 @@ void kernel_main() {
             NoKBlockInnerDimFn{},
             NoIn0Source{},
             in1_offset_fn);
+
+        // ── Downstream untilize (Interm target) ─────────────────────────────
+        // matmul_block accumulated the fully-tiled block into mm_partials_buf (SubblockMajor).
+        // reblock_and_untilize gathers it into row-major and untilizes into mm_out_buf — untilizing
+        // the FULLY-accumulated block (fixes the packer_l1_acc corruption the old fused
+        // OutWithUntilize had, where a partial got untilized before accumulation finished). Mirrors
+        // the plain-gather kernel bmm_large_block_zm_fused_bias_activation_gathered.cpp.
+        if constexpr (untilize_out) {
+            constexpr uint32_t out_block_w = in1_num_subblocks * out_subblock_w;
+#ifdef PACK_RELU
+            // The PreKBlockFn (enable_relu_on_last_via_pre_k) enabled relu for the last K-block's
+            // interm pack; restore a clean packer state before the untilize reblock.
+            PACK((llk_pack_relu_config(ReluConfig::none())));
+#endif
+            // Reconfigure srcA / pack DF / l1_acc for the reblock read, then invoke with
+            // NoReconfigure so the helper adds no reconfig of its own.
+            reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+#if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
+            PACK((pack_reconfig_data_format(mm_out_cb_id)));
+#endif
+#ifdef PACKER_L1_ACC
+            PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+            reblock_and_untilize<
+                out_subblock_w,
+                out_block_w,
+                reblock_untilize_config::InitUninitMode::InitAndUninit,
+                reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                in0_num_subblocks,
+                in1_num_subblocks,
+                out_subblock_num_tiles,
+                out_subblock_h,
+                mm_partials_buf,
+                mm_out_buf);
+        }
 
         if constexpr (enable_global_cb) {
             // Release in1
