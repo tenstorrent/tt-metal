@@ -311,7 +311,7 @@ install(
         COMPONENT tar
 )
 
-if(NOT TT_USE_SYSTEM_SFPI)
+if(NOT TT_USE_SYSTEM_SFPI AND NOT SFPI_ROOT)
     # FIXME(17578): figure out what bits we actually need to ship and omit the rest
     install(
         DIRECTORY

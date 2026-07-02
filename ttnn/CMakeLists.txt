@@ -198,7 +198,7 @@ set_target_properties(
         BUILD_RPATH
             "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
         INSTALL_RPATH
-            "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+            "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR};$ORIGIN/build/${CMAKE_INSTALL_LIBDIR};$ORIGIN" # FIXME: Install RPATH should not have a build path!
         CXX_VISIBILITY_PRESET
             "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
         ADDITIONAL_CLEAN_FILES
@@ -365,7 +365,7 @@ if(WITH_PYTHON_BINDINGS)
             BUILD_RPATH
                 "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
             INSTALL_RPATH
-                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+                "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR};$ORIGIN/build/${CMAKE_INSTALL_LIBDIR};$ORIGIN" # FIXME: Install RPATH should not have a build path!
             CXX_VISIBILITY_PRESET
                 "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
             ADDITIONAL_CLEAN_FILES
