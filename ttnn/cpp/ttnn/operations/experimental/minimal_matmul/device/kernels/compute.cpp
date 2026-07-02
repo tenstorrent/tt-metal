@@ -73,8 +73,6 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             const uint32_t up_tile_id = gate_tile_id + 1;
 
             tile_regs_acquire();
-            // silu and mul_binary are distinct SFPU programs — each op is re-initialised
-            // right before use; otherwise silu would run with the mul SFPU config.
 #ifdef FUSE_BIAS
             add_bcast_rows_init_short(in_cb, bias_cb);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
