@@ -41,7 +41,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import publish_table_and_wait_ready
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -579,7 +578,7 @@ class _InterleavedMigrationDriver:
 # ---------------------------------------------------------------------------
 
 
-def _first_rank_chunk_tokens(runtime: TtPrefillRuntime, token_ids: list[int], kv_actual: int) -> ttnn.Tensor:
+def _first_rank_chunk_tokens(runtime, token_ids: list[int], kv_actual: int) -> ttnn.Tensor:
     """Slice this chunk's tokens and build the SP-sharded input tensor. Delegates to the runtime's own
     builder so the input format has one source of truth."""
     cfg = runtime.config
@@ -754,7 +753,12 @@ def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     )
     out = runtime.prefill_chunk(
-        inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"], request_id=c
+        inp,
+        kv_cache,
+        slot_id=meta["slot_id"],
+        actual_start=meta["actual_start"],
+        actual_end=meta["actual_end"],
+        request_id=c,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -782,7 +786,16 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 
 def run_request_loop(
-    runtime: TtPrefillRuntime, kv_cache, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None, migration_driver=None
+    runtime,
+    kv_cache,
+    rank: int,
+    num_ranks: int,
+    *,
+    hidden_size: int,
+    h2d_service=None,
+    d2d_in=None,
+    d2d_out=None,
+    migration_driver=None,
 ) -> dict:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
@@ -847,7 +860,7 @@ def run_request_loop(
     return real_end_per_slot
 
 
-def run_standalone_loop(runtime: TtPrefillRuntime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
+def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
     """Bring-up / benchmark loop — BOUNDED, golden-trace input. rank 0 drives NUM_CHUNKS chunks from the
     trace; downstream ranks receive the same count over D2D. Every rank knows NUM_CHUNKS (propagated via
     global_env), so each loops a fixed range independently — no end-of-stream marker needed. With
@@ -998,13 +1011,6 @@ def main() -> None:
     params = PrefillRunParams(
         mesh_shape=GLOBAL_MESH_SHAPE,
         num_layers=num_my_layers,
-        chunk_size=CHUNK_SIZE,
-        num_users=NUM_USERS,
-        num_links=2 if is_blackhole() else 1,  # Blackhole trains 2 fabric routing planes, others 1
-        capacity_factor=CAPACITY_FACTOR,
-        gate_fallback_mode=GateComputeMode[_gate_mode_name],
-        weight_cache_path=cache_path,
-        model_cfg=MODEL_CFG,
         first_layer_idx=first_layer_idx,
         is_first_rank=is_first_rank,
         is_last_rank=is_last_rank,
@@ -1081,14 +1087,6 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
     they are disabled for num_ranks>1 (pipelined migration is future work). Shutdown for num_ranks>1 is
     rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
-
-    # Migration is only wired for the single-rank case; on the pipeline it would silently no-op. Fail
-    # loud so an enabled-migration pipeline run can't be mistaken for a working one.
-    if not single_rank and os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
-        raise ValueError(
-            f"PREFILL_ENABLE_MIGRATION=1 is unsupported for num_ranks={num_ranks} (pipelined migration "
-            "is not implemented); run single-rank or unset PREFILL_ENABLE_MIGRATION."
-        )
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
@@ -1178,7 +1176,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         # WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
         # COLLECTIVE: all ranks must call this so the table all-gather completes; only the first rank
         # attaches to the worker and sends.
-        from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import publish_kv_chunk_table_and_wait_ready
+        from models.demos.common.prefill.runners.migration import publish_kv_chunk_table_and_wait_ready
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
         # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
@@ -1188,7 +1186,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
         migration_endpoint = publish_kv_chunk_table_and_wait_ready(
             mesh_device=mesh_device,
-            kvpe_cache=runtime.kvpe_cache,
+            kvpe_cache=kv_cache,
             seq_len=MAX_SEQ_LEN,
             num_layers=NUM_LAYERS,
             mesh_shape=GLOBAL_MESH_SHAPE,
@@ -1298,8 +1296,10 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         # take the same branch (the barrier below requires it); production serving is unaffected.
         real_end_per_slot = run_request_loop(
             runtime,
+            kv_cache,
             rank,
             num_ranks,
+            hidden_size=hf_config.hidden_size,
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,
@@ -1350,7 +1350,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
 
             from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_migrations_pairwise
 
-            validate_migrations_pairwise(runtime, [(src_slot, dst_slot)])
+            validate_migrations_pairwise(runtime, kv_cache, [(src_slot, dst_slot)])
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
         # spin timing out on a stalled router); without this, producer/router/ack segments + the

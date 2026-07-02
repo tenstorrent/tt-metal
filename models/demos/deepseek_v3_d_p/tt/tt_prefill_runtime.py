@@ -194,6 +194,11 @@ class TtPrefillRuntime:
         over the D2D socket)."""
         if self.config.is_first_rank:
             return prepare_prefill_input_tensor(
+                token_ids,
+                self.mesh_device,
+                self.config.sp_factor,
+                False,  # chunked prefill is block-cyclic (non-balanced)
+                self.config.mesh_shape,
                 self.config.sp_axis,
             )
         return self.make_placeholder_activation()
@@ -346,6 +351,7 @@ class TtPrefillRuntime:
         return kv_cache_pcc_check(
             self, kv_cache, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=first_layer_idx
         )
+
     def set_layer_completion_sink(self, sink) -> None:
         """Register a per-layer completion sink for pipelined prefill.
 

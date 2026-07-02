@@ -19,8 +19,12 @@ actually issue migrations. The device map is derived from the local mesh topolog
 imported LAZILY so the runner still works standalone when migration is opted out.
 """
 
+import glob
 import os
+import socket
 import sys
+import time
+import zlib
 
 from loguru import logger
 
@@ -31,35 +35,26 @@ _DEFAULT_CMD_QUEUE = "/prefill_mig_cmd_1"
 _DEFAULT_TABLE_QUEUE = "/prefill_mig_tbl_1"
 _DEFAULT_RESP_QUEUE = "/prefill_mig_rsp_1"
 
+# This is a predefined constant for the number of contiguous tokens in a DRAM bank
+NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
+# Nominal DRAM bank count for a full (unharvested) Blackhole part. Prefer get_num_dram_banks(device)
+# at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
+# disaggregation address-table striding must both use the device's actual count to stay consistent.
+BH_NUM_DRAM_BANKS = 8
+PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
+# bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
+_CHUNK_SIZE_BYTES = 19584
 
-def serialize_kv_chunk_table(
-    *,
-    table_builder,
-    num_layers: int,
-    max_seq_len: int,
-    num_users: int,
-    chunk_n_tokens: int,
-    chunk_size_bytes: int,
-    path: str,
-) -> str:
-    """Populate the generic KvChunkAddressTableConfig, invoke a model's `table_builder`, and serialize
-    the result to a protobuf file for the worker's SET_TABLE. Returns `path`.
 
-    The KV layout (how natural positions map to storage chips/offsets) is the one model-specific part:
-    the caller supplies `table_builder(config, chunk_size_bytes, num_users) -> KvChunkAddressTable`.
-    Everything here — config population, serialization, logging — is model-agnostic.
-    """
-    disagg = ttnn.experimental.disaggregation
-    cfg = disagg.KvChunkAddressTableConfig()
-    cfg.num_layers = num_layers
-    cfg.max_sequence_length = max_seq_len
-    cfg.num_slots = num_users
-    cfg.chunk_n_tokens = chunk_n_tokens
-    cfg.chunk_size_bytes = chunk_size_bytes
-    table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
-    disagg.export_to_protobuf_file(table, path)
-    logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
-    return path
+def _disaggregation():
+    """KvChunkAddressTable + serializer come from ttnn.experimental.disaggregation
+    (no _migration extension needed)."""
+    return ttnn.experimental.disaggregation
+
+
+def _serialize_table_to_path(table, path: str) -> None:
+    """Serialize a KvChunkAddressTable to a protobuf file for the worker's SET_TABLE."""
+    _disaggregation().export_to_protobuf_file(table, path)
 
 
 def _resolve_queue_names() -> tuple[str, str, str]:
@@ -103,6 +98,57 @@ def _attach_migration_client():
             f"must launch migration_endpoint and create the shmem queues before the runner."
         ) from e
     return client, cmd_q, table_q, resp_q
+
+
+def _deliver_local_device_map(device_map, timeout_s=120.0) -> None:
+    """Push THIS rank's local FNID->UMD device map to its co-located host migration worker(s).
+
+    Direct port of tt-blaze's ``_deliver_local_device_map``. The migration endpoint spawns TWO
+    internal device workers per host -- an "A" master/sender and a "B" loopback receiver -- each with
+    its OWN shmem queues named ``/ep_<pid>_{a,b}_{cmd,table,resp}`` (endpoint_orchestrator.cpp::
+    run_loopback); a subordinate rank adds a ``_r<rank>`` suffix. BOTH the A worker and the B receiver
+    need the map, so we deliver to every match.
+
+    The device map does NOT go to the outward control queues (``PREFILL_MIGRATION_*_QUEUE``, e.g.
+    ``/mig_ep1_*``) -- those are a DIFFERENT, master-only channel used for SET_TABLE/WORKER_READY. We
+    discover the worker queues by globbing ``/dev/shm/ep_*_{a,b}_cmd*`` on THIS host (POSIX shm is
+    host-local, so the glob finds exactly the worker(s) co-located with this rank), exactly like blaze
+    -- NOT the ``mig_ep*`` control name, which never matches a device-map queue.
+    """
+    mod = _import_migration_client()
+
+    def _discover():
+        trios = []
+        for side in ("a", "b"):
+            for c in sorted(glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")):
+                name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
+                trios.append(
+                    (
+                        name,
+                        name.replace(f"_{side}_cmd", f"_{side}_table"),
+                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
+                    )
+                )
+        return trios
+
+    deadline = time.monotonic() + timeout_s
+    trios = _discover()
+    while not trios:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
+                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
+                "master-only control channel, NOT the device-map queues.)"
+            )
+        time.sleep(0.25)
+        trios = _discover()
+
+    for cmd, table, resp in trios:
+        try:
+            mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
+            logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
+        except RuntimeError as e:
+            raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
 
 
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
@@ -149,7 +195,7 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
     return device_map
 
 
-def publish_table_and_wait_ready(
+def _publish_table_and_wait_ready(
     *, mesh_device, mesh_shape, table_path: str, wait_ready_timeout_ms: int = 120_000
 ) -> None:
     """Publish an already-serialized KV-chunk table to the migration worker and block
@@ -177,3 +223,289 @@ def publish_table_and_wait_ready(
     client.send_device_map(device_map)
     client.wait_ready(wait_ready_timeout_ms)
     logger.info(f"[migration] WORKER_READY: devices={len(device_map)} table={table_path}")
+
+    return client
+
+
+def build_and_serialize_kv_chunk_table(
+    *,
+    mesh_device,
+    kvpe_cache,
+    seq_len,
+    num_layers,
+    mesh_shape,
+    sp_axis,
+    num_users,
+    chunk_size_global,
+    path,
+    first_layer_idx=0,
+    num_my_layers=None,
+    stage_layout=None,
+) -> str:
+    """Build the KV chunk address table from the device KV layout and serialize it to ``path``
+    for the inference server to forward via SET_TABLE. Returns the path on success.
+
+    Uses create_kv_chunk_address_table_kimi: chunked prefill stores KV positions block-cyclic across
+    the SP shards (every model variant), so the table must map each natural position to its true
+    block-cyclic storage chip + offset. The migration worker copies the chunks the table lists for
+    the migrated position range. A contiguous (wrong) table still works for a blanket copy of the
+    WHOLE cache — every chunk is copied regardless of its label — but any sub-cache migration (a
+    prefix copy of [0, N), or a prompt shorter than max_seq_len) lists the wrong, block-cyclically-
+    scattered chunks and copies mostly un-prefilled storage, so the migrated KV fails its PCC check.
+
+    ``chunk_size_global`` is the prefill chunk size (the block-cyclic period; the same value passed
+    to blockcyclic_positions). The kimi builder hardcodes this period as PREFILL_CHUNK_OUTPUT_TOKENS,
+    so a non-default PREFILL_CHUNK_SIZE is rejected here rather than silently mismapped."""
+    assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
+        f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
+        f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
+        f"A different period would mismap every position; re-introduce a parametrized builder if needed."
+    )
+    # Lazy import: the kimi block-cyclic builder is model-specific (lives in the deepseek package),
+    # so keep this model-agnostic module importable without it.
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import create_kv_chunk_address_table_kimi
+
+    cfg = _disaggregation().KvChunkAddressTableConfig()
+    # cfg.num_layers is the GLOBAL layer total; the builder overwrites it with the gathered sum of all
+    # stages' layer counts, so this is just an initial value (== num_layers when stages tile cleanly).
+    cfg.num_layers = num_layers
+    cfg.max_sequence_length = seq_len
+    cfg.num_slots = num_users
+    cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
+    table = create_kv_chunk_address_table_kimi(
+        config=cfg,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=kvpe_cache,
+        chunk_size_bytes=_CHUNK_SIZE_BYTES,
+        num_users=num_users,
+        first_layer_idx=first_layer_idx,
+        num_my_layers=num_my_layers,
+        stage_layout=stage_layout,
+    )
+    _serialize_table_to_path(table, path)
+    logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
+    return path
+
+
+def publish_kv_chunk_table_and_wait_ready(
+    *,
+    mesh_device,
+    kvpe_cache,
+    seq_len: int,
+    num_layers: int,
+    mesh_shape,
+    sp_axis: int,
+    num_users: int,
+    chunk_size_global: int,
+    path: str,
+    first_layer_idx: int = 0,
+    num_my_layers: int = None,
+    wait_ready_timeout_ms: int = 120_000,
+):
+    """Full migration bring-up from the prefill runner side.
+
+    Builds + serializes the KV chunk address table, attaches a
+    ``MigrationLayerClient`` on the env-driven shmem queues, sends SET_TABLE and
+    AssignDevMap in the order the worker expects, then blocks on WORKER_READY
+    (or raises on timeout). The client is scope-local to this call; runtime
+    migrations are issued by the C++ PrefillScheduler over its own adapter.
+
+    ``chunk_size_global`` is the prefill chunk size (the block-cyclic period;
+    same value passed to blockcyclic_positions). The table builder maps natural
+    positions to their true block-cyclic storage chunks — a wrong period makes
+    slot-1 migrated reads land at the wrong SP shards and PCC collapses to ~0.70
+    (the half-correct pattern). The kimi builder hardcodes this period, so
+    ``build_and_serialize_kv_chunk_table`` asserts it matches PREFILL_CHUNK_OUTPUT_TOKENS.
+
+    Strict-by-default: any failure to import the extension, attach to the
+    queues, or reach WORKER_READY raises. Callers that only need the serialized
+    table (no publish) can use ``build_and_serialize_kv_chunk_table`` directly.
+
+    Rank gating (mirrors tt-blaze's ``connect_with_migration_worker``):
+      * ALL RANKS deliver their OWN local FNID->UMD device map to the worker co-located on THEIR host
+        and join the cross-host all-gather that feeds rank 0's merged table -- see
+        ``_deliver_device_map_and_gather``. The worker needs every rank's local map before SET_TABLE
+        (a rank knows only its own chips; the map is never gathered worker-side).
+      * ONLY RANK 0 inits the endpoint ``MigrationLayerClient`` on the master cmd/table/resp queues,
+        builds + SET_TABLEs the merged table, and blocks on WORKER_READY -- see
+        ``_publish_table_and_wait_ready``. The resp queue is single-consumer, so exactly one rank may
+        attach (tt-blaze gates this to ``mesh_id == 0``).
+    """
+    rank = int(ttnn.distributed_context_get_rank())
+
+    # ALL RANKS: deliver this rank's local device map + join the collective all-gather (barrier).
+    stage_layout = _deliver_device_map_and_gather(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
+
+    if rank != 0:
+        logger.info(
+            f"[migration] rank {rank}: delivered its local device map + contributed its stage "
+            f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
+        )
+        return
+
+    # RANK 0 ONLY: build the merged table, init the MigrationLayerClient, SET_TABLE, wait for ready.
+    return _publish_table_and_wait_ready(
+        mesh_device=mesh_device,
+        kvpe_cache=kvpe_cache,
+        seq_len=seq_len,
+        num_layers=num_layers,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_users=num_users,
+        chunk_size_global=chunk_size_global,
+        path=path,
+        first_layer_idx=first_layer_idx,
+        num_my_layers=num_my_layers,
+        stage_layout=stage_layout,
+        wait_ready_timeout_ms=wait_ready_timeout_ms,
+    )
+
+
+def _deliver_device_map_and_gather(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
+    """ALL RANKS run this. Deliver THIS rank's local FNID->UMD device map to its co-located worker,
+    then join the collective all-gather that merges every stage into rank 0's table. Returns the
+    gathered ``stage_layout`` (used only by rank 0).
+
+    The delivery happens BEFORE the gather so every rank's map is in place before rank 0 SET_TABLEs;
+    the all-gather doubles as the barrier that guarantees it. The gather is an MPI collective -- EVERY
+    rank must reach it or the communicator deadlocks.
+    """
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    _deliver_local_device_map(device_map)
+    return allgather_kv_stage_layout(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
+
+
+def _publish_table_and_wait_ready(
+    *,
+    mesh_device,
+    kvpe_cache,
+    seq_len,
+    num_layers,
+    mesh_shape,
+    sp_axis,
+    num_users,
+    chunk_size_global,
+    path,
+    first_layer_idx,
+    num_my_layers,
+    stage_layout,
+    wait_ready_timeout_ms,
+):
+    """RANK 0 ONLY. Build + serialize the merged KV chunk table, init the endpoint
+    ``MigrationLayerClient`` on the master cmd/table/resp queues, send SET_TABLE, and block on
+    WORKER_READY (emitted once the table is applied and every rank's device map landed)."""
+    build_and_serialize_kv_chunk_table(
+        mesh_device=mesh_device,
+        kvpe_cache=kvpe_cache,
+        seq_len=seq_len,
+        num_layers=num_layers,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_users=num_users,
+        chunk_size_global=chunk_size_global,
+        path=path,
+        first_layer_idx=first_layer_idx,
+        num_my_layers=num_my_layers,
+        stage_layout=stage_layout,
+    )
+
+    client, cmd_q, table_q, resp_q = _attach_migration_client()
+    logger.info(
+        f"[migration] publishing table={path} (queues cmd={cmd_q}, table={table_q}, resp={resp_q}) "
+        f"wait_ready_ms={wait_ready_timeout_ms}"
+    )
+    client.send_kv_chunk_table(path)
+    client.wait_ready(wait_ready_timeout_ms)
+    logger.info(f"[migration] WORKER_READY: layers={num_layers} slots={num_users} table={path}")
+
+    return client
+
+
+def _host_tag_int():
+    """Per-host stable 31-bit id (crc32 of hostname, masked to fit the signed-int32 allgather).
+
+    Ranks on the same physical host produce the SAME value; different hosts (almost certainly)
+    differ. ``allgather_int`` is the only collective primitive exposed and it carries a signed
+    32-bit int, so a hostname STRING cannot be gathered directly — we gather this tag instead and
+    rebuild a stable per-host string ``host-{tag:08x}`` on every rank (matching tt-blaze's
+    migration_table_hook convention). A host owns multiple mesh rows but a given row never spans
+    hosts, so one tag per owning rank correctly groups every FNID to its worker.
+    """
+    return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
+
+
+def allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
+    """COLLECTIVE (all ranks): all-gather each rank's pipeline-STAGE layout so one merged table can
+    span every layer across every host -- tt-blaze's layer->mesh merge strategy.
+
+    In this pipeline-parallel deployment each rank owns a contiguous LAYER range
+    ``[first_layer_idx, first_layer_idx + num_my_layers)`` and holds the KV for those layers across
+    its FULL mesh (all SP rows x TP cols). A migration worker needs ONE table covering every layer,
+    but ``mesh_device``/``buffer_address()`` only expose THIS rank's mesh + KV base. So every rank
+    contributes, via ``allgather_int``:
+
+      * its layer range ``(first_layer_idx, num_my_layers)`` -- the analog of tt-blaze's my_layer_id
+      * KV-cache base address (64-bit, split lo/hi for the 32-bit int gather)
+      * usable DRAM bank count (harvested parts differ, so gather it rather than assume)
+      * a per-host tag (see :func:`_host_tag_int`)
+      * the ``(mesh_id, chip_id)`` of every ``(row, col)`` fabric node in its FULL mesh
+
+    EVERY rank must call this with identical ``mesh_shape`` (the per-(row,col) loop must be symmetric
+    for the collective to line up). Returns a per-rank list of stage dicts:
+    ``{rank, first_layer, count, base_addr, num_banks, host_tag, fnids[row][col]}``.
+    """
+    rows = mesh_shape[0]
+    cols = mesh_shape[1]
+    base_addr = int(tt_kvpe_cache.buffer_address())
+    num_banks = get_num_dram_banks(mesh_device)
+
+    all_first = ttnn.distributed_context_allgather_int(int(first_layer_idx))
+    all_count = ttnn.distributed_context_allgather_int(int(num_my_layers))
+    all_lo = ttnn.distributed_context_allgather_int(base_addr & 0xFFFFFFFF)
+    all_hi = ttnn.distributed_context_allgather_int((base_addr >> 32) & 0xFFFFFFFF)
+    all_banks = ttnn.distributed_context_allgather_int(int(num_banks))
+    all_host = ttnn.distributed_context_allgather_int(_host_tag_int())
+
+    # Each rank enumerates its FULL mesh (every SP row x TP col) and gathers (mesh_id, chip_id) per
+    # coord -- unlike the layers, the whole mesh belongs to this rank's stage, so no row-splitting.
+    all_mesh = [[None] * cols for _ in range(rows)]
+    all_chip = [[None] * cols for _ in range(rows)]
+    for r in range(rows):
+        for c in range(cols):
+            fid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
+            all_mesh[r][c] = ttnn.distributed_context_allgather_int(int(fid.mesh_id))
+            all_chip[r][c] = ttnn.distributed_context_allgather_int(int(fid.chip_id))
+
+    size = len(all_lo)
+    stages = []
+    for rk in range(size):
+        base = ((all_hi[rk] & 0xFFFFFFFF) << 32) | (all_lo[rk] & 0xFFFFFFFF)
+        fnids = [
+            [ttnn.FabricNodeId(ttnn.MeshId(all_mesh[r][c][rk]), all_chip[r][c][rk]) for c in range(cols)]
+            for r in range(rows)
+        ]
+        stages.append(
+            {
+                "rank": rk,
+                "first_layer": all_first[rk],
+                "count": all_count[rk],
+                "base_addr": base,
+                "num_banks": all_banks[rk],
+                "host_tag": all_host[rk],
+                "fnids": fnids,
+            }
+        )
+    return stages
+
+
+def get_num_dram_banks(mesh_device):
+    """Usable DRAM banks on this device. Full Blackhole = 8; harvested parts expose fewer (e.g. 7).
+
+    The KV cache ND-shards round-robin across these banks and the disaggregation address table replays
+    that exact striping (`curr_bank_id = (curr_bank_id + 1) % num_banks`), so both MUST derive the count
+    from the same device. dram_grid_size().x is the number of DRAM cores/banks the device exposes."""
+    return mesh_device.dram_grid_size().x
