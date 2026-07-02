@@ -417,7 +417,13 @@ ProgramDescriptor create_single_tile_descriptor(
         }
 
         writer_desc.emplace_runtime_args(
-            core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes});
+            core,
+            {dst_buffer,
+             num_rows_per_core * Wt,
+             num_tiles_written + operation_attributes.dst_tile_offset,
+             cos_sin_offset,
+             Wt,
+             Wbytes});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
@@ -853,8 +859,16 @@ ProgramDescriptor create_multi_tile_descriptor(
                  cos_sin_start_id});
         }
 
+        // Pi0.5: dst_tile_offset shifts the write start so rotated tiles land at an offset
+        // in a pre-allocated output tensor (e.g. rotary_embedding_to_cache writes K at prefix_len).
         writer_desc.emplace_runtime_args(
-            core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes});
+            core,
+            {dst_buffer,
+             num_rows_per_core * Wt,
+             num_tiles_written + operation_attributes.dst_tile_offset,
+             cos_sin_offset,
+             Wt,
+             Wbytes});
         num_tiles_written += num_rows_per_core * Wt;
     }
 

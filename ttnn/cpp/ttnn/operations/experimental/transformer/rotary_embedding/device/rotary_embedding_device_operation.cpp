@@ -140,13 +140,20 @@ TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
 
 Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // If caller provided an output tensor (e.g., KV cache for fused rotary→cache write), reuse it
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value();
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 ttsl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // dst_tile_offset is excluded: override_runtime_arguments updates the runtime arg,
+    // so different offsets share the same compiled program.
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingDeviceOperation>(
-        args.seq_len, args.output_mem_config, tensor_args.input, tensor_args.cos, tensor_args.sin);
+        args.seq_len, args.output_mem_config,
+        tensor_args.input, tensor_args.cos, tensor_args.sin, tensor_args.output_tensor.has_value());
     return hash;
 }
 
@@ -161,7 +168,9 @@ Tensor rotary_embedding(
     uint32_t seq_len,
     std::optional<uint32_t> token_idx,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& output_tensor,
+    uint32_t dst_tile_offset) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -169,8 +178,10 @@ Tensor rotary_embedding(
         .token_idx = token_idx,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
+        .dst_tile_offset = dst_tile_offset,
     };
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .cos = cos, .sin = sin};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input, .cos = cos, .sin = sin, .output_tensor = output_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -36,5 +36,7 @@ Tensor rotary_embedding(
     uint32_t seq_len,
     std::optional<uint32_t> token_idx,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    uint32_t dst_tile_offset = 0);
 }  // namespace ttnn::prim
