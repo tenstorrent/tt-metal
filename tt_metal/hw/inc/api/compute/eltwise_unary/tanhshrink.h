@@ -5,9 +5,9 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_tanhshrink.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
