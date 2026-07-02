@@ -198,11 +198,11 @@ void kernel_main() {
 #else
     uint32_t l1_write_addr_in1;
 
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+    [[maybe_unused]] const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 #endif  // IN1_SHARDED
 
     //  WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    [[maybe_unused]] const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");

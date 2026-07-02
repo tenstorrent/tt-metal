@@ -82,7 +82,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<9>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     const auto src_a = TensorAccessor(src_args, src_addr);
     const auto src_stats = TensorAccessor(stats_args, stats_addr);

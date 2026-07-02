@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
     // Run-time arguments
     uint32_t argidx = 0;
