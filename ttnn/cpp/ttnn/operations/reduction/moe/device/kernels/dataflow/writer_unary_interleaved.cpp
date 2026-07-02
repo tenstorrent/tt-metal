@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
@@ -31,7 +31,7 @@ void kernel_main() {
     const auto interleaved_accessor0 = TensorAccessor(out_args, dst_addr0);
 
     Noc noc;
-    CircularBuffer cb_out(out_cb_index);
+    DataflowBuffer cb_out(out_cb_index);
 
     uint32_t tile_id = 0;
     cb_out.wait_front(Ht * Kt);

@@ -14,7 +14,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 
 void kernel_main() {
@@ -41,7 +41,7 @@ void kernel_main() {
 
     // Build NOC address for the remote input storage core
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(cb_id_in0);
     UnicastEndpoint src_core;
 
     // Process each batch

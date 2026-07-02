@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 #include <cstdint>
@@ -33,16 +33,16 @@ void kernel_main() {
     const auto s = TensorAccessor(s_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
-    const uint32_t tile_bytes_in0 = cb_in0.get_tile_size();
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in1(cb_id_in1);
+    const uint32_t tile_bytes_in0 = cb_in0.get_entry_size();
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
     constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(4);
     const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
-    const uint32_t tile_bytes_in1 = cb_in1.get_tile_size();
+    const uint32_t tile_bytes_in1 = cb_in1.get_entry_size();
 #endif  // not GENERATE_INDICES
 
     for (uint32_t i = start_ht; i < Ht; ++i) {

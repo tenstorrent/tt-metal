@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "../../../device/kernels/accumulation_common.hpp"
 
@@ -34,7 +34,7 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr);
 
     Noc noc;
-    CircularBuffer cb_dst(dst_cb_idx);
+    DataflowBuffer cb_dst(dst_cb_idx);
 
     //-------------------------------------------------------------------------
     // Main loop - pull pages from dst_cb and push to dst

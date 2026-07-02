@@ -7,7 +7,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "topk_common_funcs.hpp"
 
@@ -125,10 +125,10 @@ void kernel_main() {
     compute_kernel_hw_startup(input_cb_index, index_cb_index, input_transposed_cb_index);
     ckernel::topk_tile_init();
 
-    CircularBuffer input_transposed_cb(input_transposed_cb_index);
-    CircularBuffer index_transposed_cb(index_transposed_cb_index);
-    CircularBuffer values_cb(values_cb_index);
-    CircularBuffer output_ind_cb(output_ind_cb_index);
+    DataflowBuffer input_transposed_cb(input_transposed_cb_index);
+    DataflowBuffer index_transposed_cb(index_transposed_cb_index);
+    DataflowBuffer values_cb(values_cb_index);
+    DataflowBuffer output_ind_cb(output_ind_cb_index);
 
     bool switch_dir = (K == 64);
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);

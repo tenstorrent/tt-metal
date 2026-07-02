@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
@@ -56,26 +56,26 @@ template <
     typename input_policy,
     typename... AdditionalCBs>
 inline void accumulate_compute_loop(
-    CircularBuffer& cb_in,
-    CircularBuffer& cb_scalar,
-    CircularBuffer& cb_out,
+    DataflowBuffer& cb_in,
+    DataflowBuffer& cb_scalar,
+    DataflowBuffer& cb_out,
     uint32_t num_tiles,
     uint32_t block_size,
     bool last_tile_partial,
     AdditionalCBs&... cb_additional) {
     static_assert(
-        (std::conjunction_v<std::is_same<std::remove_reference_t<AdditionalCBs>, CircularBuffer>...>),
-        "All additional CBs must be CircularBuffer&");
+        (std::conjunction_v<std::is_same<std::remove_reference_t<AdditionalCBs>, DataflowBuffer>...>),
+        "All additional CBs must be DataflowBuffer&");
 
     constexpr bool pop_input = input_policy::pop;
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
-    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, last_tile_partial](CircularBuffer& cb) {
+    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, last_tile_partial](DataflowBuffer& cb) {
         constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
         if constexpr (swap_operands) {
-            reconfig_data_format(cb_scalar.get_cb_id(), cb.get_cb_id());
+            reconfig_data_format(cb_scalar.get_id(), cb.get_id());
         }
-        reduce_init<reduce_type, reduce_dim>(cb.get_cb_id(), cb_scalar.get_cb_id(), cb_out.get_cb_id());
+        reduce_init<reduce_type, reduce_dim>(cb.get_id(), cb_scalar.get_id(), cb_out.get_id());
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
@@ -85,7 +85,7 @@ inline void accumulate_compute_loop(
                 // If it's the last tile and it's partial, use the second tile in cb_scalar
                 const auto scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
                 reduce_tile<reduce_type, reduce_dim>(
-                    cb.get_cb_id(), cb_scalar.get_cb_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
+                    cb.get_id(), cb_scalar.get_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
                 cb.pop_front(curr_block_size);
@@ -99,7 +99,7 @@ inline void accumulate_compute_loop(
     // Accumulate any additional CBs
     constexpr uint32_t num_additional_cbs = sizeof...(cb_additional);
     if constexpr (num_additional_cbs > 0) {
-        CircularBuffer* additional_cbs_array[num_additional_cbs] = {(&cb_additional)...};
+        DataflowBuffer* additional_cbs_array[num_additional_cbs] = {(&cb_additional)...};
 
         for (uint32_t i = 0; i < num_additional_cbs; i++) {
             accumulate_cb(*additional_cbs_array[i]);
@@ -107,7 +107,7 @@ inline void accumulate_compute_loop(
     }
 
     reduce_uninit();
-    reconfig_data_format(cb_in.get_cb_id(), cb_scalar.get_cb_id());
+    reconfig_data_format(cb_in.get_id(), cb_scalar.get_id());
 }
 
 }  // namespace detail
@@ -154,9 +154,9 @@ template <
     typename Epilogue = decltype(detail::no_op),
     typename... AdditionalCBs>
 inline void row_wise_accumulate_with_epilogue(
-    CircularBuffer& cb_in,
-    CircularBuffer& cb_scalar,
-    CircularBuffer& cb_out,
+    DataflowBuffer& cb_in,
+    DataflowBuffer& cb_scalar,
+    DataflowBuffer& cb_out,
     uint32_t num_tiles,
     uint32_t block_size,
     uint32_t N,
@@ -169,7 +169,7 @@ inline void row_wise_accumulate_with_epilogue(
     const auto last_tile_partial = N % tile_width > 0;
     const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
     cb_scalar.wait_front(num_scaler_tiles_needed);
-    reconfig_data_format(cb_in.get_cb_id(), cb_scalar.get_cb_id());
+    reconfig_data_format(cb_in.get_id(), cb_scalar.get_id());
     tile_regs_acquire();
 
     detail::accumulate_compute_loop<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy>(
@@ -181,8 +181,8 @@ inline void row_wise_accumulate_with_epilogue(
     tile_regs_wait();
 
     cb_out.reserve_back(1);
-    pack_reconfig_data_format(cb_out.get_cb_id());
-    pack_tile(detail::dst0, cb_out.get_cb_id());
+    pack_reconfig_data_format(cb_out.get_id());
+    pack_tile(detail::dst0, cb_out.get_id());
     tile_regs_release();
     cb_out.push_back(1);
 
@@ -217,9 +217,9 @@ template <
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
-    CircularBuffer& cb_in,
-    CircularBuffer& cb_scalar,
-    CircularBuffer& cb_out,
+    DataflowBuffer& cb_in,
+    DataflowBuffer& cb_scalar,
+    DataflowBuffer& cb_out,
     uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size,
@@ -257,10 +257,10 @@ template <
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean_with_pre_add(
-    CircularBuffer& cb_in0,
-    CircularBuffer& cb_in1,
-    CircularBuffer& cb_scalar,
-    CircularBuffer& cb_out,
+    DataflowBuffer& cb_in0,
+    DataflowBuffer& cb_in1,
+    DataflowBuffer& cb_scalar,
+    DataflowBuffer& cb_out,
     uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size,

@@ -111,10 +111,10 @@ void kernel_main() {
 
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced_id);
 
-    CircularBuffer cb_eps(cb_eps_id);
-    CircularBuffer cb_stats(cb_stats_id);
-    CircularBuffer cb_stats_reduced(cb_stats_reduced_id);
-    CircularBuffer cb_recip_sqrt_var(cb_recip_sqrt_var_id);
+    DataflowBuffer cb_eps(cb_eps_id);
+    DataflowBuffer cb_stats(cb_stats_id);
+    DataflowBuffer cb_stats_reduced(cb_stats_reduced_id);
+    DataflowBuffer cb_recip_sqrt_var(cb_recip_sqrt_var_id);
 
     cb_eps.wait_front(1);  // comes from the reader
 

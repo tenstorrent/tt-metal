@@ -10,7 +10,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_tile.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -21,7 +21,7 @@ enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 template <typename TensorAccessorType>
 void read_block_from_dram(
     const Noc& noc,
-    CircularBuffer& cb,
+    DataflowBuffer& cb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
@@ -120,9 +120,9 @@ void kernel_main() {
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 
     Noc noc;
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_sync(sync_cb);
-    CircularBuffer cb_sync2(sync_cb2);
+    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_sync(sync_cb);
+    DataflowBuffer cb_sync2(sync_cb2);
 
     uint32_t in1_shard_width_offset_bytes = 0;
     uint32_t in1_dram_shard_block_size_bytes = 0;

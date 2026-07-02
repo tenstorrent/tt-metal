@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -28,7 +28,7 @@ void kernel_main() {
     const uint32_t flip = get_arg_val<uint32_t>(7);
 
     Noc noc;
-    CircularBuffer cb_in_obj(CB_IN);
+    DataflowBuffer cb_in_obj(CB_IN);
 
     const uint32_t ublock_size_bytes = get_tile_size(CB_IN);
     const uint32_t input_tile_bytes = ublock_size_bytes;

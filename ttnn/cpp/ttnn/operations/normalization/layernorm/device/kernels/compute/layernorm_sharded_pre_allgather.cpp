@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #ifdef DO_COL_MASK
 #include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
@@ -57,7 +57,7 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in_id = cb_in0;
 #endif
-    CircularBuffer cb_in(cb_in_id);
+    DataflowBuffer cb_in(cb_in_id);
     constexpr uint32_t cb_scaler_id = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global_id = tt::CBIndex::c_4;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
@@ -73,14 +73,14 @@ void kernel_main() {
 #ifdef DO_COL_MASK
     // Writer-generated column mask (1.0 valid / 0.0 padding)
     constexpr uint32_t cb_col_mask_packed_id = tt::CBIndex::c_19;
-    CircularBuffer cb_col_mask_packed(cb_col_mask_packed_id);
+    DataflowBuffer cb_col_mask_packed(cb_col_mask_packed_id);
 #endif
 
-    CircularBuffer cb_scaler(cb_scaler_id);
-    CircularBuffer cb_x2(cb_x2_id);
-    CircularBuffer cb_ex_partial2(cb_ex_partial2_id);
-    CircularBuffer cb_scaler_global(cb_scaler_global_id);
-    CircularBuffer cb_ex_external2(cb_ex_external2_id);
+    DataflowBuffer cb_scaler(cb_scaler_id);
+    DataflowBuffer cb_x2(cb_x2_id);
+    DataflowBuffer cb_ex_partial2(cb_ex_partial2_id);
+    DataflowBuffer cb_scaler_global(cb_scaler_global_id);
+    DataflowBuffer cb_ex_external2(cb_ex_external2_id);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -265,7 +265,7 @@ void kernel_main() {
         reconfig_data_format(cb_scaler_global_id, cb_ex_external2_id);
         pack_reconfig_data_format(cb_reduction_out);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2_id, cb_scaler_global_id, cb_reduction_out);
-        CircularBuffer(cb_reduction_out)
+        DataflowBuffer(cb_reduction_out)
             .reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
@@ -291,7 +291,7 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        CircularBuffer(cb_reduction_out)
+        DataflowBuffer(cb_reduction_out)
             .push_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index throughout the global reduce above without being popped. Pop it once here, inside

@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using
@@ -188,27 +188,27 @@ void kernel_main() {
     constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
 
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_xmm(cb_xmm_id);
-    CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    CircularBuffer cb_ex(cb_ex_id);
-    CircularBuffer cb_ex_external(cb_ex_external_id);
-    CircularBuffer cb_ex_global(cb_ex_global_id);
-    CircularBuffer cb_transpose(cb_transpose_id);
-    CircularBuffer cb_fusion(cb_fusion_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_xmm(cb_xmm_id);
+    DataflowBuffer cb_ex_partial(cb_ex_partial_id);
+    DataflowBuffer cb_ex(cb_ex_id);
+    DataflowBuffer cb_ex_external(cb_ex_external_id);
+    DataflowBuffer cb_ex_global(cb_ex_global_id);
+    DataflowBuffer cb_transpose(cb_transpose_id);
+    DataflowBuffer cb_fusion(cb_fusion_id);
+    DataflowBuffer cb_out(cb_out_id);
 
     constexpr uint32_t cb_im_id = (do_gamma | do_beta) ? cb_x : cb_out_id;
-    CircularBuffer cb_im(cb_im_id);
+    DataflowBuffer cb_im(cb_im_id);
     constexpr uint32_t cb_outgamma_id = do_beta ? cb_fusion_id : cb_out_id;
-    CircularBuffer cb_outgamma(cb_outgamma_id);
+    DataflowBuffer cb_outgamma(cb_outgamma_id);
 #ifdef FUSE_PRE_ADD
     constexpr uint32_t cb_in_id = cb_x;
 #else
     constexpr uint32_t cb_in_id = cb_in0;
 #endif
-    CircularBuffer cb_in(cb_in_id);
+    DataflowBuffer cb_in(cb_in_id);
 
     // Welford-fp32 alias of cb_in_id. When welford_fp32_alias is true, cb_x_welford_named points
     // to c_29, a separate buffer index sharing cb_in_id's SRAM but configured with UnpackToDestFp32,
@@ -218,7 +218,7 @@ void kernel_main() {
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr auto cb_x_welford_named = get_named_compile_time_arg_val("cb_x_welford");
     constexpr auto cb_x_welford_id = welford_fp32_alias ? cb_x_welford_named : cb_in_id;
-    CircularBuffer cb_x_welford(cb_x_welford_id);
+    DataflowBuffer cb_x_welford(cb_x_welford_id);
 
     // ---------------------------------------------------------------------------
     // Derived quantities

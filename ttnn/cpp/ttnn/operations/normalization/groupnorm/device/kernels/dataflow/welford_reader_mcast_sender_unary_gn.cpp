@@ -8,7 +8,7 @@
 #include "welford_combine.h"
 #include "noc_parameters.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -136,13 +136,13 @@ void kernel_main() {
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
-    CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    CircularBuffer cb_ex_global(cb_ex_global_id);
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_in0_welford(cb_in0_welford_id);
-    CircularBuffer cb_repack(cb_repack_id);
-    CircularBuffer cb_repack_out(cb_repack_out_id);
-    CircularBuffer cb_out0(cb_out0_id);
+    DataflowBuffer cb_ex_partial(cb_ex_partial_id);
+    DataflowBuffer cb_ex_global(cb_ex_global_id);
+    DataflowBuffer cb_in0(cb_in0_id);
+    DataflowBuffer cb_in0_welford(cb_in0_welford_id);
+    DataflowBuffer cb_repack(cb_repack_id);
+    DataflowBuffer cb_repack_out(cb_repack_out_id);
+    DataflowBuffer cb_out0(cb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     constexpr uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);

@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(cb_id_in0);
 
 #ifdef IN0_SHARDED
     const uint32_t in0_num_tiles = batch * num_blocks * in0_block_h * in0_block_w;

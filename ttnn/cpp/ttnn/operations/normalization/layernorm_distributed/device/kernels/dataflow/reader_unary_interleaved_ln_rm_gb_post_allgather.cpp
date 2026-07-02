@@ -14,6 +14,7 @@
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -116,13 +117,13 @@ void kernel_main() {
     generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
 
     Noc noc;
-    CircularBuffer cb_inp_buf(cb_inp);
-    CircularBuffer cb_stats_buf(cb_stats);
+    DataflowBuffer cb_inp_buf(cb_inp);
+    DataflowBuffer cb_stats_buf(cb_stats);
 #ifdef FUSE_GAMMA
-    CircularBuffer cb_gamma_buf(cb_gamma);
+    DataflowBuffer cb_gamma_buf(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    CircularBuffer cb_beta_buf(cb_beta);
+    DataflowBuffer cb_beta_buf(cb_beta);
 #endif
 
     uint32_t inp_tile_idx = tile_offset;

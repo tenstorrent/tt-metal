@@ -18,7 +18,7 @@
 #include "api/compute/transpose.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -39,16 +39,16 @@ template <
     uint32_t W,
     uint32_t blk>
 void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_inb_obj(cb_inb);
-    CircularBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
-    CircularBuffer cb_ex_obj(cb_ex);
-    CircularBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_inb_obj(cb_inb);
+    DataflowBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
+    DataflowBuffer cb_ex_obj(cb_ex);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
     // When welford_state_fp32_alias is true these are c_30/c_31; distinct buffer indices
     // sharing cb_ex/cb_ex2's SRAM allocations but configured with UnpackToDestFp32.
     // When false, cb_ex_welford == cb_ex and cb_ex2_welford == cb_ex2.
-    CircularBuffer cb_ex_welford_obj(cb_ex_welford);
-    CircularBuffer cb_ex2_welford_obj(cb_ex2_welford);
+    DataflowBuffer cb_ex_welford_obj(cb_ex_welford);
+    DataflowBuffer cb_ex2_welford_obj(cb_ex2_welford);
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
@@ -230,8 +230,8 @@ template <
     uint32_t W,
     uint32_t blk>
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_x_welford_obj(cb_x_welford);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_x_welford_obj(cb_x_welford);
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
@@ -358,15 +358,15 @@ void kernel_main() {
     constexpr auto cb_interm_pre_add = get_named_compile_time_arg_val("cb_x");         // intermediate for fused pre-add
     constexpr auto cb_reciprocals = get_named_compile_time_arg_val("cb_reciprocals");  // Pre-computed reciprocals
 
-    CircularBuffer cb_eps_obj(cb_eps);
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_inb_obj(cb_inb);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_ex_obj(cb_ex);
-    CircularBuffer cb_ex2_obj(cb_ex2);
-    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    DataflowBuffer cb_eps_obj(cb_eps);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_inb_obj(cb_inb);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_beta_obj(cb_beta);
+    DataflowBuffer cb_ex_obj(cb_ex);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer cb_ex2pe_obj(cb_ex2pe);
 
     constexpr uint32_t onetile = 1;
 
@@ -513,7 +513,7 @@ void kernel_main() {
         // reader_unary_interleaved_ln_large_tensor_welford.cpp); compute pops it here to match
         // cb_in's pop. Both share SRAM but have independent state; popping cb_x_welford keeps it aligned
         // with cb_in so the next NCHt Welford iteration reads from the correct SRAM offset after CB wrap.
-        CircularBuffer cb_x_welford_obj_eltwise(cb_x_welford);
+        DataflowBuffer cb_x_welford_obj_eltwise(cb_x_welford);
 
         for (auto block : generic::blocks(Wt, blk)) {
             // Last block may only be partially-filled,
@@ -567,12 +567,12 @@ void kernel_main() {
 
             pack_reconfig_data_format(cb_xmm);
             // Sync with writer on full blocks
-            CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
+            DataflowBuffer(cb_xmm).reserve_back(block.full_block_size());
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, cb_xmm);
             }
-            CircularBuffer(cb_xmm).push_back(block.full_block_size());
+            DataflowBuffer(cb_xmm).push_back(block.full_block_size());
             tile_regs_release();
 
             if constexpr (do_gamma == 1) {
@@ -580,14 +580,14 @@ void kernel_main() {
                 reconfig_data_format(cb_xmm, cb_gamma);
                 tile_regs_acquire();
                 cb_gamma_obj.wait_front(block.full_block_size());
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
+                DataflowBuffer(cb_xmm).wait_front(block.full_block_size());
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
                 }
                 tile_regs_commit();
                 cb_gamma_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
+                DataflowBuffer(cb_xmm).pop_front(block.full_block_size());
 
                 if constexpr (!do_beta) {
                     pack_reconfig_data_format(cb_out);
@@ -600,11 +600,11 @@ void kernel_main() {
                     }
                     cb_out_obj.push_back(block.full_block_size());
                 } else {
-                    CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
+                    DataflowBuffer(cb_xmm).reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_xmm);
                     }
-                    CircularBuffer(cb_xmm).push_back(block.full_block_size());
+                    DataflowBuffer(cb_xmm).push_back(block.full_block_size());
                 }
                 tile_regs_release();
             }
@@ -614,14 +614,14 @@ void kernel_main() {
                 tile_regs_acquire();
                 reconfig_data_format(cb_xmm, cb_beta);
                 add_bcast_rows_init_short(cb_xmm, cb_beta);
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
+                DataflowBuffer(cb_xmm).wait_front(block.full_block_size());
                 cb_beta_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
                 }
                 tile_regs_commit();
                 cb_beta_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
+                DataflowBuffer(cb_xmm).pop_front(block.full_block_size());
 
                 pack_reconfig_data_format(cb_out);
                 cb_out_obj.reserve_back(block.full_block_size());

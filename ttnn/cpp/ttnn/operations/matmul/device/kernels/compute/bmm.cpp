@@ -7,7 +7,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 using std::uint32_t;
 
@@ -28,9 +28,9 @@ void kernel_main() {
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
-    CircularBuffer in0_cb(cb_in0);
-    CircularBuffer in1_cb(cb_in1);
-    CircularBuffer out_cb(cb_out);
+    DataflowBuffer in0_cb(cb_in0);
+    DataflowBuffer in1_cb(cb_in1);
+    DataflowBuffer out_cb(cb_out);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
     matmul_init(cb_in0, cb_in1);

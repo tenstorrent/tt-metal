@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 
@@ -85,9 +85,9 @@ void kernel_main() {
     const auto& global_reduce_sender =
         [&](const uint32_t cb_partial_id, const uint32_t cb_external_id, const uint32_t cb_reduce_first_stage_id)
             __attribute__((always_inline)) {
-                CircularBuffer cb_partial_obj(cb_partial_id);
-                CircularBuffer cb_external_obj(cb_external_id);
-                CircularBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
+                DataflowBuffer cb_partial_obj(cb_partial_id);
+                DataflowBuffer cb_external_obj(cb_external_id);
+                DataflowBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
 
                 uint32_t num_tiles_per_partial_result = 2;
                 if constexpr (rms_norm) {

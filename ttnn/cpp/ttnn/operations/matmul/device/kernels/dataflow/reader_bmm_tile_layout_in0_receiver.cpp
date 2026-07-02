@@ -9,7 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 void kernel_main() {
     // in0 mcast args
@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(cb_id_in0);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 

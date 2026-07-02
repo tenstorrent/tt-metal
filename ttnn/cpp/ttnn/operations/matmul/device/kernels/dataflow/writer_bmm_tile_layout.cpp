@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -36,7 +36,7 @@ void kernel_main() {
     const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer cb_out(cb_id_out0);
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {
@@ -53,7 +53,7 @@ void kernel_main() {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; w++) {
                         noc.async_write(
-                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            cb_out,
                             s,
                             single_tile_size_bytes,
                             {.offset_bytes = out_read_offset},

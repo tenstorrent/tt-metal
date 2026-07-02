@@ -8,7 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -192,12 +192,12 @@ void kernel_main() {
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
 
     Noc noc;
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_out(cb_id_out0);
     Semaphore<> sender_sem(get_compile_time_arg_val(10));
     Semaphore<> receiver_sem(get_compile_time_arg_val(11));
 #ifdef FUSE_BIAS
-    CircularBuffer cb_in3(cb_id_in3);
+    DataflowBuffer cb_in3(cb_id_in3);
 #endif
 
 //  READER
@@ -218,7 +218,7 @@ void kernel_main() {
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
-    CircularBuffer cb_sparsity(cb_id_sparsity);
+    DataflowBuffer cb_sparsity(cb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
@@ -625,8 +625,7 @@ void kernel_main() {
                                 for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                     if (bw < num_blocks_w_dim_) {
                                         noc.async_write(
-                                            use<CircularBuffer::AddrSelector::READ_PTR>(
-                                                cb_out),
+                                            cb_out,
                                             s,
                                             output_single_tile_size_bytes,
                                             {.offset_bytes = out_read_offset},

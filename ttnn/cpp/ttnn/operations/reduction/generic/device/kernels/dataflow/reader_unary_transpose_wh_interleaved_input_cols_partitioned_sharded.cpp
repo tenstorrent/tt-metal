@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -44,8 +44,8 @@ void kernel_main() {
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in1(cb_id_in1);
 
     cb_in1.reserve_back(num_tiles);
     uint32_t base_l1_addr = cb_in1.get_write_ptr();

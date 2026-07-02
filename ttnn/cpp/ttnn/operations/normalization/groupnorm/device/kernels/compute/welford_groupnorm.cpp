@@ -19,7 +19,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     /*
@@ -179,19 +179,19 @@ void kernel_main() {
     constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_eps(cb_eps_id);
-    CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    CircularBuffer cb_ex_global(cb_ex_global_id);
-    CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_in(cb_in_id);
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_in0_welford(cb_in0_welford_id);
-    CircularBuffer cb_input_mask(cb_input_mask_id);
-    CircularBuffer cb_out(cb_out_id);
-    CircularBuffer cb_x(cb_x_id);
-    CircularBuffer cb_xmm(cb_xmm_id);
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_eps(cb_eps_id);
+    DataflowBuffer cb_ex2pe(cb_ex2pe_id);
+    DataflowBuffer cb_ex_global(cb_ex_global_id);
+    DataflowBuffer cb_ex_partial(cb_ex_partial_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_in(cb_in_id);
+    DataflowBuffer cb_in0(cb_in0_id);
+    DataflowBuffer cb_in0_welford(cb_in0_welford_id);
+    DataflowBuffer cb_input_mask(cb_input_mask_id);
+    DataflowBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_x(cb_x_id);
+    DataflowBuffer cb_xmm(cb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN

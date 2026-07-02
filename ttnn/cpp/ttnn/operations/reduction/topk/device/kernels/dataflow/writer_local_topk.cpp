@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 
@@ -32,14 +32,14 @@ void kernel_main() {
     Semaphore<> receiver_sem(receiver_sem_id);
     Semaphore<> sender_sem(sender_sem_id);
     UnicastEndpoint remote;
-    CircularBuffer values_cb(values_cb_index);
-    CircularBuffer indices_cb(output_ind_cb_index);
-    CircularBuffer final_values_cb(final_values_cb_index);
-    CircularBuffer final_indices_cb(final_indices_cb_index);
+    DataflowBuffer values_cb(values_cb_index);
+    DataflowBuffer indices_cb(output_ind_cb_index);
+    DataflowBuffer final_values_cb(final_values_cb_index);
+    DataflowBuffer final_indices_cb(final_indices_cb_index);
 
     // Memory transfer configuration
-    const uint32_t tile_bytes_values = values_cb.get_tile_size();
-    const uint32_t tile_bytes_ind = indices_cb.get_tile_size();
+    const uint32_t tile_bytes_values = values_cb.get_entry_size();
+    const uint32_t tile_bytes_ind = indices_cb.get_entry_size();
 
     // Calculate target addresses in final core's L1 memory
     const uint32_t final_values_cb_addr = final_values_cb.get_write_ptr();

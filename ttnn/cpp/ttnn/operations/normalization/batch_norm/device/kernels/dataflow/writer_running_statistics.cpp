@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -41,23 +41,23 @@ void kernel_main() {
         get_compile_time_arg_val(old_running_var_args.next_compile_time_args_offset()) == 1;
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_dst(cb_id_dst);
-    CircularBuffer cb_old_mean(cb_id_old_running_mean);
-    CircularBuffer cb_old_var(cb_id_old_running_var);
-    CircularBuffer cb_new_mean(cb_id_updated_running_mean);
-    CircularBuffer cb_new_var(cb_id_updated_running_var);
+    DataflowBuffer cb_src(cb_id_src);
+    DataflowBuffer cb_dst(cb_id_dst);
+    DataflowBuffer cb_old_mean(cb_id_old_running_mean);
+    DataflowBuffer cb_old_var(cb_id_old_running_var);
+    DataflowBuffer cb_new_mean(cb_id_updated_running_mean);
+    DataflowBuffer cb_new_var(cb_id_updated_running_var);
 
-    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const uint32_t src_tile_bytes = cb_src.get_entry_size();
     const auto src = TensorAccessor(src_args, src_addr);
 
-    const uint32_t dst_tile_bytes = cb_dst.get_tile_size();
+    const uint32_t dst_tile_bytes = cb_dst.get_entry_size();
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
-    const uint32_t old_running_mean_tile_bytes = cb_old_mean.get_tile_size();
+    const uint32_t old_running_mean_tile_bytes = cb_old_mean.get_entry_size();
     const auto old_running_mean = TensorAccessor(old_running_mean_args, old_running_mean_addr);
 
-    const uint32_t old_running_var_tile_bytes = cb_old_var.get_tile_size();
+    const uint32_t old_running_var_tile_bytes = cb_old_var.get_entry_size();
     const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr);
 
     uint32_t tiles_per_batch = HtWt * C;

@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 
@@ -29,8 +29,8 @@ void kernel_main() {
 
     Noc noc;
     Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
     MulticastEndpoint mcast_ep;
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
@@ -49,7 +49,7 @@ void kernel_main() {
     };
 
     const auto& global_reduce_sender =
-        [&](CircularBuffer& cb_ex_obj, CircularBuffer& cb_ex_global_obj_inner)
+        [&](DataflowBuffer& cb_ex_obj, DataflowBuffer& cb_ex_global_obj_inner)
             __attribute__((always_inline)) {
                 uint32_t l1_read_addr_ex_global = cb_ex_global_obj_inner.get_read_ptr();
                 noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(

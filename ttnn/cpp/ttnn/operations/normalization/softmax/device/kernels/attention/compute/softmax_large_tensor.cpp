@@ -17,7 +17,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #include "api/debug/assert.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 // clang-format off
 // 3 Loops in code
@@ -75,8 +75,8 @@ void apply_fused_scale_mask(
     // Requirements:
     //   cb_length_t of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length_t
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_fused_scale_mask);
     pack_reconfig_data_format(cb_out);
     mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
@@ -106,10 +106,10 @@ void apply_fused_scale_mask(
 void apply_fused_attn_mask(
     uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk, bool do_mask) {
     auto cb_mask_padded = tt::CBIndex::c_5;
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_fused_attn_mask_obj(cb_fused_attn_mask);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_mask_padded_obj(cb_mask_padded);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_fused_attn_mask_obj(cb_fused_attn_mask);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_mask_padded_obj(cb_mask_padded);
     reconfig_data_format(cb_in, cb_fused_attn_mask);
     pack_reconfig_data_format(cb_out);
 #ifdef CAUSAL_MASK
@@ -160,9 +160,9 @@ void apply_fused_attn_mask(
 // applies pad to the last pass cb if needed
 void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     auto cb_mask_padded = tt::CBIndex::c_5;
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_mask_padded_obj(cb_mask_padded);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_mask_padded_obj(cb_mask_padded);
     reconfig_data_format(cb_in, cb_mask_padded);
     pack_reconfig_data_format(cb_out);
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
@@ -201,8 +201,8 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
     ASSERT(cb_length_t % blk == 0);
 
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 #ifdef NUMERIC_STABLE
@@ -286,9 +286,9 @@ ALWI void reduce_cb_pass(uint32_t cur_pass, bool use_prev_reduce, uint32_t cb_le
 }
 
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_recip_obj(cb_recip);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_recip_obj(cb_recip);
+    DataflowBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_recip);
     pack_reconfig_data_format(cb_out);
     cb_recip_obj.wait_front(1);
@@ -342,11 +342,11 @@ void kernel_main() {
     constexpr auto cb_recip = tt::CBIndex::c_16;
     constexpr auto cb_prev_max = tt::CBIndex::c_15;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
-    CircularBuffer cb_max_scaler_obj(cb_max_scaler);
-    CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
-    CircularBuffer cb_fused_scale_obj(cb_fused_scale);
-    CircularBuffer cb_recip_obj(cb_recip);
-    CircularBuffer cb_mask_padded_obj(cb_mask_padded);
+    DataflowBuffer cb_max_scaler_obj(cb_max_scaler);
+    DataflowBuffer cb_sum_scaler_obj(cb_sum_scaler);
+    DataflowBuffer cb_fused_scale_obj(cb_fused_scale);
+    DataflowBuffer cb_recip_obj(cb_recip);
+    DataflowBuffer cb_mask_padded_obj(cb_mask_padded);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(cb_mask_padded, cb_mask_padded);
 
@@ -406,7 +406,7 @@ void kernel_main() {
         cur_cb_length_t = cb_length_t;
 #endif
 #ifdef NUMERIC_STABLE
-        CircularBuffer(cb_max_final).wait_front(1);
+        DataflowBuffer(cb_max_final).wait_front(1);
 #endif
 
         /*
@@ -447,7 +447,7 @@ void kernel_main() {
          * --------------------------------------------------------
          * --------------------------------------------------------
          */
-        CircularBuffer(cb_sum_final).wait_front(1);
+        DataflowBuffer(cb_sum_final).wait_front(1);
 
         reconfig_data_format_srca(cb_sum_final);
         pack_reconfig_data_format(cb_sum_final, cb_recip);
@@ -455,7 +455,7 @@ void kernel_main() {
         copy_tile_init(cb_sum_final);
         copy_tile(cb_sum_final, 0, dst0);
 
-        CircularBuffer(cb_sum_final).pop_front(1);
+        DataflowBuffer(cb_sum_final).pop_front(1);
 
         recip_tile_init();
         recip_tile(dst0);
@@ -499,7 +499,7 @@ void kernel_main() {
         }
         cb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
-        CircularBuffer(cb_max_final).pop_front(1);
+        DataflowBuffer(cb_max_final).pop_front(1);
 #endif
     }
     cb_mask_padded_obj.pop_front(1);

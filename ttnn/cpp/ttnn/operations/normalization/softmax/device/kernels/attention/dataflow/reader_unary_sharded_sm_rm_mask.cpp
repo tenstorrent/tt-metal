@@ -7,6 +7,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 
@@ -23,7 +24,7 @@ void kernel_main() {
     const auto addr_mask = TensorAccessor(mask_args, mask_addr);
 
     Noc noc;
-    CircularBuffer cb_attn_obj(cb_attn);
+    DataflowBuffer cb_attn_obj(cb_attn);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(0);

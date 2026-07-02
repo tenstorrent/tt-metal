@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
@@ -62,11 +62,11 @@ void kernel_main() {
     constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 
     Noc noc;
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_out(cb_id_out);
-    CircularBuffer cb_out_reshard(cb_id_out_reshard);
+    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_out_reshard(cb_id_out_reshard);
 #ifdef FUSE_BIAS
-    CircularBuffer cb_in3(cb_id_in3);
+    DataflowBuffer cb_in3(cb_id_in3);
 #endif
 
     //  READER

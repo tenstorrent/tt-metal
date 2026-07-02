@@ -7,7 +7,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
@@ -28,10 +28,10 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_intermed0 = get_named_compile_time_arg_val("cb_intermed0");
 
-    CircularBuffer in0_cb(cb_in0);
-    CircularBuffer in1_cb(cb_in1);
-    CircularBuffer out_cb(cb_out);
-    CircularBuffer intermed0_cb(cb_intermed0);
+    DataflowBuffer in0_cb(cb_in0);
+    DataflowBuffer in1_cb(cb_in1);
+    DataflowBuffer out_cb(cb_out);
+    DataflowBuffer intermed0_cb(cb_intermed0);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_intermed0);
     matmul_init(cb_in0, cb_in1);

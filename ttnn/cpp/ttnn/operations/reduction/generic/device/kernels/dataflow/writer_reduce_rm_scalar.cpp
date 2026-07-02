@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
@@ -56,7 +56,7 @@ void reduce_rm_writer() {
     const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_tile(cb_id_tile);
+    DataflowBuffer cb_tile(cb_id_tile);
 
     if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //
