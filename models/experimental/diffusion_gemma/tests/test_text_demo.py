@@ -61,6 +61,40 @@ def test_generation_success_summary_reports_blocks_and_text_chars():
     )
 
 
+def test_run_mode_reports_selected_smoke_mode():
+    parser = text_demo.build_arg_parser()
+
+    assert text_demo._run_mode(parser.parse_args([])) == "generate"
+    assert text_demo._run_mode(parser.parse_args(["--build-only"])) == "build-only"
+    assert text_demo._run_mode(parser.parse_args(["--prefill-only"])) == "prefill-only"
+    assert text_demo._run_mode(parser.parse_args(["--adapter-only"])) == "adapter-only"
+
+
+def test_failure_summary_is_single_greppable_line():
+    parser = text_demo.build_arg_parser()
+    args = parser.parse_args(["--build-only", "--mesh", "P150x4"])
+
+    summary = text_demo._failure_summary(args, RuntimeError("boom"))
+
+    assert summary == ("DG_TEXT_DEMO_FAILURE mode=build-only mesh=P150x4 error_type=RuntimeError")
+    assert "\n" not in summary
+
+
+def test_main_logs_failure_marker_and_reraises(monkeypatch):
+    logged = {}
+
+    def fake_run(args):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(text_demo, "_run", fake_run)
+    monkeypatch.setattr(text_demo.logger, "error", lambda msg: logged.setdefault("error", msg))
+
+    with pytest.raises(RuntimeError, match="kaboom"):
+        text_demo.main(["--build-only", "--mesh", "P150x4"])
+
+    assert logged["error"] == ("DG_TEXT_DEMO_FAILURE mode=build-only mesh=P150x4 error_type=RuntimeError")
+
+
 def test_text_demo_rejects_conflicting_smoke_modes():
     parser = text_demo.build_arg_parser()
 

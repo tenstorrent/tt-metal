@@ -57,6 +57,8 @@ Dependency-ordered. RUN target: **short prompt → ≥2 committed blocks → det
 | 6 | **e2e acceptance test** — CPU HF `generate()` vs `reference/generate_blocks` token-equal is ✅; `reference/generate_blocks` can now replay fixed per-block canvases plus injected denoise noise via `make_replay_canvas_init_fn` / `make_replay_noise_fn` for device-vs-reference tests; device-vs-HF on a short prompt with injected reference noise remains | 🚧 | #47464 |
 
 > **RUN-first status (updated 2026-07-02):** the first short-prompt, small-context real-26B multi-block hardware run has passed. R-a's RUN-first mitigation is also in code: denoise is maskless by default, with explicit masks reserved for A/B tests. Next RUN hardening: keep this smoke reproducible, add a less-noisy success marker / regression target, and only then expand prompt length/context. **Do not** block on the deferred correctness track below.
+>
+> **Success/failure markers (2026-07-02):** `text_demo.py` now emits a single greppable `DG_TEXT_DEMO_SUCCESS …` line on success **and** a matching `DG_TEXT_DEMO_FAILURE mode=… mesh=… error_type=…` line on any uncaught exception (`main()` logs it then re-raises). Because the RUN-first denoise path emits expected `TT_THROW` fallback noise even on success, these two markers are the authoritative run outcome — grep them instead of scanning the fallback logs. Covered by CPU `tests/test_text_demo.py` (8 passed).
 
 #### Deferred — correctness track (NOT on the RUN critical path)
 

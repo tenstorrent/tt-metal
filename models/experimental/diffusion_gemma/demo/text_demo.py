@@ -171,6 +171,26 @@ def _generation_success_summary(generation) -> str:
     )
 
 
+def _run_mode(args) -> str:
+    if args.build_only:
+        return "build-only"
+    if args.prefill_only:
+        return "prefill-only"
+    if args.adapter_only:
+        return "adapter-only"
+    return "generate"
+
+
+def _failure_summary(args, exc: BaseException) -> str:
+    """Single-line, greppable failure marker mirroring DG_TEXT_DEMO_SUCCESS.
+
+    The RUN-first path emits noisy denoise SDPA ``TT_THROW`` fallback lines even
+    on success, so a crash is otherwise hard to distinguish from that noise. This
+    marker lets a loop/CI grep one line for the run outcome.
+    """
+    return "DG_TEXT_DEMO_FAILURE " f"mode={_run_mode(args)} " f"mesh={args.mesh} " f"error_type={type(exc).__name__}"
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DiffusionGemma text generation on a TT mesh.")
     parser.add_argument(
@@ -210,6 +230,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    try:
+        return _run(args)
+    except BaseException as exc:
+        logger.error(_failure_summary(args, exc))
+        raise
+
+
+def _run(args) -> int:
     zero_block_run = not args.build_only and (
         args.num_blocks == 0 or (args.num_blocks is None and args.max_new_tokens == 0)
     )
