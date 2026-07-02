@@ -332,14 +332,18 @@ def parametrize(**kwargs: any):
 
     if runtime_axes:
         if runtime_indices is not None:
-            _name = runtime_axes[0]
+            _combo_name = runtime_axes[0]
             _ri = runtime_indices
 
             def compile_key_fn(params):
-                combo = params[_name]
+                combo = params[_combo_name]
                 if len(combo) == 1 and isinstance(combo[0], tuple):
                     combo = combo[0]
-                return tuple(v for i, v in enumerate(combo) if i not in _ri)
+                filtered = tuple(v for i, v in enumerate(combo) if i not in _ri)
+                other = tuple(
+                    sorted((k, v) for k, v in params.items() if k != _combo_name)
+                )
+                return (filtered, other)
 
         else:
             _rt = frozenset(runtime_axes)

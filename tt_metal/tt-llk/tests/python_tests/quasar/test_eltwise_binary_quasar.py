@@ -125,7 +125,7 @@ ELTWISE_FORMATS = input_output_formats(
             dest_sync_dest_acc[1], dest_sync_dest_acc[0]
         )
     ),
-    acc_to_dest=runtime(valid_acc_to_dest),
+    acc_to_dest=valid_acc_to_dest,
     num_faces=[4],
 )
 def test_eltwise_binary(
