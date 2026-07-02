@@ -5,25 +5,16 @@
 """
 Unit tests for eltwise unary program cache behavior.
 
-Tests target potential caching issues.
-The unary operation uses 3 ProgramFactory variants:
-  - UnaryProgramFactory (interleaved)
-  - UnarySubCoreGridProgramFactory (explicit sub_core_grids)
-  - UnaryShardedProgramFactory (sharded input)
+UnaryDeviceOperation rides the default program-cache hash path.The input tensor is
+included in the key via its TensorSpec (logical shape, layout, dtype,
+memory_config), so the full tensor — including its shape — participates in the key.
 
-compute_program_hash() hashes:
-  TILE layout:  args, sub_core_grids, factory_index, input_dtype, input_memory_config, volume, layout
-  ROW_MAJOR:    args, sub_core_grids, factory_index, input_dtype, input_memory_config, padded_shape, layout
-
-Where args = entire UnaryParams (op_chain, output_dtype, output_memory_config,
-fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, sub_core_grids).
-
-override_runtime_arguments() only updates buffer addresses — shape/work
-distribution changes require separate cache entries.
-
-For TILE layout, only volume is hashed. Same volume = same num_pages = same
-work distribution, so different shapes with same volume correctly share a
-cache entry.
+Consequences:
+  - Same op + same tensor spec -> 1 cache entry (reuse).
+  - Different shapes (even with the same volume) -> separate cache entries, since
+    the logical shape is part of the hashed TensorSpec.
+  - Different op_chain / output_dtype / memory_config / sub_core_grids / worker_grid
+    -> separate cache entries (they are operation_attributes / tensor fields).
 """
 
 import pytest
@@ -73,10 +64,9 @@ def test_unary_cache_reuse_same_config(device):
     assert not torch.equal(tt_out1, tt_out2)
 
 
-def test_unary_cache_reuse_same_volume_different_shapes(device):
-    """TILE layout: same volume, different shapes -> 1 cache entry.
-    unary doesn't hash volume or shape; tile counts are runtime args,
-    so any shape with the same op/dtype/memory_config shares one entry."""
+def test_unary_cache_same_volume_different_shapes_separate_entries(device):
+    """Default cache path: the input TensorSpec (including logical shape) is part of
+    the key, so two different shapes -> 2 cache entries, even with the same volume."""
     device.cache_entries_counter.reset()
 
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 64], dtype=ttnn.float32)
@@ -85,14 +75,12 @@ def test_unary_cache_reuse_same_volume_different_shapes(device):
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 32], dtype=ttnn.float32)
     assert_equal(torch_ref2, tt_out2)
 
-    assert device.cache_entries_counter.total == 1
+    assert device.cache_entries_counter.total == 2
 
 
-def test_unary_cache_reuse_different_volumes(device):
-    """TILE layout: different volumes -> still 1 cache entry.
-    unary uses runtime tile counts (not compile-time), so different volumes
-    share the same compiled program. override_runtime_arguments handles the
-    different per-core tile distributions on cache hit."""
+def test_unary_cache_different_volumes_separate_entries(device):
+    """Default cache path: different shapes (different volumes) -> 2 cache entries,
+    since the input TensorSpec is hashed into the program-cache key."""
     device.cache_entries_counter.reset()
 
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 32], dtype=ttnn.float32)
@@ -101,7 +89,7 @@ def test_unary_cache_reuse_different_volumes(device):
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 64], dtype=ttnn.float32)
     assert_equal(torch_ref2, tt_out2)
 
-    assert device.cache_entries_counter.total == 1
+    assert device.cache_entries_counter.total == 2
 
 
 # =============================================================================
@@ -221,13 +209,14 @@ def test_unary_cache_correctness_repeated_runs(device):
 
 
 def test_unary_cache_correctness_same_volume_different_shapes(device):
-    """Same volume, different shapes all produce correct results via cache reuse."""
+    """Same volume, different shapes all produce correct results; each distinct shape
+    gets its own cache entry under the default cache path (TensorSpec is hashed)."""
     device.cache_entries_counter.reset()
     for shape in [[1, 1, 32, 64], [1, 1, 64, 32]]:
         torch_ref, tt_out = run_unary_op(device, ttnn.sqrt, shape, dtype=ttnn.float32)
         assert_with_ulp(torch_ref, tt_out, 1)
 
-    assert device.cache_entries_counter.total == 1
+    assert device.cache_entries_counter.total == 2
 
 
 # =============================================================================
