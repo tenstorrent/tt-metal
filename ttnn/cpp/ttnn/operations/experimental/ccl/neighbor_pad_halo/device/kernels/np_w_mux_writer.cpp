@@ -63,22 +63,24 @@ void kernel_main() {
         .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
         .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
 
-    // Mux connection RT args.
-    const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    // Termination coordination.
-    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    // Mux connection RT args — EXACT layout of ccl::fabric_mux_connection_rt_args (positions 0..16).
+    const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;                       // 0
+    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++) == 1;                      // 1
+    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);                                 // 2
+    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);                                 // 3
+    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);               // 4
+    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);            // 5
+    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);       // 6
+    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);               // 7
+    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);               // 8
+    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);                        // 9
+    const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));     // 10
+    const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));  // 11
+    const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));   // 12
+    const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));       // 13
+    const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));   // 14
+    const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);                     // 15
+    const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);                     // 16
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
 
@@ -98,7 +100,10 @@ void kernel_main() {
             fabric_mux_connection_info_address,
             fabric_mux_connection_handshake_address,
             fabric_mux_flow_control_address,
-            fabric_mux_buffer_index_address);
+            fabric_mux_buffer_index_address,
+            local_flow_control_address,
+            local_teardown_address,
+            local_buffer_index_address);
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
         tt::tt_fabric::fabric_client_connect(mux_connection);
