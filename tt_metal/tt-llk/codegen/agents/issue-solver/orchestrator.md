@@ -10,7 +10,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__atlassian__search, mcp__
 This orchestrator fixes an existing GitHub issue in `tt_metal/tt-llk`. It is intentionally thin:
 
 - Use the local `.claude` playbooks as the technical source of truth.
-- Keep the existing `/proj_sw/user_dev/llk_code_gen/*_issue_solver` dashboard logging shape.
+- Log to `${CODEGEN_LOGS_ROOT}/<arch>_issue_solver/<run_id>`, where `CODEGEN_LOGS_ROOT` is the shared dashboard tree `/proj_sw/user_dev/llk_code_gen` **when that path exists** (keeps the original dashboard shape), otherwise an in-repo gitignored `codegen/logs/` in the main checkout. An explicit `CODEGEN_LOGS_ROOT` always wins.
 - Run tests through the operator-selected backend: `local` or `ttsim`.
 - Avoid broad internal re-planning machinery unless evidence says the first plan is wrong.
 
@@ -72,13 +72,21 @@ outside the paths listed above is a scope violation.
 
 Inside the issue-solver and its subagents:
 
-- Allowed: `git status`, `git diff`, `git show`, `git log`, `git rev-parse`.
-- Not allowed: `git push`, PR creation, branch deletion, destructive reset/restore.
+- Allowed (read): `git status`, `git diff`, `git show`, `git log`, `git rev-parse`.
+- Allowed (orchestrator, **finalize only** — Step 6): a single **local** `git
+  commit` of the fix to `WORKTREE_BRANCH`, plus the `git add` / `git diff` /
+  `git reset` that produces `generated.patch`. This local commit is what makes
+  the work durable: once committed, the fix lives in the repo's shared `.git`
+  and survives even if the durable worktree directory is later removed or GC'd.
+- Not allowed: `git push`, PR creation, branch deletion, `git checkout`/`switch`,
+  and destructive reset/restore (`git reset --hard`, `git restore`, `git clean`).
+  Subagents (analyzer, worker, tester) never commit — only the orchestrator's
+  Step 6 does, and only locally.
 - One scoped exception: the perf-tester (`perf-tester.md` Step 3) may use a
   `git stash push` / `git stash pop` pair **only** to revert the fix while it
   re-measures the perf baseline on the branch base, and must always pop it back.
-  No other agent performs git writes.
-- Commit/PR decisions are returned to the caller via the final report.
+- The commit is **local only**; push/PR decisions remain the caller's and are
+  returned via the final report.
 
 ## Cost Accounting
 
@@ -120,21 +128,18 @@ case "$TARGET_ARCH" in
     export LLK_DIR=tt_llk_blackhole
     export REF_ARCH=wormhole
     export REF_LLK_DIR=tt_llk_wormhole_b0
-    export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/blackhole_issue_solver
     export DASHBOARD_PROJECT_ID=blackhole_issue_solver
     ;;
   wormhole)
     export LLK_DIR=tt_llk_wormhole_b0
     export REF_ARCH=
     export REF_LLK_DIR=
-    export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/wormhole_issue_solver
     export DASHBOARD_PROJECT_ID=wormhole_issue_solver
     ;;
   quasar)
     export LLK_DIR=tt_llk_quasar
     export REF_ARCH=blackhole
     export REF_LLK_DIR=tt_llk_blackhole
-    export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/quasar_issue_solver
     export DASHBOARD_PROJECT_ID=quasar_issue_solver
     ;;
   *)
@@ -142,12 +147,31 @@ case "$TARGET_ARCH" in
     exit 1
     ;;
 esac
+# LOGS_BASE = ${CODEGEN_LOGS_ROOT}/${DASHBOARD_PROJECT_ID}, resolved below (the
+# per-arch project id is the suffix, preserving the dashboard's folder shape).
 ```
 
 Create the run directory and initial live dashboard record:
 
 ```bash
 cd "$WORKTREE_DIR/tt_metal/tt-llk"
+
+# LOG_DIR root: explicit CODEGEN_LOGS_ROOT > /proj_sw/user_dev/llk_code_gen if it
+# exists (shared dashboard) > in-repo gitignored codegen/logs. Resolved against the
+# MAIN checkout (--git-common-dir), not the worktree (removed after the run).
+if [ -z "${CODEGEN_LOGS_ROOT:-}" ]; then
+  if [ -d /proj_sw/user_dev/llk_code_gen ]; then
+    export CODEGEN_LOGS_ROOT="/proj_sw/user_dev/llk_code_gen"
+  else
+    MAIN_REPO_ROOT=$(dirname "$(git -C "$WORKTREE_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" 2>/dev/null)
+    if [ -n "$MAIN_REPO_ROOT" ] && [ -d "$MAIN_REPO_ROOT/tt_metal/tt-llk/codegen" ]; then
+      export CODEGEN_LOGS_ROOT="${MAIN_REPO_ROOT}/tt_metal/tt-llk/codegen/logs"
+    else
+      export CODEGEN_LOGS_ROOT="$WORKTREE_DIR/tt_metal/tt-llk/codegen/logs"   # last resort (non-durable)
+    fi
+  fi
+fi
+export LOGS_BASE="${CODEGEN_LOGS_ROOT}/${DASHBOARD_PROJECT_ID}"
 
 export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
@@ -167,7 +191,7 @@ export OBSTACLE=
 export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS ISSUE_URL
 export TEST_BACKEND TTSIM_SO_PATH CREATE_LOCAL_BRANCH CREATE_PR
 
-# PERF_GOAL drives the perf stage (Step 4.5). Optimization issues must get
+# PERF_GOAL drives the perf stage (Step 5.5). Optimization issues must get
 # faster; everything else must not regress. Prefer the analyzer's perf_intent
 # line (Step 1) when present; this is the keyword fallback.
 if echo "${ISSUE_TITLE} ${ISSUE_LABELS} ${ISSUE_BODY}" | grep -qiE \
@@ -522,6 +546,34 @@ export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only | grep -v '/perf_data/' | grep -v '^perf_data/' || true)
 export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps([l for l in os.environ['CHANGED_FILES'].splitlines() if l]))")
 
+# ── Preserve the fix durably: local commit (no push) + archived patch ──
+# The commit to WORKTREE_BRANCH survives worktree removal; generated.patch in the
+# durable LOG_DIR is a second recovery path. Caller owns push/PR (see Git Policy).
+export WORKTREE_DIR WORKTREE_BRANCH GIT_BRANCH
+export BASE_COMMIT="$GIT_COMMIT"   # branch base == origin/main
+export FIX_COMMIT=""
+# Stage the fix across all allowed layers (incl. new files), never perf CSVs.
+# Symlinked infra is gitignored so add -A skips it (advice off = no exit-1 noise).
+FIX_PATHSPEC="tt_metal/tt-llk tt_metal/hw/ckernels tt_metal/hw/inc/api/compute ttnn/cpp/ttnn/operations tests/tt_metal :(exclude,glob)**/perf_data/** :(exclude,glob)**/__pycache__/** :(exclude)tt_metal/tt-llk/tests/.venv :(exclude)tt_metal/tt-llk/tests/sfpi"
+git -C "$WORKTREE_DIR" -c advice.addIgnoredFile=false add -A -- $FIX_PATHSPEC 2>/dev/null || true
+if ! git -C "$WORKTREE_DIR" diff --cached --quiet 2>/dev/null; then
+  git -C "$WORKTREE_DIR" \
+    -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
+    commit -q -m "AI issue-solver: fix #${ISSUE_NUMBER} ${ISSUE_TITLE}" 2>/dev/null || true
+  export FIX_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "")
+fi
+# Apply-able patch archived in the durable LOG_DIR. Reapply from the tt-metal
+# repo root with:  git checkout $BASE_COMMIT && git apply $LOG_DIR/generated.patch
+if [ -n "$FIX_COMMIT" ] && [ "$FIX_COMMIT" != "$BASE_COMMIT" ]; then
+  git -C "$WORKTREE_DIR" diff --binary "$BASE_COMMIT" "$FIX_COMMIT" > "$LOG_DIR/generated.patch" 2>/dev/null || true
+else
+  # Nothing committed (skipped / no changes): capture any working-tree delta.
+  git -C "$WORKTREE_DIR" -c advice.addIgnoredFile=false add -AN -- $FIX_PATHSPEC 2>/dev/null || true
+  git -C "$WORKTREE_DIR" diff --binary HEAD -- $FIX_PATHSPEC > "$LOG_DIR/generated.patch" 2>/dev/null || true
+  git -C "$WORKTREE_DIR" reset -q -- $FIX_PATHSPEC 2>/dev/null || true
+fi
+[ -s "$LOG_DIR/generated.patch" ] || rm -f "$LOG_DIR/generated.patch"
+
 python codegen/scripts/run_json_writer.py finalize \
   --log-dir "$LOG_DIR" \
   --end-time "$END_TIME" \
@@ -557,6 +609,12 @@ print(json.dumps({
     "test_backend": os.environ.get("TEST_BACKEND", ""),
     "create_local_branch_requested": os.environ.get("CREATE_LOCAL_BRANCH", ""),
     "create_pr_requested": os.environ.get("CREATE_PR", ""),
+    # Durability: base_commit=branch base, fix_commit=local commit, artifact_patch=archived diff.
+    "base_commit": os.environ.get("BASE_COMMIT") or None,
+    "fix_commit": os.environ.get("FIX_COMMIT") or None,
+    "branch": os.environ.get("GIT_BRANCH") or os.environ.get("WORKTREE_BRANCH") or None,
+    "worktree_dir": os.environ.get("WORKTREE_DIR") or None,
+    "artifact_patch": "generated.patch" if os.path.exists(os.path.join(log_dir, "generated.patch")) else None,
     "obstacle": os.environ.get("OBSTACLE") or None,
 }))
 PY
@@ -588,6 +646,11 @@ Issue-Solver Result:
   codegen_version: ${CODEGEN_VERSION}
   run_id: ${RUN_ID}
   log_dir: ${LOG_DIR}
+  branch: ${WORKTREE_BRANCH}            # fix committed here (local, NOT pushed)
+  base_commit: ${BASE_COMMIT}           # origin/main SHA the branch was cut from
+  fix_commit: ${FIX_COMMIT}             # the local fix commit (empty if no change)
+  worktree_dir: ${WORKTREE_DIR}         # where the run executed; removed after finish (recover via branch or patch)
+  patch: ${LOG_DIR}/generated.patch     # reapply: git checkout <base_commit> && git apply <patch>
   test_backend: ${TEST_BACKEND}
   perf:
     goal: ${PERF_GOAL}            # improve | no_regress

@@ -32,8 +32,8 @@ The top-level routing (`codegen/CLAUDE.md`) creates an isolated worktree and pas
 - **KERNEL_NAME** — the kernel to generate (e.g., `gelu`)
 - **TARGET_ARCH** — target architecture (default: `quasar`)
 - **SFPI_MODE** — `true` if the user explicitly requested an SFPI version, else `false` (default). When `true` the optimizer runs in SFPI Conversion Mode instead of Replay Mode (see Step 3). Only meaningful for SFPU kernels.
-- **WORKTREE_DIR** — absolute path to the isolated git worktree (e.g., `/tmp/codegen_worktree_generate-gelu-quasar`)
-- **WORKTREE_BRANCH** — the branch name (e.g., `ai-code-gen/generate-gelu-quasar-v1`)
+- **WORKTREE_DIR** — absolute path to the isolated git worktree on durable disk (e.g., `$HOME/.codegen/worktrees/generate-gelu-quasar-v1`; parent overridable via `CODEGEN_WORKTREE_ROOT`)
+- **WORKTREE_BRANCH** — the branch name (e.g., `llk_code_gen/generate-gelu-quasar-v1`)
 
 **CRITICAL: All code writes and file modifications MUST happen inside `$WORKTREE_DIR/tt_metal/tt-llk`.** The worktree has `codegen/` populated with symlinks to the source branch (read-only: `agents/`, `scripts/`, `references/`, `config/`, `CLAUDE.md`, `skills/`) plus a real per-worktree `codegen/artifacts/` directory for this run's outputs. Anything you or a subagent writes outside the worktree leaks into the source branch.
 

@@ -28,3 +28,6 @@ compile_flags.txt
 
 # Unignore .claude
 !.claude
+
+# Codegen run logs/artifacts (in-repo LOG_DIR when /proj_sw is absent)
+codegen/logs/

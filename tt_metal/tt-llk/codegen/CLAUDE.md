@@ -70,7 +70,7 @@ Then set:
 
 ## Step 2: Create Branch and Worktree
 
-Set up an isolated worktree so all code changes happen on a dedicated branch based on `origin/main`. The codegen infrastructure (agents, scripts, references, config) is symlinked into the worktree from the current branch.
+Set up an isolated worktree so all code changes happen on a dedicated branch based on `origin/main`. The codegen infrastructure (agents, scripts, references, config) is symlinked into the worktree from the current branch — that is why we can base the fix on a clean `origin/main` (clean PR diff) yet still read the codegen playbooks/skills that only live on the feature branch.
 
 ```bash
 source codegen/scripts/setup_worktree.sh
@@ -79,8 +79,8 @@ setup_worktree {TASK_ID}
 ```
 
 After this step:
-- `WORKTREE_DIR` — absolute path to the worktree (e.g., `/tmp/codegen_worktree_issue-123`)
-- `WORKTREE_BRANCH` — the branch name (e.g., `ai-code-gen/issue-123-v1`)
+- `WORKTREE_DIR` — absolute path to the worktree on **durable disk** (e.g., `$HOME/.codegen/worktrees/issue-123-v1`), removed after the run (Step 4). The directory carries the branch version, so concurrent runs never collide. Override the parent with `CODEGEN_WORKTREE_ROOT` (default `$HOME/.codegen/worktrees`). Durable rather than `/tmp` so a reboot or crash mid-run doesn't lose an in-flight checkout — finished work is preserved as the commit + patch, not the worktree.
+- `WORKTREE_BRANCH` — the branch name (e.g., `llk_code_gen/issue-123-v1`)
 - All agent playbooks are accessible via symlinks in the worktree
 - `codegen/artifacts/` is a real (non-symlinked) directory for per-task artifacts
 
@@ -122,16 +122,52 @@ Also pass:
 
 ---
 
-## Step 4: Cleanup
+## Step 4: Preserve & Cleanup
 
-After the orchestrator completes (regardless of success or failure), clean up:
+By the time the orchestrator returns, the fix is already preserved **without the
+worktree** — its Step 6 **commits the fix locally to `WORKTREE_BRANCH`** (never
+pushes) and archives an apply-able `generated.patch` plus its `base_commit`
+beside `run.json` in the durable `LOG_DIR`.
+
+So after the run, **remove the worktree to reclaim disk** (~400 MB/run). That is
+the default (`CODEGEN_KEEP_WORKTREE=false`); set it to `true` only when you want
+to keep the live checkout around for inspection.
 
 ```bash
 source codegen/scripts/setup_worktree.sh
-cleanup_worktree {TASK_ID}
+cleanup_worktree {TASK_ID}          # removes ONLY this run's worktree (safe under concurrency)
+./codegen/scripts/setup_worktree.sh prune 14   # GC worktrees left behind by crashed runs (>14d)
 ```
 
-If the orchestrator succeeded and changes should be preserved, commit and push from the worktree **before** cleanup.
+What persists after cleanup (all tiny — none of it in the removed worktree):
+- `generated.patch` + `base_commit` in `LOG_DIR`. `LOG_DIR` is `${CODEGEN_LOGS_ROOT}/<arch>_issue_solver/<run_id>/`, where `CODEGEN_LOGS_ROOT` is the shared dashboard tree `/proj_sw/user_dev/llk_code_gen` **when it exists**, otherwise an **in-repo, gitignored** `codegen/logs/` in the main checkout. Set `CODEGEN_LOGS_ROOT` to force a location.
+- The local fix commit on `WORKTREE_BRANCH` (git objects live in the shared local `.git`, not the worktree).
+
+Recovering a run's work later:
+- `git checkout <base_commit> && git apply <LOG_DIR>/generated.patch` — from the log dir, independent of repo state.
+- `git worktree add <path> <WORKTREE_BRANCH>` — re-materialize the fix from the branch.
+
+**Pushing / PR creation is a separate, explicit action** (still requires the
+user's go-ahead). When `CREATE_PR=yes`, push `WORKTREE_BRANCH` and open the PR
+only after the user confirms.
+
+## Running multiple issue-solvers concurrently
+
+The mechanism is concurrency-safe — launch as many as the machine can handle:
+
+- Each run gets a **unique branch and directory** (`llk_code_gen/<task>-v<N>` +
+  `.../<task>-v<N>`); `setup_worktree` reserves the version under a `flock`, so
+  even two runs of the *same* issue never collide.
+- Fixes are committed to **separate branches**, so concurrent local commits
+  never touch each other.
+- Simulator access is serialized per-arch by `.claude/scripts/run_test.sh` via
+  `/tmp/tt-llk-test-<arch>.lock`, so parallel runs compile in parallel and only
+  queue at the (single) simulator step.
+
+Launch pattern (mirrors `batch_generate.sh` for kernels): run one
+`claude -p "solve issue #<N> ..."` per issue, passing every input the Startup
+Contract needs (`TEST_BACKEND`, arch, etc.) in the prompt so no run blocks on an
+interactive question. Optionally cap parallelism with a job limiter.
 
 ---
 
