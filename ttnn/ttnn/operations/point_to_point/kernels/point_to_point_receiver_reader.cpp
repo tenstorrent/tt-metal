@@ -56,7 +56,9 @@ void kernel_main() {
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
 
     cb_reserve_back(packet_cb_id, 1);
-    const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
+    // L1 write pointer is a 32-bit address (matches the sender's packet_base_addr); it is
+    // used as the local NoC-read destination and as the base for per-page tt_memmove offsets.
+    const uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     // Wait for the sender's "done" — the payload has fully landed in the intermediate buffer.
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);

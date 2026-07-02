@@ -1,0 +1,365 @@
+{
+  "summary": {
+    "total": 34,
+    "supported_pass": 15,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 16,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 3,
+    "invalid_unexpected": 0,
+    "no_axes_found": 0
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "invalid_skipped": [
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT16-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT16-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT16-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT16-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=INT32-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=INT32-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=INT32-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=INT32-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT32-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT32-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT32-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x32x32-alignment=tile_aligned-dtype=UINT32-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=INT32-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=INT32-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=UINT32-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/point_to_point/test_golden.py::test_op[blackhole-1x1x48x64-alignment=non_tile_aligned-dtype=UINT32-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ]
+  }
+}
