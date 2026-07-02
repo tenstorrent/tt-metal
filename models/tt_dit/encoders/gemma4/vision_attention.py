@@ -117,12 +117,15 @@ class Gemma4VisionAttention(Module):
             k_chunk_size=128,
             exp_approx_mode=False,
         )
+        # Accuracy-first compute config (see comments in encoders/gemma4/attention.py).
+        # ``packer_l1_acc=False`` mirrors tt_dit LayerNorm's default: avoids the packer's
+        # low-precision L1 accumulation over deep reductions (head_dim_padded=96 here).
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -224,23 +227,25 @@ class Gemma4VisionAttention(Module):
     ) -> ttnn.Tensor:
         """
         Args:
-            hidden_states:   replicated [B, num_patches, hidden_size]
+            hidden_states:   replicated [1, B, num_patches, hidden_size] (tt_dit ``1BND`` convention).
             cos, sin:        [B, 1, num_patches, head_dim_padded / 2] (from Gemma4VisionRotaryEmbedding)
             attention_mask:  bf16 additive mask, optional. None → unmasked (bidirectional).
 
         Returns:
-            replicated [B, num_patches, hidden_size].
+            replicated [1, B, num_patches, hidden_size].
         """
-        B, P = hidden_states.shape[0], hidden_states.shape[1]
+        # Read batch/patch from trailing 3 dims so both 3D and 4D ``1BND`` inputs work.
+        B, P = hidden_states.shape[-3], hidden_states.shape[-2]
         H_local = self.num_local_heads
         Dp = self.head_dim_padded
 
         # Projections (column-parallel over head axis). Input is replicated per the
         # docstring — no ``parallel_config`` argument, so ColParallelLinear runs its
         # ``minimal_matmul`` path (each device against its local weight shard).
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
+        # ``compute_kernel_config=self.compute_config`` (HiFi4) overrides Linear's default HiFi2.
+        q = self.q_proj(hidden_states, compute_kernel_config=self.compute_config)
+        k = self.k_proj(hidden_states, compute_kernel_config=self.compute_config)
+        v = self.v_proj(hidden_states, compute_kernel_config=self.compute_config)
 
         # Reshape and permute to (B, H_local, P, Dp).
         q = ttnn.permute(ttnn.reshape(q, (B, P, H_local, Dp)), (0, 2, 1, 3))
@@ -249,9 +254,11 @@ class Gemma4VisionAttention(Module):
 
         # Per-head RMSNorm (Dp last axis; padded entries pre-zeroed by their projections,
         # weights pre-scaled & zero-padded by _prepare_torch_state).
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        v = self.v_norm(v)
+        # Pass HiFi4/fp32 compute config — RMSNorm's default is unset (device default HiFi2
+        # bf16-acc), which loses precision squaring bf16 head_dim values.
+        q = self.q_norm(q, compute_kernel_config=self.compute_config)
+        k = self.k_norm(k, compute_kernel_config=self.compute_config)
+        v = self.v_norm(v, compute_kernel_config=self.compute_config)
         # v_norm has no scale, so apply the sqrt(Dp/D) correction manually.
         v = ttnn.multiply(v, self._v_scale)
 
@@ -275,6 +282,13 @@ class Gemma4VisionAttention(Module):
             compute_kernel_config=self.compute_config,
         )
 
-        # (B, H_local, P, Dp) → (B, P, H_local * Dp) → o_proj → (B, P, hidden_size).
+        # (B, H_local, P, Dp) → (B, P, H_local * Dp) 3D → unsqueeze → 4D 1BND → o_proj.
         attn = ttnn.transformer.concatenate_heads(attn)
-        return self.o_proj(attn)
+        attn = ttnn.unsqueeze(attn, 0)
+        out = self.o_proj(attn, compute_kernel_config=self.compute_config)
+        # RowParallelLinear returns TP-fractured on the output dim; gather to replicated.
+        if self.parallel_config.tensor_parallel.factor > 1:
+            out = self.ccl_manager.all_gather_persistent_buffer(
+                out, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+        return out

@@ -22,9 +22,13 @@ from ....encoders.gemma4.rope import Gemma4RotaryEmbedding
 from ....utils.check import assert_quality
 from ....utils.test import line_params
 
-PCC_THRESHOLD = 0.9999
-ALLCLOSE_ATOL = 1e-2
-ALLCLOSE_RTOL = 1e-2
+# We upload cos/sin as fp32 (not bf16) so the RoPE table lands on device essentially lossless.
+# Tighten PCC accordingly. If this ever regresses, the drop is diagnostic: something re-quantized
+# the table between host and device (likely a dtype change in ``get_cos_sin`` or a ttnn upload
+# path that silently downcast).
+PCC_THRESHOLD = 0.99999
+ALLCLOSE_ATOL = 1e-3
+ALLCLOSE_RTOL = 1e-3
 
 
 @pytest.mark.parametrize(

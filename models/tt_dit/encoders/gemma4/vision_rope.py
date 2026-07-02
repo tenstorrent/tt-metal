@@ -87,7 +87,9 @@ class Gemma4VisionRotaryEmbedding(Module):
                                  responsible for masking padded positions downstream).
 
         Returns:
-            (cos, sin) ttnn tensors of shape ``[B, 1, num_patches, head_dim_padded / 2]`` (bf16).
+            (cos, sin) ttnn tensors of shape ``[B, 1, num_patches, head_dim_padded / 2]`` fp32.
+            Uploading as fp32 (vs bf16) avoids the host→device downcast; the multiplies against
+            bf16 Q/K promote to fp32 accumulation, recovering ~1 more digit of PCC.
             Layout per patch (half-dim):
                 [ cos_x_half : unique_per_dim ][ cos_y_half : unique_per_dim ][ pad : 1's ]
         """
@@ -113,9 +115,9 @@ class Gemma4VisionRotaryEmbedding(Module):
             cos = torch.cat([cos_x, cos_y], dim=-1)
             sin = torch.cat([sin_x, sin_y], dim=-1)
 
-        # (B, P, half_padded) → (B, 1, P, half_padded) for broadcast over heads.
-        cos = cos.unsqueeze(1).to(torch.bfloat16)
-        sin = sin.unsqueeze(1).to(torch.bfloat16)
-        tt_cos = ttnn.from_torch(cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        # (B, P, half_padded) → (B, 1, P, half_padded) for broadcast over heads. Keep fp32.
+        cos = cos.unsqueeze(1).contiguous()
+        sin = sin.unsqueeze(1).contiguous()
+        tt_cos = ttnn.from_torch(cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+        tt_sin = ttnn.from_torch(sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
         return tt_cos, tt_sin

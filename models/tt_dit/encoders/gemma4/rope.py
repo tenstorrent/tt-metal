@@ -97,21 +97,26 @@ class Gemma4RotaryEmbedding(Module):
         layer_type: str,
         position_ids: torch.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Slice the cos/sin table at ``position_ids`` and upload bf16 to the mesh.
+        """Slice the cos/sin table at ``position_ids`` and upload as fp32 to the mesh.
+
+        Uploading as fp32 (not bf16) avoids downcasting the host fp32 tables at the
+        boundary. The RoPE multiplies against bf16 Q/K promote to fp32 accumulation on
+        device, which recovers ~1 more digit of PCC vs a bf16 cos/sin table. Storage
+        cost per batch is small (S × head_dim/2 × 4B ≈ 32 KiB for S=256, D=256).
 
         Args:
             layer_type: ``"sliding_attention"`` or ``"full_attention"``.
             position_ids: ``(B, seq)`` long tensor of absolute positions.
 
         Returns:
-            Tuple of ttnn tensors, each shape ``(B, 1, seq, head_dim/2)``.
+            Tuple of ttnn tensors, each shape ``(B, 1, seq, head_dim/2)`` fp32.
         """
         cos_table, sin_table = self._tables[layer_type]
-        cos = cos_table[position_ids]  # (B, seq, head_dim/2)
+        cos = cos_table[position_ids]  # (B, seq, head_dim/2), fp32
         sin = sin_table[position_ids]
         # Expand to (B, 1, seq, head_dim/2) — second axis for broadcast over heads.
-        cos = cos.unsqueeze(1).to(torch.bfloat16)
-        sin = sin.unsqueeze(1).to(torch.bfloat16)
-        tt_cos = ttnn.from_torch(cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        cos = cos.unsqueeze(1).contiguous()
+        sin = sin.unsqueeze(1).contiguous()
+        tt_cos = ttnn.from_torch(cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+        tt_sin = ttnn.from_torch(sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
         return tt_cos, tt_sin

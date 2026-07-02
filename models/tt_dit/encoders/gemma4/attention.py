@@ -152,12 +152,21 @@ class Gemma4Attention(Module):
             k_chunk_size=128,
             exp_approx_mode=False,
         )
+        # Accuracy-first compute config. Reasoning per knob:
+        #   HiFi4: max bf16 accumulator fidelity — 4 fidelity passes per matmul/norm step.
+        #   fp32_dest_acc_en=True: intermediate accumulator in fp32 (else bf16 partial sums).
+        #   packer_l1_acc=False: skip the packer's low-precision L1 accumulation; each tile
+        #     writes go through the fp32 dest, then external accumulation — mirrors tt_dit's
+        #     LayerNorm default (normalization.py:98). ``True`` is faster but drops precision
+        #     over deep reductions (head_dim=256 or 512 here).
+        # Post-validation, revisit ``packer_l1_acc=True`` / HiFi2 for perf if PCC still meets
+        # the layer/model-level thresholds.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
     def _prepare_torch_state(self, state: dict) -> None:
@@ -192,7 +201,7 @@ class Gemma4Attention(Module):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
         Args:
-            hidden_states:   replicated [B, seq, hidden_size]
+            hidden_states:   replicated [1, B, seq, hidden_size] (tt_dit ``1BND`` convention).
             cos, sin:        [B, 1, seq, head_dim/2]  (from Gemma4RotaryEmbedding.get_cos_sin)
             attention_mask:  None or bf16 additive mask broadcastable to attention scores.
                               Mutually exclusive with implicit causal — when None, SDPA runs
@@ -201,24 +210,28 @@ class Gemma4Attention(Module):
                               (K_enc already has RoPE applied).
 
         Returns:
-            (out, K_local, V_local) — `out` replicated [B, seq, hidden_size]; the K_local/V_local
+            (out, K_local, V_local) — `out` replicated [1, B, seq, hidden_size]; the K_local/V_local
             tensors are the post-RoPE K and post-v_norm V *from this call* (TP-sharded on heads,
             shape [B, num_local_kv_heads, seq, head_dim]). The text-encoder model collects these
             per layer to feed the decoder later. Pass ``None`` through in non-encoder use.
         """
-        B, S = hidden_states.shape[0], hidden_states.shape[1]
+        # Read batch/seq from the trailing 3 dims so both 3D and 4D ``1BND`` inputs work.
+        B, S = hidden_states.shape[-3], hidden_states.shape[-2]
 
         # 1. Projections (column-parallel over head axis). ``parallel_config`` is only passed
         # when the input is TP-fractured on its last dim (triggers the fused
         # ``all_gather_minimal_matmul_async`` path). Here ``hidden_states`` is replicated —
         # each device runs ``minimal_matmul`` against its local weight shard.
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
+        # ``compute_kernel_config=self.compute_config`` overrides Linear's default HiFi2 with
+        # our HiFi4 config; the four chained proj matmuls (Q/K/V/O) accumulate drift at HiFi2
+        # that lands ~1e-3 short of the 0.999 attention PCC target vs the fp32 HF reference.
+        q = self.q_proj(hidden_states, compute_kernel_config=self.compute_config)
+        k = self.k_proj(hidden_states, compute_kernel_config=self.compute_config)
         # K=V quirk for full attention: V uses the raw k_proj output BEFORE k_norm / RoPE.
         # `v_raw = k` is a tensor alias — safe because ttnn ops are non-in-place by default
         # (RMSNorm/RoPE return new tensors). The underlying k_proj output lives until both
         # the k-path (k_norm → RoPE) and v-path (v_norm) have consumed it.
-        v_raw = k if not self.is_sliding else self.v_proj(hidden_states)
+        v_raw = k if not self.is_sliding else self.v_proj(hidden_states, compute_kernel_config=self.compute_config)
 
         # 2. Reshape (B, S, H_local * D) → (B, S, H_local, D) → permute (B, H_local, S, D).
         q = ttnn.permute(ttnn.reshape(q, (B, S, self.num_local_heads, self.head_dim)), (0, 2, 1, 3))
@@ -226,9 +239,12 @@ class Gemma4Attention(Module):
         v = ttnn.permute(ttnn.reshape(v_raw, (B, S, self.num_local_kv_heads, self.head_dim)), (0, 2, 1, 3))
 
         # 3. Per-head RMSNorm over head_dim (last axis); fully local.
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        v = self.v_norm(v)
+        # Pass our HiFi4 / fp32-dest-acc config: RMSNorm's default is unset (device default is
+        # HiFi2 / bf16 acc), which squares bf16 head_dim values into a bf16 accumulator and
+        # noticeably degrades PCC of every downstream matmul.
+        q = self.q_norm(q, compute_kernel_config=self.compute_config)
+        k = self.k_norm(k, compute_kernel_config=self.compute_config)
+        v = self.v_norm(v, compute_kernel_config=self.compute_config)
 
         # 4. RoPE applied to Q and K. V is NOT rotated.
         q = self._apply_rope(q, cos, sin)
@@ -269,9 +285,17 @@ class Gemma4Attention(Module):
             compute_kernel_config=self.compute_config,
         )
 
-        # 8. (B, H_local, S, D) → (B, S, H_local * D), then o_proj (row-parallel → replicated).
-        attn = ttnn.transformer.concatenate_heads(attn)  # (B, S, H_local * D)
-        out = self.o_proj(attn)
+        # 8. (B, H_local, S, D) → (B, S, H_local * D) → 4D → o_proj → 4D [1, B, S, hidden_size].
+        attn = ttnn.transformer.concatenate_heads(attn)  # (B, S, H_local * D), 3D
+        attn = ttnn.unsqueeze(attn, 0)  # back to 4D 1BND for o_proj + downstream ops
+        out = self.o_proj(attn, compute_kernel_config=self.compute_config)
+        # RowParallelLinear's output is N-fractured on the TP axis (tt_dit convention — the impl
+        # does a per-device matmul, no allreduce). Gather along the last dim so downstream
+        # residual adds and the returned tensor are replicated.
+        if self.parallel_config.tensor_parallel.factor > 1:
+            out = self.ccl_manager.all_gather_persistent_buffer(
+                out, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
         return out, k_out, v_out
 
     @staticmethod
