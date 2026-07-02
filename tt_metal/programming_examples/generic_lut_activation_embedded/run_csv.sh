@@ -927,18 +927,23 @@ if any(asymptotic_flags):
         if factor_class != 'X':
             asymptotic_macro += f'constexpr float ASYMPTOTIC_EXP_ARG_SCALE = {arg_scale:.16e}f;\n'
         asymptotic_macro += f'constexpr float ASYMPTOTIC_SCALE = {output_scale:.16e}f;\n'
-        # Determine bound: left tail (x < bound) or right tail (x > bound)
+        # Determine bound: left tail (x < bound) or right tail (x > bound).
+        # Always define both constants so generic kernel branches can compile
+        # without depending on which side of the piecewise range is asymptotic.
         first_asym = next(i for i, a in enumerate(asymptotic_flags) if a)
         last_asym = next(i for i in range(num_segments - 1, -1, -1) if asymptotic_flags[i])
         if first_asym == 0 and last_asym < num_segments - 1:
             bound = boundaries[last_asym + 1]
+            asymptotic_macro += 'constexpr float ASYMPTOTIC_LOWER_BOUND = -1.0e38f;\n'
             asymptotic_macro += f'constexpr float ASYMPTOTIC_UPPER_BOUND = {bound:.16e}f;\n'
             print(f'Asymptotic factoring: {dom_str} (left tail, x < {bound})')
         elif last_asym == num_segments - 1 and first_asym > 0:
             bound = boundaries[first_asym]
             asymptotic_macro += f'constexpr float ASYMPTOTIC_LOWER_BOUND = {bound:.16e}f;\n'
+            asymptotic_macro += 'constexpr float ASYMPTOTIC_UPPER_BOUND = 1.0e38f;\n'
             print(f'Asymptotic factoring: {dom_str} (right tail, x > {bound})')
         elif first_asym == 0 and last_asym == num_segments - 1:
+            asymptotic_macro += 'constexpr float ASYMPTOTIC_LOWER_BOUND = -1.0e38f;\n'
             asymptotic_macro += 'constexpr float ASYMPTOTIC_UPPER_BOUND = 1.0e38f;\n'
             print(f'Asymptotic factoring: {dom_str} (all segments)')
         else:
